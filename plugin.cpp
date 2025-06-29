@@ -1,9 +1,19 @@
 #include <iostream>
 
+#include <pro.h>
+#include <prodir.h>
 #include <ida.hpp>
-#include <idp.hpp>
+#include <auto.hpp>
+#include <expr.hpp>
+#include <name.hpp>
+#include <undo.hpp>
+#include <name.hpp>
+#include <diskio.hpp>
 #include <loader.hpp>
-#include <funcs.hpp>
+#include <dirtree.hpp>
+#include <kernwin.hpp>
+#include <segment.hpp>
+#include <parsejson.hpp>
 
 
 // Define the class that inherits from plugmod_t
@@ -53,7 +63,7 @@ static bool idaapi run(size_t arg)
 
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
-    PLUGIN_MULTI,         // plugin flags
+    PLUGIN_FIX,         // plugin flags
     init,                 // initialize
     term,                 // terminate. this pointer can be nullptr
     run,                  // invoke the plugin
