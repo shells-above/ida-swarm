@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(ida_re_agent)
+project(ida_llm_agent)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -50,23 +50,47 @@ if(NOT IDA64)
     message(FATAL_ERROR "Could not find IDA libraries in ${IDA_LIBDIR}")
 endif()
 
+# end IDA SDK setup
+
+
+find_package(CURL REQUIRED)
+find_package(nlohmann_json REQUIRED)
+
 # Source files
-set(SOURCES plugin.cpp)
+set(SOURCES
+        src/plugin.cpp
+        src/agent.cpp
+        src/memory.cpp
+        src/actions.cpp
+        src/ida_utils.cpp
+        src/anthropic_client.cpp
+)
 
 # Create shared library with correct naming convention (end in "64", wont be loaded if it doesn't)
-add_library(ida_analyzer64 SHARED ${SOURCES})
+add_library(ida_llm_agent64 SHARED ${SOURCES})
 
 # Link libraries
-target_link_libraries(ida_analyzer64 ${IDA64})
+target_link_libraries(ida_llm_agent64
+        ${IDA64}
+        CURL::libcurl
+        nlohmann_json::nlohmann_json
+)
+
+
+
+# Windows specific
+if(WIN32)
+    target_compile_definitions(ida_llm_agent PRIVATE __NT__)
+endif()
 
 # Set RPATH for finding libraries at runtime
 if(APPLE)
-    set_target_properties(ida_analyzer64 PROPERTIES
+    set_target_properties(ida_llm_agent64 PROPERTIES
             BUILD_RPATH "@executable_path;${IDA_LIBDIR}"
             INSTALL_RPATH "@executable_path;${IDA_LIBDIR}"
     )
 elseif(UNIX AND NOT APPLE)
-    set_target_properties(ida_analyzer64 PROPERTIES
+    set_target_properties(ida_llm_agent64 PROPERTIES
             BUILD_RPATH "$ORIGIN;${IDA_LIBDIR}"
             INSTALL_RPATH "$ORIGIN;${IDA_LIBDIR}"
     )
@@ -75,10 +99,10 @@ endif()
 # Option to copy built plugin to IDA Pro plugins directory
 option(INSTALL_TO_IDA "Copy built plugin to IDA Pro plugins directory" ON)
 if(INSTALL_TO_IDA)
-    add_custom_command(TARGET ida_analyzer64 POST_BUILD
+    add_custom_command(TARGET ida_llm_agent64 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:ida_analyzer64>
-            "${IDA_PLUGINS_PATH}/ida_analyzer64.dylib"
+            $<TARGET_FILE:ida_llm_agent64>
+            "${IDA_PLUGINS_PATH}/ida_llm_agent64.dylib"
             COMMENT "Installing plugin to IDA Pro plugins directory: ${IDA_PLUGINS_PATH}"
     )
 endif()

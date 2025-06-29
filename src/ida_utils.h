@@ -1,0 +1,197 @@
+//
+// Created by user on 6/29/25.
+//
+
+#ifndef IDA_UTILS_H
+#define IDA_UTILS_H
+
+#include "common.h"
+
+namespace llm_re {
+
+// Utility class that bridges our actions to IDA API calls
+// All methods here will be called from worker thread and use execute_sync
+class IDAUtils {
+private:
+    // Helper to execute IDA operations synchronously
+    template<typename Func>
+    static auto execute_sync_wrapper(Func&& func) -> decltype(func()) {
+        using RetType = decltype(func());
+        RetType result;
+        auto wrapper = [&func, &result]() -> int {
+            result = func();
+            return 0;
+        };
+        execute_sync(wrapper, MFF_READ);
+        return result;
+    }
+
+public:
+    // Cross-reference operations
+
+    /**
+     * Find all references TO a location (who calls/references this?)
+     * @param address Target address
+     * @return Vector of addresses that reference the target
+     */
+    static std::vector<ea_t> get_xrefs_to(ea_t address);
+
+    /**
+     * Find all references FROM a location (what does this reference?)
+     * @param address Source address
+     * @return Vector of addresses referenced by the source
+     */
+    static std::vector<ea_t> get_xrefs_from(ea_t address);
+
+    // Disassembly and decompilation
+
+    /**
+     * Get the disassembly for a function with comments
+     * @param address Function start address
+     * @return Disassembly text with comments
+     */
+    static std::string get_function_disassembly(ea_t address);
+
+    /**
+     * Get the decompilation for a function with comments
+     * @param address Function start address
+     * @return Decompiled code with comments
+     */
+    static std::string get_function_decompilation(ea_t address);
+
+    // Function operations
+
+    /**
+     * Get a function's address from its name
+     * @param name Function name
+     * @return Function address or BADADDR if not found
+     */
+    static ea_t get_function_address(const std::string& name);
+
+    /**
+     * Get a function's name from its address
+     * @param address Function address
+     * @return Function name or empty string if unnamed
+     */
+    static std::string get_function_name(ea_t address);
+
+    /**
+     * Set a function's name
+     * @param address Function address
+     * @param name New name
+     * @return Success status
+     */
+    static bool set_function_name(ea_t address, const std::string& name);
+
+    /**
+     * Get all string references used by a function
+     * @param address Function address
+     * @return Vector of string values
+     */
+    static std::vector<std::string> get_function_string_refs(ea_t address);
+
+    /**
+     * Get all data references accessed by a function
+     * @param address Function address
+     * @return Vector of data addresses
+     */
+    static std::vector<ea_t> get_function_data_refs(ea_t address);
+
+    // Data operations
+
+    /**
+     * Get the name of a data item
+     * @param address Data address
+     * @return Data name or empty string if unnamed
+     */
+    static std::string get_data_name(ea_t address);
+
+    /**
+     * Set the name of a data item
+     * @param address Data address
+     * @param name New name
+     * @return Success status
+     */
+    static bool set_data_name(ea_t address, const std::string& name);
+
+    // Comment operations
+
+    /**
+     * Add a comment to disassembly at an address
+     * @param address Target address
+     * @param comment Comment text
+     * @return Success status
+     */
+    static bool add_disassembly_comment(ea_t address, const std::string& comment);
+
+    /**
+     * Add a comment to pseudocode
+     * @param address Function address
+     * @param comment Comment text
+     * @return Success status
+     */
+    static bool add_pseudocode_comment(ea_t address, const std::string& comment);
+
+    /**
+     * Clear disassembly comment at an address
+     * @param address Target address
+     * @return Success status
+     */
+    static bool clear_disassembly_comment(ea_t address);
+
+    /**
+     * Clear all pseudocode comments for a function
+     * @param address Function address
+     * @return Success status
+     */
+    static bool clear_pseudocode_comments(ea_t address);
+
+    // Import/Export operations
+
+    /**
+     * Get all imported functions
+     * @return Map of module names to imported function names
+     */
+    static std::map<std::string, std::vector<std::string>> get_imports();
+
+    /**
+     * Get all exported functions
+     * @return Vector of exported function info (name, address)
+     */
+    static std::vector<std::pair<std::string, ea_t>> get_exports();
+
+    // String operations
+
+    /**
+     * Get all strings in the binary
+     * @return Vector of string values
+     */
+    static std::vector<std::string> get_strings();
+
+    /**
+     * Search for strings containing text
+     * @param text Search text
+     * @param is_case_sensitive Case sensitivity flag
+     * @return Vector of matching strings
+     */
+    static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive);
+
+    // Utility operations
+
+    /**
+     * Check if an address is within a function
+     * @param address Address to check
+     * @return Function start address or BADADDR if not in function
+     */
+    static ea_t get_function_containing(ea_t address);
+
+    /**
+     * Get all functions in the binary
+     * @return Vector of function addresses
+     */
+    static std::vector<ea_t> get_all_functions();
+};
+
+} // namespace llm_re
+
+#endif //IDA_UTILS_H
