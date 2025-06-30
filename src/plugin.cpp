@@ -385,6 +385,8 @@ plugmod_t* idaapi init() {
         if (log_file.is_open()) {
             log_file << get_timestamp() << " === PLUGIN INIT ===" << std::endl;
         }
+        std::string llm_log_path = std::string(get_user_idadir()) + "/llm_messages.json";
+        std::ofstream llm_log_file(llm_log_path, std::ios::trunc);
     } catch (...) {}
 
     // Create action handler

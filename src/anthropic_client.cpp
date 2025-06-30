@@ -45,7 +45,14 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     }
 
     if (!request.system_prompt.empty()) {
-        request_json["system"] = request.system_prompt;
+        // Wrap system prompt in cache control for prompt caching
+        request_json["system"] = json::array({
+            {
+                {"type", "text"},
+                {"text", request.system_prompt},
+                {"cache_control", {{"type", "ephemeral"}}}  // This enables caching!
+            }
+        });
     }
 
     // Build messages array

@@ -31,7 +31,7 @@ namespace llm_re {
 
         // Agent state
         std::vector<AnthropicClient::ChatMessage> conversation_history;
-        
+
         // Token tracking
         struct TokenStats {
             int total_input_tokens = 0;
@@ -61,6 +61,8 @@ namespace llm_re {
 
         // LLM interaction
         std::string build_system_prompt() const;
+        std::string build_continuation_prompt() const;
+
         void log_token_usage(const AnthropicClient::ChatResponse& response, int iteration);
 
         // UI callback

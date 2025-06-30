@@ -491,6 +491,10 @@ It is up to you to figure out how much you will need to reverse engineer the bin
 Current task: )";
 }
 
+std::string REAgent::build_continuation_prompt() const {
+    return "Continue analyzing to complete the task. Use tools to gather information and submit_final_report when done.";
+}
+
 void REAgent::worker_loop() {
     while (!stop_requested) {
         // Wait for a task using semaphore with timeout
@@ -538,6 +542,8 @@ void REAgent::worker_loop() {
         request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
         request.tools = define_tools();
 
+        bool first_request = true;
+
         // Main agent loop
         int iteration = 0;
         const int max_iterations = 50;
@@ -545,8 +551,12 @@ void REAgent::worker_loop() {
 
         while (iteration < max_iterations && !stop_requested && !task_complete) {
             iteration++;
-
             anthropic->set_iteration(iteration);
+
+            if (!first_request) {
+                request.system_prompt = build_continuation_prompt();
+            }
+            first_request = false;
 
             if (log_callback) {
                 log_callback("Iteration " + std::to_string(iteration));

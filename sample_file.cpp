@@ -36,7 +36,8 @@
 // Obfuscated strings
 const char* encoded_update_host = "\x75\x70\x64\x61\x74\x65\x2e\x65\x78\x61\x6d\x70\x6c\x65\x2e\x63\x6f\x6d"; // "update.example.com"
 const char* encoded_update_path = "\x2f\x61\x70\x69\x2f\x76\x31\x2f\x63\x68\x65\x63\x6b"; // "/api/v1/check"
-const unsigned char license_key[] = {0x4d, 0x59, 0x2d, 0x53, 0x45, 0x43, 0x52, 0x45, 0x54, 0x2d, 0x4b, 0x45, 0x59, 0x31, 0x32, 0x33}; // "MY-SECRET-KEY123"
+// const unsigned char license_key[] = {0x4d, 0x59, 0x2d, 0x53, 0x45, 0x43, 0x52, 0x45, 0x54, 0x2d, 0x4b, 0x45, 0x59, 0x31, 0x32, 0x33}; // "MY-SECRET-KEY123"
+const unsigned char license_key[] = "5baf76de66a5";
 
 // Version info
 const int MAJOR_VERSION = 2;

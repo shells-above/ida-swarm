@@ -54,9 +54,25 @@ std::string IDAUtils::get_function_disassembly(ea_t address) {
 
         // Generate disassembly for each instruction in the function
         for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            // Get the disassembly line
             qstring line;
-            if (generate_disasm_line(&line, ea, GENDSM_REMOVE_TAGS)) {
+            if (generate_disasm_line(&line, ea, GENDSM_REMOVE_TAGS | GENDSM_MULTI_LINE)) {
                 result += line.c_str();
+
+                // Get repeatable comment
+                qstring rpt_cmt;
+                if (get_cmt(&rpt_cmt, ea, true)) {  // true = repeatable
+                    result += " ; ";
+                    result += rpt_cmt.c_str();
+                }
+
+                // Get non-repeatable comment
+                qstring cmt;
+                if (get_cmt(&cmt, ea, false)) {  // false = non-repeatable
+                    result += " ; ";
+                    result += cmt.c_str();
+                }
+
                 result += "\n";
             }
             ea = next_head(ea, func->end_ea);
@@ -86,15 +102,12 @@ std::string IDAUtils::get_function_decompilation(ea_t address) {
 
         // Decompile the function
         hexrays_failure_t hf;
-        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
         if (cfunc) {
-            // Create a string printer
             qstring str;
-            const strvec_t &sv = cfunc->get_pseudocode();
-            for (int i = 0; i < sv.size(); i++) {
-                str += sv[i].line;
-                str += '\n';
-            }
+            qstring_printer_t printer(cfunc, str, false);  // false = no tags
+            cfunc->print_func(printer);
+
             result = str.c_str();
         }
 
@@ -338,7 +351,7 @@ bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) 
 
         // Get the decompiled function
         hexrays_failure_t hf;
-        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
         if (!cfunc) {
             return false;
         }
