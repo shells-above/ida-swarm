@@ -63,24 +63,20 @@ namespace llm_re {
             }
             
             double get_estimated_cost() const {
-                // approximate because cache reads are a different price
-
                 // todo track usage per model and switch pricing calc for each
 
-                // Claude Opus 4 pricing (approximate)
-                // double input_cost = (total_input_tokens / 1000.0) * 0.015;  // $15 per 1M input tokens
-                // double output_cost = (total_output_tokens / 1000.0) * 0.075; // $75 per 1M output tokens
+                // price per million tokens
+                double price_base_input = 3.0;
+                double price_base_output = 15.0;
+                double price_cache_write = price_base_input * 1.25;   // not totally right because of 5m vs 1h cache writes
+                double price_cache_read = price_base_input * 0.1;
 
-                // Claude Sonnet 4 pricing (approximate)
-                double input_cost = (total_input_tokens / 1000.0) * 0.003;  // $3 per 1M input tokens
-                double output_cost = (total_output_tokens / 1000.0) * 0.015; // $15 per 1M output tokens
+                double input_cost = (total_input_tokens / 1000000.0) * price_base_input;
+                double output_cost = (total_output_tokens / 1000000.0) * price_base_output;
+                double cache_write_cost = (total_cache_creation_tokens / 1000000.0) * price_cache_write;
+                double cache_read_cost = (total_cache_read_tokens / 1000000.0) * price_cache_read;
 
-                // Claude Haiku 3.5 pricing (approximate)
-                // double input_cost = (total_input_tokens / 1000.0) * 0.0008;  // $0.8 per 1M input tokens
-                // double output_cost = (total_output_tokens / 1000.0) * 0.004; // $4 per 1M output tokens
-
-                double cache_write_cost = (total_cache_creation_tokens / 1000.0) * 0.00375; // 1.25x input
-                return input_cost + output_cost + cache_write_cost;
+                return input_cost + output_cost + cache_write_cost + cache_read_cost;
             }
         } token_stats;
 

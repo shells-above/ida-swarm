@@ -36,26 +36,43 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     request_json["model"] = request.model_sonnet;
     request_json["max_tokens"] = request.max_tokens;
     request_json["temperature"] = request.temperature;
-    
-    if (request.enable_thinking) {
-        // request_json["thinking"] = {
-        //     "budget_tokens":
-        //
-        // };
+
+    // order is important for prompt caching
+
+    // tools first
+    if (!request.tools.empty()) {
+        json tools_json = json::array();
+        for (size_t i = 0; i < request.tools.size(); ++i) {
+            const auto& tool = request.tools[i];
+            json tool_json;
+            tool_json["name"] = tool.name;
+            tool_json["description"] = tool.description;
+            tool_json["input_schema"] = tool.parameters;
+
+            // Add cache_control to the last tool
+            // tells anthropic that
+            if (i == request.tools.size() - 1) {
+                tool_json["cache_control"] = {{"type", "ephemeral"}};  // cache checkpoint for tools
+            }
+
+            tools_json.push_back(tool_json);
+        }
+        request_json["tools"] = tools_json;
     }
 
+    // system second
     if (!request.system_prompt.empty()) {
         // Wrap system prompt in cache control for prompt caching
         request_json["system"] = json::array({
             {
                 {"type", "text"},
                 {"text", request.system_prompt},
-                {"cache_control", {{"type", "ephemeral"}}}  // enables caching
+                {"cache_control", {{"type", "ephemeral"}}}  // cache checkpoint for system prompt
             }
         });
     }
 
-    // Build messages array
+    // messages last
     json messages = json::array();
     for (const auto& msg : request.messages) {
         json msg_json;
@@ -103,18 +120,13 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     request_json["messages"] = messages;
 
 
-    // Add tools if provided
-    if (!request.tools.empty()) {
-        json tools_json = json::array();
-        for (const auto& tool : request.tools) {
-            json tool_json;
-            tool_json["name"] = tool.name;
-            tool_json["description"] = tool.description;
-            tool_json["input_schema"] = tool.parameters;
-            tools_json.push_back(tool_json);
-        }
-        request_json["tools"] = tools_json;
+    if (request.enable_thinking) {
+        // request_json["thinking"] = {
+        //     "budget_tokens":
+        //
+        // };
     }
+
 
     // Log the request
     if (message_logger) {

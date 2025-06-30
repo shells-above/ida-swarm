@@ -20,11 +20,9 @@
 #include <fstream>
 #include <atomic>
 #include <condition_variable>
-#include <fstream>
 #include <utility>
 #include <algorithm>
 #include <cctype>
-#include <fstream>
 #include <regex>
 #include <curl/curl.h>
 #include <cmath>
