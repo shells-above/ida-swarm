@@ -483,17 +483,21 @@ Remember to:
 4. Use appropriate detail levels based on relevance
 5. Look for patterns and connections between functions
 6. Document your findings with notes and insights
+7. Update the IDA database with your knowledge by setting function names and comments using your tool calls. Only update information when you are confident you understand it.
 
 When you have gathered enough information to answer the user's question, use the submit_final_report tool with your detailed findings.
-
 It is up to you to figure out how much you will need to reverse engineer the binary using the tools before submitting your final report.
 
 Current task: )";
 }
 
-std::string REAgent::build_continuation_prompt() const {
-    return "Continue analyzing to complete the task. Use tools to gather information and submit_final_report when done.";
-}
+/*
+ *haiku sucks really bad, so i put these in the prompt and it didnt help much
+Impossible tasks will NEVER be provided to you. I guarantee that there is **ALWAYS** a solution, and your job is to find it.
+Work outwards from your anchor points (strings) and examine the functions and their relation to one another to accomplish your task.
+Remember! **It is of the utmost importance that once you want to create your final report, you use the submit_final_report tool call to submit your report. Your task WILL NOT FINISH if you don't submit it using this tool call.**
+Once you submit your final report, you will be terminated! You must make sure that your final report contains the information the user needs, because NO further investigation will occur.
+ */
 
 void REAgent::worker_loop() {
     while (!stop_requested) {
@@ -531,7 +535,7 @@ void REAgent::worker_loop() {
         // Log start
         log_callback("Starting analysis for task: " + task);
 
-        // Initialize conversation
+        // Initialize conversation history
         conversation_history.clear();
 
         // Build initial prompt
@@ -542,7 +546,11 @@ void REAgent::worker_loop() {
         request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
         request.tools = define_tools();
 
-        bool first_request = true;
+        // Track tool calls with their iteration number
+        std::map<std::string, std::string> tool_call_to_name;  // tool_call_id -> tool_name
+        std::map<std::string, json> tool_call_to_input;       // tool_call_id -> input params
+        std::map<std::string, int> tool_call_iteration;       // tool_call_id -> iteration when created
+        std::map<std::string, std::string> latest_tool_results; // key -> tool_call_id for most recent result
 
         // Main agent loop
         int iteration = 0;
@@ -553,32 +561,99 @@ void REAgent::worker_loop() {
             iteration++;
             anthropic->set_iteration(iteration);
 
-            // Keep original system prompt with caching, don't change it
-            // if (!first_request) {
-            //     request.system_prompt = build_continuation_prompt();
-            // }
-            first_request = false;
-
             if (log_callback) {
                 log_callback("Iteration " + std::to_string(iteration));
             }
 
-            // Send request to LLM
-            auto response = anthropic->send_chat_request(request);
+            // Create request for this iteration with pruning
+            AnthropicClient::ChatRequest current_request = request;
+
+            // Prune old large tool results (but keep the most recent one for each function)
+            if (iteration > 1) {
+                current_request.messages.clear();
+
+                for (const auto& msg : request.messages) {
+                    if (msg.role == "tool" && !msg.tool_call_id.empty()) {
+                        std::string tool_call_id = msg.tool_call_id;
+
+                        // Get the tool name and iteration
+                        if (tool_call_to_name.count(tool_call_id)) {
+                            std::string tool_name = tool_call_to_name[tool_call_id];
+                            int msg_iteration = tool_call_iteration[tool_call_id];
+
+                            // Check if this is a large result type
+                            if (tool_name == "get_function_decompilation" ||
+                                tool_name == "get_function_disassembly") {
+
+                                // Build unique key for this function/address
+                                std::string key = tool_name;
+                                if (tool_call_to_input[tool_call_id].contains("address")) {
+                                    key += ":" + std::to_string(tool_call_to_input[tool_call_id]["address"].get<int>());
+                                }
+
+                                // Check if this is the most recent result for this function/address
+                                bool is_most_recent = (latest_tool_results.count(key) &&
+                                                     latest_tool_results[key] == tool_call_id);
+
+                                // Prune if it's from a previous iteration AND not the most recent
+                                if (msg_iteration < iteration && !is_most_recent) {
+                                    try {
+                                        json result_json = json::parse(msg.content);
+                                        json pruned = result_json;
+
+                                        if (pruned.contains("decompilation")) {
+                                            pruned["decompilation"] = "[Decompilation result pruned - " +
+                                                std::to_string(pruned["decompilation"].get<std::string>().length()) +
+                                                " chars. Request again if needed.]";
+                                        }
+                                        if (pruned.contains("disassembly")) {
+                                            pruned["disassembly"] = "[Disassembly result pruned - " +
+                                                std::to_string(pruned["disassembly"].get<std::string>().length()) +
+                                                " chars. Request again if needed.]";
+                                        }
+
+                                        AnthropicClient::ChatMessage pruned_msg = msg;
+                                        pruned_msg.content = pruned.dump();
+                                        current_request.messages.push_back(pruned_msg);
+                                    } catch (...) {
+                                        // If parsing fails, keep original
+                                        current_request.messages.push_back(msg);
+                                    }
+                                } else {
+                                    // Keep the most recent result or current iteration results
+                                    current_request.messages.push_back(msg);
+                                }
+                            } else {
+                                // Keep non-large tool results
+                                current_request.messages.push_back(msg);
+                            }
+                        } else {
+                            // Keep messages we can't identify
+                            current_request.messages.push_back(msg);
+                        }
+                    } else {
+                        // Keep non-tool messages as-is
+                        current_request.messages.push_back(msg);
+                    }
+                }
+            }
+
+            // Send request
+            auto response = anthropic->send_chat_request(current_request);
 
             if (!response.success) {
                 if (log_callback) {
                     log_callback("LLM Error: " + response.error);
                     log_callback("Task failed due to API error. Please check your API key.");
                 }
-                task_complete = true;  // Mark task as complete to exit cleanly
+                task_complete = true;
                 break;
             }
 
             // Log token usage and progress
             log_token_usage(response, iteration);
 
-            // Build assistant message with content and tool calls
+            // Add response to ORIGINAL request history
             AnthropicClient::ChatMessage assistant_msg("assistant", response.content);
             assistant_msg.tool_calls = response.tool_calls;
             request.messages.push_back(assistant_msg);
@@ -590,8 +665,13 @@ void REAgent::worker_loop() {
                     std::string tool_id = tool_call["id"];
                     json tool_input = tool_call["input"];
 
+                    // Track this tool call
+                    tool_call_to_name[tool_id] = tool_name;
+                    tool_call_to_input[tool_id] = tool_input;
+                    tool_call_iteration[tool_id] = iteration;
+
                     if (log_callback) {
-                        log_callback("Executing tool: " + tool_name);
+                        log_callback("Executing tool: " + tool_name + " (" + tool_input.dump() + ")");
                     }
 
                     // Handle special case: final report
@@ -606,7 +686,17 @@ void REAgent::worker_loop() {
                     // Execute the tool
                     json result = executor->execute_action(tool_name, tool_input);
 
-                    // Add tool result to conversation
+                    // Update latest tool results tracking for large results
+                    if (tool_name == "get_function_decompilation" ||
+                        tool_name == "get_function_disassembly") {
+                        std::string key = tool_name;
+                        if (tool_input.contains("address")) {
+                            key += ":" + std::to_string(tool_input["address"].get<int>());
+                        }
+                        latest_tool_results[key] = tool_id;
+                    }
+
+                    // Add tool result to conversation (unpruned)
                     AnthropicClient::ChatMessage tool_result_msg("tool", result.dump());
                     tool_result_msg.tool_call_id = tool_id;
                     request.messages.push_back(tool_result_msg);

@@ -52,6 +52,7 @@ namespace llm_re {
         struct ChatRequest {
             std::string model_opus = "claude-opus-4-20250514";
             std::string model_sonnet = "claude-sonnet-4-20250514";
+            std::string model_haiku = "claude-3-5-haiku-latest";  // haiku really sucks, it likes to give up
             std::vector<ChatMessage> messages;
             std::vector<Tool> tools;
             int max_tokens = 8192;

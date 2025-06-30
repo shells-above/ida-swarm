@@ -48,9 +48,22 @@ namespace llm_re {
             }
             
             double get_estimated_cost() const {
+                // approximate because cache reads are a different price
+
+                // todo track usage per model and switch pricing calc for each
+
+                // Claude Opus 4 pricing (approximate)
+                // double input_cost = (total_input_tokens / 1000.0) * 0.015;  // $15 per 1M input tokens
+                // double output_cost = (total_output_tokens / 1000.0) * 0.075; // $75 per 1M output tokens
+
                 // Claude Sonnet 4 pricing (approximate)
                 double input_cost = (total_input_tokens / 1000.0) * 0.003;  // $3 per 1M input tokens
                 double output_cost = (total_output_tokens / 1000.0) * 0.015; // $15 per 1M output tokens
+
+                // Claude Haiku 3.5 pricing (approximate)
+                // double input_cost = (total_input_tokens / 1000.0) * 0.0008;  // $0.8 per 1M input tokens
+                // double output_cost = (total_output_tokens / 1000.0) * 0.004; // $4 per 1M output tokens
+
                 double cache_write_cost = (total_cache_creation_tokens / 1000.0) * 0.00375; // 1.25x input
                 return input_cost + output_cost + cache_write_cost;
             }
@@ -61,7 +74,6 @@ namespace llm_re {
 
         // LLM interaction
         std::string build_system_prompt() const;
-        std::string build_continuation_prompt() const;
 
         void log_token_usage(const AnthropicClient::ChatResponse& response, int iteration);
 
