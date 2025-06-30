@@ -1,24 +1,11 @@
-#include "plugin.h"
 #include "common.h"
 #include "agent.h"
 #include "ida_utils.h"
 
-#include <atomic>
-#include <memory>
-#include <string>
-#include <vector>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <chrono>
-#include <mutex>
-#include <algorithm>
-
-// UI constants definitions
-const char* PLUGIN_NAME = "LLM RE Agent";
-const char* PLUGIN_HOTKEY = "Ctrl+Shift+L";
-const char* LOG_VIEW_TITLE = "LLM Agent Log";
-const char* LLM_MSG_VIEW_TITLE = "LLM Messages";
+struct log_handler_t;
+struct llm_msg_handler_t;
+struct resume_handler_t;
+struct continue_handler_t;
 
 // Global plugin state
 namespace {
@@ -41,12 +28,20 @@ namespace {
     // New handlers for resume/continue
     resume_handler_t* g_resume_handler = nullptr;
     continue_handler_t* g_continue_handler = nullptr;
+
+    // UI constants
+    const char* PLUGIN_NAME = "LLM RE Agent";
+    const char* PLUGIN_HOTKEY = "Ctrl+Shift+L";
+    const char* LOG_VIEW_TITLE = "LLM Agent Log";
+    const char* LLM_MSG_VIEW_TITLE = "LLM Messages";
 }
 
 // Forward declarations
+plugmod_t* idaapi init();
+void idaapi term();
+bool idaapi run(size_t arg);
 void format_llm_message_for_ida(const std::string& direction, const json& message, strvec_t& lines);
-void log_llm_message(const std::string& direction, const json& message, int iteration = -1);
-void format_json_for_display(const json& j, strvec_t& lines, int indent = 0);
+void update_ui_state();
 
 // Plugin description
 plugin_t PLUGIN = {
@@ -194,106 +189,114 @@ static const custom_viewer_handlers_t llm_msg_handlers = {
 };
 
 // Resume handler - for resuming after API errors
-int idaapi resume_handler_t::activate(action_activation_ctx_t*) {
-    if (!g_agent || !g_agent->is_paused()) {
-        warning("No paused task to resume");
-        return 0;
+struct resume_handler_t : public action_handler_t {
+    virtual int idaapi activate(action_activation_ctx_t*) override {
+        if (!g_agent || !g_agent->is_paused()) {
+            warning("No paused task to resume");
+            return 0;
+        }
+
+        append_to_log("Resuming paused task...");
+        g_agent->resume();
+        update_ui_state();
+        return 1;
     }
 
-    append_to_log("Resuming paused task...");
-    g_agent->resume();
-    update_ui_state();
-    return 1;
-}
-
-action_state_t idaapi resume_handler_t::update(action_update_ctx_t*) {
-    if (g_agent && g_agent->is_paused()) {
-        return AST_ENABLE;
+    virtual action_state_t idaapi update(action_update_ctx_t*) override {
+        if (g_agent && g_agent->is_paused()) {
+            return AST_ENABLE;
+        }
+        return AST_DISABLE;
     }
-    return AST_DISABLE;
-}
+};
 
 // Continue handler - for continuing after final report
-int idaapi continue_handler_t::activate(action_activation_ctx_t*) {
-    if (!g_agent || (!g_agent->is_completed() && !g_agent->is_idle())) {
-        warning("Agent must complete a task before continuing");
-        return 0;
+struct continue_handler_t : public action_handler_t {
+    virtual int idaapi activate(action_activation_ctx_t*) override {
+        if (!g_agent || (!g_agent->is_completed() && !g_agent->is_idle())) {
+            warning("Agent must complete a task before continuing");
+            return 0;
+        }
+
+        // Get additional instructions from user
+        qstring additional_task;
+        if (!ask_str(&additional_task, HIST_CMT, "Enter additional instructions for the agent:") || additional_task.empty()) {
+            return 0;
+        }
+
+        append_to_log("Continuing with new instructions: " + std::string(additional_task.c_str()));
+        g_agent->continue_with_task(additional_task.c_str());
+        update_ui_state();
+        return 1;
     }
 
-    // Get additional instructions from user
-    qstring additional_task;
-    if (!ask_str(&additional_task, HIST_CMT, "Enter additional instructions for the agent:") || additional_task.empty()) {
-        return 0;
+    virtual action_state_t idaapi update(action_update_ctx_t*) override {
+        if (g_agent && (g_agent->is_completed() || g_agent->is_idle())) {
+            return AST_ENABLE;
+        }
+        return AST_DISABLE;
     }
-
-    append_to_log("Continuing with new instructions: " + std::string(additional_task.c_str()));
-    g_agent->continue_with_task(additional_task.c_str());
-    update_ui_state();
-    return 1;
-}
-
-action_state_t idaapi continue_handler_t::update(action_update_ctx_t*) {
-    if (g_agent && (g_agent->is_completed() || g_agent->is_idle())) {
-        return AST_ENABLE;
-    }
-    return AST_DISABLE;
-}
+};
 
 // Log window handler
-int idaapi log_handler_t::activate(action_activation_ctx_t*) {
-    if (g_log_viewer) {
-        // Bring existing viewer to front
-        activate_widget(g_log_viewer, true);
-    } else {
-        // Create new log viewer
-        simpleline_place_t s1;
-        simpleline_place_t s2(g_log_lines.size() > 0 ? g_log_lines.size() - 1 : 0);
-        g_log_viewer = create_custom_viewer(
-            LOG_VIEW_TITLE,
-            &s1, &s2, &s1,
-            nullptr,
-            &g_log_lines,
-            &log_handlers,
-            nullptr
-        );
-
+struct log_handler_t : public action_handler_t {
+    virtual int idaapi activate(action_activation_ctx_t*) override {
         if (g_log_viewer) {
-            display_widget(g_log_viewer, WOPN_DP_TAB | WOPN_RESTORE);
-        }
-    }
-    return 1;
-}
+            // Bring existing viewer to front
+            activate_widget(g_log_viewer, true);
+        } else {
+            // Create new log viewer
+            simpleline_place_t s1;
+            simpleline_place_t s2(g_log_lines.size() > 0 ? g_log_lines.size() - 1 : 0);
+            g_log_viewer = create_custom_viewer(
+                LOG_VIEW_TITLE,
+                &s1, &s2, &s1,
+                nullptr,
+                &g_log_lines,
+                &log_handlers,
+                nullptr
+            );
 
-action_state_t idaapi log_handler_t::update(action_update_ctx_t*) {
-    return AST_ENABLE_ALWAYS;
-}
+            if (g_log_viewer) {
+                display_widget(g_log_viewer, WOPN_DP_TAB | WOPN_RESTORE);
+            }
+        }
+        return 1;
+    }
+
+    virtual action_state_t idaapi update(action_update_ctx_t*) override {
+        return AST_ENABLE_ALWAYS;
+    }
+};
 
 // Show LLM messages window handler
-int idaapi llm_msg_handler_t::activate(action_activation_ctx_t*) {
-    if (g_llm_msg_viewer) {
-        activate_widget(g_llm_msg_viewer, true);
-    } else {
-        simpleline_place_t s1;
-        simpleline_place_t s2(g_llm_msg_lines.size() > 0 ? g_llm_msg_lines.size() - 1 : 0);
-        g_llm_msg_viewer = create_custom_viewer(
-            LLM_MSG_VIEW_TITLE,
-            &s1, &s2, &s1,
-            nullptr,
-            &g_llm_msg_lines,
-            &llm_msg_handlers,
-            nullptr
-        );
-
+struct llm_msg_handler_t : public action_handler_t {
+    virtual int idaapi activate(action_activation_ctx_t*) override {
         if (g_llm_msg_viewer) {
-            display_widget(g_llm_msg_viewer, WOPN_DP_TAB | WOPN_RESTORE);
-        }
-    }
-    return 1;
-}
+            activate_widget(g_llm_msg_viewer, true);
+        } else {
+            simpleline_place_t s1;
+            simpleline_place_t s2(g_llm_msg_lines.size() > 0 ? g_llm_msg_lines.size() - 1 : 0);
+            g_llm_msg_viewer = create_custom_viewer(
+                LLM_MSG_VIEW_TITLE,
+                &s1, &s2, &s1,
+                nullptr,
+                &g_llm_msg_lines,
+                &llm_msg_handlers,
+                nullptr
+            );
 
-action_state_t idaapi llm_msg_handler_t::update(action_update_ctx_t*) {
-    return AST_ENABLE_ALWAYS;
-}
+            if (g_llm_msg_viewer) {
+                display_widget(g_llm_msg_viewer, WOPN_DP_TAB | WOPN_RESTORE);
+            }
+        }
+        return 1;
+    }
+
+    virtual action_state_t idaapi update(action_update_ctx_t*) override {
+        return AST_ENABLE_ALWAYS;
+    }
+};
 
 // Update UI state based on agent state
 void update_ui_state() {
@@ -318,11 +321,12 @@ void update_ui_state() {
 }
 
 // Format JSON for display with syntax coloring
+
 void format_llm_message_for_ida(const std::string& direction, const json& message, strvec_t& lines) {
     if (direction == "REQUEST") {
         // For requests, show ALL new messages since the last request
         if (message.contains("messages") && message["messages"].is_array() && !message["messages"].empty()) {
-            const nlohmann::basic_json<>& messages = message["messages"];
+            nlohmann::basic_json<> messages = message["messages"];
 
             // Find the most recent messages that haven't been shown yet
             // We'll show the last few messages to provide context
@@ -562,7 +566,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
     }
 }
 
-void format_json_for_display(const json& j, strvec_t& lines, int indent) {
+void format_json_for_display(const json& j, strvec_t& lines, int indent = 0) {
     const std::string indent_str(indent * 2, ' ');
 
     if (j.is_object()) {
@@ -618,7 +622,7 @@ void format_json_for_display(const json& j, strvec_t& lines, int indent) {
 }
 
 // Log LLM messages (thread-safe)
-void log_llm_message(const std::string& direction, const json& message, int iteration) {
+void log_llm_message(const std::string& direction, const json& message, int iteration = -1) {
     if (g_terminating) return;
 
     // Prepare the message - use atomic increment
