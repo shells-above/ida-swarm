@@ -571,7 +571,7 @@ void REAgent::worker_loop() {
 
         // Main agent loop
         int iteration = 0;
-        const int max_iterations = 50;
+        const int max_iterations = 100;
         bool task_complete = false;
 
         while (iteration < max_iterations && !stop_requested && !task_complete) {

@@ -26,6 +26,39 @@ std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, c
                 ea_t addr = parse_single_address_value(element);
                 addresses.push_back(addr);
             }
+        } else if (param.is_string()) {
+            std::string str = param.get<std::string>();
+
+            // Trim whitespace
+            str.erase(str.find_last_not_of(" \t\n\r\f\v") + 1);
+            str.erase(0, str.find_first_not_of(" \t\n\r\f\v"));
+
+            // Check if it's a JSON array string
+            if (!str.empty() && str[0] == '[' && str.back() == ']') {
+                try {
+                    // Parse the string as JSON
+                    json array_json = json::parse(str);
+                    if (array_json.is_array()) {
+                        // Process each element in the parsed array
+                        for (const auto& element : array_json) {
+                            ea_t addr = parse_single_address_value(element);
+                            addresses.push_back(addr);
+                        }
+                    } else {
+                        // Not a valid array, treat as single address
+                        ea_t addr = parse_single_address_value(param);
+                        addresses.push_back(addr);
+                    }
+                } catch (const json::parse_error& e) {
+                    // Failed to parse as JSON array, treat as single address
+                    ea_t addr = parse_single_address_value(param);
+                    addresses.push_back(addr);
+                }
+            } else {
+                // Regular string address
+                ea_t addr = parse_single_address_value(param);
+                addresses.push_back(addr);
+            }
         } else {
             // Single value - parse and return as single-element vector
             ea_t addr = parse_single_address_value(param);
@@ -174,12 +207,15 @@ ea_t ActionExecutor::parse_single_address_value(const json& param) {
  * Supported formats:
  * - Single values: Same as before
  * - Arrays: ["0x100006008", "0x100007d55"], [16384, "0x4000", "$8000"]
+ * - String arrays: "[0x100006008, 0x100007d55]", "[0x5000, 0x4000]"
  * - Mixed formats in arrays: ["0x4000", 16384, "040000", "0b100"]
  *
  * Examples:
  * - "address": "0x4000" -> single address
  * - "related_addresses": ["0x100006008", "0x100007d55"] -> array of addresses
+ * - "related_addresses": "[0x100006008, 0x100007d55]" -> string containing array
  * - "targets": [16384, "0x4000", "$8000", "16,384"] -> mixed format array
+ * - "targets": "[0x5000, 0x4000]" -> string containing hex array
  */
 
 

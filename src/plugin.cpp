@@ -243,43 +243,178 @@ void append_to_log(const std::string& text) {
 
 // Format JSON for display with syntax coloring
 
-// Simplified formatting for IDA window - only show essential info
 void format_llm_message_for_ida(const std::string& direction, const json& message, strvec_t& lines) {
     if (direction == "REQUEST") {
-        // For requests, show only the user's latest message
+        // For requests, show ALL new messages since the last request
         if (message.contains("messages") && message["messages"].is_array() && !message["messages"].empty()) {
             auto messages = message["messages"];
-            auto last_msg = messages.back();
-            
-            if (last_msg.contains("role") && last_msg.contains("content")) {
-                std::string role = last_msg["role"].get<std::string>();
-                
-                simpleline_t role_line;
-                role_line.line = ("Role: " + role).c_str();
-                role_line.color = COLOR_KEYWORD;
-                lines.push_back(role_line);
-                
-                // Handle content based on type
-                if (last_msg["content"].is_string()) {
-                    std::string content = last_msg["content"].get<std::string>();
-                    // Split long content into multiple lines
-                    size_t pos = 0;
-                    while (pos < content.length()) {
-                        size_t line_end = std::min(pos + 80, content.length());
-                        // Try to break at word boundary
-                        if (line_end < content.length()) {
-                            size_t space_pos = content.find_last_of(' ', line_end);
-                            if (space_pos != std::string::npos && space_pos > pos) {
-                                line_end = space_pos;
+
+            // Find the most recent messages that haven't been shown yet
+            // We'll show the last few messages to provide context
+            int msgs_to_show = 1;  // Show last message
+            int start_idx = std::max(0, (int)messages.size() - msgs_to_show);
+
+            // Show each message in the request
+            for (int i = start_idx; i < (int)messages.size(); i++) {
+                auto msg = messages[i];
+                if (!msg.contains("role")) continue;
+
+                std::string role = msg["role"].get<std::string>();
+
+                // Add a separator between messages
+                if (i > start_idx) {
+                    simpleline_t sep;
+                    sep.line = "";
+                    lines.push_back(sep);
+                }
+
+                // Check if this is a user message with tool_result content
+                if (role == "user" && msg.contains("content") && msg["content"].is_array()) {
+                    bool has_tool_result = false;
+                    for (const auto& content_item : msg["content"]) {
+                        if (content_item.contains("type") && content_item["type"] == "tool_result") {
+                            has_tool_result = true;
+
+                            simpleline_t role_line;
+                            role_line.line = "Tool Result:";
+                            role_line.color = COLOR_KEYWORD;
+                            lines.push_back(role_line);
+
+                            if (content_item.contains("tool_use_id")) {
+                                std::string tool_use_id = content_item["tool_use_id"].get<std::string>();
+                                simpleline_t id_line;
+                                id_line.line = ("Tool Call ID: " + tool_use_id).c_str();
+                                id_line.color = COLOR_IMPNAME;
+                                lines.push_back(id_line);
+                            }
+
+                            // Show the tool result content
+                            if (content_item.contains("content") && content_item["content"].is_string()) {
+                                std::string content = content_item["content"].get<std::string>();
+
+                                // Try to parse as JSON for better display
+                                try {
+                                    json parsed_content = json::parse(content);
+
+                                    // Show raw JSON in a formatted way
+                                    std::string json_str = parsed_content.dump();
+                                    if (json_str.length() > 300) {
+                                        json_str = json_str.substr(0, 297) + "...";
+                                    }
+
+                                    simpleline_t result_line;
+                                    result_line.line = ("Result: " + json_str).c_str();
+                                    result_line.color = COLOR_DEFAULT;
+                                    lines.push_back(result_line);
+                                } catch (...) {
+                                    // If not JSON, show as plain text
+                                    if (content.length() > 300) {
+                                        content = content.substr(0, 297) + "...";
+                                    }
+
+                                    simpleline_t result_line;
+                                    result_line.line = ("Result: " + content).c_str();
+                                    result_line.color = COLOR_DEFAULT;
+                                    lines.push_back(result_line);
+                                }
+                            }
+                            break;  // We found and processed the tool result
+                        }
+                    }
+
+                    // If no tool result found, show as regular user message
+                    if (!has_tool_result) {
+                        simpleline_t role_line;
+                        role_line.line = ("Role: " + role).c_str();
+                        role_line.color = COLOR_KEYWORD;
+                        lines.push_back(role_line);
+
+                        // Show any text content
+                        for (const auto& content_item : msg["content"]) {
+                            if (content_item.contains("type") && content_item["type"] == "text" &&
+                                content_item.contains("text")) {
+                                std::string text = content_item["text"].get<std::string>();
+                                // Split long content into multiple lines
+                                size_t pos = 0;
+                                while (pos < text.length()) {
+                                    size_t line_end = std::min(pos + 80, text.length());
+                                    if (line_end < text.length()) {
+                                        size_t space_pos = text.find_last_of(' ', line_end);
+                                        if (space_pos != std::string::npos && space_pos > pos) {
+                                            line_end = space_pos;
+                                        }
+                                    }
+
+                                    simpleline_t content_line;
+                                    content_line.line = text.substr(pos, line_end - pos).c_str();
+                                    content_line.color = COLOR_DEFAULT;
+                                    lines.push_back(content_line);
+
+                                    pos = line_end + (line_end < text.length() && text[line_end] == ' ' ? 1 : 0);
+                                }
                             }
                         }
-                        
-                        simpleline_t content_line;
-                        content_line.line = content.substr(pos, line_end - pos).c_str();
-                        content_line.color = COLOR_DEFAULT;
-                        lines.push_back(content_line);
-                        
-                        pos = line_end + (line_end < content.length() && content[line_end] == ' ' ? 1 : 0);
+                    }
+                } else if (role == "assistant" && msg.contains("tool_calls")) {
+                    simpleline_t role_line;
+                    role_line.line = "Role: assistant (with tool calls)";
+                    role_line.color = COLOR_KEYWORD;
+                    lines.push_back(role_line);
+
+                    // Show tool calls from assistant
+                    for (const auto& tool_call : msg["tool_calls"]) {
+                        if (tool_call.contains("name") && tool_call.contains("id")) {
+                            std::string tool_name = tool_call["name"];
+                            std::string tool_id = tool_call["id"];
+
+                            simpleline_t tool_call_line;
+                            tool_call_line.line = ("→ Tool Call: " + tool_name + " (ID: " + tool_id + ")").c_str();
+                            tool_call_line.color = COLOR_IMPNAME;
+                            lines.push_back(tool_call_line);
+
+                            if (tool_call.contains("input")) {
+                                std::string args = tool_call["input"].dump();
+                                if (args.length() > 100) {
+                                    args = args.substr(0, 97) + "...";
+                                }
+                                simpleline_t args_line;
+                                args_line.line = ("  Args: " + args).c_str();
+                                args_line.color = COLOR_DEFAULT;
+                                lines.push_back(args_line);
+                            }
+                        }
+                    }
+                } else {
+                    // Regular message (user, system, etc.)
+                    simpleline_t role_line;
+                    role_line.line = ("Role: " + role).c_str();
+                    role_line.color = COLOR_KEYWORD;
+                    lines.push_back(role_line);
+
+                    // Handle content based on type
+                    if (msg.contains("content")) {
+                        if (msg["content"].is_string()) {
+                            std::string content = msg["content"].get<std::string>();
+                            // Split long content into multiple lines
+                            size_t pos = 0;
+                            while (pos < content.length()) {
+                                size_t line_end = std::min(pos + 80, content.length());
+                                // Try to break at word boundary
+                                if (line_end < content.length()) {
+                                    size_t space_pos = content.find_last_of(' ', line_end);
+                                    if (space_pos != std::string::npos && space_pos > pos) {
+                                        line_end = space_pos;
+                                    }
+                                }
+
+                                simpleline_t content_line;
+                                content_line.line = content.substr(pos, line_end - pos).c_str();
+                                content_line.color = COLOR_DEFAULT;
+                                lines.push_back(content_line);
+
+                                pos = line_end + (line_end < content.length() && content[line_end] == ' ' ? 1 : 0);
+                            }
+                        }
                     }
                 }
             }
@@ -290,15 +425,15 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
             for (const auto& content_item : message["content"]) {
                 if (content_item.contains("type")) {
                     std::string type = content_item["type"].get<std::string>();
-                    
+
                     if (type == "text" && content_item.contains("text")) {
                         std::string text = content_item["text"].get<std::string>();
-                        
+
                         simpleline_t type_line;
                         type_line.line = "Assistant:";
                         type_line.color = COLOR_KEYWORD;
                         lines.push_back(type_line);
-                        
+
                         // Split text into lines
                         size_t pos = 0;
                         while (pos < text.length()) {
@@ -309,25 +444,37 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
                                     line_end = space_pos;
                                 }
                             }
-                            
+
                             simpleline_t text_line;
                             text_line.line = text.substr(pos, line_end - pos).c_str();
                             text_line.color = COLOR_DEFAULT;
                             lines.push_back(text_line);
-                            
+
                             pos = line_end + (line_end < text.length() && text[line_end] == ' ' ? 1 : 0);
                         }
                     } else if (type == "tool_use" && content_item.contains("name")) {
                         std::string tool_name = content_item["name"].get<std::string>();
-                        
+                        std::string tool_id = "";
+                        if (content_item.contains("id")) {
+                            tool_id = content_item["id"].get<std::string>();
+                        }
+
                         simpleline_t tool_line;
-                        tool_line.line = ("Tool: " + tool_name).c_str();
+                        if (!tool_id.empty()) {
+                            tool_line.line = ("Tool: " + tool_name + " (ID: " + tool_id + ")").c_str();
+                        } else {
+                            tool_line.line = ("Tool: " + tool_name).c_str();
+                        }
                         tool_line.color = COLOR_IMPNAME;
                         lines.push_back(tool_line);
-                        
+
                         // Show arguments if present
                         if (content_item.contains("input")) {
                             std::string args = content_item["input"].dump();
+                            // Truncate very long arguments
+                            if (args.length() > 150) {
+                                args = args.substr(0, 147) + "...";
+                            }
                             simpleline_t args_line;
                             args_line.line = ("Args: " + args).c_str();
                             args_line.color = COLOR_DEFAULT;
