@@ -69,6 +69,8 @@ set(SOURCES
 # Create shared library with correct naming convention (end in "64", wont be loaded if it doesn't)
 add_library(ida_llm_agent64 SHARED ${SOURCES})
 
+add_executable(sample_file sample_file.cpp)
+
 # Link libraries
 target_link_libraries(ida_llm_agent64
         ${IDA64}
