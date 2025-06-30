@@ -70,8 +70,12 @@ private:
     std::set<ea_t> anchor_points;
     ea_t current_focus;
 
-    // Helper methods
+    // Call graph
+    mutable std::map<std::pair<ea_t, ea_t>, int> call_graph_cache;
+
+
     int calculateDistance(ea_t from, ea_t to) const;
+    int compute_call_graph_distance(ea_t from, ea_t to) const;
 
 public:
     BinaryMemory();

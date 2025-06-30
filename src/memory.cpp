@@ -14,11 +14,66 @@ BinaryMemory::BinaryMemory() : current_focus(0) {}
 BinaryMemory::~BinaryMemory() {}
 
 int BinaryMemory::calculateDistance(ea_t from, ea_t to) const {
-    // Simple implementation - can be enhanced with call graph distance
     if (from == to) return 0;
-    if (anchor_points.find(to) != anchor_points.end()) return 1;
-    // More sophisticated distance calculation would go here
-    return 5;  // Default distance
+
+    // Check cache first
+    auto cache_key = std::make_pair(from, to);
+    auto it = call_graph_cache.find(cache_key);
+    if (it != call_graph_cache.end()) {
+        return it->second;
+    }
+
+    // Compute actual distance
+    int distance = compute_call_graph_distance(from, to);
+    call_graph_cache[cache_key] = distance;
+    return distance;
+}
+
+int BinaryMemory::compute_call_graph_distance(ea_t from, ea_t to) const {
+    // BFS to find shortest path in call graph
+    std::queue<std::pair<ea_t, int>> bfs_queue;
+    std::set<ea_t> visited;
+
+    bfs_queue.push({from, 0});
+    visited.insert(from);
+
+    while (!bfs_queue.empty() && bfs_queue.size() < 1000) { // Limit search
+        auto [current, distance] = bfs_queue.front();
+        bfs_queue.pop();
+
+        if (current == to) {
+            return distance;
+        }
+
+        // Check if we have this function in memory
+        auto func_it = function_memories.find(current);
+        if (func_it != function_memories.end()) {
+            // Check callees
+            for (ea_t callee : func_it->second.callees) {
+                if (visited.find(callee) == visited.end()) {
+                    visited.insert(callee);
+                    bfs_queue.push({callee, distance + 1});
+                }
+            }
+            // Check callers (for backward reachability)
+            for (ea_t caller : func_it->second.callers) {
+                if (visited.find(caller) == visited.end()) {
+                    visited.insert(caller);
+                    bfs_queue.push({caller, distance + 1});
+                }
+            }
+        }
+
+        // If function not in memory, we need to get its xrefs
+        // This is a limitation - we work with what we have cached
+    }
+
+    // If no path found or anchor point
+    if (anchor_points.find(to) != anchor_points.end()) {
+        return 2; // Close to anchor
+    }
+
+    return 10; // Default far distance
 }
 
 void BinaryMemory::set_global_note(const std::string& key, const std::string& content) {
