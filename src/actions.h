@@ -42,6 +42,7 @@ public:
     json get_function_data_refs(ea_t address);
     json get_data_name(ea_t address);
     json set_data_name(ea_t address, const std::string& name);
+    json get_data(ea_t address);
     json add_disassembly_comment(ea_t address, const std::string& comment);
     json add_pseudocode_comment(ea_t address, const std::string& comment);
     json clear_disassembly_comment(ea_t address);

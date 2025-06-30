@@ -75,7 +75,15 @@ set(SOURCES
 add_library(ida_llm_agent64 SHARED ${SOURCES})
 
 add_executable(sample_file sample_file.cpp)
+set_target_properties(sample_file PROPERTIES
+        CMAKE_BUILD_TYPE Release
+)
 
+target_compile_options(sample_file PRIVATE
+        -O3          # Optimize
+        -g0          # No debug info
+        -DNDEBUG     # Release mode
+)
 # Link libraries
 target_link_libraries(ida_llm_agent64
         ${IDA64}

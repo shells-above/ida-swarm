@@ -90,12 +90,290 @@ void REAgent::set_log_callback(std::function<void(const std::string&)> callback)
     log_callback = callback;
 }
 
+std::vector<AnthropicClient::Tool> REAgent::define_tools() const {
+    std::vector<AnthropicClient::Tool> tools;
+
+    // Helper to create parameter schema
+    auto make_params = [](const std::vector<std::pair<std::string, std::string>>& params,
+                         const std::vector<std::string>& required = {}) -> json {
+        json schema;
+        schema["type"] = "object";
+        schema["properties"] = json::object();
+
+        for (const auto& [name, type] : params) {
+            if (type == "integer") {
+                schema["properties"][name] = {{"type", "integer"}};
+            } else if (type == "boolean") {
+                schema["properties"][name] = {{"type", "boolean"}};
+            } else if (type == "array") {
+                schema["properties"][name] = {{"type", "array"}, {"items", {{"type", "integer"}}}};
+            } else {
+                schema["properties"][name] = {{"type", "string"}};
+            }
+        }
+
+        if (!required.empty()) {
+            schema["required"] = required;
+        }
+
+        return schema;
+    };
+
+    // Cross-Reference tools
+    tools.push_back({
+        "get_xrefs_to",
+        "Find what calls or references this address. Returns list of caller addresses. Auto-updates memory with relationships. Essential for understanding how functions are used.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "get_xrefs_from",
+        "Find what this address calls or references. Returns list of callee addresses. Auto-updates memory with relationships. Use to trace execution flow.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Code Analysis tools
+    tools.push_back({
+        "get_function_disassembly",
+        "Get assembly code with comments for a function. Use for low-level analysis, anti-debugging checks, optimizations, or when decompilation fails.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "get_function_decompilation",
+        "Get C-like pseudocode for a function. Best for understanding logic, algorithms, and control flow. Easier to read than assembly.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Function Management tools
+    tools.push_back({
+        "get_function_address",
+        "Convert function name to address. Returns BADADDR if not found. Use to locate known functions.",
+        make_params({{"name", "string"}}, {"name"})
+    });
+
+    tools.push_back({
+        "get_function_name",
+        "Get current name of function at address. May be auto-generated like 'sub_401000'. Check before renaming.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "set_function_name",
+        "Rename function at address. Use descriptive names like 'validate_license' or 'decrypt_config'. Makes analysis clearer.",
+        make_params({{"address", "integer"}, {"name", "string"}}, {"address", "name"})
+    });
+
+    // Reference Analysis tools
+    tools.push_back({
+        "get_function_string_refs",
+        "Get all strings used by function. Excellent for finding URLs, error messages, format strings, or understanding function purpose.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "get_function_data_refs",
+        "Get global data addresses accessed by function. Tracks global state usage and shared data structures.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Data Management tools
+    tools.push_back({
+        "get_data_name",
+        "Get name of global variable at address. May be auto-generated.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "set_data_name",
+        "Rename global variable at address. Use descriptive names like 'g_license_key' or 'encryption_table'.",
+        make_params({{"address", "integer"}, {"name", "string"}}, {"address", "name"})
+    });
+
+    tools.push_back({
+        "get_data",
+        "Get the value of global data at address. Returns string for string data, or hex bytes for other data types.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Documentation tools
+    tools.push_back({
+        "add_disassembly_comment",
+        "Add comment to a specific instruction. Document important findings at instruction level.",
+        make_params({{"address", "integer"}, {"comment", "string"}}, {"address", "comment"})
+    });
+
+    tools.push_back({
+        "add_pseudocode_comment",
+        "Add comment to function pseudocode. Document high-level understanding and algorithms.",
+        make_params({{"address", "integer"}, {"comment", "string"}}, {"address", "comment"})
+    });
+
+    tools.push_back({
+        "clear_disassembly_comment",
+        "Remove disassembly comment at address if incorrect or outdated.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "clear_pseudocode_comments",
+        "Remove all pseudocode comments for function. Use when starting fresh analysis.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Binary Information tools
+    tools.push_back({
+        "get_imports",
+        "Get all imported functions grouped by module. Find interesting APIs like crypto (CryptDecrypt), network (WSASocket), or anti-debug (IsDebuggerPresent).",
+        make_params({})
+    });
+
+    tools.push_back({
+        "get_exports",
+        "List all exported functions with addresses. Essential for DLL analysis. Find entry points and public APIs.",
+        make_params({})
+    });
+
+    tools.push_back({
+        "search_strings",
+        "Find strings containing specific text. Locate keywords like 'update', 'license', 'password', URLs, or error messages. Case-sensitive option available.",
+        make_params({{"text", "string"}, {"is_case_sensitive", "boolean"}}, {"text"})
+    });
+
+    // Knowledge Management tools
+    tools.push_back({
+        "set_global_note",
+        "Store high-level analysis findings. Use descriptive keys like 'update_mechanism', 'crypto_analysis', 'network_protocol'. Persistent across analysis.",
+        make_params({{"key", "string"}, {"content", "string"}}, {"key", "content"})
+    });
+
+    tools.push_back({
+        "get_global_note",
+        "Retrieve previously stored note by key. Check for existing analysis before starting.",
+        make_params({{"key", "string"}}, {"key"})
+    });
+
+    tools.push_back({
+        "list_global_notes",
+        "Get all stored note keys. See what aspects have been analyzed.",
+        make_params({})
+    });
+
+    tools.push_back({
+        "search_notes",
+        "Search all notes with regex pattern. Find related analyses and connect findings.",
+        make_params({{"query", "string"}}, {"query"})
+    });
+
+    // Function Analysis tools
+    tools.push_back({
+        "set_function_analysis",
+        "Store function analysis at detail level. Level 1=basic purpose, 2=relationships, 3=detailed logic, 4=comprehensive. Build understanding incrementally.",
+        make_params({{"address", "integer"}, {"level", "integer"}, {"analysis", "string"}},
+                   {"address", "level", "analysis"})
+    });
+
+    tools.push_back({
+        "get_function_analysis",
+        "Get stored analysis for function. Level 0 returns best available. Check before re-analyzing.",
+        make_params({{"address", "integer"}, {"level", "integer"}}, {"address"})
+    });
+
+    tools.push_back({
+        "get_memory_context",
+        "Get all knowledge within call-hop radius. Your 'working memory' for understanding code regions. Essential before deep analysis.",
+        make_params({{"address", "integer"}, {"radius", "integer"}}, {"address"})
+    });
+
+    // Analysis Tracking tools
+    tools.push_back({
+        "get_analyzed_functions",
+        "List all analyzed functions with maximum detail level achieved. Track analysis coverage.",
+        make_params({})
+    });
+
+    tools.push_back({
+        "find_functions_by_pattern",
+        "Search function analyses with regex. Find similar functionality across the binary.",
+        make_params({{"pattern", "string"}}, {"pattern"})
+    });
+
+    tools.push_back({
+        "get_exploration_frontier",
+        "Get functions marked but not yet analyzed. See what needs investigation.",
+        make_params({})
+    });
+
+    // Work Queue tools
+    tools.push_back({
+        "mark_for_analysis",
+        "Queue function for future analysis with reason and priority (1=low, 10=high). Track interesting functions found during exploration.",
+        make_params({{"address", "integer"}, {"reason", "string"}, {"priority", "integer"}},
+                   {"address", "reason"})
+    });
+
+    tools.push_back({
+        "get_analysis_queue",
+        "View pending analysis queue sorted by priority. Decide what to analyze next.",
+        make_params({})
+    });
+
+    tools.push_back({
+        "set_current_focus",
+        "Set anchor point for analysis. Affects detail level calculations - nearby functions get more attention.",
+        make_params({{"address", "integer"}}, {"address"})
+    });
+
+    // Pattern Recognition tools
+    tools.push_back({
+        "add_insight",
+        "Record analysis insights. Types: 'pattern' (recurring code), 'hypothesis' (theory), 'question' (uncertainty), 'finding' (discovery).",
+        make_params({{"type", "string"}, {"description", "string"}, {"related_addresses", "array"}},
+                   {"type", "description", "related_addresses"})
+    });
+
+    tools.push_back({
+        "get_insights",
+        "Retrieve recorded insights by type. Empty type returns all. Review patterns and hypotheses.",
+        make_params({{"type", "string"}})
+    });
+
+    // Bulk Operation tools
+    tools.push_back({
+        "analyze_cluster",
+        "Group related functions for cohesive analysis. Useful for analyzing subsystems like 'crypto_functions' or 'network_handlers'.",
+        make_params({{"addresses", "array"}, {"cluster_name", "string"}, {"initial_level", "integer"}},
+                   {"addresses", "cluster_name", "initial_level"})
+    });
+
+    tools.push_back({
+        "get_cluster_analysis",
+        "Retrieve all analyses for a named cluster. Understand subsystem functionality.",
+        make_params({{"cluster_name", "string"}}, {"cluster_name"})
+    });
+
+    tools.push_back({
+        "summarize_region",
+        "Get summary of everything known in address range. Useful for understanding code sections.",
+        make_params({{"start_addr", "integer"}, {"end_addr", "integer"}}, {"start_addr", "end_addr"})
+    });
+
+    // Special tool for final report
+    tools.push_back({
+        "submit_final_report",
+        "Submit your final analysis report when you have gathered enough information to answer the user's task. This completes the analysis.",
+        make_params({{"report", "string"}}, {"report"})
+    });
+
+    return tools;
+}
+
 std::string REAgent::build_system_prompt() const {
     return R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
 
-You have access to the following actions:
+You have access to the following tools:
 
-IDA API Actions:
+IDA API Tools:
 ### Cross-References
 - **get_xrefs_to(address)** - Find what calls/references this address. Returns list of caller addresses. Auto-updates memory with relationships.
 - **get_xrefs_from(address)** - Find what this address calls/references. Returns list of callee addresses. Auto-updates memory with relationships.
@@ -116,6 +394,7 @@ IDA API Actions:
 ### Data Management
 - **get_data_name(address)** - Get name of global variable.
 - **set_data_name(address, name)** - Rename global variable descriptively.
+- **get_data(address)** - Get the value of global data. Returns string content for strings, hex bytes for other data.
 
 ### Documentation
 - **add_disassembly_comment(address, comment)** - Comment on a specific instruction.
@@ -128,7 +407,7 @@ IDA API Actions:
 - **get_exports()** - List exported functions with addresses. Find entry points in DLLs.
 - **search_strings(text, is_case_sensitive)** - Find strings containing text. Locate keywords like "update", "license", "password".
 
-## Memory System Actions
+## Memory System Tools
 
 ### Knowledge Management
 - **set_global_note(key, content)** - Store discoveries. Use keys like "update_mechanism", "crypto_analysis".
@@ -165,6 +444,9 @@ IDA API Actions:
 - **get_cluster_analysis(cluster_name)** - Get all analyses for a cluster.
 - **summarize_region(start_addr, end_addr)** - Summary of everything known in address range.
 
+### Task Completion
+- **submit_final_report(report)** - Submit your final analysis report when you have gathered enough information to answer the user's question.
+
 ## Best Practices
 
 1. **Start with reconnaissance**: Use `search_strings()`, and `get_imports()` to find anchor points (a point which you will work out from to accomplish the user task).
@@ -187,12 +469,6 @@ IDA API Actions:
 
 10. **Connect findings**: Use `search_notes()` and `find_functions_by_pattern()` to link related analyses.
 
-To execute an action, respond with:
-ACTION: action_name
-PARAMS: {"param1": value1, "param2": value2}
-
-You can execute multiple actions by using multiple ACTION/PARAMS pairs.
-
 Remember to:
 1. Start by finding anchor points (strings, function names) relevant to the task
 2. Work outward from anchor points, following references
@@ -201,49 +477,11 @@ Remember to:
 5. Look for patterns and connections between functions
 6. Document your findings with notes and insights
 
-When you have gathered enough information to answer the user's question, respond with:
-REPORT: Your detailed findings about the task
+When you have gathered enough information to answer the user's question, use the submit_final_report tool with your detailed findings.
 
-It is up to you to figure out how much you will need to reverse engineer the binary using the actions before responding with a report.
+It is up to you to figure out how much you will need to reverse engineer the binary using the tools before submitting your final report.
 
 Current task: )";
-}
-
-json REAgent::parse_llm_action(const std::string& response) const {
-    json actions = json::array();
-
-    // Parse ACTION/PARAMS pairs
-    std::regex action_regex(R"(ACTION:\s*(\w+)\s*\nPARAMS:\s*(\{[^}]+\}))");
-    std::sregex_iterator it(response.begin(), response.end(), action_regex);
-    std::sregex_iterator end;
-
-    while (it != end) {
-        json action;
-        action["name"] = (*it)[1].str();
-        try {
-            action["params"] = json::parse((*it)[2].str());
-        } catch (const std::exception& e) {
-            action["params"] = json::object();
-        }
-        actions.push_back(action);
-        ++it;
-    }
-
-    // Check for REPORT
-    std::regex report_regex(R"(REPORT:\s*(.+))");
-    std::smatch report_match;
-    if (std::regex_search(response, report_match, report_regex)) {
-        json report_action;
-        report_action["name"] = "report";
-        report_action["params"]["content"] = report_match[1].str();
-        actions.push_back(report_action);
-    }
-
-    return actions;
-}
-
-std::string REAgent::format_action_result(const json& result) const {
-    return result.dump(2);
 }
 
 void REAgent::worker_loop() {
@@ -293,12 +531,14 @@ void REAgent::worker_loop() {
         AnthropicClient::ChatRequest request;
         request.system_prompt = system_prompt;
         request.messages.push_back({"user", "Please analyze the binary to answer: " + task});
+        request.tools = define_tools();
 
         // Main agent loop
         int iteration = 0;
         const int max_iterations = 50;
+        bool task_complete = false;
 
-        while (iteration < max_iterations && !stop_requested) {
+        while (iteration < max_iterations && !stop_requested && !task_complete) {
             iteration++;
 
             if (log_callback) {
@@ -314,60 +554,54 @@ void REAgent::worker_loop() {
                 }
                 break;
             }
-            
+
             // Log token usage and progress
             log_token_usage(response, iteration);
 
-            // Add response to history
-            request.messages.push_back({"assistant", response.content});
+            // Build assistant message with content and tool calls
+            AnthropicClient::ChatMessage assistant_msg("assistant", response.content);
+            assistant_msg.tool_calls = response.tool_calls;
+            request.messages.push_back(assistant_msg);
 
-            // Parse actions from response
-            json actions = parse_llm_action(response.content);
+            // Process tool calls
+            if (!response.tool_calls.empty()) {
+                for (const auto& tool_call : response.tool_calls) {
+                    std::string tool_name = tool_call["name"];
+                    std::string tool_id = tool_call["id"];
+                    json tool_input = tool_call["input"];
 
-            if (actions.empty()) {
-                continue;
-            }
-
-            // Execute actions
-            json results = json::array();
-            bool found_report = false;
-
-            for (const auto& action : actions) {
-                std::string action_name = action["name"];
-
-                if (action_name == "report") {
-                    // Final report
                     if (log_callback) {
-                        log_callback("=== FINAL REPORT ===\n" + action["params"]["content"].get<std::string>());
-                    }
-                    found_report = true;
-                    break;
-                } else {
-                    // Execute action
-                    if (log_callback) {
-                        log_callback("Executing: " + action_name);
+                        log_callback("Executing tool: " + tool_name);
                     }
 
-                    json result = executor->execute_action(action_name, action["params"]);
-                    results.push_back({
-                        {"action", action_name},
-                        {"result", result}
-                    });
+                    // Handle special case: final report
+                    if (tool_name == "submit_final_report") {
+                        if (log_callback) {
+                            log_callback("=== FINAL REPORT ===\n" + tool_input["report"].get<std::string>());
+                        }
+                        task_complete = true;
+                        break;
+                    }
+
+                    // Execute the tool
+                    json result = executor->execute_action(tool_name, tool_input);
+
+                    // Add tool result to conversation
+                    AnthropicClient::ChatMessage tool_result_msg(tool_id, result);
+                    request.messages.push_back(tool_result_msg);
+                }
+            } else if (response.stop_reason == "end_turn" && response.tool_calls.empty()) {
+                // Assistant finished without calling tools - might be thinking or need prompting
+                if (iteration > 1) {
+                    std::string analyze_more_msg = "Please continue your analysis and use tools to gather more information or submit your final report.";
+                    request.messages.emplace_back("user", analyze_more_msg);
                 }
             }
-
-            if (found_report) {
-                break;
-            }
-
-            // Add results to conversation
-            std::string results_str = "Results:\n" + results.dump(2);
-            request.messages.push_back({"user", results_str});
         }
 
-        if (iteration >= max_iterations) {
+        if (iteration >= max_iterations && !task_complete) {
             if (log_callback) {
-                log_callback("Reached maximum iterations limit");
+                log_callback("Reached maximum iterations limit without completing the task");
             }
         }
     }

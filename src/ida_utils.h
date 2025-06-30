@@ -179,6 +179,13 @@ public:
      */
     static bool set_data_name(ea_t address, const std::string& name);
 
+    /**
+     * Returns the value and type of the data item
+     * @param address Data address
+     * @return Value and type of data
+     */
+    static std::pair<std::string, std::string> get_data(ea_t address);
+
     // Comment operations
 
     /**

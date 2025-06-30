@@ -163,12 +163,6 @@ struct log_handler_t : public action_handler_t {
     }
 };
 
-// Task input form
-static const char task_form[] =
-    "LLM Reverse Engineering Agent\n"
-    "<Task:q:1:50:100::>\n"
-    "<API Key:q:2:50:100::>\n";
-
 // Append text to log viewer
 void append_to_log(const std::string& text) {
     // Add timestamped line to log
@@ -223,29 +217,21 @@ plugmod_t* idaapi init() {
 
 // Run plugin
 bool idaapi run(size_t arg) {
-    // Get task from user
-    qstring task, api_key;
-
-    // Load saved API key if available
-    if (!g_api_key.empty()) {
-        api_key = g_api_key.c_str();
-    }
-
-    if (!ask_form(task_form, &task, &api_key)) {
-        return false;
-    }
-
-    if (task.empty()) {
+    // Get task
+    qstring task;
+    if (!ask_str(&task, HIST_IDENT, "Enter task for the LLM agent:") || task.empty()) {
         warning("Please enter a task for the agent");
         return false;
     }
 
-    if (api_key.empty()) {
+    // Get API key (with default from saved)
+    qstring api_key = g_api_key.c_str();
+    if (!ask_str(&api_key, HIST_IDENT, "Enter your Anthropic API key:") || api_key.empty()) {
         warning("Please enter your Anthropic API key");
         return false;
     }
 
-    // Save API key
+    // Save for next time
     g_api_key = api_key.c_str();
 
     // Create log viewer if it doesn't exist

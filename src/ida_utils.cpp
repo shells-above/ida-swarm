@@ -248,6 +248,60 @@ bool IDAUtils::set_data_name(ea_t address, const std::string& name) {
     });
 }
 
+std::pair<std::string, std::string> IDAUtils::get_data(ea_t address) {
+    return execute_sync_wrapper([address]() {
+        // Validate that this is a data address
+        if (!IDAValidators::is_valid_address(address)) {
+            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+        }
+
+        flags_t flags = get_flags(address);
+        if (!is_data(flags)) {
+            throw std::invalid_argument("Address is not a data location: 0x" + std::to_string(address));
+        }
+
+        std::string value;
+        std::string type;
+
+        // Check if it's a string
+        if (is_strlit(flags)) {
+            qstring str;
+            size_t len = get_max_strlit_length(address, STRTYPE_C);
+            if (get_strlit_contents(&str, address, len, STRTYPE_C) > 0) {
+                value = str.c_str();
+                type = "string";
+            }
+        } else {
+            // Get the size of the data item
+            asize_t item_size = get_item_size(address);
+            if (item_size > 0 && item_size <= 1024) { // Reasonable size limit
+                // Read raw bytes
+                bytevec_t bytes;
+                bytes.resize(item_size);
+                if (get_bytes(&bytes[0], item_size, address)) {
+                    // Convert to hex string
+                    std::stringstream ss;
+                    ss << std::hex << std::setfill('0');
+                    for (size_t i = 0; i < item_size; i++) {
+                        ss << std::setw(2) << static_cast<int>(bytes[i]);
+                        if (i < item_size - 1) ss << " ";
+                    }
+                    value = ss.str();
+                    type = "bytes";
+                }
+            } else {
+                throw std::runtime_error("Unable to determine data size or size too large");
+            }
+        }
+
+        if (value.empty()) {
+            throw std::runtime_error("Unable to read data at address");
+        }
+
+        return std::make_pair(value, type);
+    });
+}
+
 bool IDAUtils::add_disassembly_comment(ea_t address, const std::string& comment) {
     return execute_sync_wrapper([address, &comment]() {
         // Validate inputs

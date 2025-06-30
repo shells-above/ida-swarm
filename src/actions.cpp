@@ -57,6 +57,10 @@ void ActionExecutor::register_actions() {
         return set_data_name(params["address"], params["name"]);
     };
 
+    action_map["get_data"] = [this](const json& params) -> json {
+        return get_data(params["address"]);
+    };
+
     action_map["add_disassembly_comment"] = [this](const json& params) -> json {
         return add_disassembly_comment(params["address"], params["comment"]);
     };
@@ -307,6 +311,20 @@ json ActionExecutor::set_data_name(ea_t address, const std::string& name) {
     try {
         bool success = IDAUtils::set_data_name(address, name);
         result["success"] = success;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_data(ea_t address) {
+    json result;
+    try {
+        auto data = IDAUtils::get_data(address);
+        result["success"] = true;
+        result["value"] = data.first;
+        result["type"] = data.second;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

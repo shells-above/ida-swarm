@@ -56,10 +56,11 @@ namespace llm_re {
             }
         } token_stats;
 
+        // Tool definitions
+        std::vector<AnthropicClient::Tool> define_tools() const;
+
         // LLM interaction
         std::string build_system_prompt() const;
-        json parse_llm_action(const std::string& response) const;
-        std::string format_action_result(const json& result) const;
         void log_token_usage(const AnthropicClient::ChatResponse& response, int iteration);
 
         // UI callback
