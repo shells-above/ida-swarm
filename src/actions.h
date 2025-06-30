@@ -5,21 +5,32 @@
 #ifndef ACTIONS_H
 #define ACTIONS_H
 
-
-
 #include "common.h"
 #include "memory.h"
 
 namespace llm_re {
 
-class ActionExecutor {
-private:
-    std::shared_ptr<BinaryMemory> memory;
+struct AuditEntry {
+    std::time_t timestamp;
+    std::string action;
+    ea_t address;
+    std::string old_value;
+    std::string new_value;
+    bool success;
+    std::string error_message;
+};
 
+class ActionExecutor {
 public:
+    using ActionFunction = std::function<json(const json&)>;
+    using ActionMap = std::unordered_map<std::string, ActionFunction>;
+
     explicit ActionExecutor(std::shared_ptr<BinaryMemory> mem);
 
-    // IDA API Bridge Actions
+    // Main action execution interface
+    json execute_action(const std::string& action_name, const json& params);
+
+    // IDA Core Actions
     json get_xrefs_to(ea_t address);
     json get_xrefs_from(ea_t address);
     json get_function_disassembly(ea_t address);
@@ -37,7 +48,7 @@ public:
     json clear_pseudocode_comments(ea_t address);
     json get_imports();
     json get_exports();
-    json search_strings(const std::string& text, bool is_case_sensitive);
+    json search_strings(const std::string& text, bool is_case_sensitive = false);
 
     // Memory System Actions
     json set_global_note(const std::string& key, const std::string& content);
@@ -59,13 +70,24 @@ public:
     json get_cluster_analysis(const std::string& cluster_name);
     json summarize_region(ea_t start_addr, ea_t end_addr);
 
-    // Execute action by name
-    json execute_action(const std::string& action_name, const json& params);
+    // Audit system
+    void log_action(const std::string& action, ea_t address = BADADDR,
+                   const std::string& old_value = "", const std::string& new_value = "",
+                   bool success = true, const std::string& error_msg = "");
+    void save_audit_log(const std::string& filename) const;
+    std::vector<AuditEntry> get_recent_audit_entries(size_t count = 100) const;
+
+private:
+    void register_actions();
+
+    std::shared_ptr<BinaryMemory> memory;
+    ActionMap action_map;
+
+    // Audit system
+    mutable std::mutex audit_mutex;
+    std::vector<AuditEntry> audit_log;
 };
 
 } // namespace llm_re
-
-
-
 
 #endif //ACTIONS_H

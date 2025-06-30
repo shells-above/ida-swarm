@@ -5,11 +5,159 @@
 #include "actions.h"
 #include "ida_utils.h"
 
-#include <utility>
-
 namespace llm_re {
 
-ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) {}
+ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) {
+    register_actions();
+}
+
+void ActionExecutor::register_actions() {
+    // IDA Core Actions
+    action_map["get_xrefs_to"] = [this](const json& params) -> json {
+        return get_xrefs_to(params["address"]);
+    };
+
+    action_map["get_xrefs_from"] = [this](const json& params) -> json {
+        return get_xrefs_from(params["address"]);
+    };
+
+    action_map["get_function_disassembly"] = [this](const json& params) -> json {
+        return get_function_disassembly(params["address"]);
+    };
+
+    action_map["get_function_decompilation"] = [this](const json& params) -> json {
+        return get_function_decompilation(params["address"]);
+    };
+
+    action_map["get_function_address"] = [this](const json& params) -> json {
+        return get_function_address(params["name"]);
+    };
+
+    action_map["get_function_name"] = [this](const json& params) -> json {
+        return get_function_name(params["address"]);
+    };
+
+    action_map["set_function_name"] = [this](const json& params) -> json {
+        return set_function_name(params["address"], params["name"]);
+    };
+
+    action_map["get_function_string_refs"] = [this](const json& params) -> json {
+        return get_function_string_refs(params["address"]);
+    };
+
+    action_map["get_function_data_refs"] = [this](const json& params) -> json {
+        return get_function_data_refs(params["address"]);
+    };
+
+    action_map["get_data_name"] = [this](const json& params) -> json {
+        return get_data_name(params["address"]);
+    };
+
+    action_map["set_data_name"] = [this](const json& params) -> json {
+        return set_data_name(params["address"], params["name"]);
+    };
+
+    action_map["add_disassembly_comment"] = [this](const json& params) -> json {
+        return add_disassembly_comment(params["address"], params["comment"]);
+    };
+
+    action_map["add_pseudocode_comment"] = [this](const json& params) -> json {
+        return add_pseudocode_comment(params["address"], params["comment"]);
+    };
+
+    action_map["clear_disassembly_comment"] = [this](const json& params) -> json {
+        return clear_disassembly_comment(params["address"]);
+    };
+
+    action_map["clear_pseudocode_comments"] = [this](const json& params) -> json {
+        return clear_pseudocode_comments(params["address"]);
+    };
+
+    action_map["get_imports"] = [this](const json& params) -> json {
+        return get_imports();
+    };
+
+    action_map["get_exports"] = [this](const json& params) -> json {
+        return get_exports();
+    };
+
+    action_map["search_strings"] = [this](const json& params) -> json {
+        return search_strings(params["text"], params.value("is_case_sensitive", false));
+    };
+
+    // Memory System Actions
+    action_map["set_global_note"] = [this](const json& params) -> json {
+        return set_global_note(params["key"], params["content"]);
+    };
+
+    action_map["get_global_note"] = [this](const json& params) -> json {
+        return get_global_note(params["key"]);
+    };
+
+    action_map["list_global_notes"] = [this](const json& params) -> json {
+        return list_global_notes();
+    };
+
+    action_map["search_notes"] = [this](const json& params) -> json {
+        return search_notes(params["query"]);
+    };
+
+    action_map["set_function_analysis"] = [this](const json& params) -> json {
+        return set_function_analysis(params["address"], params["level"], params["analysis"]);
+    };
+
+    action_map["get_function_analysis"] = [this](const json& params) -> json {
+        return get_function_analysis(params["address"], params.value("level", 0));
+    };
+
+    action_map["get_memory_context"] = [this](const json& params) -> json {
+        return get_memory_context(params["address"], params.value("radius", 2));
+    };
+
+    action_map["get_analyzed_functions"] = [this](const json& params) -> json {
+        return get_analyzed_functions();
+    };
+
+    action_map["find_functions_by_pattern"] = [this](const json& params) -> json {
+        return find_functions_by_pattern(params["pattern"]);
+    };
+
+    action_map["get_exploration_frontier"] = [this](const json& params) -> json {
+        return get_exploration_frontier();
+    };
+
+    action_map["mark_for_analysis"] = [this](const json& params) -> json {
+        return mark_for_analysis(params["address"], params["reason"], params.value("priority", 5));
+    };
+
+    action_map["get_analysis_queue"] = [this](const json& params) -> json {
+        return get_analysis_queue();
+    };
+
+    action_map["set_current_focus"] = [this](const json& params) -> json {
+        return set_current_focus(params["address"]);
+    };
+
+    action_map["add_insight"] = [this](const json& params) -> json {
+        return add_insight(params["type"], params["description"], params["related_addresses"].get<std::vector<ea_t>>());
+    };
+
+    action_map["get_insights"] = [this](const json& params) -> json {
+        return get_insights(params.value("type", ""));
+    };
+
+    action_map["analyze_cluster"] = [this](const json& params) -> json {
+        return analyze_cluster(params["addresses"].get<std::vector<ea_t>>(), params["cluster_name"], params["initial_level"]);
+    };
+
+    action_map["get_cluster_analysis"] = [this](const json& params) -> json {
+        return get_cluster_analysis(params["cluster_name"]);
+    };
+
+    action_map["summarize_region"] = [this](const json& params) -> json {
+        return summarize_region(params["start_addr"], params["end_addr"]);
+    };
+}
 
 json ActionExecutor::get_xrefs_to(ea_t address) {
     json result;
@@ -557,85 +705,82 @@ json ActionExecutor::summarize_region(ea_t start_addr, ea_t end_addr) {
 }
 
 json ActionExecutor::execute_action(const std::string& action_name, const json& params) {
-    // Route action to appropriate method
-    if (action_name == "get_xrefs_to") {
-        return get_xrefs_to(params["address"]);
-    } else if (action_name == "get_xrefs_from") {
-        return get_xrefs_from(params["address"]);
-    } else if (action_name == "get_function_disassembly") {
-        return get_function_disassembly(params["address"]);
-    } else if (action_name == "get_function_decompilation") {
-        return get_function_decompilation(params["address"]);
-    } else if (action_name == "get_function_address") {
-        return get_function_address(params["name"]);
-    } else if (action_name == "get_function_name") {
-        return get_function_name(params["address"]);
-    } else if (action_name == "set_function_name") {
-        return set_function_name(params["address"], params["name"]);
-    } else if (action_name == "get_function_string_refs") {
-        return get_function_string_refs(params["address"]);
-    } else if (action_name == "get_function_data_refs") {
-        return get_function_data_refs(params["address"]);
-    } else if (action_name == "get_data_name") {
-        return get_data_name(params["address"]);
-    } else if (action_name == "set_data_name") {
-        return set_data_name(params["address"], params["name"]);
-    } else if (action_name == "add_disassembly_comment") {
-        return add_disassembly_comment(params["address"], params["comment"]);
-    } else if (action_name == "add_pseudocode_comment") {
-        return add_pseudocode_comment(params["address"], params["comment"]);
-    } else if (action_name == "clear_disassembly_comment") {
-        return clear_disassembly_comment(params["address"]);
-    } else if (action_name == "clear_pseudocode_comments") {
-        return clear_pseudocode_comments(params["address"]);
-    } else if (action_name == "get_imports") {
-        return get_imports();
-    } else if (action_name == "get_exports") {
-        return get_exports();
-    } else if (action_name == "search_strings") {
-        return search_strings(params["text"], params.value("is_case_sensitive", false));
-    } else if (action_name == "set_global_note") {
-        return set_global_note(params["key"], params["content"]);
-    } else if (action_name == "get_global_note") {
-        return get_global_note(params["key"]);
-    } else if (action_name == "list_global_notes") {
-        return list_global_notes();
-    } else if (action_name == "search_notes") {
-        return search_notes(params["query"]);
-    } else if (action_name == "set_function_analysis") {
-        return set_function_analysis(params["address"], params["level"], params["analysis"]);
-    } else if (action_name == "get_function_analysis") {
-        return get_function_analysis(params["address"], params.value("level", 0));
-    } else if (action_name == "get_memory_context") {
-        return get_memory_context(params["address"], params.value("radius", 2));
-    } else if (action_name == "get_analyzed_functions") {
-        return get_analyzed_functions();
-    } else if (action_name == "find_functions_by_pattern") {
-        return find_functions_by_pattern(params["pattern"]);
-    } else if (action_name == "get_exploration_frontier") {
-        return get_exploration_frontier();
-    } else if (action_name == "mark_for_analysis") {
-        return mark_for_analysis(params["address"], params["reason"], params.value("priority", 5));
-    } else if (action_name == "get_analysis_queue") {
-        return get_analysis_queue();
-    } else if (action_name == "set_current_focus") {
-        return set_current_focus(params["address"]);
-    } else if (action_name == "add_insight") {
-        return add_insight(params["type"], params["description"], params["related_addresses"].get<std::vector<ea_t>>());
-    } else if (action_name == "get_insights") {
-        return get_insights(params.value("type", ""));
-    } else if (action_name == "analyze_cluster") {
-        return analyze_cluster(params["addresses"].get<std::vector<ea_t>>(), params["cluster_name"], params["initial_level"]);
-    } else if (action_name == "get_cluster_analysis") {
-        return get_cluster_analysis(params["cluster_name"]);
-    } else if (action_name == "summarize_region") {
-        return summarize_region(params["start_addr"], params["end_addr"]);
+    auto it = action_map.find(action_name);
+    if (it != action_map.end()) {
+        try {
+            return it->second(params);
+        } catch (const std::exception& e) {
+            json error_result;
+            error_result["success"] = false;
+            error_result["error"] = "Action execution failed: " + std::string(e.what());
+            return error_result;
+        }
     } else {
         json error_result;
         error_result["success"] = false;
         error_result["error"] = "Unknown action: " + action_name;
         return error_result;
     }
+}
+
+void ActionExecutor::log_action(const std::string& action, ea_t address,
+                               const std::string& old_value, const std::string& new_value,
+                               bool success, const std::string& error_msg) {
+    std::lock_guard<std::mutex> lock(audit_mutex);
+
+    AuditEntry entry{
+        .timestamp = std::time(nullptr),
+        .action = action,
+        .address = address,
+        .old_value = old_value,
+        .new_value = new_value,
+        .success = success,
+        .error_message = error_msg
+    };
+
+    audit_log.push_back(entry);
+
+    // Keep only last 10000 entries to prevent unbounded growth
+    if (audit_log.size() > 10000) {
+        audit_log.erase(audit_log.begin(), audit_log.begin() + 1000);
+    }
+}
+
+void ActionExecutor::save_audit_log(const std::string& filename) const {
+    std::lock_guard<std::mutex> lock(audit_mutex);
+
+    json log_json = json::array();
+    for (const auto& entry : audit_log) {
+        json entry_json{
+                {"timestamp", entry.timestamp},
+                {"action", entry.action},
+                {"address", entry.address},
+                {"old_value", entry.old_value},
+                {"new_value", entry.new_value},
+                {"success", entry.success},
+                {"error_message", entry.error_message}
+        };
+        log_json.push_back(entry_json);
+    }
+
+    std::ofstream file(filename);
+    if (file.is_open()) {
+        file << log_json.dump(2);
+        file.close();
+    }
+}
+
+std::vector<AuditEntry> ActionExecutor::get_recent_audit_entries(size_t count) const {
+    std::lock_guard<std::mutex> lock(audit_mutex);
+
+    std::vector<AuditEntry> recent;
+    size_t start = (audit_log.size() > count) ? audit_log.size() - count : 0;
+
+    for (size_t i = start; i < audit_log.size(); ++i) {
+        recent.push_back(audit_log[i]);
+    }
+
+    return recent;
 }
 
 } // namespace llm_re

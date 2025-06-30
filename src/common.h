@@ -20,6 +20,8 @@
 #include <fstream>
 #include <atomic>
 #include <condition_variable>
+#include <fstream>
+#include <utility>
 
 // IDA headers
 #include <ida.hpp>
