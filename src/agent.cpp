@@ -518,9 +518,7 @@ void REAgent::worker_loop() {
         }
 
         // Log start
-        if (log_callback) {
-            log_callback("Starting analysis for task: " + task);
-        }
+        log_callback("Starting analysis for task: " + task);
 
         // Initialize conversation
         conversation_history.clear();
@@ -530,7 +528,7 @@ void REAgent::worker_loop() {
 
         AnthropicClient::ChatRequest request;
         request.system_prompt = system_prompt;
-        request.messages.push_back({"user", "Please analyze the binary to answer: " + task});
+        request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
         request.tools = define_tools();
 
         // Main agent loop
@@ -551,7 +549,9 @@ void REAgent::worker_loop() {
             if (!response.success) {
                 if (log_callback) {
                     log_callback("LLM Error: " + response.error);
+                    log_callback("Task failed due to API error. Please check your API key.");
                 }
+                task_complete = true;  // Mark task as complete to exit cleanly
                 break;
             }
 
