@@ -65,6 +65,8 @@ namespace llm_re {
 
         // UI callback
         std::function<void(const std::string&)> log_callback;
+        std::function<void(const std::string&, const json&, int)> llm_message_callback;
+
 
     public:
         REAgent(const std::string& anthropic_api_key);
@@ -79,6 +81,7 @@ namespace llm_re {
 
         // Set logging callback
         void set_log_callback(std::function<void(const std::string&)> callback);
+        void set_llm_message_callback(std::function<void(const std::string&, const json&, int)> callback);
 
         // Get current state
         std::string get_current_state() const;

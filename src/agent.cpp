@@ -90,6 +90,13 @@ void REAgent::set_log_callback(std::function<void(const std::string&)> callback)
     log_callback = callback;
 }
 
+void REAgent::set_llm_message_callback(std::function<void(const std::string&, const json&, int)> callback) {
+    llm_message_callback = callback;
+    if (anthropic) {
+        anthropic->set_message_logger(callback);
+    }
+}
+
 std::vector<AnthropicClient::Tool> REAgent::define_tools() const {
     std::vector<AnthropicClient::Tool> tools;
 
@@ -538,6 +545,8 @@ void REAgent::worker_loop() {
 
         while (iteration < max_iterations && !stop_requested && !task_complete) {
             iteration++;
+
+            anthropic->set_iteration(iteration);
 
             if (log_callback) {
                 log_callback("Iteration " + std::to_string(iteration));

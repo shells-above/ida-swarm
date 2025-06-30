@@ -14,11 +14,20 @@ namespace llm_re {
         std::string api_key;
         std::string api_url;
 
+        std::function<void(const std::string&, const json&, int)> message_logger;
+        int current_iteration = 0;
+
         static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
 
     public:
         AnthropicClient(const std::string& key);
         ~AnthropicClient();
+
+        // Add setters for logging
+        void set_message_logger(std::function<void(const std::string&, const json&, int)> logger) {
+            message_logger = logger;
+        }
+        void set_iteration(int iter) { current_iteration = iter; }
 
         struct ChatMessage {
             std::string role;  // "user", "assistant", or "tool"

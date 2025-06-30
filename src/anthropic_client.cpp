@@ -52,14 +52,23 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     json messages = json::array();
     for (const auto& msg : request.messages) {
         json msg_json;
-        msg_json["role"] = msg.role;
 
-        if (msg.role == "tool") {
-            // Tool result message
-            msg_json["tool_call_id"] = msg.tool_call_id;
-            msg_json["content"] = msg.content;
-        } else if (msg.role == "assistant" && !msg.tool_calls.empty()) {
+        if (msg.role == "tool") {  // there isn't actually a "tool" role, i store it internally because it makes more sense
+            // Tool results must be sent as user messages with tool_result content
+            msg_json["role"] = "user";
+            json content_array = json::array();
+
+            // Always keep content as string - Anthropic expects string or content blocks
+            content_array.push_back({
+                {"type", "tool_result"},
+                {"tool_use_id", msg.tool_call_id},
+                {"content", msg.content}  // This is already a string from result.dump()
+            });
+            msg_json["content"] = content_array;
+        }
+        else if (msg.role == "assistant" && !msg.tool_calls.empty()) {
             // Assistant message with tool calls
+            msg_json["role"] = msg.role;
             json content_array = json::array();
 
             // Add text content if present
@@ -78,12 +87,14 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
             msg_json["content"] = content_array;
         } else {
             // Regular text message
+            msg_json["role"] = msg.role;
             msg_json["content"] = msg.content;
         }
 
         messages.push_back(msg_json);
     }
     request_json["messages"] = messages;
+
 
     // Add tools if provided
     if (!request.tools.empty()) {
@@ -96,6 +107,19 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
             tools_json.push_back(tool_json);
         }
         request_json["tools"] = tools_json;
+    }
+
+    // Log the request
+    if (message_logger) {
+        // Create a simplified version for logging (truncate system prompt after first iteration)
+        json log_request = request_json;
+        if (current_iteration > 1 && request_json.contains("system") &&
+            request_json["system"].get<std::string>().length() > 500) {
+            log_request["system"] = "[System prompt truncated - " +
+                std::to_string(request_json["system"].get<std::string>().length()) +
+                " chars]";
+        }
+        message_logger("REQUEST", log_request, current_iteration);
     }
 
     std::string request_body = request_json.dump();
@@ -121,6 +145,13 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     if (res != CURLE_OK) {
         response.success = false;
         response.error = "CURL error: " + std::string(curl_easy_strerror(res));
+
+        // Log error
+        if (message_logger) {
+            json error_log;
+            error_log["error"] = response.error;
+            message_logger("ERROR", error_log, current_iteration);
+        }
     } else {
         // Parse response
         try {
@@ -132,6 +163,22 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
             } else {
                 response.success = true;
                 response.stop_reason = response_json["stop_reason"];
+
+                // Log the response
+                if (message_logger) {
+                    // Optionally truncate very long content
+                    json log_response = response_json;
+                    if (log_response.contains("content")) {
+                        for (auto& content_item : log_response["content"]) {
+                            if (content_item.contains("text") &&
+                                content_item["text"].get<std::string>().length() > 1000) {
+                                std::string text = content_item["text"];
+                                content_item["text"] = text.substr(0, 997) + "...";
+                            }
+                        }
+                    }
+                    message_logger("RESPONSE", log_response, current_iteration);
+                }
 
                 // Extract thinking if present
                 if (response_json.contains("thinking") && !response_json["thinking"].is_null()) {
@@ -168,6 +215,14 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
         } catch (const std::exception& e) {
             response.success = false;
             response.error = "JSON parse error: " + std::string(e.what());
+
+            // Log parse error with raw response
+            if (message_logger) {
+                json error_log;
+                error_log["error"] = response.error;
+                error_log["raw_response"] = response_body.substr(0, 500);
+                message_logger("PARSE_ERROR", error_log, current_iteration);
+            }
         }
     }
 
