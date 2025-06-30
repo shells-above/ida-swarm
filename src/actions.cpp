@@ -3,6 +3,7 @@
 //
 
 #include "actions.h"
+#include "ida_utils.h"
 
 #include <utility>
 
@@ -239,19 +240,6 @@ json ActionExecutor::get_exports() {
             exports_json.push_back(exp_obj);
         }
         result["exports"] = exports_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_strings() {
-    json result;
-    try {
-        std::vector<std::string> strings = IDAUtils::get_strings();
-        result["success"] = true;
-        result["strings"] = strings;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -568,31 +556,6 @@ json ActionExecutor::summarize_region(ea_t start_addr, ea_t end_addr) {
     return result;
 }
 
-json ActionExecutor::export_memory_snapshot() {
-    json result;
-    try {
-        json snapshot = memory->export_memory_snapshot();
-        result["success"] = true;
-        result["snapshot"] = snapshot;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::import_memory_snapshot(const json& snapshot) {
-    json result;
-    try {
-        memory->import_memory_snapshot(snapshot);
-        result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
 json ActionExecutor::execute_action(const std::string& action_name, const json& params) {
     // Route action to appropriate method
     if (action_name == "get_xrefs_to") {
@@ -629,8 +592,6 @@ json ActionExecutor::execute_action(const std::string& action_name, const json& 
         return get_imports();
     } else if (action_name == "get_exports") {
         return get_exports();
-    } else if (action_name == "get_strings") {
-        return get_strings();
     } else if (action_name == "search_strings") {
         return search_strings(params["text"], params.value("is_case_sensitive", false));
     } else if (action_name == "set_global_note") {
@@ -669,10 +630,6 @@ json ActionExecutor::execute_action(const std::string& action_name, const json& 
         return get_cluster_analysis(params["cluster_name"]);
     } else if (action_name == "summarize_region") {
         return summarize_region(params["start_addr"], params["end_addr"]);
-    } else if (action_name == "export_memory_snapshot") {
-        return export_memory_snapshot();
-    } else if (action_name == "import_memory_snapshot") {
-        return import_memory_snapshot(params["snapshot"]);
     } else {
         json error_result;
         error_result["success"] = false;

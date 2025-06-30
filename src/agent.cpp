@@ -98,51 +98,96 @@ std::string REAgent::build_system_prompt() const {
 You have access to the following actions:
 
 IDA API Actions:
-- get_xrefs_to(address) - Find all references TO a location
-- get_xrefs_from(address) - Find all references FROM a location
-- get_function_disassembly(address) - Get disassembly for a function
-- get_function_decompilation(address) - Get decompiled code for a function
-- get_function_address(name) - Get address from function name
-- get_function_name(address) - Get function name from address
-- set_function_name(address, name) - Rename a function
-- get_function_string_refs(address) - Get strings used by a function
-- get_function_data_refs(address) - Get data references from a function
-- get_data_name(address) - Get name of data item
-- set_data_name(address, name) - Rename data item
-- add_disassembly_comment(address, comment) - Add comment to disassembly
-- add_pseudocode_comment(address, comment) - Add comment to pseudocode
-- clear_disassembly_comment(address) - Clear disassembly comment
-- clear_pseudocode_comments(address) - Clear pseudocode comments
-- get_imports() - List all imported functions
-- get_exports() - List all exported functions
-- get_strings() - List all strings in the binary
-- search_strings(text, is_case_sensitive) - Search for strings
+### Cross-References
+- **get_xrefs_to(address)** - Find what calls/references this address. Returns list of caller addresses. Auto-updates memory with relationships.
+- **get_xrefs_from(address)** - Find what this address calls/references. Returns list of callee addresses. Auto-updates memory with relationships.
 
-Memory System Actions:
-- set_global_note(key, content) - Store a note about your findings
-- get_global_note(key) - Retrieve a specific note
-- list_global_notes() - List all note keys
-- search_notes(query) - Search through your notes
-- set_function_analysis(address, level, analysis) - Store function analysis
-- get_function_analysis(address, level) - Retrieve function analysis
-- get_memory_context(address, radius) - Get all knowledge near an address
-- get_analyzed_functions() - List all analyzed functions
-- find_functions_by_pattern(pattern) - Search function analyses
-- get_exploration_frontier() - Get functions marked for analysis
-- mark_for_analysis(address, reason, priority) - Queue function for analysis
-- get_analysis_queue() - View analysis queue
-- set_current_focus(address) - Set current anchor point
-- add_insight(type, description, related_addresses) - Record a discovery
-- get_insights(type) - Retrieve insights
-- analyze_cluster(addresses, cluster_name, initial_level) - Analyze related functions
-- get_cluster_analysis(cluster_name) - Get cluster analysis
-- summarize_region(start_addr, end_addr) - Summarize memory region
+### Code Analysis
+- **get_function_disassembly(address)** - Get assembly code with comments. Use for low-level analysis, anti-debugging checks, or optimizations.
+- **get_function_decompilation(address)** - Get C-like pseudocode. Use for understanding logic, algorithms, and control flow.
 
-Detail Levels:
-1 = SUMMARY: Basic function purpose
-2 = CONTEXTUAL: How it relates to nearby functions
-3 = ANALYTICAL: Detailed analysis with data flow
-4 = COMPREHENSIVE: Full breakdown including all relationships
+### Function Management
+- **get_function_address(name)** - Convert function name to address. Returns BADADDR if not found.
+- **get_function_name(address)** - Get current name (may be auto-generated like "sub_401000").
+- **set_function_name(address, name)** - Rename function. Use descriptive names like "validate_license".
+
+### Reference Analysis
+- **get_function_string_refs(address)** - Get all strings used by function. Good for finding URLs, errors, format strings.
+- **get_function_data_refs(address)** - Get global data addresses accessed. Tracks global state usage.
+
+### Data Management
+- **get_data_name(address)** - Get name of global variable.
+- **set_data_name(address, name)** - Rename global variable descriptively.
+
+### Documentation
+- **add_disassembly_comment(address, comment)** - Comment on a specific instruction.
+- **add_pseudocode_comment(address, comment)** - Comment on function pseudocode.
+- **clear_disassembly_comment(address)** - Remove disassembly comment.
+- **clear_pseudocode_comments(address)** - Remove all pseudocode comments.
+
+### Binary Information
+- **get_imports()** - Returns map of modules to imported functions. Find interesting APIs (crypto, network, anti-debug).
+- **get_exports()** - List exported functions with addresses. Find entry points in DLLs.
+- **search_strings(text, is_case_sensitive)** - Find strings containing text. Locate keywords like "update", "license", "password".
+
+## Memory System Actions
+
+### Knowledge Management
+- **set_global_note(key, content)** - Store discoveries. Use keys like "update_mechanism", "crypto_analysis".
+- **get_global_note(key)** - Retrieve stored note.
+- **list_global_notes()** - Get all note keys.
+- **search_notes(query)** - Search notes with regex. Returns matches with snippets.
+
+### Function Analysis
+- **set_function_analysis(address, level: int, analysis)** - Store analysis at detail level:
+  - Level 1 = SUMMARY: Basic purpose (1-2 sentences)
+  - Level 2 = CONTEXTUAL: How it relates to other functions
+  - Level 3 = ANALYTICAL: Detailed logic and data flow
+  - Level 4 = COMPREHENSIVE: Complete understanding with all relationships
+- **get_function_analysis(address, level: int)** - Get analysis (level 0 = best available).
+- **get_memory_context(address, radius)** - Get all knowledge within call-hop radius. Your "working memory".
+
+### Analysis Tracking
+- **get_analyzed_functions()** - List all analyzed functions with max detail level achieved.
+- **find_functions_by_pattern(pattern)** - Search analyses with regex. Find similar functionality.
+- **get_exploration_frontier()** - Get functions marked but not analyzed yet.
+
+### Work Queue
+- **mark_for_analysis(address, reason, priority)** - Queue function for analysis (priority 1-10).
+- **get_analysis_queue()** - View queue sorted by priority.
+- **set_current_focus(address)** - Set anchor point. Affects detail level calculations.
+
+### Pattern Recognition
+- **add_insight(type, description, related_addresses)** - Record discoveries:
+  - Types: "pattern", "hypothesis", "question", "finding"
+- **get_insights(type)** - Retrieve insights (empty type = all).
+
+### Bulk Operations
+- **analyze_cluster(addresses, cluster_name, initial_level)** - Group related functions for analysis.
+- **get_cluster_analysis(cluster_name)** - Get all analyses for a cluster.
+- **summarize_region(start_addr, end_addr)** - Summary of everything known in address range.
+
+## Best Practices
+
+1. **Start with reconnaissance**: Use `search_strings()`, and `get_imports()` to find anchor points (a point which you will work out from to accomplish the user task).
+
+2. **Document as you go**: Use `set_global_note()` for high-level understanding and `set_function_analysis()` for specific functions.
+
+3. **Work systematically**: Use `mark_for_analysis()` to queue functions and make sure to check `get_analysis_queue()` to track progress.
+
+4. **Build incrementally**: Start with level 1 analysis and increase detail as understanding grows.
+
+5. **Record patterns**: Use `add_insight()` for patterns, hypotheses, and questions.
+
+6. **Use meaningful names**: Rename functions and data to make analysis clearer.
+
+7. **Follow the data**: Use cross-references to trace execution flow and data usage.
+
+8. **Check context**: Use `get_memory_context()` before diving deeper.
+
+9. **Think in clusters**: Group related functions to understand subsystems.
+
+10. **Connect findings**: Use `search_notes()` and `find_functions_by_pattern()` to link related analyses.
 
 To execute an action, respond with:
 ACTION: action_name
@@ -160,6 +205,8 @@ Remember to:
 
 When you have gathered enough information to answer the user's question, respond with:
 REPORT: Your detailed findings about the task
+
+It is up to you to figure out how much you will need to reverse engineer the binary using the actions before responding with a report.
 
 Current task: )";
 }

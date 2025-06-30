@@ -9,7 +9,6 @@
 
 #include "common.h"
 #include "memory.h"
-#include "ida_utils.h"
 
 namespace llm_re {
 
@@ -38,7 +37,6 @@ public:
     json clear_pseudocode_comments(ea_t address);
     json get_imports();
     json get_exports();
-    json get_strings();
     json search_strings(const std::string& text, bool is_case_sensitive);
 
     // Memory System Actions
@@ -60,8 +58,6 @@ public:
     json analyze_cluster(const std::vector<ea_t>& addresses, const std::string& cluster_name, int initial_level);
     json get_cluster_analysis(const std::string& cluster_name);
     json summarize_region(ea_t start_addr, ea_t end_addr);
-    json export_memory_snapshot();
-    json import_memory_snapshot(const json& snapshot);
 
     // Execute action by name
     json execute_action(const std::string& action_name, const json& params);
