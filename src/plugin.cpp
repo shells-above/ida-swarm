@@ -100,14 +100,14 @@ bool idaapi run(size_t arg);
 // Plugin description
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
-    PLUGIN_MULTI | PLUGIN_FIX,  // Plugin flags
+    PLUGIN_FIX,                  // Plugin flags
     init,                        // Initialize
     term,                        // Terminate
     run,                         // Run
     "LLM-powered reverse engineering agent",  // Comment
     "Analyzes binaries using LLM to answer specific questions",  // Help
     PLUGIN_NAME,                 // Wanted name
-    PLUGIN_HOTKEY               // Wanted hotkey
+    PLUGIN_HOTKEY                // Wanted hotkey
 };
 
 // Get current timestamp string
