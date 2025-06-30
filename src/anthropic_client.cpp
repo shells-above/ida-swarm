@@ -33,7 +33,7 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
 
     // Build request JSON
     json request_json;
-    request_json["model"] = request.model;
+    request_json["model"] = request.model_sonnet;
     request_json["max_tokens"] = request.max_tokens;
     request_json["temperature"] = request.temperature;
 

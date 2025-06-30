@@ -19,16 +19,33 @@ void log(LogLevel level, const std::string& message) {
     msg("%s %s\n", level_str, message.c_str());
 }
 
+// Thread callback function for IDA's qthread
+static int idaapi agent_worker_thread(void* ud) {
+    REAgent* agent = static_cast<REAgent*>(ud);
+    agent->worker_loop();
+    return 0;
+}
+
 REAgent::REAgent(const std::string& anthropic_api_key)
-    : api_key(anthropic_api_key), running(false), stop_requested(false) {
+    : api_key(anthropic_api_key),
+      running(false),
+      stop_requested(false),
+      worker_thread(nullptr),
+      task_semaphore(nullptr) {
 
     memory = std::make_shared<BinaryMemory>();
     executor = std::make_shared<ActionExecutor>(memory);
     anthropic = std::make_shared<AnthropicClient>(api_key);
+
+    // Create semaphore for task notification
+    task_semaphore = qsem_create(nullptr, 0);
 }
 
 REAgent::~REAgent() {
     stop();
+    if (task_semaphore) {
+        qsem_free(task_semaphore);
+    }
 }
 
 void REAgent::start() {
@@ -36,26 +53,39 @@ void REAgent::start() {
 
     running = true;
     stop_requested = false;
-    worker_thread = std::thread(&REAgent::worker_loop, this);
+
+    // Create worker thread using IDA's API
+    worker_thread = qthread_create(agent_worker_thread, this);
 }
 
 void REAgent::stop() {
     if (!running) return;
 
     stop_requested = true;
-    task_cv.notify_all();
 
-    if (worker_thread.joinable()) {
-        worker_thread.join();
+    // Signal the semaphore to wake up the worker thread
+    if (task_semaphore) {
+        qsem_post(task_semaphore);
+    }
+
+    // Wait for thread to finish
+    if (worker_thread) {
+        qthread_join(worker_thread);
+        qthread_free(worker_thread);
+        worker_thread = nullptr;
     }
 
     running = false;
 }
 
 void REAgent::set_task(const std::string& task) {
-    std::lock_guard<std::mutex> lock(task_mutex);
+    qmutex_locker_t lock(task_mutex);
     current_task = task;
-    task_cv.notify_all();
+
+    // Signal the semaphore to wake up the worker thread
+    if (task_semaphore) {
+        qsem_post(task_semaphore);
+    }
 }
 
 void REAgent::set_log_callback(std::function<void(const std::string&)> callback) {
@@ -173,15 +203,36 @@ std::string REAgent::format_action_result(const json& result) const {
 
 void REAgent::worker_loop() {
     while (!stop_requested) {
-        std::unique_lock<std::mutex> lock(task_mutex);
-        task_cv.wait(lock, [this] { return !current_task.empty() || stop_requested; });
+        // Wait for a task using semaphore with timeout
+        bool got_task = false;
 
-        if (stop_requested) break;
-        if (current_task.empty()) continue;
+        // Check if we have a task
+        {
+            qmutex_locker_t lock(task_mutex);
+            if (!current_task.empty()) {
+                got_task = true;
+            }
+        }
 
-        std::string task = current_task;
-        current_task.clear();
-        lock.unlock();
+        // If no task, wait on semaphore
+        if (!got_task) {
+            // Wait with 100ms timeout to periodically check stop_requested
+            qsem_wait(task_semaphore, 100);
+
+            // Check again after waking up
+            qmutex_locker_t lock(task_mutex);
+            if (current_task.empty() || stop_requested) {
+                continue;
+            }
+        }
+
+        // Get the task
+        std::string task;
+        {
+            qmutex_locker_t lock(task_mutex);
+            task = current_task;
+            current_task.clear();
+        }
 
         // Log start
         if (log_callback) {
@@ -277,7 +328,12 @@ void REAgent::worker_loop() {
 std::string REAgent::get_current_state() const {
     json state;
     state["running"] = running.load();
-    state["current_task"] = current_task;
+
+    {
+        qmutex_locker_t lock(const_cast<qmutex_t&>(task_mutex));
+        state["current_task"] = current_task;
+    }
+
     state["memory_snapshot"] = memory->export_memory_snapshot();
     return state.dump(2);
 }

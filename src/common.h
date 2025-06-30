@@ -29,18 +29,23 @@
 #include <bytes.hpp>
 #include <name.hpp>
 #include <funcs.hpp>
-#include <hexrays.hpp>
+// #include <hexrays.hpp>
 #include <lines.hpp>
 #include <segment.hpp>
 #include <search.hpp>
 
+#undef fgetc
+#undef snprintf
+
 // JSON library
 #include <nlohmann/json.hpp>
+
+#define fgetc dont_use_fgetc
+#define snprintf dont_use_snprintf
+
 using json = nlohmann::json;
 
 // Type definitions
-using ea_t = uintptr_t;
-
 namespace llm_re {
     // Logging
     enum class LogLevel {

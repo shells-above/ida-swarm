@@ -5,12 +5,11 @@
 #ifndef AGENT_H
 #define AGENT_H
 
-
-
 #include "common.h"
 #include "memory.h"
 #include "actions.h"
 #include "anthropic_client.h"
+#include <pro.h>  // For IDA threading APIs
 
 namespace llm_re {
 
@@ -20,12 +19,12 @@ namespace llm_re {
         std::shared_ptr<ActionExecutor> executor;
         std::shared_ptr<AnthropicClient> anthropic;
 
-        // Thread management
-        std::thread worker_thread;
+        // Thread management using IDA's API
+        qthread_t worker_thread;
         std::atomic<bool> running;
         std::atomic<bool> stop_requested;
-        std::mutex task_mutex;
-        std::condition_variable task_cv;
+        qmutex_t task_mutex;
+        qsemaphore_t task_semaphore;
 
         // Current task
         std::string current_task;
@@ -33,9 +32,6 @@ namespace llm_re {
 
         // Agent state
         std::vector<AnthropicClient::ChatMessage> conversation_history;
-
-        // Worker thread function
-        void worker_loop();
 
         // LLM interaction
         std::string build_system_prompt() const;
@@ -65,10 +61,11 @@ namespace llm_re {
         // Save/load memory
         void save_memory(const std::string& filename);
         void load_memory(const std::string& filename);
+
+        // Worker thread function (needs to be public for thread callback)
+        void worker_loop();
     };
 
 } // namespace llm_re
-
-
 
 #endif //AGENT_H

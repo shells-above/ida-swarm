@@ -76,22 +76,26 @@
 #include "common.h"
 #include "agent.h"
 #include <sstream>
+#include <chrono>
+#include <iomanip>
 
 // Global plugin state
 namespace {
     std::unique_ptr<llm_re::REAgent> g_agent;
     std::string g_api_key;
-    HWND g_log_window = nullptr;
-
+    TWidget* g_log_viewer = nullptr;
+    strvec_t g_log_lines;
+    
     // UI constants
     const char* PLUGIN_NAME = "LLM RE Agent";
     const char* PLUGIN_HOTKEY = "Ctrl+Shift+L";
+    const char* LOG_VIEW_TITLE = "LLM Agent Log";
 }
 
 // Forward declarations
-int idaapi init(void);
+plugmod_t* idaapi init();
+void idaapi term();
 bool idaapi run(size_t arg);
-void idaapi term(void);
 
 // Plugin description
 plugin_t PLUGIN = {
@@ -106,12 +110,50 @@ plugin_t PLUGIN = {
     PLUGIN_HOTKEY               // Wanted hotkey
 };
 
+// Get current timestamp string
+std::string get_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time_t), "[%H:%M:%S]");
+    return ss.str();
+}
+
+// Custom viewer handlers
+static const custom_viewer_handlers_t log_handlers = {
+    nullptr,  // keyboard
+    nullptr,  // popup
+    nullptr,  // mouse_moved
+    nullptr,  // click
+    nullptr,  // dblclick
+    nullptr,  // current_position_changed
+    nullptr,  // close
+    nullptr,  // help
+    nullptr   // adjust_place
+};
+
 // Log window handler
 struct log_handler_t : public action_handler_t {
     virtual int idaapi activate(action_activation_ctx_t*) override {
-        if (g_log_window && IsWindow(g_log_window)) {
-            ShowWindow(g_log_window, SW_SHOW);
-            SetForegroundWindow(g_log_window);
+        if (g_log_viewer) {
+            // Bring existing viewer to front
+            activate_widget(g_log_viewer, true);
+        } else {
+            // Create new log viewer
+            simpleline_place_t s1;
+            simpleline_place_t s2(g_log_lines.size() > 0 ? g_log_lines.size() - 1 : 0);
+            g_log_viewer = create_custom_viewer(
+                LOG_VIEW_TITLE,
+                &s1, &s2, &s1,
+                nullptr,
+                &g_log_lines,
+                &log_handlers,
+                nullptr
+            );
+            
+            if (g_log_viewer) {
+                display_widget(g_log_viewer, WOPN_DP_TAB | WOPN_RESTORE);
+            }
         }
         return 1;
     }
@@ -127,103 +169,47 @@ static const char task_form[] =
     "<Task:q:1:50:100::>\n"
     "<API Key:q:2:50:100::>\n";
 
-// Log window procedure
-LRESULT CALLBACK LogWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE: {
-        // Create edit control
-        HWND hEdit = CreateWindowEx(
-            WS_EX_CLIENTEDGE,
-            "EDIT",
-            "",
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            0, 0, 0, 0,
-            hwnd,
-            (HMENU)1,
-            GetModuleHandle(NULL),
-            NULL
-        );
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)hEdit);
-
-        // Set font
-        HFONT hFont = CreateFont(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
-        SendMessage(hEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
-        break;
-    }
-
-    case WM_SIZE: {
-        HWND hEdit = (HWND)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-        if (hEdit) {
-            RECT rect;
-            GetClientRect(hwnd, &rect);
-            SetWindowPos(hEdit, NULL, 0, 0, rect.right, rect.bottom, SWP_NOZORDER);
-        }
-        break;
-    }
-
-    case WM_CLOSE:
-        ShowWindow(hwnd, SW_HIDE);
-        return 0;
-
-    case WM_DESTROY:
-        g_log_window = nullptr;
-        break;
-    }
-
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-// Append text to log window
+// Append text to log viewer
 void append_to_log(const std::string& text) {
-    if (!g_log_window || !IsWindow(g_log_window)) return;
-
-    HWND hEdit = (HWND)GetWindowLongPtr(g_log_window, GWLP_USERDATA);
-    if (!hEdit) return;
-
-    // Get current text length
-    int len = GetWindowTextLength(hEdit);
-
-    // Move caret to end
-    SendMessage(hEdit, EM_SETSEL, len, len);
-
-    // Add timestamp
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char timestamp[32];
-    snprintf(timestamp, sizeof(timestamp), "[%02d:%02d:%02d] ",
-        st.wHour, st.wMinute, st.wSecond);
-
-    // Append text
-    std::string timestamped = timestamp + text + "\r\n";
-    SendMessage(hEdit, EM_REPLACESEL, FALSE, (LPARAM)timestamped.c_str());
-
-    // Scroll to bottom
-    SendMessage(hEdit, EM_SCROLLCARET, 0, 0);
+    // Add timestamped line to log
+    std::string timestamped = get_timestamp() + " " + text;
+    
+    simpleline_t line;
+    line.line = timestamped.c_str();
+    g_log_lines.push_back(line);
+    
+    // Keep log size reasonable
+    if (g_log_lines.size() > 1000) {
+        g_log_lines.erase(g_log_lines.begin());
+    }
+    
+    // Update viewer if it exists
+    if (g_log_viewer) {
+        // Refresh the viewer
+        refresh_custom_viewer(g_log_viewer);
+        
+        // Scroll to bottom
+        simpleline_place_t bottom(g_log_lines.size() - 1);
+        jumpto(g_log_viewer, &bottom, 0, 0);
+    }
+    
+    // Also output to IDA's message window
+    msg("%s\n", timestamped.c_str());
 }
 
 // Initialize plugin
-int idaapi init(void) {
-    // Only for x86/x64
+plugmod_t* idaapi init() {
+    // Plugin works in all IDA versions
     if (!is_idaq()) return PLUGIN_SKIP;
-
-    // Register log window class
-    WNDCLASSEX wc = {0};
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.lpfnWndProc = LogWindowProc;
-    wc.hInstance = GetModuleHandle(NULL);
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "LLMAgentLogWindow";
-    RegisterClassEx(&wc);
 
     // Register action for showing log
     register_action(action_desc_t{
+        sizeof(action_desc_t),
         "llm_agent:show_log",
         "Show LLM Agent Log",
         new log_handler_t(),
-        PLUGIN_HOTKEY,
+        &PLUGIN,
+        nullptr,
         "Show the LLM agent log window",
         -1
     });
@@ -262,20 +248,14 @@ bool idaapi run(size_t arg) {
     // Save API key
     g_api_key = api_key.c_str();
 
-    // Create log window if needed
-    if (!g_log_window || !IsWindow(g_log_window)) {
-        g_log_window = CreateWindowEx(
-            WS_EX_TOOLWINDOW,
-            "LLMAgentLogWindow",
-            "LLM Agent Log",
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-            NULL, NULL, GetModuleHandle(NULL), NULL
-        );
+    // Create log viewer if it doesn't exist
+    if (!g_log_viewer) {
+        // Execute the show log action to create the viewer
+        process_ui_action("llm_agent:show_log");
+    } else {
+        // Bring existing viewer to front
+        activate_widget(g_log_viewer, true);
     }
-
-    // Show log window
-    ShowWindow(g_log_window, SW_SHOW);
 
     // Create or restart agent
     if (!g_agent) {
@@ -299,21 +279,17 @@ void idaapi term(void) {
         g_agent.reset();
     }
 
-    // Destroy log window
-    if (g_log_window && IsWindow(g_log_window)) {
-        DestroyWindow(g_log_window);
+    // Close log viewer if open
+    if (g_log_viewer) {
+        close_widget(g_log_viewer, 0);
+        g_log_viewer = nullptr;
     }
+
+    // Clear log lines
+    g_log_lines.clear();
 
     // Unregister action
     unregister_action("llm_agent:show_log");
 
     msg("%s plugin terminated\n", PLUGIN_NAME);
-}
-
-// Plugin entry point
-#ifdef __NT__
-__declspec(dllexport)
-#endif
-plugin_t* PLUGIN_ENTRY(void) {
-    return &PLUGIN;
 }

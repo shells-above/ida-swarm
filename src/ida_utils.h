@@ -13,17 +13,82 @@ namespace llm_re {
 // All methods here will be called from worker thread and use execute_sync
 class IDAUtils {
 private:
+    template<typename Func>
+class exec_request_wrapper_t : public exec_request_t {
+    private:
+        Func func;
+        using RetType = decltype(std::declval<Func>()());
+        RetType* result_ptr;
+        std::exception_ptr* exception_ptr;
+
+    public:
+        exec_request_wrapper_t(Func&& f, RetType* res_ptr, std::exception_ptr* exc_ptr)
+            : func(std::forward<Func>(f)), result_ptr(res_ptr), exception_ptr(exc_ptr) {}
+
+        virtual ssize_t idaapi execute() override {
+            try {
+                *result_ptr = func();
+                return 0;
+            } catch (...) {
+                *exception_ptr = std::current_exception();
+                return -1;
+            }
+        }
+    };
+
+    // Specialization for void return type
+    template<typename Func>
+    class exec_request_wrapper_void_t : public exec_request_t {
+    private:
+        Func func;
+        std::exception_ptr* exception_ptr;
+
+    public:
+        exec_request_wrapper_void_t(Func&& f, std::exception_ptr* exc_ptr)
+            : func(std::forward<Func>(f)), exception_ptr(exc_ptr) {}
+
+        virtual ssize_t idaapi execute() override {
+            try {
+                func();
+                return 0;
+            } catch (...) {
+                *exception_ptr = std::current_exception();
+                return -1;
+            }
+        }
+    };
+
+    // Helper to detect void return type
+    template<typename T>
+    struct is_void_return : std::false_type {};
+
+    template<typename... Args>
+    struct is_void_return<void(Args...)> : std::true_type {};
+
     // Helper to execute IDA operations synchronously
     template<typename Func>
     static auto execute_sync_wrapper(Func&& func) -> decltype(func()) {
         using RetType = decltype(func());
-        RetType result;
-        auto wrapper = [&func, &result]() -> int {
-            result = func();
-            return 0;
-        };
-        execute_sync(wrapper, MFF_READ);
-        return result;
+
+        // Handle void return type
+        if constexpr (std::is_void_v<RetType>) {
+            std::exception_ptr exc_ptr;
+            exec_request_wrapper_void_t<Func> req(std::forward<Func>(func), &exc_ptr);
+            execute_sync(req, MFF_READ);
+            if (exc_ptr) {
+                std::rethrow_exception(exc_ptr);
+            }
+        } else {
+            // Handle non-void return type
+            RetType result;
+            std::exception_ptr exc_ptr;
+            exec_request_wrapper_t<Func> req(std::forward<Func>(func), &result, &exc_ptr);
+            execute_sync(req, MFF_READ);
+            if (exc_ptr) {
+                std::rethrow_exception(exc_ptr);
+            }
+            return result;
+        }
     }
 
 public:

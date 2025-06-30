@@ -337,14 +337,14 @@ void BinaryMemory::import_memory_snapshot(const json& snapshot) {
             }
 
             if (func.contains("callers")) {
-                for (const auto& caller : func["callers"]) {
-                    fm.callers.insert(caller);
+                for (const nlohmann::basic_json<> &caller: func["callers"]) {
+                    fm.callers.insert(caller.get<ea_t>());
                 }
             }
 
             if (func.contains("callees")) {
-                for (const auto& callee : func["callees"]) {
-                    fm.callees.insert(callee);
+                for (const nlohmann::basic_json<> &callee: func["callees"]) {
+                    fm.callees.insert(callee.get<ea_t>());
                 }
             }
 
@@ -380,8 +380,8 @@ void BinaryMemory::import_memory_snapshot(const json& snapshot) {
     }
 
     if (snapshot.contains("anchor_points")) {
-        for (const auto& anchor : snapshot["anchor_points"]) {
-            anchor_points.insert(anchor);
+        for (const nlohmann::basic_json<> &anchor: snapshot["anchor_points"]) {
+            anchor_points.insert(anchor.get<ea_t>());
         }
     }
 }

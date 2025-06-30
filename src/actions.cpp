@@ -4,14 +4,16 @@
 
 #include "actions.h"
 
+#include <utility>
+
 namespace llm_re {
 
-ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(mem) {}
+ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) {}
 
 json ActionExecutor::get_xrefs_to(ea_t address) {
     json result;
     try {
-        auto xrefs = IDAUtils::get_xrefs_to(address);
+        std::vector<ea_t> xrefs = IDAUtils::get_xrefs_to(address);
         result["success"] = true;
         result["xrefs"] = xrefs;
 
@@ -28,7 +30,7 @@ json ActionExecutor::get_xrefs_to(ea_t address) {
 json ActionExecutor::get_xrefs_from(ea_t address) {
     json result;
     try {
-        auto xrefs = IDAUtils::get_xrefs_from(address);
+        std::vector<ea_t> xrefs = IDAUtils::get_xrefs_from(address);
         result["success"] = true;
         result["xrefs"] = xrefs;
 
@@ -45,7 +47,7 @@ json ActionExecutor::get_xrefs_from(ea_t address) {
 json ActionExecutor::get_function_disassembly(ea_t address) {
     json result;
     try {
-        auto disasm = IDAUtils::get_function_disassembly(address);
+        std::string disasm = IDAUtils::get_function_disassembly(address);
         result["success"] = true;
         result["disassembly"] = disasm;
     } catch (const std::exception& e) {
@@ -58,7 +60,7 @@ json ActionExecutor::get_function_disassembly(ea_t address) {
 json ActionExecutor::get_function_decompilation(ea_t address) {
     json result;
     try {
-        auto decomp = IDAUtils::get_function_decompilation(address);
+        std::string decomp = IDAUtils::get_function_decompilation(address);
         result["success"] = true;
         result["decompilation"] = decomp;
     } catch (const std::exception& e) {
@@ -84,7 +86,7 @@ json ActionExecutor::get_function_address(const std::string& name) {
 json ActionExecutor::get_function_name(ea_t address) {
     json result;
     try {
-        auto name = IDAUtils::get_function_name(address);
+        std::string name = IDAUtils::get_function_name(address);
         result["success"] = true;
         result["name"] = name;
     } catch (const std::exception& e) {
@@ -109,7 +111,7 @@ json ActionExecutor::set_function_name(ea_t address, const std::string& name) {
 json ActionExecutor::get_function_string_refs(ea_t address) {
     json result;
     try {
-        auto strings = IDAUtils::get_function_string_refs(address);
+        std::vector<std::string> strings = IDAUtils::get_function_string_refs(address);
         result["success"] = true;
         result["strings"] = strings;
 
@@ -125,7 +127,7 @@ json ActionExecutor::get_function_string_refs(ea_t address) {
 json ActionExecutor::get_function_data_refs(ea_t address) {
     json result;
     try {
-        auto data_refs = IDAUtils::get_function_data_refs(address);
+        std::vector<ea_t> data_refs = IDAUtils::get_function_data_refs(address);
         result["success"] = true;
         result["data_refs"] = data_refs;
 
@@ -141,7 +143,7 @@ json ActionExecutor::get_function_data_refs(ea_t address) {
 json ActionExecutor::get_data_name(ea_t address) {
     json result;
     try {
-        auto name = IDAUtils::get_data_name(address);
+        std::string name = IDAUtils::get_data_name(address);
         result["success"] = true;
         result["name"] = name;
     } catch (const std::exception& e) {
@@ -214,7 +216,7 @@ json ActionExecutor::clear_pseudocode_comments(ea_t address) {
 json ActionExecutor::get_imports() {
     json result;
     try {
-        auto imports = IDAUtils::get_imports();
+        std::map<std::string, std::vector<std::string>> imports = IDAUtils::get_imports();
         result["success"] = true;
         result["imports"] = imports;
     } catch (const std::exception& e) {
@@ -227,10 +229,10 @@ json ActionExecutor::get_imports() {
 json ActionExecutor::get_exports() {
     json result;
     try {
-        auto exports = IDAUtils::get_exports();
+        std::vector<std::pair<std::string, ea_t>> exports = IDAUtils::get_exports();
         result["success"] = true;
         json exports_json = json::array();
-        for (const auto& exp : exports) {
+        for (const std::pair<std::string, ea_t>& exp: exports) {
             json exp_obj;
             exp_obj["name"] = exp.first;
             exp_obj["address"] = exp.second;
@@ -247,7 +249,7 @@ json ActionExecutor::get_exports() {
 json ActionExecutor::get_strings() {
     json result;
     try {
-        auto strings = IDAUtils::get_strings();
+        std::vector<std::string> strings = IDAUtils::get_strings();
         result["success"] = true;
         result["strings"] = strings;
     } catch (const std::exception& e) {
@@ -260,7 +262,7 @@ json ActionExecutor::get_strings() {
 json ActionExecutor::search_strings(const std::string& text, bool is_case_sensitive) {
     json result;
     try {
-        auto strings = IDAUtils::search_strings(text, is_case_sensitive);
+        std::vector<std::string> strings = IDAUtils::search_strings(text, is_case_sensitive);
         result["success"] = true;
         result["strings"] = strings;
     } catch (const std::exception& e) {
@@ -287,7 +289,7 @@ json ActionExecutor::set_global_note(const std::string& key, const std::string& 
 json ActionExecutor::get_global_note(const std::string& key) {
     json result;
     try {
-        auto content = memory->get_global_note(key);
+        std::string content = memory->get_global_note(key);
         result["success"] = true;
         result["content"] = content;
     } catch (const std::exception& e) {
@@ -300,7 +302,7 @@ json ActionExecutor::get_global_note(const std::string& key) {
 json ActionExecutor::list_global_notes() {
     json result;
     try {
-        auto keys = memory->list_global_notes();
+        std::vector<std::string> keys = memory->list_global_notes();
         result["success"] = true;
         result["keys"] = keys;
     } catch (const std::exception& e) {
@@ -313,10 +315,10 @@ json ActionExecutor::list_global_notes() {
 json ActionExecutor::search_notes(const std::string& query) {
     json result;
     try {
-        auto matches = memory->search_notes(query);
+        std::vector<std::pair<std::string, std::string>> matches = memory->search_notes(query);
         result["success"] = true;
         json matches_json = json::array();
-        for (const auto& match : matches) {
+        for (const std::pair<std::string, std::string> &match: matches) {
             json match_obj;
             match_obj["key"] = match.first;
             match_obj["snippet"] = match.second;
@@ -345,7 +347,7 @@ json ActionExecutor::set_function_analysis(ea_t address, int level, const std::s
 json ActionExecutor::get_function_analysis(ea_t address, int level) {
     json result;
     try {
-        auto analysis = memory->get_function_analysis(address, static_cast<DetailLevel>(level));
+        std::string analysis = memory->get_function_analysis(address, static_cast<DetailLevel>(level));
         result["success"] = true;
         result["analysis"] = analysis;
     } catch (const std::exception& e) {
@@ -358,12 +360,12 @@ json ActionExecutor::get_function_analysis(ea_t address, int level) {
 json ActionExecutor::get_memory_context(ea_t address, int radius) {
     json result;
     try {
-        auto context = memory->get_memory_context(address, radius);
+        MemoryContext context = memory->get_memory_context(address, radius);
         result["success"] = true;
 
         // Convert context to JSON
         json nearby = json::array();
-        for (const auto& func : context.nearby_functions) {
+        for (const FunctionMemory& func: context.nearby_functions) {
             json func_obj;
             func_obj["address"] = func.address;
             func_obj["name"] = func.name;
@@ -374,7 +376,7 @@ json ActionExecutor::get_memory_context(ea_t address, int radius) {
         result["nearby_functions"] = nearby;
 
         json context_funcs = json::array();
-        for (const auto& func : context.context_functions) {
+        for (const FunctionMemory& func: context.context_functions) {
             json func_obj;
             func_obj["address"] = func.address;
             func_obj["name"] = func.name;
@@ -395,10 +397,10 @@ json ActionExecutor::get_memory_context(ea_t address, int radius) {
 json ActionExecutor::get_analyzed_functions() {
     json result;
     try {
-        auto functions = memory->get_analyzed_functions();
+        std::vector<std::tuple<ea_t, std::string, DetailLevel>> functions = memory->get_analyzed_functions();
         result["success"] = true;
         json funcs_json = json::array();
-        for (const auto& func : functions) {
+        for (const std::tuple<ea_t, std::string, DetailLevel>& func: functions) {
             json func_obj;
             func_obj["address"] = std::get<0>(func);
             func_obj["name"] = std::get<1>(func);
@@ -416,7 +418,7 @@ json ActionExecutor::get_analyzed_functions() {
 json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
     json result;
     try {
-        auto addresses = memory->find_functions_by_pattern(pattern);
+        std::vector<ea_t> addresses = memory->find_functions_by_pattern(pattern);
         result["success"] = true;
         result["addresses"] = addresses;
     } catch (const std::exception& e) {
@@ -429,10 +431,10 @@ json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
 json ActionExecutor::get_exploration_frontier() {
     json result;
     try {
-        auto frontier = memory->get_exploration_frontier();
+        std::vector<std::tuple<ea_t, std::string, std::string>> frontier = memory->get_exploration_frontier();
         result["success"] = true;
         json frontier_json = json::array();
-        for (const auto& item : frontier) {
+        for (const std::tuple<ea_t, std::string, std::string>& item: frontier) {
             json item_obj;
             item_obj["address"] = std::get<0>(item);
             item_obj["name"] = std::get<1>(item);
@@ -462,10 +464,10 @@ json ActionExecutor::mark_for_analysis(ea_t address, const std::string& reason, 
 json ActionExecutor::get_analysis_queue() {
     json result;
     try {
-        auto queue = memory->get_analysis_queue();
+        std::vector<std::tuple<ea_t, std::string, int>> queue = memory->get_analysis_queue();
         result["success"] = true;
         json queue_json = json::array();
-        for (const auto& item : queue) {
+        for (const std::tuple<ea_t, std::string, int>& item: queue) {
             json item_obj;
             item_obj["address"] = std::get<0>(item);
             item_obj["reason"] = std::get<1>(item);
@@ -507,10 +509,10 @@ json ActionExecutor::add_insight(const std::string& type, const std::string& des
 json ActionExecutor::get_insights(const std::string& type) {
     json result;
     try {
-        auto insights = memory->get_insights(type);
+        std::vector<std::tuple<std::string, std::vector<ea_t>>> insights = memory->get_insights(type);
         result["success"] = true;
         json insights_json = json::array();
-        for (const auto& insight : insights) {
+        for (const std::tuple<std::string, std::vector<ea_t>> &insight: insights) {
             json insight_obj;
             insight_obj["description"] = std::get<0>(insight);
             insight_obj["addresses"] = std::get<1>(insight);
@@ -539,10 +541,10 @@ json ActionExecutor::analyze_cluster(const std::vector<ea_t>& addresses, const s
 json ActionExecutor::get_cluster_analysis(const std::string& cluster_name) {
     json result;
     try {
-        auto cluster = memory->get_cluster_analysis(cluster_name);
+        std::map<ea_t, std::string> cluster = memory->get_cluster_analysis(cluster_name);
         result["success"] = true;
         json cluster_json = json::object();
-        for (const auto& pair : cluster) {
+        for (const std::pair<const unsigned long long, std::string> &pair: cluster) {
             cluster_json[std::to_string(pair.first)] = pair.second;
         }
         result["cluster"] = cluster_json;
@@ -556,7 +558,7 @@ json ActionExecutor::get_cluster_analysis(const std::string& cluster_name) {
 json ActionExecutor::summarize_region(ea_t start_addr, ea_t end_addr) {
     json result;
     try {
-        auto summary = memory->summarize_region(start_addr, end_addr);
+        std::string summary = memory->summarize_region(start_addr, end_addr);
         result["success"] = true;
         result["summary"] = summary;
     } catch (const std::exception& e) {
@@ -569,7 +571,7 @@ json ActionExecutor::summarize_region(ea_t start_addr, ea_t end_addr) {
 json ActionExecutor::export_memory_snapshot() {
     json result;
     try {
-        auto snapshot = memory->export_memory_snapshot();
+        json snapshot = memory->export_memory_snapshot();
         result["success"] = true;
         result["snapshot"] = snapshot;
     } catch (const std::exception& e) {

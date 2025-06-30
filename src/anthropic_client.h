@@ -27,7 +27,8 @@ namespace llm_re {
         };
 
         struct ChatRequest {
-            std::string model = "claude-3-opus-20240229";
+            std::string model_opus = "claude-opus-4-20250514";
+            std::string model_sonnet = "claude-sonnet-4-20250514";
             std::vector<ChatMessage> messages;
             int max_tokens = 4096;
             double temperature = 0.0;
