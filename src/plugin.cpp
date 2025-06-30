@@ -1,81 +1,8 @@
-// #include <iostream>
-//
-// #include <pro.h>
-// #include <prodir.h>
-// #include <ida.hpp>
-// #include <auto.hpp>
-// #include <expr.hpp>
-// #include <name.hpp>
-// #include <undo.hpp>
-// #include <name.hpp>
-// #include <diskio.hpp>
-// #include <loader.hpp>
-// #include <dirtree.hpp>
-// #include <kernwin.hpp>
-// #include <segment.hpp>
-// #include <parsejson.hpp>
-//
-// // CORRECT IDA PRO 9 C++ PLUGIN CREATION:
-// // Define the class that inherits from plugmod_t
-// class MyPlugmod : public plugmod_t
-// {
-// public:
-//     // Constructor
-//     MyPlugmod()
-//     {
-//         msg("MyPlugmod: Constructor called.\n");
-//     }
-//
-//     // Destructor
-//     virtual ~MyPlugmod()
-//     {
-//         msg("MyPlugmod: Destructor called.\n");
-//     }
-//
-//     // Method that gets called when the plugin is activated
-//     virtual bool idaapi run(size_t arg) override
-//     {
-//         msg("MyPlugmod.run() called with arg: %zu\n", arg);
-//
-//         // Add some actual functionality to test
-//         msg("Plugin is working! Current database: %s\n", get_path(PATH_TYPE_IDB));
-//
-//         return true;
-//     }
-// };
-//
-// static plugmod_t* idaapi init(void)
-// {
-//     msg("Plugin init() called\n");
-//     return new MyPlugmod();
-// }
-//
-// static void idaapi term(void)
-// {
-//     msg("Plugin term() called\n");
-// }
-//
-// static bool idaapi run(size_t arg)
-// {
-//     msg("Plugin run() called with arg: %zu\n", arg);
-//     return false; // This shouldn't be called with PLUGIN_MULTI
-// }
-//
-// plugin_t PLUGIN = {
-//     IDP_INTERFACE_VERSION,
-//     PLUGIN_FIX,         // plugin flags
-//     init,                 // initialize
-//     term,                 // terminate. this pointer can be nullptr
-//     run,                  // invoke the plugin
-//     "List functions plugin", // long comment about the plugin
-//     "This plugin demonstrates basic functionality", // multiline help about the plugin
-//     "List functions",     // the preferred short name of the plugin
-//     "Ctrl-Shift-L"        // the preferred hotkey to run the plugin
-// };
-
 #include "common.h"
 #include "agent.h"
 #include "ida_utils.h"
+
+struct log_handler_t;
 
 // Global plugin state
 namespace {
@@ -83,6 +10,8 @@ namespace {
     std::string g_api_key;
     TWidget* g_log_viewer = nullptr;
     strvec_t g_log_lines;
+    std::atomic<bool> g_terminating{false};
+    log_handler_t* g_log_handler = nullptr;  // Store the handler
     
     // UI constants
     const char* PLUGIN_NAME = "LLM RE Agent";
@@ -117,6 +46,35 @@ std::string get_timestamp() {
     return ss.str();
 }
 
+// File-only logging for debugging (thread-safe, no UI updates)
+void log_to_file_only(const std::string& text) {
+    std::string timestamped = get_timestamp() + " " + text;
+
+    // Output to message window
+    msg("%s\n", timestamped.c_str());
+
+    // Write to file
+    try {
+        std::string log_path = std::string(get_user_idadir()) + "/llm_plugin.log";
+        std::ofstream log_file(log_path, std::ios::app);
+        if (log_file.is_open()) {
+            log_file << timestamped << std::endl;
+            log_file.flush();
+        }
+    } catch (...) {
+        // Ignore errors
+    }
+}
+
+// Close handler for log viewer
+static void idaapi log_viewer_close(TWidget* cv, void*) {
+    // Clear the global pointer when viewer is closed
+    if (cv == g_log_viewer) {
+        g_log_viewer = nullptr;
+        msg("LLM Agent Log viewer closed\n");
+    }
+}
+
 // Custom viewer handlers
 static const custom_viewer_handlers_t log_handlers = {
     nullptr,  // keyboard
@@ -125,7 +83,7 @@ static const custom_viewer_handlers_t log_handlers = {
     nullptr,  // click
     nullptr,  // dblclick
     nullptr,  // current_position_changed
-    nullptr,  // close
+    log_viewer_close,  // close
     nullptr,  // help
     nullptr,  // adjust_place
     nullptr,  // get_place_xcoord
@@ -166,6 +124,12 @@ struct log_handler_t : public action_handler_t {
 
 // Thread-safe append to log function using your wrapper
 void append_to_log(const std::string& text) {
+    // Don't update UI if we're terminating
+    if (g_terminating) {
+        log_to_file_only("[TERM] " + text);
+        return;
+    }
+
     // Add timestamp
     std::string timestamped = get_timestamp() + " " + text;
 
@@ -187,6 +151,9 @@ void append_to_log(const std::string& text) {
 
     // For UI updates, we need to execute on main thread with MFF_WRITE
     llm_re::IDAUtils::execute_sync_wrapper([timestamped]() {
+        // Double-check we're not terminating
+        if (g_terminating) return;
+
         // Add timestamped line to log
         simpleline_t line;
         line.line = timestamped.c_str();
@@ -206,8 +173,7 @@ void append_to_log(const std::string& text) {
             simpleline_place_t bottom(g_log_lines.size() - 1);
             jumpto(g_log_viewer, &bottom, 0, 0);
         }
-    }, MFF_WRITE);  // Use MFF_WRITE for UI updates
-
+    }, MFF_WRITE);
 }
 
 // Initialize plugin
@@ -215,12 +181,27 @@ plugmod_t* idaapi init() {
     // Plugin works in all IDA versions
     if (!is_idaq()) return PLUGIN_SKIP;
 
+    // Reset termination flag
+    g_terminating = false;
+
+    // Clear debug log at startup
+    try {
+        std::string log_path = std::string(get_user_idadir()) + "/llm_plugin3.log";
+        std::ofstream log_file(log_path, std::ios::trunc);
+        if (log_file.is_open()) {
+            log_file << get_timestamp() << " === PLUGIN INIT ===" << std::endl;
+        }
+    } catch (...) {}
+
+    // Create action handler
+    g_log_handler = new log_handler_t();
+
     // Register action for showing log
     register_action(action_desc_t{
         sizeof(action_desc_t),
         "llm_agent:show_log",
         "Show LLM Agent Log",
-        new log_handler_t(),
+        g_log_handler,  // Use stored pointer
         &PLUGIN,
         nullptr,
         "Show the LLM agent log window",
@@ -279,23 +260,74 @@ bool idaapi run(size_t arg) {
 
 // Terminate plugin
 void idaapi term() {
+    // Set termination flag
+    g_terminating = true;
+
+    log_to_file_only("=== TERM START ===");
+    log_to_file_only("g_agent exists: " + std::string(g_agent ? "yes" : "no"));
+    log_to_file_only("g_log_viewer exists: " + std::string(g_log_viewer ? "yes" : "no"));
+    log_to_file_only("g_log_lines size: " + std::to_string(g_log_lines.size()));
+
     // Stop agent
     if (g_agent) {
-        g_agent->stop();
-        g_agent.reset();
+        log_to_file_only("Calling g_agent->stop()");
+        try {
+            g_agent->stop();
+            log_to_file_only("g_agent->stop() succeeded");
+        } catch (const std::exception& e) {
+            log_to_file_only("g_agent->stop() exception: " + std::string(e.what()));
+        } catch (...) {
+            log_to_file_only("g_agent->stop() unknown exception");
+        }
+
+        log_to_file_only("Resetting g_agent");
+        try {
+            g_agent.reset();
+            log_to_file_only("g_agent reset succeeded");
+        } catch (...) {
+            log_to_file_only("g_agent reset failed");
+        }
     }
 
-    // Close log viewer if open
-    if (g_log_viewer) {
-        close_widget(g_log_viewer, 0);
-        g_log_viewer = nullptr;
+    log_to_file_only("Starting UI cleanup");
+
+    try {
+        llm_re::IDAUtils::execute_sync_wrapper([]() {
+            // Write to file from main thread to confirm we're there
+            std::ofstream debug_file(std::string(get_user_idadir()) + "/llm_plugin.log", std::ios::app);
+            if (debug_file.is_open()) {
+                debug_file << get_timestamp() << " [MAIN] In execute_sync_wrapper" << std::endl;
+
+                if (g_log_viewer) {
+                    debug_file << get_timestamp() << " [MAIN] Closing widget..." << std::endl;
+                    debug_file.flush();
+
+                    close_widget(g_log_viewer, 0);
+
+                    debug_file << get_timestamp() << " [MAIN] Widget closed" << std::endl;
+                    g_log_viewer = nullptr;
+                }
+
+                debug_file << get_timestamp() << " [MAIN] Clearing lines..." << std::endl;
+                g_log_lines.clear();
+
+                debug_file << get_timestamp() << " [MAIN] Unregistering action..." << std::endl;
+                unregister_action("llm_agent:show_log");
+
+                debug_file << get_timestamp() << " [MAIN] UI cleanup done" << std::endl;
+                debug_file.close();
+            }
+        }, MFF_WRITE);
+
+        log_to_file_only("execute_sync_wrapper returned");
+    } catch (const std::exception& e) {
+        log_to_file_only("execute_sync_wrapper exception: " + std::string(e.what()));
+    } catch (...) {
+        log_to_file_only("execute_sync_wrapper unknown exception");
     }
 
-    // Clear log lines
-    g_log_lines.clear();
+    log_to_file_only("=== TERM END ===");
 
-    // Unregister action
-    unregister_action("llm_agent:show_log");
-
-    msg("%s plugin terminated\n", PLUGIN_NAME);
+    // Reset flag
+    g_terminating = false;
 }
