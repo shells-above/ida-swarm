@@ -45,14 +45,55 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
         request_json["system"] = request.system_prompt;
     }
 
+    // Build messages array
     json messages = json::array();
     for (const auto& msg : request.messages) {
         json msg_json;
         msg_json["role"] = msg.role;
-        msg_json["content"] = msg.content;
+
+        if (msg.role == "tool") {
+            // Tool result message
+            msg_json["tool_call_id"] = msg.tool_call_id;
+            msg_json["content"] = msg.content;
+        } else if (msg.role == "assistant" && !msg.tool_calls.empty()) {
+            // Assistant message with tool calls
+            json content_array = json::array();
+
+            // Add text content if present
+            if (!msg.content.empty()) {
+                content_array.push_back({
+                    {"type", "text"},
+                    {"text", msg.content}
+                });
+            }
+
+            // Add tool calls
+            for (const auto& tool_call : msg.tool_calls) {
+                content_array.push_back(tool_call);
+            }
+
+            msg_json["content"] = content_array;
+        } else {
+            // Regular text message
+            msg_json["content"] = msg.content;
+        }
+
         messages.push_back(msg_json);
     }
     request_json["messages"] = messages;
+
+    // Add tools if provided
+    if (!request.tools.empty()) {
+        json tools_json = json::array();
+        for (const auto& tool : request.tools) {
+            json tool_json;
+            tool_json["name"] = tool.name;
+            tool_json["description"] = tool.description;
+            tool_json["input_schema"] = tool.parameters;
+            tools_json.push_back(tool_json);
+        }
+        request_json["tools"] = tools_json;
+    }
 
     std::string request_body = request_json.dump();
     std::string response_body;
@@ -87,14 +128,23 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
                 response.error = response_json["error"]["message"];
             } else {
                 response.success = true;
-                response.content = response_json["content"][0]["text"];
                 response.stop_reason = response_json["stop_reason"];
-                
+
                 // Extract thinking if present
                 if (response_json.contains("thinking") && !response_json["thinking"].is_null()) {
                     response.thinking = response_json["thinking"];
                 }
-                
+
+                // Extract content (can be text or tool calls)
+                const auto& content_array = response_json["content"];
+                for (const auto& content_item : content_array) {
+                    if (content_item["type"] == "text") {
+                        response.content = content_item["text"];
+                    } else if (content_item["type"] == "tool_use") {
+                        response.tool_calls.push_back(content_item);
+                    }
+                }
+
                 // Extract token usage information
                 if (response_json.contains("usage")) {
                     const auto& usage = response_json["usage"];
@@ -126,4 +176,3 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
 }
 
 } // namespace llm_re
-
