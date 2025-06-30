@@ -53,7 +53,7 @@ namespace llm_re {
             int max_tokens = 8192;
             double temperature = 0.0;
             std::string system_prompt;
-            bool enable_thinking = true;
+            bool enable_thinking = false;  // todo add support for this with interleaved thinking tool calls (in beta)
         };
 
         struct ChatResponse {

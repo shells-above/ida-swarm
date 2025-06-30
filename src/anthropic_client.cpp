@@ -38,7 +38,10 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     request_json["temperature"] = request.temperature;
     
     if (request.enable_thinking) {
-        request_json["thinking"] = true;
+        // request_json["thinking"] = {
+        //     "budget_tokens":
+        //
+        // };
     }
 
     if (!request.system_prompt.empty()) {
