@@ -3,17 +3,29 @@
 //
 
 #include "ida_utils.h"
+#include <name.hpp>
+#include <xref.hpp>
+#include <funcs.hpp>
+#include <lines.hpp>
+#include <hexrays.hpp>
+#include <segment.hpp>
+#include <nalt.hpp>
+#include <entry.hpp>
+#include <auto.hpp>
+#include <bytes.hpp>
+#include <strlist.hpp>
+#include <algorithm>
+#include <cctype>
 
 namespace llm_re {
 
 std::vector<ea_t> IDAUtils::get_xrefs_to(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::vector<ea_t> result;
-        // TODO: Implement using get_first_cref_to, get_next_cref_to, etc.
-        // xrefblk_t xb;
-        // for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
-        //     result.push_back(xb.from);
-        // }
+        xrefblk_t xb;
+        for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
+            result.push_back(xb.from);
+        }
         return result;
     });
 }
@@ -21,7 +33,10 @@ std::vector<ea_t> IDAUtils::get_xrefs_to(ea_t address) {
 std::vector<ea_t> IDAUtils::get_xrefs_from(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::vector<ea_t> result;
-        // TODO: Implement using get_first_cref_from, get_next_cref_from, etc.
+        xrefblk_t xb;
+        for (bool ok = xb.first_from(address, XREF_ALL); ok; ok = xb.next_from()) {
+            result.push_back(xb.to);
+        }
         return result;
     });
 }
@@ -29,7 +44,20 @@ std::vector<ea_t> IDAUtils::get_xrefs_from(ea_t address) {
 std::string IDAUtils::get_function_disassembly(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::string result;
-        // TODO: Implement using generate_disasm_line, get_func, etc.
+        func_t *func = get_func(address);
+        if (!func) {
+            return result;
+        }
+
+        // Generate disassembly for each instruction in the function
+        for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            qstring line;
+            if (generate_disasm_line(&line, ea, GENDSM_REMOVE_TAGS)) {
+                result += line.c_str();
+                result += "\n";
+            }
+            ea = next_head(ea, func->end_ea);
+        }
         return result;
     });
 }
@@ -37,39 +65,93 @@ std::string IDAUtils::get_function_disassembly(ea_t address) {
 std::string IDAUtils::get_function_decompilation(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::string result;
-        // TODO: Implement using Hex-Rays decompiler API
+
+        // Initialize Hex-Rays decompiler if not already done
+        if (!init_hexrays_plugin()) {
+            return result;
+        }
+
+        func_t *func = get_func(address);
+        if (!func) {
+            return result;
+        }
+
+        // Decompile the function
+        hexrays_failure_t hf;
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        if (cfunc) {
+            // Create a string printer
+            qstring str;
+            const strvec_t &sv = cfunc->get_pseudocode();
+            for (int i = 0; i < sv.size(); i++) {
+                str += sv[i].line;
+                str += '\n';
+            }
+            result = str.c_str();
+        }
+
         return result;
     });
 }
 
 ea_t IDAUtils::get_function_address(const std::string& name) {
     return execute_sync_wrapper([&name]() {
-        ea_t result = BADADDR;
-        // TODO: Implement using get_name_ea_simple
-        return result;
+        return get_name_ea(BADADDR, name.c_str());
     });
 }
 
 std::string IDAUtils::get_function_name(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::string result;
-        // TODO: Implement using get_name
+        qstring name;
+        if (get_func_name(&name, address) > 0) {
+            result = name.c_str();
+        }
         return result;
     });
 }
 
 bool IDAUtils::set_function_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
-        bool result = false;
-        // TODO: Implement using set_name
-        return result;
+        func_t *func = get_func(address);
+        if (!func) {
+            return false;
+        }
+        return set_name(func->start_ea, name.c_str(), SN_CHECK);
     });
 }
 
 std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::vector<std::string> result;
-        // TODO: Implement by iterating through function and finding string references
+        func_t *func = get_func(address);
+        if (!func) {
+            return result;
+        }
+
+        // Iterate through function instructions
+        for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            // Check for data references from this instruction
+            xrefblk_t xb;
+            for (bool ok = xb.first_from(ea, XREF_DATA); ok; ok = xb.next_from()) {
+                // Check if the target is a string
+                flags_t flags = get_flags(xb.to);
+                if (is_strlit(flags)) {
+                    // Get the string content
+                    qstring str;
+                    size_t len = get_max_strlit_length(xb.to, STRTYPE_C);
+                    if (get_strlit_contents(&str, xb.to, len, STRTYPE_C) > 0) {
+                        result.push_back(str.c_str());
+                    }
+                }
+            }
+            ea = next_head(ea, func->end_ea);
+        }
+
+        // Remove duplicates
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+
         return result;
     });
 }
@@ -77,7 +159,25 @@ std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
 std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::vector<ea_t> result;
-        // TODO: Implement by iterating through function and finding data references
+        func_t *func = get_func(address);
+        if (!func) {
+            return result;
+        }
+
+        // Iterate through function instructions
+        for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            // Get data references from this instruction
+            xrefblk_t xb;
+            for (bool ok = xb.first_from(ea, XREF_DATA); ok; ok = xb.next_from()) {
+                result.push_back(xb.to);
+            }
+            ea = next_head(ea, func->end_ea);
+        }
+
+        // Remove duplicates
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+
         return result;
     });
 }
@@ -85,55 +185,125 @@ std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address) {
 std::string IDAUtils::get_data_name(ea_t address) {
     return execute_sync_wrapper([address]() {
         std::string result;
-        // TODO: Implement using get_name
+        qstring name;
+        if (get_name(&name, address) > 0) {
+            result = name.c_str();
+        }
         return result;
     });
 }
 
 bool IDAUtils::set_data_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
-        bool result = false;
-        // TODO: Implement using set_name
-        return result;
+        return set_name(address, name.c_str(), SN_CHECK);
     });
 }
 
 bool IDAUtils::add_disassembly_comment(ea_t address, const std::string& comment) {
     return execute_sync_wrapper([address, &comment]() {
-        bool result = false;
-        // TODO: Implement using set_cmt
-        return result;
+        return set_cmt(address, comment.c_str(), false);
     });
 }
 
 bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) {
     return execute_sync_wrapper([address, &comment]() {
-        bool result = false;
-        // TODO: Implement using Hex-Rays API
-        return result;
+        // Initialize Hex-Rays if needed
+        if (!init_hexrays_plugin()) {
+            return false;
+        }
+
+        func_t *func = get_func(address);
+        if (!func) {
+            return false;
+        }
+
+        // Get the decompiled function
+        hexrays_failure_t hf;
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        if (!cfunc) {
+            return false;
+        }
+
+        // Get existing user comments or create new
+        user_cmts_t *cmts = restore_user_cmts(func->start_ea);
+        if (!cmts) {
+            cmts = user_cmts_new();
+        }
+
+        // Create a tree location for the comment
+        treeloc_t loc;
+        loc.ea = address;
+        // Use ITP_SEMI for expression comments, ITP_BLOCK1 for block comments
+        loc.itp = ITP_SEMI;
+
+        // Insert the comment
+        user_cmts_insert(cmts, loc, comment.c_str());
+
+        // Save the comments
+        save_user_cmts(func->start_ea, cmts);
+        user_cmts_free(cmts);
+
+        // Mark the database as changed
+        cfunc->refresh_func_ctext();
+
+        return true;
     });
 }
 
 bool IDAUtils::clear_disassembly_comment(ea_t address) {
     return execute_sync_wrapper([address]() {
-        bool result = false;
-        // TODO: Implement using set_cmt with empty string
-        return result;
+        return set_cmt(address, "", false);
     });
 }
 
 bool IDAUtils::clear_pseudocode_comments(ea_t address) {
     return execute_sync_wrapper([address]() {
-        bool result = false;
-        // TODO: Implement using Hex-Rays API
-        return result;
+        // Initialize Hex-Rays if needed
+        if (!init_hexrays_plugin()) {
+            return false;
+        }
+
+        func_t *func = get_func(address);
+        if (!func) {
+            return false;
+        }
+
+        // Clear all user comments for the function
+        user_cmts_t *cmts = user_cmts_new();
+        save_user_cmts(func->start_ea, cmts);
+        user_cmts_free(cmts);
+
+        return true;
     });
 }
 
 std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
     return execute_sync_wrapper([]() {
         std::map<std::string, std::vector<std::string>> result;
-        // TODO: Implement using nimps, get_import_module_name, get_import_ordinal_name
+
+        // Iterate through all import modules
+        for (int i = 0; i < get_import_module_qty(); i++) {
+            qstring module_name;
+            if (!get_import_module_name(&module_name, i)) {
+                continue;
+            }
+
+            std::vector<std::string> functions;
+
+            // Enumerate all imports from this module
+            enum_import_names(i, [](ea_t ea, const char *name, uval_t ord, void *param) -> int {
+                auto *funcs = static_cast<std::vector<std::string>*>(param);
+                if (name) {
+                    funcs->push_back(name);
+                }
+                return 1; // Continue enumeration
+            }, &functions);
+
+            if (!functions.empty()) {
+                result[module_name.c_str()] = functions;
+            }
+        }
+
         return result;
     });
 }
@@ -141,7 +311,18 @@ std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
 std::vector<std::pair<std::string, ea_t>> IDAUtils::get_exports() {
     return execute_sync_wrapper([]() {
         std::vector<std::pair<std::string, ea_t>> result;
-        // TODO: Implement using get_entry_qty, get_entry_ordinal, get_entry_name
+
+        // Iterate through all exports
+        for (size_t i = 0; i < get_entry_qty(); i++) {
+            uval_t ord = get_entry_ordinal(i);
+            ea_t ea = get_entry(ord);
+
+            qstring name;
+            if (get_entry_name(&name, ord)) {
+                result.push_back({name.c_str(), ea});
+            }
+        }
+
         return result;
     });
 }
@@ -149,7 +330,22 @@ std::vector<std::pair<std::string, ea_t>> IDAUtils::get_exports() {
 std::vector<std::string> IDAUtils::get_strings() {
     return execute_sync_wrapper([]() {
         std::vector<std::string> result;
-        // TODO: Implement using string window APIs or by scanning segments
+
+        // Refresh string list
+        build_strlist();
+
+        // Get all strings
+        size_t qty = get_strlist_qty();
+        for (size_t i = 0; i < qty; i++) {
+            string_info_t si;
+            if (get_strlist_item(&si, i)) {
+                qstring str;
+                if (get_strlit_contents(&str, si.ea, si.length, si.type) > 0) {
+                    result.push_back(str.c_str());
+                }
+            }
+        }
+
         return result;
     });
 }
@@ -157,26 +353,59 @@ std::vector<std::string> IDAUtils::get_strings() {
 std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool is_case_sensitive) {
     return execute_sync_wrapper([&text, is_case_sensitive]() {
         std::vector<std::string> result;
-        // TODO: Implement string search
+
+        // Get all strings first
+        std::vector<std::string> all_strings = get_strings();
+
+        // Search through them
+        for (const auto& str : all_strings) {
+            bool found = false;
+
+            if (is_case_sensitive) {
+                found = str.find(text) != std::string::npos;
+            } else {
+                // Case-insensitive search
+                std::string lower_str = str;
+                std::string lower_text = text;
+                std::transform(lower_str.begin(), lower_str.end(), lower_str.begin(), ::tolower);
+                std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(), ::tolower);
+                found = lower_str.find(lower_text) != std::string::npos;
+            }
+
+            if (found) {
+                result.push_back(str);
+            }
+        }
+
         return result;
     });
 }
 
 ea_t IDAUtils::get_function_containing(ea_t address) {
     return execute_sync_wrapper([address]() {
-        ea_t result = BADADDR;
-        // TODO: Implement using get_func
-        return result;
+        func_t *func = get_func(address);
+        if (func) {
+            return func->start_ea;
+        }
+        return BADADDR;
     });
 }
 
 std::vector<ea_t> IDAUtils::get_all_functions() {
     return execute_sync_wrapper([]() {
         std::vector<ea_t> result;
-        // TODO: Implement using get_func_qty, getn_func
+
+        // Iterate through all functions
+        size_t qty = get_func_qty();
+        for (size_t i = 0; i < qty; i++) {
+            func_t *func = getn_func(i);
+            if (func) {
+                result.push_back(func->start_ea);
+            }
+        }
+
         return result;
     });
 }
 
 } // namespace llm_re
-

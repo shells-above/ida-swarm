@@ -11,6 +11,7 @@ set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
 # IDA Pro plugins directory path
 set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
 
+
 # Detect system and architecture
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
@@ -38,6 +39,10 @@ endif()
 
 # Include directories
 include_directories(${IDASDK_PATH}/include)
+
+# while 9.0 says that they moved hexrays.hpp (decompiler support) into the SDK, beta 2 that was leaked did not have this changed yet (https://docs.hex-rays.com/release-notes/9_0)
+# you will find the hexrays sdk inside plugins/hexrays_sdk/
+include_directories(${IDA_PLUGINS_PATH}/hexrays_sdk/include)
 
 # Find IDA libraries
 find_library(IDA64
