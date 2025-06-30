@@ -4,19 +4,6 @@
 
 #include "ida_utils.h"
 #include "ida_validators.h"
-#include <name.hpp>
-#include <xref.hpp>
-#include <funcs.hpp>
-#include <lines.hpp>
-#include <hexrays.hpp>
-#include <segment.hpp>
-#include <nalt.hpp>
-#include <entry.hpp>
-#include <auto.hpp>
-#include <bytes.hpp>
-#include <strlist.hpp>
-#include <algorithm>
-#include <cctype>
 
 namespace llm_re {
 

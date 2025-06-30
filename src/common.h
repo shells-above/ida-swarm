@@ -22,6 +22,14 @@
 #include <condition_variable>
 #include <fstream>
 #include <utility>
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <regex>
+#include <curl/curl.h>
+#include <cmath>
+#include <iomanip>
+
 
 // IDA headers
 #include <ida.hpp>
@@ -31,10 +39,15 @@
 #include <bytes.hpp>
 #include <name.hpp>
 #include <funcs.hpp>
-// #include <hexrays.hpp>
+#include <hexrays.hpp>
 #include <lines.hpp>
 #include <segment.hpp>
 #include <search.hpp>
+#include <xref.hpp>
+#include <nalt.hpp>
+#include <entry.hpp>
+#include <auto.hpp>
+#include <strlist.hpp>
 
 #undef fgetc
 #undef snprintf

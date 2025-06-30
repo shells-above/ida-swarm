@@ -36,6 +36,10 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     request_json["model"] = request.model_sonnet;
     request_json["max_tokens"] = request.max_tokens;
     request_json["temperature"] = request.temperature;
+    
+    if (request.enable_thinking) {
+        request_json["thinking"] = true;
+    }
 
     if (!request.system_prompt.empty()) {
         request_json["system"] = request.system_prompt;
@@ -85,6 +89,28 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
                 response.success = true;
                 response.content = response_json["content"][0]["text"];
                 response.stop_reason = response_json["stop_reason"];
+                
+                // Extract thinking if present
+                if (response_json.contains("thinking") && !response_json["thinking"].is_null()) {
+                    response.thinking = response_json["thinking"];
+                }
+                
+                // Extract token usage information
+                if (response_json.contains("usage")) {
+                    const auto& usage = response_json["usage"];
+                    if (usage.contains("input_tokens")) {
+                        response.input_tokens = usage["input_tokens"];
+                    }
+                    if (usage.contains("output_tokens")) {
+                        response.output_tokens = usage["output_tokens"];
+                    }
+                    if (usage.contains("cache_creation_input_tokens")) {
+                        response.cache_creation_input_tokens = usage["cache_creation_input_tokens"];
+                    }
+                    if (usage.contains("cache_read_input_tokens")) {
+                        response.cache_read_input_tokens = usage["cache_read_input_tokens"];
+                    }
+                }
             }
         } catch (const std::exception& e) {
             response.success = false;

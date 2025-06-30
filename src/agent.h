@@ -9,7 +9,6 @@
 #include "memory.h"
 #include "actions.h"
 #include "anthropic_client.h"
-#include <pro.h>  // For IDA threading APIs
 
 namespace llm_re {
 
@@ -32,11 +31,36 @@ namespace llm_re {
 
         // Agent state
         std::vector<AnthropicClient::ChatMessage> conversation_history;
+        
+        // Token tracking
+        struct TokenStats {
+            int total_input_tokens = 0;
+            int total_output_tokens = 0;
+            int total_cache_creation_tokens = 0;
+            int total_cache_read_tokens = 0;
+            int request_count = 0;
+            std::time_t session_start;
+            
+            TokenStats() : session_start(std::time(nullptr)) {}
+            
+            int get_total_tokens() const {
+                return total_input_tokens + total_output_tokens;
+            }
+            
+            double get_estimated_cost() const {
+                // Claude Sonnet 4 pricing (approximate)
+                double input_cost = (total_input_tokens / 1000.0) * 0.003;  // $3 per 1M input tokens
+                double output_cost = (total_output_tokens / 1000.0) * 0.015; // $15 per 1M output tokens
+                double cache_write_cost = (total_cache_creation_tokens / 1000.0) * 0.00375; // 1.25x input
+                return input_cost + output_cost + cache_write_cost;
+            }
+        } token_stats;
 
         // LLM interaction
         std::string build_system_prompt() const;
         json parse_llm_action(const std::string& response) const;
         std::string format_action_result(const json& result) const;
+        void log_token_usage(const AnthropicClient::ChatResponse& response, int iteration);
 
         // UI callback
         std::function<void(const std::string&)> log_callback;
@@ -57,6 +81,10 @@ namespace llm_re {
 
         // Get current state
         std::string get_current_state() const;
+        
+        // Token usage
+        TokenStats get_token_stats() const { return token_stats; }
+        void reset_token_stats() { token_stats = TokenStats(); }
 
         // Save/load memory
         void save_memory(const std::string& filename);

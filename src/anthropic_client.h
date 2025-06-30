@@ -6,7 +6,6 @@
 #define ANTHROPIC_CLIENT_H
 
 #include "common.h"
-#include <curl/curl.h>
 
 namespace llm_re {
 
@@ -30,16 +29,22 @@ namespace llm_re {
             std::string model_opus = "claude-opus-4-20250514";
             std::string model_sonnet = "claude-sonnet-4-20250514";
             std::vector<ChatMessage> messages;
-            int max_tokens = 4096;
+            int max_tokens = 8192;
             double temperature = 0.0;
             std::string system_prompt;
+            bool enable_thinking = true;
         };
 
         struct ChatResponse {
             bool success;
             std::string content;
+            std::string thinking;
             std::string error;
             std::string stop_reason;
+            int input_tokens = 0;
+            int output_tokens = 0;
+            int cache_creation_input_tokens = 0;
+            int cache_read_input_tokens = 0;
         };
 
         ChatResponse send_chat_request(const ChatRequest& request);

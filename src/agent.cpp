@@ -3,8 +3,6 @@
 //
 
 #include "agent.h"
-#include <fstream>
-#include <regex>
 
 namespace llm_re {
 
@@ -316,6 +314,9 @@ void REAgent::worker_loop() {
                 }
                 break;
             }
+            
+            // Log token usage and progress
+            log_token_usage(response, iteration);
 
             // Add response to history
             request.messages.push_back({"assistant", response.content});
@@ -400,6 +401,37 @@ void REAgent::load_memory(const std::string& filename) {
         file >> snapshot;
         memory->import_memory_snapshot(snapshot);
         file.close();
+    }
+}
+
+void REAgent::log_token_usage(const AnthropicClient::ChatResponse& response, int iteration) {
+    // Update token statistics
+    token_stats.total_input_tokens += response.input_tokens;
+    token_stats.total_output_tokens += response.output_tokens;
+    token_stats.total_cache_creation_tokens += response.cache_creation_input_tokens;
+    token_stats.total_cache_read_tokens += response.cache_read_input_tokens;
+    token_stats.request_count++;
+    
+    if (log_callback) {
+        std::stringstream log_msg;
+        log_msg << "[Iteration " << iteration << "] ";
+        log_msg << "Tokens: " << response.input_tokens << " in, " << response.output_tokens << " out";
+        
+        if (response.cache_read_input_tokens > 0) {
+            log_msg << " (" << response.cache_read_input_tokens << " cached)";
+        }
+        
+        log_msg << " | Session Total: " << token_stats.get_total_tokens();
+        log_msg << " | Est. Cost: $" << std::fixed << std::setprecision(4) << token_stats.get_estimated_cost();
+        
+        // Show thinking summary if available
+        if (!response.thinking.empty()) {
+            std::string thinking_preview = response.thinking.substr(0, 100);
+            if (response.thinking.length() > 100) thinking_preview += "...";
+            log_msg << " | Reasoning: " << thinking_preview;
+        }
+        
+        log_callback(log_msg.str());
     }
 }
 
