@@ -28,6 +28,7 @@ REAgent::REAgent(const std::string& anthropic_api_key)
     : api_key(anthropic_api_key),
       running(false),
       stop_requested(false),
+      pause_requested(false),
       worker_thread(nullptr),
       task_semaphore(nullptr) {
 
@@ -51,6 +52,7 @@ void REAgent::start() {
 
     running = true;
     stop_requested = false;
+    pause_requested = false;
 
     // Create worker thread using IDA's API
     worker_thread = qthread_create(agent_worker_thread, this);
@@ -80,9 +82,53 @@ void REAgent::set_task(const std::string& task) {
     qmutex_locker_t lock(task_mutex);
     current_task = task;
 
+    // Clear saved state when starting a new task
+    has_saved_state = false;
+    saved_iteration = 0;
+
+    // Update state
+    agent_state = AgentState::RUNNING;
+
     // Signal the semaphore to wake up the worker thread
     if (task_semaphore) {
         qsem_post(task_semaphore);
+    }
+}
+
+void REAgent::resume() {
+    if (agent_state != AgentState::PAUSED || !has_saved_state) {
+        if (log_callback) {
+            log_callback("Cannot resume - agent is not in paused state or no saved state");
+        }
+        return;
+    }
+
+    agent_state = AgentState::RUNNING;
+    pause_requested = false;
+
+    // Signal the semaphore to wake up the worker thread
+    if (task_semaphore) {
+        qsem_post(task_semaphore);
+    }
+}
+
+void REAgent::continue_with_task(const std::string& additional_task) {
+    if (agent_state != AgentState::COMPLETED && agent_state != AgentState::IDLE) {
+        if (log_callback) {
+            log_callback("Cannot continue - agent must be completed or idle");
+        }
+        return;
+    }
+
+    // Add user message with additional instructions
+    if (has_saved_state) {
+        saved_request.messages.emplace_back("user", additional_task);
+        agent_state = AgentState::RUNNING;
+
+        // Signal the semaphore to wake up the worker thread
+        if (task_semaphore) {
+            qsem_post(task_semaphore);
+        }
     }
 }
 
@@ -501,37 +547,51 @@ Once you submit your final report, you will be terminated! You must make sure th
 
 void REAgent::worker_loop() {
     while (!stop_requested) {
-        // Wait for a task using semaphore with timeout
-        bool got_task = false;
+        // Wait for a task or resume signal
+        bool got_signal = false;
 
-        // Check if we have a task
+        // Check current state
         {
             qmutex_locker_t lock(task_mutex);
-            if (!current_task.empty()) {
-                got_task = true;
+            if (!current_task.empty() && agent_state == AgentState::RUNNING) {
+                got_signal = true;
+            } else if (agent_state == AgentState::PAUSED && has_saved_state && !pause_requested) {
+                got_signal = true;
+            } else if (agent_state == AgentState::RUNNING && has_saved_state) {
+                // Continue from completed state
+                got_signal = true;
             }
         }
 
-        // If no task, wait on semaphore
-        if (!got_task) {
+        // If no signal, wait on semaphore
+        if (!got_signal) {
             // Wait with 100ms timeout to periodically check stop_requested
             qsem_wait(task_semaphore, 100);
 
             // Check again after waking up
             qmutex_locker_t lock(task_mutex);
-            if (current_task.empty() || stop_requested) {
+            if ((current_task.empty() && !has_saved_state) || stop_requested) {
                 continue;
             }
         }
 
         // Get the task
         std::string task;
+        bool resuming = false;
+        bool continuing = false;
         {
             qmutex_locker_t lock(task_mutex);
-            task = current_task;
-            current_task.clear();
+            if (agent_state == AgentState::PAUSED && has_saved_state) {
+                resuming = true;
+                task = "Resuming from paused state";
+            } else if (has_saved_state && agent_state == AgentState::RUNNING) {
+                continuing = true;
+                task = "Continuing with additional instructions";
+            } else {
+                task = current_task;
+                current_task.clear();
+            }
         }
-
 
         // Helper function to build a unique key for decompilation/disassembly results
         auto build_result_key = [this](const std::string& tool_name, const json& tool_input) -> std::string {
@@ -556,33 +616,43 @@ void REAgent::worker_loop() {
         std::map<std::string, std::string> latest_tool_results;
 
         // Log start
-        log_callback("Starting analysis for task: " + task);
+        if (!resuming && !continuing) {
+            log_callback("Starting analysis for task: " + task);
 
-        // Initialize conversation history
-        conversation_history.clear();
+            // Initialize conversation history
+            conversation_history.clear();
 
-        // Build initial prompt
-        std::string system_prompt = build_system_prompt() + task;
+            // Build initial prompt
+            std::string system_prompt = build_system_prompt() + task;
 
-        AnthropicClient::ChatRequest request;
-        request.system_prompt = system_prompt;
-        request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
-        request.tools = define_tools();
+            AnthropicClient::ChatRequest request;
+            request.system_prompt = system_prompt;
+            request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
+            request.tools = define_tools();
+
+            saved_request = request;
+            saved_iteration = 0;
+        } else if (resuming) {
+            log_callback("Resuming from API error...");
+        } else if (continuing) {
+            log_callback("Continuing with additional instructions...");
+        }
 
         // Main agent loop
-        int iteration = 0;
+        int iteration = saved_iteration;
         const int max_iterations = 100;
         bool task_complete = false;
 
-        while (iteration < max_iterations && !stop_requested && !task_complete) {
+        while (iteration < max_iterations && !stop_requested && !task_complete && agent_state == AgentState::RUNNING) {
             iteration++;
+            saved_iteration = iteration;
             anthropic->set_iteration(iteration);
 
             if (log_callback) {
                 log_callback("Iteration " + std::to_string(iteration));
             }
 
-            AnthropicClient::ChatRequest pruned_request = request;
+            AnthropicClient::ChatRequest pruned_request = saved_request;
             if (iteration > 1) {
                 for (AnthropicClient::ChatMessage& msg: pruned_request.messages) {
                     // Only prune tool results
@@ -616,19 +686,30 @@ void REAgent::worker_loop() {
             if (!response.success) {
                 if (log_callback) {
                     log_callback("LLM Error: " + response.error);
-                    log_callback("Task failed due to API error. Please check your API key.");
+
+                    // Check if it's a recoverable error (rate limit, server overload)
+                    if (response.error.find("This request would exceed the rate limit for your organization") != std::string::npos ||
+                        response.error.find("Overloaded") != std::string::npos) {
+                        log_callback("This is a temporary error. You can resume the analysis using 'Resume LLM Agent' (Ctrl+Shift+R)");
+                        agent_state = AgentState::PAUSED;
+                        pause_requested = true;
+                        has_saved_state = true;
+                    } else {
+                        log_callback("Task failed due to API error. Please check your API key.");
+                        agent_state = AgentState::IDLE;
+                        has_saved_state = false;
+                    }
                 }
-                task_complete = true;
                 break;
             }
 
             // Log token usage and progress
             log_token_usage(response, iteration);
 
-            // Add response to ORIGINAL request history
+            // Add response to ORIGINAL request history (saved_request)
             AnthropicClient::ChatMessage assistant_msg("assistant", response.content);
             assistant_msg.tool_calls = response.tool_calls;
-            request.messages.push_back(assistant_msg);
+            saved_request.messages.push_back(assistant_msg);
 
             // Process tool calls
             if (!response.tool_calls.empty()) {
@@ -650,8 +731,11 @@ void REAgent::worker_loop() {
                     if (tool_name == "submit_final_report") {
                         if (log_callback) {
                             log_callback("=== FINAL REPORT ===\n" + tool_input["report"].get<std::string>());
+                            log_callback("\nTask completed. You can continue with additional instructions using 'Continue LLM Agent' (Ctrl+Shift+C)");
                         }
+                        agent_state = AgentState::COMPLETED;
                         task_complete = true;
+                        has_saved_state = true;
                         break;
                     }
 
@@ -667,13 +751,13 @@ void REAgent::worker_loop() {
                     // Add tool result to conversation (unpruned)
                     AnthropicClient::ChatMessage tool_result_msg("tool", result.dump());
                     tool_result_msg.tool_call_id = tool_id;
-                    request.messages.push_back(tool_result_msg);
+                    saved_request.messages.push_back(tool_result_msg);
                 }
             } else if (response.stop_reason == "end_turn" && response.tool_calls.empty()) {
                 // Assistant finished without calling tools - might be thinking or need prompting
                 if (iteration > 1) {
                     std::string analyze_more_msg = "Please continue your analysis and use tools to gather more information or submit your final report.";
-                    request.messages.emplace_back("user", analyze_more_msg);
+                    saved_request.messages.emplace_back("user", analyze_more_msg);
                 }
             }
         }
@@ -681,14 +765,18 @@ void REAgent::worker_loop() {
         if (iteration >= max_iterations && !task_complete) {
             if (log_callback) {
                 log_callback("Reached maximum iterations limit without completing the task");
+                agent_state = AgentState::COMPLETED;
+                has_saved_state = true;
             }
         }
     }
 }
 
+
 std::string REAgent::get_current_state() const {
     json state;
     state["running"] = running.load();
+    state["agent_state"] = static_cast<int>(agent_state.load());
 
     {
         qmutex_locker_t lock(const_cast<qmutex_t&>(task_mutex));
@@ -696,6 +784,8 @@ std::string REAgent::get_current_state() const {
     }
 
     state["memory_snapshot"] = memory->export_memory_snapshot();
+    state["has_saved_state"] = has_saved_state;
+    state["saved_iteration"] = saved_iteration;
     return state.dump(2);
 }
 

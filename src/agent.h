@@ -13,6 +13,14 @@
 namespace llm_re {
 
     class REAgent {
+    public:
+        enum class AgentState {
+            IDLE,       // No task
+            RUNNING,    // Currently executing
+            PAUSED,     // Paused due to error
+            COMPLETED   // Task completed
+        };
+
     private:
         std::shared_ptr<BinaryMemory> memory;
         std::shared_ptr<ActionExecutor> executor;
@@ -22,12 +30,19 @@ namespace llm_re {
         qthread_t worker_thread;
         std::atomic<bool> running;
         std::atomic<bool> stop_requested;
+        std::atomic<bool> pause_requested;
+        std::atomic<AgentState> agent_state{AgentState::IDLE};
         qmutex_t task_mutex;
         qsemaphore_t task_semaphore;
 
         // Current task
         std::string current_task;
         std::string api_key;
+
+        // Saved state for resume/continue
+        AnthropicClient::ChatRequest saved_request;
+        int saved_iteration = 0;
+        bool has_saved_state = false;
 
         // Agent state
         std::vector<AnthropicClient::ChatMessage> conversation_history;
@@ -92,6 +107,17 @@ namespace llm_re {
 
         // Set task
         void set_task(const std::string& task);
+
+        // Resume/continue functionality
+        void resume();
+        void continue_with_task(const std::string& additional_task);
+
+        // State queries
+        bool is_idle() const { return agent_state == AgentState::IDLE; }
+        bool is_running() const { return agent_state == AgentState::RUNNING; }
+        bool is_paused() const { return agent_state == AgentState::PAUSED; }
+        bool is_completed() const { return agent_state == AgentState::COMPLETED; }
+        AgentState get_state() const { return agent_state.load(); }
 
         // Set logging callback
         void set_log_callback(std::function<void(const std::string&)> callback);
