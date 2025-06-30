@@ -75,9 +75,7 @@
 
 #include "common.h"
 #include "agent.h"
-#include <sstream>
-#include <chrono>
-#include <iomanip>
+#include "ida_utils.h"
 
 // Global plugin state
 namespace {
@@ -129,7 +127,10 @@ static const custom_viewer_handlers_t log_handlers = {
     nullptr,  // current_position_changed
     nullptr,  // close
     nullptr,  // help
-    nullptr   // adjust_place
+    nullptr,  // adjust_place
+    nullptr,  // get_place_xcoord
+    nullptr,  // location_changed
+    nullptr,  // can_navigate
 };
 
 // Log window handler
@@ -163,32 +164,50 @@ struct log_handler_t : public action_handler_t {
     }
 };
 
-// Append text to log viewer
+// Thread-safe append to log function using your wrapper
 void append_to_log(const std::string& text) {
-    // Add timestamped line to log
+    // Add timestamp
     std::string timestamped = get_timestamp() + " " + text;
-    
-    simpleline_t line;
-    line.line = timestamped.c_str();
-    g_log_lines.push_back(line);
-    
-    // Keep log size reasonable
-    if (g_log_lines.size() > 1000) {
-        g_log_lines.erase(g_log_lines.begin());
-    }
-    
-    // Update viewer if it exists
-    if (g_log_viewer) {
-        // Refresh the viewer
-        refresh_custom_viewer(g_log_viewer);
-        
-        // Scroll to bottom
-        simpleline_place_t bottom(g_log_lines.size() - 1);
-        jumpto(g_log_viewer, &bottom, 0, 0);
-    }
-    
-    // Also output to IDA's message window
+
+    // Always output to IDA's message window (thread-safe)
     msg("%s\n", timestamped.c_str());
+
+    // Save to log file (thread-safe file I/O)
+    try {
+        std::string log_path = std::string(get_user_idadir()) + "/llm_plugin.log";
+        std::ofstream log_file(log_path, std::ios::app);
+        if (log_file.is_open()) {
+            log_file << timestamped << std::endl;
+            log_file.flush();
+            log_file.close();
+        }
+    } catch (const std::exception& e) {
+        // Silently ignore log file errors
+    }
+
+    // For UI updates, we need to execute on main thread with MFF_WRITE
+    llm_re::IDAUtils::execute_sync_wrapper([timestamped]() {
+        // Add timestamped line to log
+        simpleline_t line;
+        line.line = timestamped.c_str();
+        g_log_lines.push_back(line);
+
+        // Keep log size reasonable
+        if (g_log_lines.size() > 1000) {
+            g_log_lines.erase(g_log_lines.begin());
+        }
+
+        // Update viewer if it exists
+        if (g_log_viewer) {
+            // Refresh the viewer
+            refresh_custom_viewer(g_log_viewer);
+
+            // Scroll to bottom
+            simpleline_place_t bottom(g_log_lines.size() - 1);
+            jumpto(g_log_viewer, &bottom, 0, 0);
+        }
+    }, MFF_WRITE);  // Use MFF_WRITE for UI updates
+
 }
 
 // Initialize plugin
@@ -248,6 +267,7 @@ bool idaapi run(size_t arg) {
         g_agent = std::make_unique<llm_re::REAgent>(g_api_key);
         g_agent->set_log_callback(append_to_log);
         g_agent->start();
+        append_to_log("started");
     }
 
     // Set task
@@ -258,7 +278,7 @@ bool idaapi run(size_t arg) {
 }
 
 // Terminate plugin
-void idaapi term(void) {
+void idaapi term() {
     // Stop agent
     if (g_agent) {
         g_agent->stop();

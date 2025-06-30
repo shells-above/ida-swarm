@@ -28,6 +28,7 @@
 #include <regex>
 #include <curl/curl.h>
 #include <cmath>
+#include <chrono>
 #include <iomanip>
 
 
@@ -48,6 +49,7 @@
 #include <entry.hpp>
 #include <auto.hpp>
 #include <strlist.hpp>
+#include <diskio.hpp>
 
 #undef fgetc
 #undef snprintf
