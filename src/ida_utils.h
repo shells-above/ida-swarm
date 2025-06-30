@@ -65,16 +65,17 @@ class exec_request_wrapper_t : public exec_request_t {
     template<typename... Args>
     struct is_void_return<void(Args...)> : std::true_type {};
 
-    // Helper to execute IDA operations synchronously
+public:
+    // Helper to execute IDA operations synchronously with custom flags
     template<typename Func>
-    static auto execute_sync_wrapper(Func&& func) -> decltype(func()) {
+    static auto execute_sync_wrapper(Func&& func, int flags = MFF_READ) -> decltype(func()) {
         using RetType = decltype(func());
 
         // Handle void return type
         if constexpr (std::is_void_v<RetType>) {
             std::exception_ptr exc_ptr;
             exec_request_wrapper_void_t<Func> req(std::forward<Func>(func), &exc_ptr);
-            execute_sync(req, MFF_READ);
+            execute_sync(req, flags);
             if (exc_ptr) {
                 std::rethrow_exception(exc_ptr);
             }
@@ -83,7 +84,7 @@ class exec_request_wrapper_t : public exec_request_t {
             RetType result;
             std::exception_ptr exc_ptr;
             exec_request_wrapper_t<Func> req(std::forward<Func>(func), &result, &exc_ptr);
-            execute_sync(req, MFF_READ);
+            execute_sync(req, flags);
             if (exc_ptr) {
                 std::rethrow_exception(exc_ptr);
             }
@@ -91,7 +92,7 @@ class exec_request_wrapper_t : public exec_request_t {
         }
     }
 
-public:
+
     // Cross-reference operations
 
     /**
