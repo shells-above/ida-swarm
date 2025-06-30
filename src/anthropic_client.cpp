@@ -50,7 +50,7 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
             {
                 {"type", "text"},
                 {"text", request.system_prompt},
-                {"cache_control", {{"type", "ephemeral"}}}  // This enables caching!
+                {"cache_control", {{"type", "ephemeral"}}}  // enables caching
             }
         });
     }
@@ -120,11 +120,16 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
     if (message_logger) {
         // Create a simplified version for logging (truncate system prompt after first iteration)
         json log_request = request_json;
-        if (current_iteration > 1 && request_json.contains("system") &&
-            request_json["system"].get<std::string>().length() > 500) {
-            log_request["system"] = "[System prompt truncated - " +
-                std::to_string(request_json["system"].get<std::string>().length()) +
-                " chars]";
+        if (current_iteration > 1 && request_json.contains("system")) {
+            // System prompt is now an array with cache control, extract text length
+            if (request_json["system"].is_array() && !request_json["system"].empty() &&
+                request_json["system"][0].contains("text")) {
+                std::string system_text = request_json["system"][0]["text"].get<std::string>();
+                if (system_text.length() > 500) {
+                    log_request["system"] = "[System prompt truncated - " +
+                        std::to_string(system_text.length()) + " chars]";
+                }
+            }
         }
         message_logger("REQUEST", log_request, current_iteration);
     }

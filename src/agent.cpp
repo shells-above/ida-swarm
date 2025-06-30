@@ -553,9 +553,10 @@ void REAgent::worker_loop() {
             iteration++;
             anthropic->set_iteration(iteration);
 
-            if (!first_request) {
-                request.system_prompt = build_continuation_prompt();
-            }
+            // Keep original system prompt with caching, don't change it
+            // if (!first_request) {
+            //     request.system_prompt = build_continuation_prompt();
+            // }
             first_request = false;
 
             if (log_callback) {
@@ -606,7 +607,8 @@ void REAgent::worker_loop() {
                     json result = executor->execute_action(tool_name, tool_input);
 
                     // Add tool result to conversation
-                    AnthropicClient::ChatMessage tool_result_msg(tool_id, result);
+                    AnthropicClient::ChatMessage tool_result_msg("tool", result.dump());
+                    tool_result_msg.tool_call_id = tool_id;
                     request.messages.push_back(tool_result_msg);
                 }
             } else if (response.stop_reason == "end_turn" && response.tool_calls.empty()) {

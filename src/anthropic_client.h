@@ -41,11 +41,6 @@ namespace llm_re {
 
             ChatMessage(const std::string& r, const std::string& c)
                 : role(r), content(c) {}
-
-            explicit ChatMessage(const std::string& tool_id, const json& result)
-                : role("tool"), tool_call_id(tool_id) {
-                content = result.dump();
-            }
         };
 
         struct Tool {
