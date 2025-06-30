@@ -386,7 +386,7 @@ IDA API Tools:
 - **get_xrefs_from(address)** - Find what this address calls/references. Returns list of callee addresses. Auto-updates memory with relationships.
 
 ### Code Analysis
-- **get_function_disassembly(address)** - Get assembly code with comments. Use for low-level analysis, anti-debugging checks, or optimizations.
+- **get_function_disassembly(address)** - Get assembly code with comments. Use for low-level analysis, anti-debugging checks, or optimizations. This is expensive! So only use it for functions you really need a detailed understanding of.
 - **get_function_decompilation(address)** - Get C-like pseudocode. Use for understanding logic, algorithms, and control flow.
 
 ### Function Management
@@ -532,6 +532,29 @@ void REAgent::worker_loop() {
             current_task.clear();
         }
 
+
+        // Helper function to build a unique key for decompilation/disassembly results
+        auto build_result_key = [this](const std::string& tool_name, const json& tool_input) -> std::string {
+            std::string key = tool_name;
+            if (tool_input.contains("address")) {
+                ea_t addr = ActionExecutor::parse_single_address_value(tool_input["address"]);
+                key += ":" + std::to_string(addr);
+            }
+            return key;
+        };
+
+        // Helper to check if a tool produces large results
+        auto is_large_result_tool = [](const std::string& tool_name) -> bool {
+            return tool_name == "get_function_decompilation" ||
+                   tool_name == "get_function_disassembly";
+        };
+
+        // Track tool calls with their iteration number
+        std::map<std::string, std::string> tool_call_to_name;
+        std::map<std::string, json> tool_call_to_input;
+        std::map<std::string, int> tool_call_iteration;
+        std::map<std::string, std::string> latest_tool_results;
+
         // Log start
         log_callback("Starting analysis for task: " + task);
 
@@ -546,12 +569,6 @@ void REAgent::worker_loop() {
         request.messages.emplace_back("user", "Please analyze the binary to answer: " + task);
         request.tools = define_tools();
 
-        // Track tool calls with their iteration number
-        std::map<std::string, std::string> tool_call_to_name;  // tool_call_id -> tool_name
-        std::map<std::string, json> tool_call_to_input;       // tool_call_id -> input params
-        std::map<std::string, int> tool_call_iteration;       // tool_call_id -> iteration when created
-        std::map<std::string, std::string> latest_tool_results; // key -> tool_call_id for most recent result
-
         // Main agent loop
         int iteration = 0;
         const int max_iterations = 50;
@@ -565,81 +582,36 @@ void REAgent::worker_loop() {
                 log_callback("Iteration " + std::to_string(iteration));
             }
 
-            // Create request for this iteration with pruning
-            AnthropicClient::ChatRequest current_request = request;
-
-            // Prune old large tool results (but keep the most recent one for each function)
+            AnthropicClient::ChatRequest pruned_request = request;
             if (iteration > 1) {
-                current_request.messages.clear();
-
-                for (const auto& msg : request.messages) {
+                for (AnthropicClient::ChatMessage& msg: pruned_request.messages) {
+                    // Only prune tool results
                     if (msg.role == "tool" && !msg.tool_call_id.empty()) {
-                        std::string tool_call_id = msg.tool_call_id;
-
-                        // Get the tool name and iteration
-                        if (tool_call_to_name.count(tool_call_id)) {
-                            std::string tool_name = tool_call_to_name[tool_call_id];
-                            int msg_iteration = tool_call_iteration[tool_call_id];
-
-                            // Check if this is a large result type
-                            if (tool_name == "get_function_decompilation" ||
-                                tool_name == "get_function_disassembly") {
-
-                                // Build unique key for this function/address
-                                std::string key = tool_name;
-                                if (tool_call_to_input[tool_call_id].contains("address")) {
-                                    key += ":" + std::to_string(tool_call_to_input[tool_call_id]["address"].get<int>());
-                                }
-
-                                // Check if this is the most recent result for this function/address
-                                bool is_most_recent = (latest_tool_results.count(key) &&
-                                                     latest_tool_results[key] == tool_call_id);
-
-                                // Prune if it's from a previous iteration AND not the most recent
-                                if (msg_iteration < iteration && !is_most_recent) {
-                                    try {
-                                        json result_json = json::parse(msg.content);
-                                        json pruned = result_json;
-
-                                        if (pruned.contains("decompilation")) {
-                                            pruned["decompilation"] = "[Decompilation result pruned - " +
-                                                std::to_string(pruned["decompilation"].get<std::string>().length()) +
-                                                " chars. Request again if needed.]";
-                                        }
-                                        if (pruned.contains("disassembly")) {
-                                            pruned["disassembly"] = "[Disassembly result pruned - " +
-                                                std::to_string(pruned["disassembly"].get<std::string>().length()) +
-                                                " chars. Request again if needed.]";
-                                        }
-
-                                        AnthropicClient::ChatMessage pruned_msg = msg;
-                                        pruned_msg.content = pruned.dump();
-                                        current_request.messages.push_back(pruned_msg);
-                                    } catch (...) {
-                                        // If parsing fails, keep original
-                                        current_request.messages.push_back(msg);
+                        auto it = tool_call_to_name.find(msg.tool_call_id);
+                        if (it != tool_call_to_name.end() && is_large_result_tool(it->second)) {
+                            // Check if this result is from a previous iteration
+                            if (tool_call_iteration[msg.tool_call_id] < iteration - 1) {
+                                // Parse and prune the content
+                                try {
+                                    json result = json::parse(msg.content);
+                                    if (result.contains("decompilation")) {
+                                        result["decompilation"] = "[Decompilation pruned - previously shown to LLM. You can request again if you need to analyze it deeper.]";
                                     }
-                                } else {
-                                    // Keep the most recent result or current iteration results
-                                    current_request.messages.push_back(msg);
+                                    if (result.contains("disassembly")) {
+                                        result["disassembly"] = "[Disassembly pruned - previously shown to LLM. You can request again if you need to analyze it deeper.]";
+                                    }
+                                    msg.content = result.dump();
+                                } catch (...) {
+                                    // If parsing fails, just leave it as is
                                 }
-                            } else {
-                                // Keep non-large tool results
-                                current_request.messages.push_back(msg);
                             }
-                        } else {
-                            // Keep messages we can't identify
-                            current_request.messages.push_back(msg);
                         }
-                    } else {
-                        // Keep non-tool messages as-is
-                        current_request.messages.push_back(msg);
                     }
                 }
             }
 
             // Send request
-            auto response = anthropic->send_chat_request(current_request);
+            auto response = anthropic->send_chat_request(pruned_request);
 
             if (!response.success) {
                 if (log_callback) {
@@ -687,12 +659,8 @@ void REAgent::worker_loop() {
                     json result = executor->execute_action(tool_name, tool_input);
 
                     // Update latest tool results tracking for large results
-                    if (tool_name == "get_function_decompilation" ||
-                        tool_name == "get_function_disassembly") {
-                        std::string key = tool_name;
-                        if (tool_input.contains("address")) {
-                            key += ":" + std::to_string(tool_input["address"].get<int>());
-                        }
+                    if (is_large_result_tool(tool_name)) {
+                        std::string key = build_result_key(tool_name, tool_input);
                         latest_tool_results[key] = tool_id;
                     }
 

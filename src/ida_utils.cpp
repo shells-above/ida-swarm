@@ -7,11 +7,18 @@
 
 namespace llm_re {
 
+// Helper function to format addresses as hex strings for error messages
+std::string format_address_hex(ea_t address) {
+    std::stringstream ss;
+    ss << "0x" << std::hex << address;
+    return ss.str();
+}
+
 std::vector<ea_t> IDAUtils::get_xrefs_to(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         std::vector<ea_t> result;
@@ -27,7 +34,7 @@ std::vector<ea_t> IDAUtils::get_xrefs_from(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         std::vector<ea_t> result;
@@ -43,7 +50,7 @@ std::string IDAUtils::get_function_disassembly(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         std::string result;
@@ -85,7 +92,7 @@ std::string IDAUtils::get_function_decompilation(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         std::string result;
@@ -130,7 +137,7 @@ std::string IDAUtils::get_function_name(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         std::string result;
@@ -146,7 +153,7 @@ bool IDAUtils::set_function_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
         // Validate inputs
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
         if (!IDAValidators::is_valid_name(name)) {
             throw std::invalid_argument("Invalid function name: " + name);
@@ -164,7 +171,7 @@ std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         std::vector<std::string> result;
@@ -204,7 +211,7 @@ std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         std::vector<ea_t> result;
@@ -235,7 +242,7 @@ std::string IDAUtils::get_data_name(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         std::string result;
@@ -251,7 +258,7 @@ bool IDAUtils::set_data_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
         // Validate inputs
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
         if (!IDAValidators::is_valid_name(name)) {
             throw std::invalid_argument("Invalid data name: " + name);
@@ -265,12 +272,12 @@ std::pair<std::string, std::string> IDAUtils::get_data(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate that this is a data address
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         flags_t flags = get_flags(address);
         if (!is_data(flags)) {
-            throw std::invalid_argument("Address is not a data location: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a data location: " + format_address_hex(address));
         }
 
         std::string value;
@@ -319,7 +326,7 @@ bool IDAUtils::add_disassembly_comment(ea_t address, const std::string& comment)
     return execute_sync_wrapper([address, &comment]() {
         // Validate inputs
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
         if (comment.length() > 4096) {
             throw std::invalid_argument("Comment too long (max 4096 characters)");
@@ -333,7 +340,7 @@ bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) 
     return execute_sync_wrapper([address, &comment]() {
         // Validate inputs
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
         if (comment.length() > 4096) {
             throw std::invalid_argument("Comment too long (max 4096 characters)");
@@ -386,7 +393,7 @@ bool IDAUtils::clear_disassembly_comment(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         return set_cmt(address, "", false);
@@ -397,7 +404,7 @@ bool IDAUtils::clear_pseudocode_comments(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: 0x" + std::to_string(address));
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
         // Initialize Hex-Rays if needed
@@ -535,7 +542,7 @@ ea_t IDAUtils::get_function_containing(ea_t address) {
     return execute_sync_wrapper([address]() {
         // Validate input
         if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: 0x" + std::to_string(address));
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         func_t *func = get_func(address);

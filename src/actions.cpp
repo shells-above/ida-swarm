@@ -7,6 +7,183 @@
 
 namespace llm_re {
 
+// New function to parse address lists (handles both single values and arrays)
+std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, const std::string& key) {
+    if (!params.contains(key)) {
+        throw std::invalid_argument("Missing parameter: " + key);
+    }
+
+    std::vector<ea_t> addresses;
+
+    try {
+        const auto& param = params[key];
+
+        // Check if it's an array
+        if (param.is_array()) {
+            // Process each element in the array
+            for (const auto& element : param) {
+                // Parse each element as a single address using existing logic
+                ea_t addr = parse_single_address_value(element);
+                addresses.push_back(addr);
+            }
+        } else {
+            // Single value - parse and return as single-element vector
+            ea_t addr = parse_single_address_value(param);
+            addresses.push_back(addr);
+        }
+
+        return addresses;
+
+    } catch (const std::invalid_argument& e) {
+        throw;
+    } catch (const std::exception& e) {
+        throw std::invalid_argument("Failed to parse address list parameter: " + std::string(e.what()));
+    }
+}
+
+// Extract the core parsing logic into a separate function that handles a single value
+ea_t ActionExecutor::parse_single_address_value(const json& param) {
+    if (param.is_string()) {
+        std::string str = param.get<std::string>();
+
+        // Trim whitespace
+        str.erase(str.find_last_not_of(" \t\n\r\f\v") + 1);
+        str.erase(0, str.find_first_not_of(" \t\n\r\f\v"));
+
+        if (str.empty()) {
+            throw std::invalid_argument("Empty address string");
+        }
+
+        // Remove underscores used as separators (e.g., 0x1234_5678)
+        str.erase(std::remove(str.begin(), str.end(), '_'), str.end());
+
+        // Remove commas used as thousands separators
+        str.erase(std::remove(str.begin(), str.end(), ','), str.end());
+
+        // Handle optional + prefix
+        bool has_plus = false;
+        if (!str.empty() && str[0] == '+') {
+            has_plus = true;
+            str = str.substr(1);
+        }
+
+        // Binary format: 0b or 0B prefix
+        if (str.length() >= 3 && (str.substr(0, 2) == "0b" || str.substr(0, 2) == "0B")) {
+            std::string bin_part = str.substr(2);
+            for (char c : bin_part) {
+                if (c != '0' && c != '1') {
+                    throw std::invalid_argument("Invalid binary character in: " + str);
+                }
+            }
+            return std::stoull(bin_part, nullptr, 2);
+        }
+
+        // Hex formats: 0x, 0X, $, &, suffix h/H
+        if ((str.length() >= 3 && (str.substr(0, 2) == "0x" || str.substr(0, 2) == "0X")) ||
+            (str.length() >= 2 && (str[0] == '$' || str[0] == '&')) ||
+            (str.length() >= 2 && (str.back() == 'h' || str.back() == 'H'))) {
+
+            std::string hex_part;
+            if (str.back() == 'h' || str.back() == 'H') {
+                hex_part = str.substr(0, str.length() - 1);
+            } else if (str[0] == '$' || str[0] == '&') {
+                hex_part = str.substr(1);
+            } else {
+                hex_part = str.substr(2);
+            }
+
+            // Validate hex characters
+            for (char c : hex_part) {
+                if (!std::isxdigit(c)) {
+                    throw std::invalid_argument("Invalid hex character in: " + str);
+                }
+            }
+
+            return std::stoull(hex_part, nullptr, 16);
+        }
+
+        // Octal format: 0 prefix (not 0x) or 0o prefix
+        if (str.length() >= 2) {
+            if (str.substr(0, 2) == "0o" || str.substr(0, 2) == "0O") {
+                std::string oct_part = str.substr(2);
+                for (char c : oct_part) {
+                    if (c < '0' || c > '7') {
+                        throw std::invalid_argument("Invalid octal character in: " + str);
+                    }
+                }
+                return std::stoull(oct_part, nullptr, 8);
+            } else if (str[0] == '0' && str.length() > 1 && std::isdigit(str[1])) {
+                // Traditional octal (leading 0)
+                for (size_t i = 1; i < str.length(); ++i) {
+                    if (str[i] < '0' || str[i] > '7') {
+                        // Not a valid octal, treat as decimal with leading zero
+                        goto decimal_parse;
+                    }
+                }
+                return std::stoull(str, nullptr, 8);
+            }
+        }
+
+        decimal_parse:
+        // Decimal - validate all digits
+        for (char c : str) {
+            if (!std::isdigit(c)) {
+                throw std::invalid_argument("Invalid decimal character in: " + str);
+            }
+        }
+        return std::stoull(str, nullptr, 10);
+
+    } else if (param.is_number_integer()) {
+        if (param.is_number_unsigned()) {
+            uint64_t val = param.get<uint64_t>();
+            if (val > std::numeric_limits<ea_t>::max()) {
+                throw std::invalid_argument("Address value too large");
+            }
+            return static_cast<ea_t>(val);
+        } else {
+            int64_t val = param.get<int64_t>();
+            if (val < 0) {
+                throw std::invalid_argument("Address cannot be negative");
+            }
+            if (static_cast<uint64_t>(val) > std::numeric_limits<ea_t>::max()) {
+                throw std::invalid_argument("Address value too large");
+            }
+            return static_cast<ea_t>(val);
+        }
+
+    } else if (param.is_number_float()) {
+        double val = param.get<double>();
+        if (val < 0) {
+            throw std::invalid_argument("Address cannot be negative");
+        }
+        if (val > std::numeric_limits<ea_t>::max()) {
+            throw std::invalid_argument("Address value too large");
+        }
+        // Check if it's a whole number
+        if (val != std::floor(val)) {
+            throw std::invalid_argument("Address must be a whole number");
+        }
+        return static_cast<ea_t>(val);
+
+    } else {
+        throw std::invalid_argument("Address parameter must be a number or string");
+    }
+}
+
+/*
+ * Supported formats:
+ * - Single values: Same as before
+ * - Arrays: ["0x100006008", "0x100007d55"], [16384, "0x4000", "$8000"]
+ * - Mixed formats in arrays: ["0x4000", 16384, "040000", "0b100"]
+ *
+ * Examples:
+ * - "address": "0x4000" -> single address
+ * - "related_addresses": ["0x100006008", "0x100007d55"] -> array of addresses
+ * - "targets": [16384, "0x4000", "$8000", "16,384"] -> mixed format array
+ */
+
+
+
 ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) {
     register_actions();
 }
@@ -14,19 +191,19 @@ ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::
 void ActionExecutor::register_actions() {
     // IDA Core Actions
     action_map["get_xrefs_to"] = [this](const json& params) -> json {
-        return get_xrefs_to(params["address"]);
+        return get_xrefs_to(parse_single_address_value(params["address"]));
     };
 
     action_map["get_xrefs_from"] = [this](const json& params) -> json {
-        return get_xrefs_from(params["address"]);
+        return get_xrefs_from(parse_single_address_value(params["address"]));
     };
 
     action_map["get_function_disassembly"] = [this](const json& params) -> json {
-        return get_function_disassembly(params["address"]);
+        return get_function_disassembly(parse_single_address_value(params["address"]));
     };
 
     action_map["get_function_decompilation"] = [this](const json& params) -> json {
-        return get_function_decompilation(params["address"]);
+        return get_function_decompilation(parse_single_address_value(params["address"]));
     };
 
     action_map["get_function_address"] = [this](const json& params) -> json {
@@ -34,47 +211,47 @@ void ActionExecutor::register_actions() {
     };
 
     action_map["get_function_name"] = [this](const json& params) -> json {
-        return get_function_name(params["address"]);
+        return get_function_name(parse_single_address_value(params["address"]));
     };
 
     action_map["set_function_name"] = [this](const json& params) -> json {
-        return set_function_name(params["address"], params["name"]);
+        return set_function_name(parse_single_address_value(params["address"]), params["name"]);
     };
 
     action_map["get_function_string_refs"] = [this](const json& params) -> json {
-        return get_function_string_refs(params["address"]);
+        return get_function_string_refs(parse_single_address_value(params["address"]));
     };
 
     action_map["get_function_data_refs"] = [this](const json& params) -> json {
-        return get_function_data_refs(params["address"]);
+        return get_function_data_refs(parse_single_address_value(params["address"]));
     };
 
     action_map["get_data_name"] = [this](const json& params) -> json {
-        return get_data_name(params["address"]);
+        return get_data_name(parse_single_address_value(params["address"]));
     };
 
     action_map["set_data_name"] = [this](const json& params) -> json {
-        return set_data_name(params["address"], params["name"]);
+        return set_data_name(parse_single_address_value(params["address"]), params["name"]);
     };
 
     action_map["get_data"] = [this](const json& params) -> json {
-        return get_data(params["address"]);
+        return get_data(parse_single_address_value(params["address"]));
     };
 
     action_map["add_disassembly_comment"] = [this](const json& params) -> json {
-        return add_disassembly_comment(params["address"], params["comment"]);
+        return add_disassembly_comment(parse_single_address_value(params["address"]), params["comment"]);
     };
 
     action_map["add_pseudocode_comment"] = [this](const json& params) -> json {
-        return add_pseudocode_comment(params["address"], params["comment"]);
+        return add_pseudocode_comment(parse_single_address_value(params["address"]), params["comment"]);
     };
 
     action_map["clear_disassembly_comment"] = [this](const json& params) -> json {
-        return clear_disassembly_comment(params["address"]);
+        return clear_disassembly_comment(parse_single_address_value(params["address"]));
     };
 
     action_map["clear_pseudocode_comments"] = [this](const json& params) -> json {
-        return clear_pseudocode_comments(params["address"]);
+        return clear_pseudocode_comments(parse_single_address_value(params["address"]));
     };
 
     action_map["get_imports"] = [this](const json& params) -> json {
@@ -107,15 +284,15 @@ void ActionExecutor::register_actions() {
     };
 
     action_map["set_function_analysis"] = [this](const json& params) -> json {
-        return set_function_analysis(params["address"], params["level"], params["analysis"]);
+        return set_function_analysis(parse_single_address_value(params["address"]), params["level"], params["analysis"]);
     };
 
     action_map["get_function_analysis"] = [this](const json& params) -> json {
-        return get_function_analysis(params["address"], params.value("level", 0));
+        return get_function_analysis(parse_single_address_value(params["address"]), params.value("level", 0));
     };
 
     action_map["get_memory_context"] = [this](const json& params) -> json {
-        return get_memory_context(params["address"], params.value("radius", 2));
+        return get_memory_context(parse_single_address_value(params["address"]), params.value("radius", 2));
     };
 
     action_map["get_analyzed_functions"] = [this](const json& params) -> json {
@@ -131,7 +308,7 @@ void ActionExecutor::register_actions() {
     };
 
     action_map["mark_for_analysis"] = [this](const json& params) -> json {
-        return mark_for_analysis(params["address"], params["reason"], params.value("priority", 5));
+        return mark_for_analysis(parse_single_address_value(params["address"]), params["reason"], params.value("priority", 5));
     };
 
     action_map["get_analysis_queue"] = [this](const json& params) -> json {
@@ -139,11 +316,11 @@ void ActionExecutor::register_actions() {
     };
 
     action_map["set_current_focus"] = [this](const json& params) -> json {
-        return set_current_focus(params["address"]);
+        return set_current_focus(parse_single_address_value(params["address"]));
     };
 
     action_map["add_insight"] = [this](const json& params) -> json {
-        return add_insight(params["type"], params["description"], params["related_addresses"].get<std::vector<ea_t>>());
+        return add_insight(params["type"], params["description"], parse_list_address_param(params, "related_addresses"));
     };
 
     action_map["get_insights"] = [this](const json& params) -> json {
@@ -168,7 +345,11 @@ json ActionExecutor::get_xrefs_to(ea_t address) {
     try {
         std::vector<ea_t> xrefs = IDAUtils::get_xrefs_to(address);
         result["success"] = true;
-        result["xrefs"] = xrefs;
+        json xrefs_json = json::array();
+        for (ea_t addr : xrefs) {
+            xrefs_json.push_back(HexAddress(addr));
+        }
+        result["xrefs"] = xrefs_json;
 
         // Update memory with caller information
         std::set<ea_t> callers(xrefs.begin(), xrefs.end());
@@ -185,7 +366,11 @@ json ActionExecutor::get_xrefs_from(ea_t address) {
     try {
         std::vector<ea_t> xrefs = IDAUtils::get_xrefs_from(address);
         result["success"] = true;
-        result["xrefs"] = xrefs;
+        json xrefs_json = json::array();
+        for (ea_t addr : xrefs) {
+            xrefs_json.push_back(HexAddress(addr));
+        }
+        result["xrefs"] = xrefs_json;
 
         // Update memory with callee information
         std::set<ea_t> callees(xrefs.begin(), xrefs.end());
@@ -228,7 +413,7 @@ json ActionExecutor::get_function_address(const std::string& name) {
     try {
         ea_t addr = IDAUtils::get_function_address(name);
         result["success"] = (addr != BADADDR);
-        result["address"] = addr;
+        result["address"] = HexAddress(addr);
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -282,7 +467,11 @@ json ActionExecutor::get_function_data_refs(ea_t address) {
     try {
         std::vector<ea_t> data_refs = IDAUtils::get_function_data_refs(address);
         result["success"] = true;
-        result["data_refs"] = data_refs;
+        json data_refs_json = json::array();
+        for (ea_t addr : data_refs) {
+            data_refs_json.push_back(HexAddress(addr));
+        }
+        result["data_refs"] = data_refs_json;
 
         // Update memory
         memory->update_function_refs(address, {}, data_refs);
@@ -402,7 +591,7 @@ json ActionExecutor::get_exports() {
         for (const std::pair<std::string, ea_t>& exp: exports) {
             json exp_obj;
             exp_obj["name"] = exp.first;
-            exp_obj["address"] = exp.second;
+            exp_obj["address"] = HexAddress(exp.second);
             exports_json.push_back(exp_obj);
         }
         result["exports"] = exports_json;
@@ -521,7 +710,7 @@ json ActionExecutor::get_memory_context(ea_t address, int radius) {
         json nearby = json::array();
         for (const FunctionMemory& func: context.nearby_functions) {
             json func_obj;
-            func_obj["address"] = func.address;
+            func_obj["address"] = HexAddress(func.address);
             func_obj["name"] = func.name;
             func_obj["distance_from_anchor"] = func.distance_from_anchor;
             func_obj["current_level"] = static_cast<int>(func.current_level);
@@ -532,7 +721,7 @@ json ActionExecutor::get_memory_context(ea_t address, int radius) {
         json context_funcs = json::array();
         for (const FunctionMemory& func: context.context_functions) {
             json func_obj;
-            func_obj["address"] = func.address;
+            func_obj["address"] = HexAddress(func.address);
             func_obj["name"] = func.name;
             func_obj["distance_from_anchor"] = func.distance_from_anchor;
             func_obj["current_level"] = static_cast<int>(func.current_level);
@@ -556,7 +745,7 @@ json ActionExecutor::get_analyzed_functions() {
         json funcs_json = json::array();
         for (const std::tuple<ea_t, std::string, DetailLevel>& func: functions) {
             json func_obj;
-            func_obj["address"] = std::get<0>(func);
+            func_obj["address"] = HexAddress(std::get<0>(func));
             func_obj["name"] = std::get<1>(func);
             func_obj["max_level"] = static_cast<int>(std::get<2>(func));
             funcs_json.push_back(func_obj);
@@ -574,7 +763,11 @@ json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
     try {
         std::vector<ea_t> addresses = memory->find_functions_by_pattern(pattern);
         result["success"] = true;
-        result["addresses"] = addresses;
+        json addresses_json = json::array();
+        for (ea_t addr : addresses) {
+            addresses_json.push_back(HexAddress(addr));
+        }
+        result["addresses"] = addresses_json;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -590,7 +783,7 @@ json ActionExecutor::get_exploration_frontier() {
         json frontier_json = json::array();
         for (const std::tuple<ea_t, std::string, std::string>& item: frontier) {
             json item_obj;
-            item_obj["address"] = std::get<0>(item);
+            item_obj["address"] = HexAddress(std::get<0>(item));
             item_obj["name"] = std::get<1>(item);
             item_obj["reason"] = std::get<2>(item);
             frontier_json.push_back(item_obj);
@@ -623,7 +816,7 @@ json ActionExecutor::get_analysis_queue() {
         json queue_json = json::array();
         for (const std::tuple<ea_t, std::string, int>& item: queue) {
             json item_obj;
-            item_obj["address"] = std::get<0>(item);
+            item_obj["address"] = HexAddress(std::get<0>(item));
             item_obj["reason"] = std::get<1>(item);
             item_obj["priority"] = std::get<2>(item);
             queue_json.push_back(item_obj);
@@ -669,7 +862,11 @@ json ActionExecutor::get_insights(const std::string& type) {
         for (const std::tuple<std::string, std::vector<ea_t>> &insight: insights) {
             json insight_obj;
             insight_obj["description"] = std::get<0>(insight);
-            insight_obj["addresses"] = std::get<1>(insight);
+            json addresses_json = json::array();
+            for (ea_t addr : std::get<1>(insight)) {
+                addresses_json.push_back(HexAddress(addr));
+            }
+            insight_obj["addresses"] = addresses_json;
             insights_json.push_back(insight_obj);
         }
         result["insights"] = insights_json;

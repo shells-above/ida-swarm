@@ -34,6 +34,7 @@ namespace {
 plugmod_t* idaapi init();
 void idaapi term();
 bool idaapi run(size_t arg);
+void format_llm_message_for_ida(const std::string& direction, const json& message, strvec_t& lines);
 
 // Plugin description
 plugin_t PLUGIN = {
@@ -241,6 +242,104 @@ void append_to_log(const std::string& text) {
 }
 
 // Format JSON for display with syntax coloring
+
+// Simplified formatting for IDA window - only show essential info
+void format_llm_message_for_ida(const std::string& direction, const json& message, strvec_t& lines) {
+    if (direction == "REQUEST") {
+        // For requests, show only the user's latest message
+        if (message.contains("messages") && message["messages"].is_array() && !message["messages"].empty()) {
+            auto messages = message["messages"];
+            auto last_msg = messages.back();
+            
+            if (last_msg.contains("role") && last_msg.contains("content")) {
+                std::string role = last_msg["role"].get<std::string>();
+                
+                simpleline_t role_line;
+                role_line.line = ("Role: " + role).c_str();
+                role_line.color = COLOR_KEYWORD;
+                lines.push_back(role_line);
+                
+                // Handle content based on type
+                if (last_msg["content"].is_string()) {
+                    std::string content = last_msg["content"].get<std::string>();
+                    // Split long content into multiple lines
+                    size_t pos = 0;
+                    while (pos < content.length()) {
+                        size_t line_end = std::min(pos + 80, content.length());
+                        // Try to break at word boundary
+                        if (line_end < content.length()) {
+                            size_t space_pos = content.find_last_of(' ', line_end);
+                            if (space_pos != std::string::npos && space_pos > pos) {
+                                line_end = space_pos;
+                            }
+                        }
+                        
+                        simpleline_t content_line;
+                        content_line.line = content.substr(pos, line_end - pos).c_str();
+                        content_line.color = COLOR_DEFAULT;
+                        lines.push_back(content_line);
+                        
+                        pos = line_end + (line_end < content.length() && content[line_end] == ' ' ? 1 : 0);
+                    }
+                }
+            }
+        }
+    } else if (direction == "RESPONSE") {
+        // For responses, show the assistant's reply and any tool calls
+        if (message.contains("content") && message["content"].is_array()) {
+            for (const auto& content_item : message["content"]) {
+                if (content_item.contains("type")) {
+                    std::string type = content_item["type"].get<std::string>();
+                    
+                    if (type == "text" && content_item.contains("text")) {
+                        std::string text = content_item["text"].get<std::string>();
+                        
+                        simpleline_t type_line;
+                        type_line.line = "Assistant:";
+                        type_line.color = COLOR_KEYWORD;
+                        lines.push_back(type_line);
+                        
+                        // Split text into lines
+                        size_t pos = 0;
+                        while (pos < text.length()) {
+                            size_t line_end = std::min(pos + 80, text.length());
+                            if (line_end < text.length()) {
+                                size_t space_pos = text.find_last_of(' ', line_end);
+                                if (space_pos != std::string::npos && space_pos > pos) {
+                                    line_end = space_pos;
+                                }
+                            }
+                            
+                            simpleline_t text_line;
+                            text_line.line = text.substr(pos, line_end - pos).c_str();
+                            text_line.color = COLOR_DEFAULT;
+                            lines.push_back(text_line);
+                            
+                            pos = line_end + (line_end < text.length() && text[line_end] == ' ' ? 1 : 0);
+                        }
+                    } else if (type == "tool_use" && content_item.contains("name")) {
+                        std::string tool_name = content_item["name"].get<std::string>();
+                        
+                        simpleline_t tool_line;
+                        tool_line.line = ("Tool: " + tool_name).c_str();
+                        tool_line.color = COLOR_IMPNAME;
+                        lines.push_back(tool_line);
+                        
+                        // Show arguments if present
+                        if (content_item.contains("input")) {
+                            std::string args = content_item["input"].dump();
+                            simpleline_t args_line;
+                            args_line.line = ("Args: " + args).c_str();
+                            args_line.color = COLOR_DEFAULT;
+                            lines.push_back(args_line);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 void format_json_for_display(const json& j, strvec_t& lines, int indent = 0) {
     const std::string indent_str(indent * 2, ' ');
 
@@ -331,7 +430,7 @@ void log_llm_message(const std::string& direction, const json& message, int iter
     } catch (...) {}
 
     // Update viewer on main thread
-    llm_re::IDAUtils::execute_sync_wrapper([header, message]() {
+    llm_re::IDAUtils::execute_sync_wrapper([header, message, direction]() {
         if (g_terminating) return;
 
         // Add header
@@ -340,8 +439,8 @@ void log_llm_message(const std::string& direction, const json& message, int iter
         header_line.color = COLOR_IMPNAME;  // Bright color for headers
         g_llm_msg_lines.push_back(header_line);
 
-        // Add formatted JSON
-        format_json_for_display(message, g_llm_msg_lines);
+        // Add simplified display for IDA window
+        format_llm_message_for_ida(direction, message, g_llm_msg_lines);
 
         // Add separator
         simpleline_t sep_line;

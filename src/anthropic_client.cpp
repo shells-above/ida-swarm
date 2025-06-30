@@ -131,6 +131,19 @@ AnthropicClient::ChatResponse AnthropicClient::send_chat_request(const ChatReque
                 }
             }
         }
+        // Truncate tools array for logging
+        if (log_request.contains("tools") && log_request["tools"].is_array()) {
+            log_request["tools"] = "tools: [...]";
+        }
+        // Only show the most recent message instead of full history
+        if (log_request.contains("messages") && log_request["messages"].is_array() && 
+            !log_request["messages"].empty()) {
+            json messages_array = log_request["messages"];
+            json recent_messages = json::array();
+            // Keep only the last message
+            recent_messages.push_back(messages_array.back());
+            log_request["messages"] = recent_messages;
+        }
         message_logger("REQUEST", log_request, current_iteration);
     }
 

@@ -6,6 +6,7 @@
 
 namespace llm_re {
 
+
 BinaryMemory::BinaryMemory() : current_focus(0) {}
 
 BinaryMemory::~BinaryMemory() {}
@@ -308,7 +309,7 @@ json BinaryMemory::export_memory_snapshot() const {
     json functions = json::array();
     for (const auto& pair : function_memories) {
         json func;
-        func["address"] = pair.first;
+        func["address"] = HexAddress(pair.first);
         func["name"] = pair.second.name;
         func["distance_from_anchor"] = pair.second.distance_from_anchor;
         func["current_level"] = static_cast<int>(pair.second.current_level);
@@ -321,12 +322,12 @@ json BinaryMemory::export_memory_snapshot() const {
 
         func["callers"] = json::array();
         for (ea_t caller : pair.second.callers) {
-            func["callers"].push_back(caller);
+            func["callers"].push_back(HexAddress(caller));
         }
 
         func["callees"] = json::array();
         for (ea_t callee : pair.second.callees) {
-            func["callees"].push_back(callee);
+            func["callees"].push_back(HexAddress(callee));
         }
 
         func["string_refs"] = pair.second.string_refs;

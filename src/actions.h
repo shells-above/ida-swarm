@@ -30,6 +30,11 @@ public:
     // Main action execution interface
     json execute_action(const std::string& action_name, const json& params);
 
+    // Helpers to convert any LLM address format to ea_t
+    static std::vector<ea_t> parse_list_address_param(const json &params, const std::string &key);
+    static ea_t parse_single_address_value(const json &param);
+
+
     // IDA Core Actions
     json get_xrefs_to(ea_t address);
     json get_xrefs_from(ea_t address);
