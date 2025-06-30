@@ -247,7 +247,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
     if (direction == "REQUEST") {
         // For requests, show ALL new messages since the last request
         if (message.contains("messages") && message["messages"].is_array() && !message["messages"].empty()) {
-            auto messages = message["messages"];
+            nlohmann::basic_json<> messages = message["messages"];
 
             // Find the most recent messages that haven't been shown yet
             // We'll show the last few messages to provide context
@@ -256,7 +256,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
 
             // Show each message in the request
             for (int i = start_idx; i < (int)messages.size(); i++) {
-                auto msg = messages[i];
+                nlohmann::basic_json<> msg = messages[i];
                 if (!msg.contains("role")) continue;
 
                 std::string role = msg["role"].get<std::string>();
@@ -271,7 +271,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
                 // Check if this is a user message with tool_result content
                 if (role == "user" && msg.contains("content") && msg["content"].is_array()) {
                     bool has_tool_result = false;
-                    for (const auto& content_item : msg["content"]) {
+                    for (const nlohmann::basic_json<> &content_item: msg["content"]) {
                         if (content_item.contains("type") && content_item["type"] == "tool_result") {
                             has_tool_result = true;
 
@@ -330,7 +330,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
                         lines.push_back(role_line);
 
                         // Show any text content
-                        for (const auto& content_item : msg["content"]) {
+                        for (const nlohmann::basic_json<> &content_item: msg["content"]) {
                             if (content_item.contains("type") && content_item["type"] == "text" &&
                                 content_item.contains("text")) {
                                 std::string text = content_item["text"].get<std::string>();
@@ -362,7 +362,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
                     lines.push_back(role_line);
 
                     // Show tool calls from assistant
-                    for (const auto& tool_call : msg["tool_calls"]) {
+                    for (const nlohmann::basic_json<> &tool_call: msg["tool_calls"]) {
                         if (tool_call.contains("name") && tool_call.contains("id")) {
                             std::string tool_name = tool_call["name"];
                             std::string tool_id = tool_call["id"];
@@ -422,7 +422,7 @@ void format_llm_message_for_ida(const std::string& direction, const json& messag
     } else if (direction == "RESPONSE") {
         // For responses, show the assistant's reply and any tool calls
         if (message.contains("content") && message["content"].is_array()) {
-            for (const auto& content_item : message["content"]) {
+            for (const nlohmann::basic_json<> &content_item: message["content"]) {
                 if (content_item.contains("type")) {
                     std::string type = content_item["type"].get<std::string>();
 
@@ -491,7 +491,7 @@ void format_json_for_display(const json& j, strvec_t& lines, int indent = 0) {
     const std::string indent_str(indent * 2, ' ');
 
     if (j.is_object()) {
-        for (auto it = j.begin(); it != j.end(); ++it) {
+        for (nlohmann::basic_json<>::const_iterator it = j.begin(); it != j.end(); ++it) {
             simpleline_t line;
             std::string key_line = indent_str + "\"" + it.key() + "\": ";
 
@@ -527,7 +527,7 @@ void format_json_for_display(const json& j, strvec_t& lines, int indent = 0) {
         }
     } else if (j.is_array()) {
         int idx = 0;
-        for (const auto& item : j) {
+        for (const nlohmann::basic_json<> &item: j) {
             simpleline_t line;
             line.line = (indent_str + "[" + std::to_string(idx++) + "]").c_str();
             line.color = COLOR_DEFAULT;
