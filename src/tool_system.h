@@ -1263,7 +1263,72 @@ public:
         register_tool_type<GetXrefsTool>(memory, executor);
         register_tool_type<GetXrefsFromTool>(memory, executor);
 
+        // Function disassembly and decompilation tools
+        register_tool_type<GetFunctionDisassemblyTool>(memory, executor);
+        register_tool_type<GetFunctionDecompilationTool>(memory, executor);
 
+        // Function name tools
+        register_tool_type<GetFunctionAddressTool>(memory, executor);
+        register_tool_type<GetFunctionNameTool>(memory, executor);
+        register_tool_type<SetFunctionNameTool>(memory, executor);
+
+        // Function reference tools
+        register_tool_type<GetFunctionStringRefsTool>(memory, executor);
+        register_tool_type<GetFunctionDataRefsTool>(memory, executor);
+
+        // Data tools
+        register_tool_type<GetDataNameTool>(memory, executor);
+        register_tool_type<SetDataNameTool>(memory, executor);
+        register_tool_type<GetDataTool>(memory, executor);
+
+        // Comment tools
+        register_tool_type<AddDisassemblyCommentTool>(memory, executor);
+        register_tool_type<AddPseudocodeCommentTool>(memory, executor);
+        register_tool_type<ClearDisassemblyCommentTool>(memory, executor);
+        register_tool_type<ClearPseudocodeCommentsTool>(memory, executor);
+
+        // Import/Export tools
+        register_tool_type<GetImportsTool>(memory, executor);
+        register_tool_type<GetExportsTool>(memory, executor);
+
+        // String search tool
+        register_tool_type<SearchStringsTool>(memory, executor);
+
+        // Global note tools
+        register_tool_type<SetGlobalNoteTool>(memory, executor);
+        register_tool_type<GetGlobalNoteTool>(memory, executor);
+        register_tool_type<ListGlobalNotesTool>(memory, executor);
+        register_tool_type<SearchNotesTool>(memory, executor);
+
+        // Function analysis tools
+        register_tool_type<SetFunctionAnalysisTool>(memory, executor);
+        register_tool_type<GetFunctionAnalysisTool>(memory, executor);
+
+        // Memory context tool
+        register_tool_type<GetMemoryContextTool>(memory, executor);
+
+        // Analysis tracking tools
+        register_tool_type<GetAnalyzedFunctionsTool>(memory, executor);
+        register_tool_type<FindFunctionsByPatternTool>(memory, executor);
+
+        // Exploration tools
+        register_tool_type<GetExplorationFrontierTool>(memory, executor);
+        register_tool_type<MarkForAnalysisTool>(memory, executor);
+        register_tool_type<GetAnalysisQueueTool>(memory, executor);
+
+        // Focus tool
+        register_tool_type<SetCurrentFocusTool>(memory, executor);
+
+        // Insight tools
+        register_tool_type<AddInsightTool>(memory, executor);
+        register_tool_type<GetInsightsTool>(memory, executor);
+
+        // Cluster analysis tools
+        register_tool_type<AnalyzeClusterTool>(memory, executor);
+        register_tool_type<GetClusterAnalysisTool>(memory, executor);
+
+        // Region summary tool
+        register_tool_type<SummarizeRegionTool>(memory, executor);
 
         // Final report tool
         register_tool_type<SubmitFinalReportTool>(memory, executor);
@@ -1274,15 +1339,11 @@ public:
         return it != tools.end() ? it->second.get() : nullptr;
     }
 
-    const Tool* get_tool(const std::string& name) const {
-        auto it = tools.find(name);
-        return it != tools.end() ? it->second.get() : nullptr;
-    }
-
     std::vector<json> get_api_definitions() const {
         std::vector<json> defs;
         // Use ordered list to maintain consistent tool order
-        for (const auto& name : tool_order) {
+        // necessary for prompt caching
+        for (const std::string &name: tool_order) {
             auto it = tools.find(name);
             if (it != tools.end()) {
                 defs.push_back(it->second->to_api_definition());
