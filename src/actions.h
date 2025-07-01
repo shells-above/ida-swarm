@@ -39,7 +39,8 @@ public:
     json clear_comment(ea_t address);
     json get_imports();
     json search_strings(const std::string& text, bool is_case_sensitive = false);
-    json get_named_functions();
+    json get_named_functions(int max_count);
+    json search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
     json search_named_globals(const std::string& pattern, bool is_regex);
     json get_named_globals();
     json get_strings(int min_length);

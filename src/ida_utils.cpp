@@ -538,13 +538,20 @@ std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool 
 }
 
 
-std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions() {
-    return execute_sync_wrapper([]() {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions(int max_count) {
+    return execute_sync_wrapper([max_count]() {
         std::vector<std::pair<ea_t, std::string>> result;
 
         // Iterate through all functions
         size_t qty = get_func_qty();
+        int added_count = 0;
+
         for (size_t i = 0; i < qty; i++) {
+            // Check if we've reached the maximum count
+            if (max_count > 0 && added_count >= max_count) {
+                break;
+            }
+
             func_t *func = getn_func(i);
             if (func) {
                 qstring name;
@@ -558,6 +565,7 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions() {
                         func_name.substr(0, 7) != "nullsub_" &&
                         func_name.substr(0, 4) != "def_") {
                         result.push_back({func->start_ea, func_name});
+                        added_count++;
                     }
                 }
             }
@@ -565,6 +573,54 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions() {
 
         // Sort by address
         std::sort(result.begin(), result.end());
+
+        return result;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_functions(const std::string& text, bool is_case_sensitive, int max_count) {
+    return execute_sync_wrapper([&text, is_case_sensitive, max_count]() {
+        // Validate input
+        if (text.empty()) {
+            throw std::invalid_argument("Search text cannot be empty");
+        }
+        if (text.length() > 1024) {
+            throw std::invalid_argument("Search text too long (max 1024 characters)");
+        }
+
+        std::vector<std::pair<ea_t, std::string>> result;
+
+        // Get all named functions first (without limit to ensure we can search through all)
+        std::vector<std::pair<ea_t, std::string>> all_functions = get_named_functions(-1);
+
+        int added_count = 0;
+
+        // Search through them
+        for (const auto& func_pair : all_functions) {
+            // Check if we've reached the maximum count
+            if (max_count > 0 && added_count >= max_count) {
+                break;
+            }
+
+            const std::string& func_name = func_pair.second;
+            bool found = false;
+
+            if (is_case_sensitive) {
+                found = func_name.find(text) != std::string::npos;
+            } else {
+                // Case-insensitive search
+                std::string lower_name = func_name;
+                std::string lower_text = text;
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(), ::tolower);
+                found = lower_name.find(lower_text) != std::string::npos;
+            }
+
+            if (found) {
+                result.push_back(func_pair);
+                added_count++;
+            }
+        }
 
         return result;
     });

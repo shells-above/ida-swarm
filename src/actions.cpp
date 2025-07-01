@@ -466,10 +466,10 @@ json ActionExecutor::search_strings(const std::string& text, bool is_case_sensit
     return result;
 }
 
-json ActionExecutor::get_named_functions() {
+json ActionExecutor::get_named_functions(int max_count) {
     json result;
     try {
-        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::get_named_functions();
+        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::get_named_functions(max_count);
         result["success"] = true;
         json funcs_json = json::array();
         for (const auto& func : functions) {
@@ -479,6 +479,28 @@ json ActionExecutor::get_named_functions() {
             funcs_json.push_back(func_obj);
         }
         result["functions"] = funcs_json;
+        result["count"] = funcs_json.size();
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::search_named_functions(const std::string& text, bool is_case_sensitive, int max_count) {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::search_named_functions(text, is_case_sensitive, max_count);
+        result["success"] = true;
+        json funcs_json = json::array();
+        for (const auto& func : functions) {
+            json func_obj;
+            func_obj["address"] = HexAddress(func.first);
+            func_obj["name"] = func.second;
+            funcs_json.push_back(func_obj);
+        }
+        result["functions"] = funcs_json;
+        result["count"] = funcs_json.size();
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

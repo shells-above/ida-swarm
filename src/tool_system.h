@@ -610,12 +610,48 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder().build();
+        return ParameterBuilder()
+            .add_integer("max_count", "Maximum number of functions to return")
+            .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_named_functions());
+            int max_count = input.value("max_count", -1); // -1 means unlimited
+            return ToolResult::success(executor->get_named_functions(max_count));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Search named functions tool
+class SearchNamedFunctionsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_named_functions";
+    }
+
+    std::string description() const override {
+        return "Search for named functions containing the given text in their names. Case sensitivity is optional.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("text", "The text to search for in function names")
+            .add_integer("max_count", "Maximum number of functions to return")
+            .add_boolean("is_case_sensitive", "Whether the search is case sensitive", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string text = input.at("text");
+            bool is_case_sensitive = input.value("is_case_sensitive", false);
+            int max_count = input.value("max_count", -1); // -1 means unlimited
+            return ToolResult::success(executor->search_named_functions(text, is_case_sensitive, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1594,6 +1630,7 @@ public:
         register_tool_type<SearchStringsTool>(memory, executor);
 
         register_tool_type<GetNamedFunctionsTool>(memory, executor);
+        register_tool_type<SearchNamedFunctionsTool>(memory, executor);
         register_tool_type<SearchNamedGlobalsTool>(memory, executor);
         register_tool_type<GetNamedGlobalsTool>(memory, executor);
         register_tool_type<GetStringsTool>(memory, executor);

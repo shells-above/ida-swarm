@@ -232,7 +232,8 @@ public:
      */
     static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive);
 
-    static std::vector<std::pair<ea_t, std::string>> get_named_functions();
+    static std::vector<std::pair<ea_t, std::string>> get_named_functions(int max_count);
+    static std::vector<std::pair<ea_t, std::string>> search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
     static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex);
     static std::vector<std::pair<ea_t, std::string>> get_named_globals();
     static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length = 4);
