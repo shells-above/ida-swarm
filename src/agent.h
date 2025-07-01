@@ -161,6 +161,7 @@ private:
     AgentState state_;
     ConversationState conversation_;  // stores all Message's with when tools were used
     const Config& config_;
+    std::string last_error_;
 
     // Token tracking
     api::TokenTracker token_tracker_;
@@ -313,6 +314,9 @@ public:
         state_.set_status(AgentState::Status::Running);
         qsem_post(task_semaphore_);
     }
+
+    std::string get_last_error() const { return last_error_; }
+    void clear_last_error() { last_error_.clear(); }
 
     // Callbacks
     void set_log_callback(std::function<void(LogLevel, const std::string&)> callback) {
@@ -629,18 +633,24 @@ private:
         if (!response.error) {
             log(LogLevel::ERROR, "Unknown API error");
             state_.set_status(AgentState::Status::Idle);
+            // Store error for worker to retrieve
+            last_error_ = "Unknown API error";
             return;
         }
 
+        std::string error_msg = *response.error;
+
         if (api::AnthropicClient::is_recoverable_error(response)) {
-            log(LogLevel::WARNING, "Recoverable API error: " + *response.error);
+            log(LogLevel::WARNING, "Recoverable API error: " + error_msg);
             log(LogLevel::INFO, "You can resume the analysis");
             state_.set_status(AgentState::Status::Paused);
             saved_state_.valid = true;
+            last_error_ = "API Error (recoverable): " + error_msg;
         } else {
-            log(LogLevel::ERROR, "Unrecoverable API error: " + *response.error);
+            log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
             state_.set_status(AgentState::Status::Idle);
             saved_state_.valid = false;
+            last_error_ = "API Error: " + error_msg;
         }
     }
 

@@ -41,6 +41,9 @@ public:
     AgentWorker(REAgent* agent, const std::string& task)
         : agent_(agent), task_(task) {}
 
+    void setResumeMode(bool resume) { resume_mode_ = resume; }
+    void setContinueMode(bool cont) { continue_mode_ = cont; }
+
 public slots:
     void process();
 
@@ -52,6 +55,8 @@ signals:
 private:
     REAgent* agent_;
     std::string task_;
+    bool resume_mode_ = false;
+    bool continue_mode_ = false;
 };
 
 // Main window class
@@ -77,6 +82,7 @@ private slots:
     // UI actions
     void on_execute_clicked();
     void on_stop_clicked();
+    void on_resume_clicked();
     void on_clear_clicked();
     void on_export_clicked();
     void on_settings_clicked();
@@ -84,9 +90,11 @@ private slots:
     void on_open_log_dir();
     void on_search_clicked();
     void on_about_clicked();
+    void on_continue_clicked();
+    void on_new_task_clicked();
 
     // Agent callbacks
-    void on_agent_log(LogLevel level, const QString& message);
+    void on_agent_log(int level, const QString& message);
     void on_agent_message(const QString& type, const QString& content);
     void on_agent_tool_executed(const QString& tool, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
@@ -146,7 +154,12 @@ private:
     QTextEdit* task_input_;
     QPushButton* execute_button_;
     QPushButton* stop_button_;
+    QPushButton* resume_button_;
     QPushButton* templates_button_;
+    QWidget* continue_widget_;
+    QTextEdit* continue_input_;
+    QPushButton* continue_button_;
+    QPushButton* new_task_button_;
 
     // Chat view
     QWidget* chat_widget_;
@@ -202,8 +215,6 @@ private:
     int current_iteration_ = 0;
 
     // Actions
-    QAction* execute_action_;
-    QAction* stop_action_;
     QAction* clear_action_;
     QAction* export_action_;
     QAction* settings_action_;

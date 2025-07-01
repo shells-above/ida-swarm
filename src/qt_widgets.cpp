@@ -667,10 +667,10 @@ void ToolExecutionWidget::update_tool_result(const std::string& tool_id, const j
             // Update status based on result
             if (result.contains("success") && result["success"].get<bool>()) {
                 item->setText(1, "Success");
-                item->setForeground(1, QColor(ColorScheme::SUCCESS));
+                item->setForeground(1, QColor(0, 200, 0));  // Green
             } else {
                 item->setText(1, "Failed");
-                item->setForeground(1, QColor(ColorScheme::ERROR));
+                item->setForeground(1, QColor(200, 0, 0));  // Red
 
                 // Add error as child if present
                 if (result.contains("error")) {

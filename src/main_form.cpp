@@ -16,18 +16,25 @@ MainForm* get_main_form() {
 // Worker implementation
 void AgentWorker::process() {
     try {
-        agent_->set_task(task_);
+        // Clear any previous error
+        agent_->clear_last_error();
 
-        // Poll for completion or interruption
+        if (resume_mode_) {
+            agent_->resume();
+        } else if (continue_mode_) {
+            agent_->continue_with_task(task_);
+        } else {
+            agent_->set_task(task_);
+        }
+
+        // Wait for completion
         while (agent_->is_running()) {
-            // Check for interruption request
             if (QThread::currentThread()->isInterruptionRequested()) {
-                agent_->stop();  // This tells the agent to stop
+                agent_->stop();
                 emit progress("Stopping...");
 
-                // Wait a bit for agent to actually stop
                 int wait_count = 0;
-                while (agent_->is_running() && wait_count < 50) {  // 5 second timeout
+                while (agent_->is_running() && wait_count < 50) {
                     QThread::msleep(100);
                     wait_count++;
                 }
@@ -36,14 +43,19 @@ void AgentWorker::process() {
                 return;
             }
 
-            QThread::msleep(100);  // Check every 100ms
+            QThread::msleep(100);
         }
 
         // Check final status
         if (agent_->is_completed()) {
             emit finished();
         } else if (agent_->is_paused()) {
-            emit error("Task paused due to error");
+            // Get the actual error message
+            std::string error_msg = agent_->get_last_error();
+            if (error_msg.empty()) {
+                error_msg = "Task paused due to error";
+            }
+            emit error(QString::fromStdString(error_msg));
         } else {
             emit error("Task stopped");
         }
@@ -182,14 +194,6 @@ void MainForm::setup_toolbars() {
     QToolBar* main_toolbar = addToolBar("Main");
     main_toolbar->setMovable(false);
 
-    execute_action_ = main_toolbar->addAction("Execute", this, &MainForm::on_execute_clicked);
-    execute_action_->setShortcut(QKeySequence("Ctrl+Return"));
-
-    stop_action_ = main_toolbar->addAction("Stop", this, &MainForm::on_stop_clicked);
-    stop_action_->setEnabled(false);
-
-    main_toolbar->addSeparator();
-
     templates_button_ = new QPushButton("Templates");
     connect(templates_button_, &QPushButton::clicked, this, &MainForm::on_templates_clicked);
     main_toolbar->addWidget(templates_button_);
@@ -286,10 +290,40 @@ void MainForm::setup_central_widget() {
     task_input_->setPlaceholderText("Enter your reverse engineering task here...");
     input_layout->addWidget(task_input_);
 
+    // Continue input area (initially hidden)
+    continue_widget_ = new QWidget();
+    QVBoxLayout* continue_layout = new QVBoxLayout(continue_widget_);
+
+    QLabel* continue_label = new QLabel("Continue with additional instructions:");
+    continue_layout->addWidget(continue_label);
+
+    continue_input_ = new QTextEdit();
+    continue_input_->setMaximumHeight(80);
+    continue_input_->setPlaceholderText("Enter additional instructions to continue the analysis...");
+    continue_layout->addWidget(continue_input_);
+
+    QHBoxLayout* continue_button_layout = new QHBoxLayout();
+
+    continue_button_ = new QPushButton("Continue");
+    continue_button_->setDefault(true);
+    connect(continue_button_, &QPushButton::clicked, this, &MainForm::on_continue_clicked);
+    continue_button_layout->addWidget(continue_button_);
+
+    new_task_button_ = new QPushButton("Start New Task");
+    connect(new_task_button_, &QPushButton::clicked, this, &MainForm::on_new_task_clicked);
+    continue_button_layout->addWidget(new_task_button_);
+
+    continue_button_layout->addStretch();
+    continue_layout->addLayout(continue_button_layout);
+
+    continue_widget_->setVisible(false);  // Hidden by default
+    layout->addWidget(continue_widget_);
+
     QHBoxLayout* button_layout = new QHBoxLayout();
 
     execute_button_ = new QPushButton("Execute");
     execute_button_->setDefault(true);
+    execute_button_->setShortcut(QKeySequence("Ctrl+Return"));
     connect(execute_button_, &QPushButton::clicked, this, &MainForm::on_execute_clicked);
     button_layout->addWidget(execute_button_);
 
@@ -297,6 +331,11 @@ void MainForm::setup_central_widget() {
     stop_button_->setEnabled(false);
     connect(stop_button_, &QPushButton::clicked, this, &MainForm::on_stop_clicked);
     button_layout->addWidget(stop_button_);
+
+    resume_button_ = new QPushButton("Resume");
+    resume_button_->setEnabled(false);
+    connect(resume_button_, &QPushButton::clicked, this, &MainForm::on_resume_clicked);
+    button_layout->addWidget(resume_button_);
 
     button_layout->addStretch();
     input_layout->addLayout(button_layout);
@@ -362,9 +401,10 @@ void MainForm::setup_agent() {
 
     // Set callbacks
     agent_->set_log_callback([this](LogLevel level, const std::string& msg) {
+        int level_int = static_cast<int>(level);
         QMetaObject::invokeMethod(this, "on_agent_log",
                                  Qt::QueuedConnection,
-                                 Q_ARG(llm_re::LogLevel, level),
+                                 Q_ARG(int, level_int),
                                  Q_ARG(QString, QString::fromStdString(msg)));
     });
 
@@ -433,6 +473,12 @@ void MainForm::set_current_address(ea_t addr) {
 void MainForm::on_execute_clicked() {
     if (is_running_) return;
 
+    // Hide continue widget if it's visible
+    if (continue_widget_->isVisible()) {
+        continue_widget_->setVisible(false);
+        task_input_->setVisible(true);
+    }
+
     std::string task = task_input_->toPlainText().toStdString();
     if (task.empty()) {
         QMessageBox::warning(this, "Warning", "Please enter a task to execute.");
@@ -494,6 +540,35 @@ void MainForm::on_stop_clicked() {
     if (worker_thread_ && worker_thread_->isRunning()) {
         worker_thread_->requestInterruption();  // when worker_thread_ sees this, it signals to the agent worker_loop to stop
     }
+}
+
+void MainForm::on_resume_clicked() {
+    if (!agent_->is_paused()) {
+        QMessageBox::warning(this, "Warning", "No paused task to resume.");
+        return;
+    }
+
+    // Update UI
+    is_running_ = true;
+    update_ui_state();
+
+    log(LogLevel::INFO, "Resuming task...");
+
+    // Create worker thread for resume
+    worker_thread_ = new QThread();
+    worker_ = new AgentWorker(agent_.get(), "");  // Empty task for resume
+    worker_->setResumeMode(true);
+    worker_->moveToThread(worker_thread_);
+
+    connect(worker_thread_, &QThread::started, worker_, &AgentWorker::process);
+    connect(worker_, &AgentWorker::finished, this, &MainForm::on_worker_finished);
+    connect(worker_, &AgentWorker::error, this, &MainForm::on_worker_error);
+    connect(worker_, &AgentWorker::progress, this, &MainForm::on_worker_progress);
+    connect(worker_, &AgentWorker::finished, worker_thread_, &QThread::quit);
+    connect(worker_, &AgentWorker::finished, worker_, &QObject::deleteLater);
+    connect(worker_thread_, &QThread::finished, worker_thread_, &QObject::deleteLater);
+
+    worker_thread_->start();
 }
 
 void MainForm::on_clear_clicked() {
@@ -603,8 +678,63 @@ void MainForm::on_about_clicked() {
         "<p>Copyright © 2025</p>");
 }
 
-void MainForm::on_agent_log(LogLevel level, const QString& message) {
-    log(level, message.toStdString());
+void MainForm::on_continue_clicked() {
+    std::string additional_instructions = continue_input_->toPlainText().toStdString();
+    if (additional_instructions.empty()) {
+        QMessageBox::warning(this, "Warning", "Please enter additional instructions to continue.");
+        return;
+    }
+
+    // Hide continue widget
+    continue_widget_->setVisible(false);
+    task_input_->setVisible(true);
+
+    // Add user message to chat
+    messages::Message user_msg = messages::Message::user_text(additional_instructions);
+    add_message_to_chat(user_msg);
+
+    // Clear continue input
+    continue_input_->clear();
+
+    // Update UI
+    is_running_ = true;
+    update_ui_state();
+
+    log(LogLevel::INFO, "Continuing with: " + additional_instructions);
+
+    // Create worker thread for continue
+    worker_thread_ = new QThread();
+    worker_ = new AgentWorker(agent_.get(), additional_instructions);
+    worker_->setContinueMode(true);  // Set continue mode
+    worker_->moveToThread(worker_thread_);
+
+    connect(worker_thread_, &QThread::started, worker_, &AgentWorker::process);
+    connect(worker_, &AgentWorker::finished, this, &MainForm::on_worker_finished);
+    connect(worker_, &AgentWorker::error, this, &MainForm::on_worker_error);
+    connect(worker_, &AgentWorker::progress, this, &MainForm::on_worker_progress);
+    connect(worker_, &AgentWorker::finished, worker_thread_, &QThread::quit);
+    connect(worker_, &AgentWorker::finished, worker_, &QObject::deleteLater);
+    connect(worker_thread_, &QThread::finished, worker_thread_, &QObject::deleteLater);
+
+    worker_thread_->start();
+}
+
+void MainForm::on_new_task_clicked() {
+    // Hide continue widget and show normal task input
+    continue_widget_->setVisible(false);
+    task_input_->setVisible(true);
+    task_input_->clear();
+    task_input_->setFocus();
+
+    // Clear conversation
+    message_list_->clear();
+
+    log(LogLevel::INFO, "Ready for new task");
+}
+
+void MainForm::on_agent_log(int level, const QString& message) {
+    LogLevel log_level = static_cast<LogLevel>(level);
+    log(log_level, message.toStdString());
 }
 
 void MainForm::on_agent_message(const QString& type, const QString& content) {
@@ -612,8 +742,22 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
     try {
         json content_json = json::parse(content.toStdString());
         log_message_to_file(type.toStdString(), content_json);
+
+        // Check for error responses
+        if (type == "RESPONSE" && content_json.contains("type") &&
+            content_json["type"] == "error") {
+            // Log the error details
+            if (content_json.contains("error")) {
+                json error = content_json["error"];
+                std::string error_msg = error.value("message", "Unknown error");
+                std::string error_type = error.value("type", "unknown");
+                int http_code = content_json.value("_http_code", 0);
+
+                log(LogLevel::ERROR, std::format("API Error (HTTP {}): {} - {}",
+                    http_code, error_type, error_msg));
+            }
+        }
     } catch (...) {
-        // If not JSON, log as string
         log_message_to_file(type.toStdString(), content.toStdString());
     }
 
@@ -724,13 +868,12 @@ void MainForm::on_worker_finished() {
     update_ui_state();
 
     // Complete session
-    auto& session = sessions_.back();
+    SessionInfo& session = sessions_.back();
     session.end_time = std::chrono::system_clock::now();
     session.token_usage = agent_->get_token_usage();
     session.message_count = message_list_->count();
     session.success = true;
-    session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - session_start_).count();
+    session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - session_start_).count();
 
     // Update timeline
     timeline_->set_session_info(session.task, session.token_usage);
@@ -739,12 +882,22 @@ void MainForm::on_worker_finished() {
     update_statistics();
 
     log(LogLevel::INFO, "Task completed successfully");
+
+    // Show continue option
+    task_input_->setVisible(false);
+    continue_widget_->setVisible(true);
+    continue_input_->setFocus();
+
     worker_thread_ = nullptr;
     worker_ = nullptr;
 }
 
 void MainForm::on_worker_error(const QString& error) {
     is_running_ = false;
+
+    // Check if agent is paused (recoverable error)
+    bool is_paused = agent_ && agent_->is_paused();
+
     update_ui_state();
 
     // Complete session with error
@@ -755,8 +908,12 @@ void MainForm::on_worker_error(const QString& error) {
 
     log(LogLevel::ERROR, "Task failed: " + error.toStdString());
 
-    // Only show message box for actual errors, not cancellations
-    if (!error.contains("cancelled", Qt::CaseInsensitive)) {
+    if (is_paused) {
+        QMessageBox::information(this, "Task Paused",
+            "The task has been paused due to a recoverable error.\n\n"
+            "Error: " + error + "\n\n"
+            "You can click 'Resume' to continue when the API is available again.");
+    } else if (!error.contains("cancelled", Qt::CaseInsensitive)) {
         QMessageBox::critical(this, "Error", QString("Task failed: %1").arg(error));
     }
 
@@ -809,17 +966,28 @@ void MainForm::update_statistics() {
 }
 
 void MainForm::update_ui_state() {
-    execute_button_->setEnabled(!is_running_);
-    execute_action_->setEnabled(!is_running_);
+    bool is_paused = agent_ && agent_->is_paused();
+    bool is_completed = agent_ && agent_->is_completed();
+
+    execute_button_->setEnabled(!is_running_ && !is_paused);
     stop_button_->setEnabled(is_running_);
-    stop_action_->setEnabled(is_running_);
-    task_input_->setReadOnly(is_running_);
+    resume_button_->setEnabled(is_paused && !is_running_);
+
+    // Only disable task input if running or paused (not if completed)
+    task_input_->setReadOnly(is_running_ || is_paused);
 
     if (is_running_) {
         status_progress_->setVisible(true);
-        status_progress_->setMaximum(0);  // Indeterminate
+        status_progress_->setMaximum(0);
     } else {
         status_progress_->setVisible(false);
+    }
+
+    // Update status label
+    if (is_paused) {
+        status_label_->setText("Paused - Click Resume to continue");
+    } else if (is_completed && continue_widget_->isVisible()) {
+        status_label_->setText("Completed - Enter additional instructions or start a new task");
     }
 }
 
