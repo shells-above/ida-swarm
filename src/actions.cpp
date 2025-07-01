@@ -402,11 +402,12 @@ json ActionExecutor::get_data(ea_t address) {
     return result;
 }
 
-json ActionExecutor::add_disassembly_comment(ea_t address, const std::string& comment) {
+json ActionExecutor::add_comment(ea_t address, const std::string& comment) {
     json result;
     try {
-        bool success = IDAUtils::add_disassembly_comment(address, comment);
-        result["success"] = success;
+        bool success_dis = IDAUtils::add_disassembly_comment(address, comment);
+        bool success_dec = IDAUtils::add_pseudocode_comment(address, comment);
+        result["success"] = success_dis && success_dec;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -414,35 +415,12 @@ json ActionExecutor::add_disassembly_comment(ea_t address, const std::string& co
     return result;
 }
 
-json ActionExecutor::add_pseudocode_comment(ea_t address, const std::string& comment) {
+json ActionExecutor::clear_comment(ea_t address) {
     json result;
     try {
-        bool success = IDAUtils::add_pseudocode_comment(address, comment);
-        result["success"] = success;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::clear_disassembly_comment(ea_t address) {
-    json result;
-    try {
-        bool success = IDAUtils::clear_disassembly_comment(address);
-        result["success"] = success;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::clear_pseudocode_comments(ea_t address) {
-    json result;
-    try {
-        bool success = IDAUtils::clear_pseudocode_comments(address);
-        result["success"] = success;
+        bool success_dis = IDAUtils::clear_disassembly_comment(address);
+        bool success_dec = IDAUtils::clear_pseudocode_comments(address);
+        result["success"] = success_dis && success_dec;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

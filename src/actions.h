@@ -35,10 +35,8 @@ public:
     json get_data_name(ea_t address);
     json set_data_name(ea_t address, const std::string& name);
     json get_data(ea_t address);
-    json add_disassembly_comment(ea_t address, const std::string& comment);
-    json add_pseudocode_comment(ea_t address, const std::string& comment);
-    json clear_disassembly_comment(ea_t address);
-    json clear_pseudocode_comments(ea_t address);
+    json add_comment(ea_t address, const std::string& comment);
+    json clear_comment(ea_t address);
     json get_imports();
     json get_exports();
     json search_strings(const std::string& text, bool is_case_sensitive = false);

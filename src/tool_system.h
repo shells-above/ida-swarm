@@ -480,16 +480,16 @@ public:
 };
 
 // Comment tools
-class AddDisassemblyCommentTool : public Tool {
+class AddCommentTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "add_disassembly_comment";
+        return "add_comment";
     }
 
     std::string description() const override {
-        return "Add a comment to the disassembly at the given address. Helps document your analysis findings.";
+        return "Add a comment to the disassembly and pseudocode at the given address. Helps document your analysis findings.";
     }
 
     json parameters_schema() const override {
@@ -503,53 +503,24 @@ public:
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string comment = input.at("comment");
-            return ToolResult::success(executor->add_disassembly_comment(address, comment));
+
+            return ToolResult::success(executor->add_comment(address, comment));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-class AddPseudocodeCommentTool : public Tool {
+class ClearCommentTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "add_pseudocode_comment";
+        return "clear_comment";
     }
 
     std::string description() const override {
-        return "Add a comment to the pseudocode/decompilation at the given address. Helps document your analysis findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to add the comment to")
-            .add_string("comment", "The comment text")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            std::string comment = input.at("comment");
-            return ToolResult::success(executor->add_pseudocode_comment(address, comment));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class ClearDisassemblyCommentTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "clear_disassembly_comment";
-    }
-
-    std::string description() const override {
-        return "Clear/remove the disassembly comment at the given address.";
+        return "Clear/remove the disassembly and pseudocode comment at the given address.";
     }
 
     json parameters_schema() const override {
@@ -561,35 +532,7 @@ public:
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->clear_disassembly_comment(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class ClearPseudocodeCommentsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "clear_pseudocode_comments";
-    }
-
-    std::string description() const override {
-        return "Clear/remove all pseudocode comments at the given address.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to clear comments from")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->clear_pseudocode_comments(address));
+            return ToolResult::success(executor->clear_comment(address));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1282,10 +1225,8 @@ public:
         register_tool_type<GetDataTool>(memory, executor);
 
         // Comment tools
-        register_tool_type<AddDisassemblyCommentTool>(memory, executor);
-        register_tool_type<AddPseudocodeCommentTool>(memory, executor);
-        register_tool_type<ClearDisassemblyCommentTool>(memory, executor);
-        register_tool_type<ClearPseudocodeCommentsTool>(memory, executor);
+        register_tool_type<AddCommentTool>(memory, executor);
+        register_tool_type<ClearCommentTool>(memory, executor);
 
         // Import/Export tools
         register_tool_type<GetImportsTool>(memory, executor);
