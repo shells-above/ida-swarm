@@ -202,15 +202,7 @@ add_custom_command(TARGET ida_llm_agent64 POST_BUILD
         "${IDA_PLUGINS_PATH}/"
         COMMENT "Copying plugin to IDA plugins directory"
 )
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_re_config.json.example")
-    add_custom_command(TARGET ida_llm_agent64 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/llm_re_config.json.example"
-            "${IDA_PLUGINS_PATH}/llm_re_config.json"
-            COMMENT "Copying default configuration"
-    )
-endif()
+# put llm_re_config.json into IDA_PLUGINS_PATH dir
 
 # Installation
 install(TARGETS ida_llm_agent64
