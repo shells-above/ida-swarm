@@ -446,12 +446,30 @@ public:
 
             try {
                 json result = json::parse(content.content);
+
+                // Prune large outputs from various tools
                 if (result.contains("decompilation")) {
                     result["decompilation"] = "[Decompilation pruned - previously shown to LLM. You can request again if you need to analyze it deeper.]";
                 }
                 if (result.contains("disassembly")) {
                     result["disassembly"] = "[Disassembly pruned - previously shown to LLM. You can request again if you need to analyze it deeper.]";
                 }
+                if (result.contains("imports")) {
+                    result["imports"] = "[Imports list pruned - previously shown to LLM. You can request again if needed.]";
+                }
+                if (result.contains("functions")) {
+                    result["functions"] = "[Functions list pruned - previously shown to LLM. You can request again if needed.]";
+                }
+                if (result.contains("globals")) {
+                    result["globals"] = "[Globals list pruned - previously shown to LLM. You can request again if needed.]";
+                }
+                if (result.contains("strings")) {
+                    result["strings"] = "[Strings list pruned - previously shown to LLM. You can request again if needed.]";
+                }
+                if (result.contains("entry_points")) {
+                    result["entry_points"] = "[Entry points list pruned - previously shown to LLM. You can request again if needed.]";
+                }
+
                 pruned_content = std::make_unique<ToolResultContent>(
                     content.tool_use_id, result.dump(), content.is_error
                 );

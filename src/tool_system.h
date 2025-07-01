@@ -1430,12 +1430,6 @@ public:
     std::vector<std::string> get_tool_names() const {
         return tool_order;
     }
-
-    // Check if a tool produces large output
-    bool is_large_output_tool(const std::string& name) const {
-        return name == "get_function_decompilation" ||
-               name == "get_function_disassembly";
-    }
 };
 
 } // namespace llm_re::tools
