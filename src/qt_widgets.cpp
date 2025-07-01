@@ -2166,7 +2166,7 @@ void MemoryDockWidget::update_memory(std::shared_ptr<BinaryMemory> memory) {
 }
 
 
-    void MemoryDockWidget::on_function_selected() {
+void MemoryDockWidget::on_function_selected() {
     auto items = function_tree_->selectedItems();
     if (items.isEmpty()) {
         function_analysis_viewer_->clear();
