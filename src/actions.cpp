@@ -224,16 +224,22 @@ ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::
 json ActionExecutor::get_xrefs_to(ea_t address) {
     json result;
     try {
-        std::vector<ea_t> xrefs = IDAUtils::get_xrefs_to(address);
+        std::vector<std::pair<ea_t, std::string>> xrefs = IDAUtils::get_xrefs_to_with_names(address);
         result["success"] = true;
         json xrefs_json = json::array();
-        for (ea_t addr : xrefs) {
-            xrefs_json.push_back(HexAddress(addr));
+        for (const auto& xref : xrefs) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_json.push_back(xref_obj);
         }
         result["xrefs"] = xrefs_json;
 
         // Update memory with caller information
-        std::set<ea_t> callers(xrefs.begin(), xrefs.end());
+        std::set<ea_t> callers;
+        for (const auto& xref : xrefs) {
+            callers.insert(xref.first);
+        }
         memory->update_function_relationships(address, callers, {});
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -245,16 +251,22 @@ json ActionExecutor::get_xrefs_to(ea_t address) {
 json ActionExecutor::get_xrefs_from(ea_t address) {
     json result;
     try {
-        std::vector<ea_t> xrefs = IDAUtils::get_xrefs_from(address);
+        std::vector<std::pair<ea_t, std::string>> xrefs = IDAUtils::get_xrefs_from_with_names(address);
         result["success"] = true;
         json xrefs_json = json::array();
-        for (ea_t addr : xrefs) {
-            xrefs_json.push_back(HexAddress(addr));
+        for (const auto& xref : xrefs) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_json.push_back(xref_obj);
         }
         result["xrefs"] = xrefs_json;
 
         // Update memory with callee information
-        std::set<ea_t> callees(xrefs.begin(), xrefs.end());
+        std::set<ea_t> callees;
+        for (const auto& xref : xrefs) {
+            callees.insert(xref.first);
+        }
         memory->update_function_relationships(address, {}, callees);
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -537,13 +549,14 @@ json ActionExecutor::get_strings(int min_length) {
 json ActionExecutor::get_entry_points() {
     json result;
     try {
-        std::vector<std::pair<ea_t, std::string>> entries = IDAUtils::get_entry_points();
+        std::vector<std::tuple<ea_t, std::string, std::string>> entries = IDAUtils::get_entry_points();
         result["success"] = true;
         json entries_json = json::array();
         for (const auto& entry : entries) {
             json entry_obj;
-            entry_obj["address"] = HexAddress(entry.first);
-            entry_obj["type"] = entry.second;
+            entry_obj["address"] = HexAddress(std::get<0>(entry));
+            entry_obj["type"] = std::get<1>(entry);
+            entry_obj["name"] = std::get<2>(entry);
             entries_json.push_back(entry_obj);
         }
         result["entry_points"] = entries_json;
@@ -698,16 +711,23 @@ json ActionExecutor::get_analyzed_functions() {
     return result;
 }
 
-json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
+    json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
     json result;
     try {
         std::vector<ea_t> addresses = memory->find_functions_by_pattern(pattern);
         result["success"] = true;
-        json addresses_json = json::array();
+        json functions_json = json::array();
         for (ea_t addr : addresses) {
-            addresses_json.push_back(HexAddress(addr));
+            json func_obj;
+            func_obj["address"] = HexAddress(addr);
+
+            // Get the function name
+            std::string name = IDAUtils::get_function_name(addr);
+            func_obj["name"] = name;
+
+            functions_json.push_back(func_obj);
         }
-        result["addresses"] = addresses_json;
+        result["functions"] = functions_json;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -756,9 +776,15 @@ json ActionExecutor::get_analysis_queue() {
         json queue_json = json::array();
         for (const std::tuple<ea_t, std::string, int>& item: queue) {
             json item_obj;
-            item_obj["address"] = HexAddress(std::get<0>(item));
+            ea_t addr = std::get<0>(item);
+            item_obj["address"] = HexAddress(addr);
             item_obj["reason"] = std::get<1>(item);
             item_obj["priority"] = std::get<2>(item);
+
+            // Get the function name
+            std::string name = IDAUtils::get_function_name(addr);
+            item_obj["name"] = name;
+
             queue_json.push_back(item_obj);
         }
         result["queue"] = queue_json;

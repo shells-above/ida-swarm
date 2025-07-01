@@ -95,19 +95,8 @@ public:
 
     // Cross-reference operations
 
-    /**
-     * Find all references TO a location (who calls/references this?)
-     * @param address Target address
-     * @return Vector of addresses that reference the target
-     */
-    static std::vector<ea_t> get_xrefs_to(ea_t address);
-
-    /**
-     * Find all references FROM a location (what does this reference?)
-     * @param address Source address
-     * @return Vector of addresses referenced by the source
-     */
-    static std::vector<ea_t> get_xrefs_from(ea_t address);
+    static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address);
+    static std::vector<std::pair<ea_t, std::string>> get_xrefs_from_with_names(ea_t address);
 
     // Disassembly and decompilation
 
@@ -247,7 +236,7 @@ public:
     static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex);
     static std::vector<std::pair<ea_t, std::string>> get_named_globals();
     static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length = 4);
-    static std::vector<std::pair<ea_t, std::string>> get_entry_points();
+    static std::vector<std::tuple<ea_t, std::string, std::string>> get_entry_points();
 };
 
 } // namespace llm_re

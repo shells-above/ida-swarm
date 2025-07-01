@@ -14,33 +14,51 @@ std::string format_address_hex(ea_t address) {
     return ss.str();
 }
 
-std::vector<ea_t> IDAUtils::get_xrefs_to(ea_t address) {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t address) {
     return execute_sync_wrapper([address]() {
-        // Validate input
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
-        std::vector<ea_t> result;
+        std::vector<std::pair<ea_t, std::string>> result;
         xrefblk_t xb;
         for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
-            result.push_back(xb.from);
+            qstring name;
+            std::string func_name;
+
+            // Try to get function name at the xref source
+            if (get_func_name(&name, xb.from) > 0) {
+                func_name = name.c_str();
+            } else if (get_name(&name, xb.from) > 0) {
+                func_name = name.c_str();
+            }
+
+            result.push_back({xb.from, func_name});
         }
         return result;
     });
 }
 
-std::vector<ea_t> IDAUtils::get_xrefs_from(ea_t address) {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_from_with_names(ea_t address) {
     return execute_sync_wrapper([address]() {
-        // Validate input
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
-        std::vector<ea_t> result;
+        std::vector<std::pair<ea_t, std::string>> result;
         xrefblk_t xb;
         for (bool ok = xb.first_from(address, XREF_ALL); ok; ok = xb.next_from()) {
-            result.push_back(xb.to);
+            qstring name;
+            std::string func_name;
+
+            // Try to get function name at the xref target
+            if (get_func_name(&name, xb.to) > 0) {
+                func_name = name.c_str();
+            } else if (get_name(&name, xb.to) > 0) {
+                func_name = name.c_str();
+            }
+
+            result.push_back({xb.to, func_name});
         }
         return result;
     });
@@ -694,21 +712,33 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(i
         return result;
     });
 }
-
-std::vector<std::pair<ea_t, std::string>> IDAUtils::get_entry_points() {
+std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_entry_points() {
     return execute_sync_wrapper([]() {
-        std::vector<std::pair<ea_t, std::string>> result;
+        std::vector<std::tuple<ea_t, std::string, std::string>> result;
+
+        // Helper function to get function name
+        auto get_func_name_at = [](ea_t ea) -> std::string {
+            qstring name;
+            if (get_func_name(&name, ea) > 0) {
+                return name.c_str();
+            } else if (get_name(&name, ea) > 0) {
+                return name.c_str();
+            }
+            return "";
+        };
 
         // Get main entry point
         ea_t main_ea = inf_get_main();
         if (main_ea != BADADDR) {
-            result.push_back({main_ea, "main"});
+            std::string name = get_func_name_at(main_ea);
+            result.push_back({main_ea, "main", name});
         }
 
         // Get start address (program entry)
         ea_t start_ea = inf_get_start_ea();
         if (start_ea != BADADDR && start_ea != main_ea) {
-            result.push_back({start_ea, "start"});
+            std::string name = get_func_name_at(start_ea);
+            result.push_back({start_ea, "start", name});
         }
 
         // Get all exported functions
@@ -720,13 +750,14 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_entry_points() {
                 // Skip if already added
                 bool already_added = false;
                 for (const auto& entry : result) {
-                    if (entry.first == ea) {
+                    if (std::get<0>(entry) == ea) {
                         already_added = true;
                         break;
                     }
                 }
                 if (!already_added) {
-                    result.push_back({ea, "export"});
+                    std::string name = get_func_name_at(ea);
+                    result.push_back({ea, "export", name});
                 }
             }
         }
@@ -742,7 +773,8 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_entry_points() {
                     ea_t callback_ea = get_qword(callback_ptr);
                     if (callback_ea) {
                         if (callback_ea != 0) {
-                            result.push_back({callback_ea, "tls_callback"});
+                            std::string name = get_func_name_at(callback_ea);
+                            result.push_back({callback_ea, "tls_callback", name});
                         }
                     }
                     callback_ptr += sizeof(ea_t);
@@ -751,7 +783,9 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_entry_points() {
         }
 
         // Sort by address
-        std::sort(result.begin(), result.end());
+        std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+            return std::get<0>(a) < std::get<0>(b);
+        });
 
         return result;
     });

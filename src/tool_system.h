@@ -143,7 +143,7 @@ public:
     }
 
     std::string description() const override {
-        return "Find what calls or references this address. Returns list of caller addresses. Auto-updates memory with relationships. Essential for understanding how functions are used.";
+        return "Find what calls or references this address. Returns caller addresses with names. Essential for understanding how functions are used.";
     }
 
     json parameters_schema() const override {
@@ -172,7 +172,7 @@ public:
     }
 
     std::string description() const override {
-        return "Find what this address calls or references. Returns list of called addresses. Auto-updates memory with relationships.";
+        return "Find what this address calls or references. Returns called addresses with names.";
     }
 
     json parameters_schema() const override {
