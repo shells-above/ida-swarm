@@ -204,9 +204,9 @@ Guidelines:
 4. Look for strings and imports to understand functionality
 5. Save important findings and speculation to memory for later reference
 6. Save confident information in the IDA database through function name setting and adding comments
-6. When you have gathered enough information, submit your final report
+7. When you have gathered enough information, submit your final report
 
-When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analye it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
+When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
 Be systematic and thorough. Build your understanding incrementally.
 
 Current task: )";
