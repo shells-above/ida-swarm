@@ -247,6 +247,17 @@ void MainForm::setup_docks() {
 
     memory_dock_->setWidget(memory_widget_);
     addDockWidget(Qt::RightDockWidgetArea, memory_dock_);
+    connect(toggle_memory_action_, &QAction::triggered, [this]() {
+        if (memory_dock_->isVisible()) {
+            // If already visible, raise it to front of tab group
+            memory_dock_->raise();
+        } else {
+            // If hidden, show and raise it
+            memory_dock_->show();
+            memory_dock_->raise();
+        }
+        toggle_memory_action_->setChecked(true);
+    });
 
     // Tools dock
     tools_dock_ = new QDockWidget("Tool Execution", this);
@@ -264,10 +275,19 @@ void MainForm::setup_docks() {
 
     stats_dashboard_ = new ui::StatsDashboard();
     stats_dock_->setWidget(stats_dashboard_);
-    addDockWidget(Qt::LeftDockWidgetArea, stats_dock_);
+    addDockWidget(Qt::RightDockWidgetArea, stats_dock_);
     stats_dock_->hide();
-    connect(toggle_stats_action_, &QAction::toggled,
-            stats_dock_, &QDockWidget::setVisible);
+    connect(toggle_stats_action_, &QAction::triggered, [this]() {
+        if (stats_dock_->isVisible()) {
+            // If already visible, raise it to front of tab group
+            stats_dock_->raise();
+        } else {
+            // If hidden, show and raise it
+            stats_dock_->show();
+            stats_dock_->raise();
+        }
+        toggle_stats_action_->setChecked(true);
+    });
 
     // Tab docks
     tabifyDockWidget(memory_dock_, stats_dock_);
@@ -912,7 +932,6 @@ void MainForm::on_worker_error(const QString& error) {
     if (is_paused) {
         QMessageBox::information(this, "Task Paused",
             "The task has been paused due to a recoverable error.\n\n"
-            "Error: " + error + "\n\n"
             "You can click 'Resume' to continue when the API is available again.");
     } else if (!error.contains("cancelled", Qt::CaseInsensitive)) {
         QMessageBox::critical(this, "Error", QString("Task failed: %1").arg(error));

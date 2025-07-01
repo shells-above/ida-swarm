@@ -645,7 +645,6 @@ private:
         std::string error_msg = *response.error;
 
         if (api::AnthropicClient::is_recoverable_error(response)) {
-            log(LogLevel::WARNING, "Recoverable API error: " + error_msg);
             log(LogLevel::INFO, "You can resume the analysis");
             state_.set_status(AgentState::Status::Paused);
             saved_state_.valid = true;
