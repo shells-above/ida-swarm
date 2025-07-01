@@ -11,6 +11,7 @@
 #include "anthropic_api.h"
 #include "memory.h"
 #include "actions.h"
+#include "qt_widgets.h"
 
 #include <atomic>
 #include <queue>
@@ -153,18 +154,6 @@ struct AgentTask {
 
 // Main agent
 class REAgent {
-public:
-    // Configuration
-    struct Config {
-        api::Model model = api::Model::Sonnet4;
-        int max_iterations = 100;
-        int max_tokens = 8192;
-        double temperature = 0.0;
-        bool enable_thinking = false;
-        bool enable_prompt_caching = true;
-        size_t max_conversation_length = 200;  // Prune after this many messages. todo make this be based off max context window size
-    };
-
 private:
     // Core components
     std::shared_ptr<BinaryMemory> memory_;      // memory that can be scripted by the LLM
@@ -175,7 +164,7 @@ private:
     // State management
     AgentState state_;
     ConversationState conversation_;  // stores all Message's with when tools were used
-    Config config_;
+    const Config& config_;
 
     // Token tracking
     api::TokenTracker token_tracker_;
@@ -224,11 +213,11 @@ Be systematic and thorough. Build your understanding incrementally.
 Current task: )";
 
 public:
-    REAgent(const std::string& api_key, const Config& config = Config())
-        : api_client_(api_key),
+    REAgent(const Config& config)
+        : config_(config),
+          api_client_(config.api.api_key, config.api.base_url),
           memory_(std::make_shared<BinaryMemory>()),
-          executor_(std::make_shared<ActionExecutor>(memory_)),
-          config_(config) {
+          executor_(std::make_shared<ActionExecutor>(memory_)) {
 
         // Initialize semaphore
         task_semaphore_ = qsem_create(nullptr, 0);
@@ -454,13 +443,13 @@ private:
 
         // Build initial request
         api::ChatRequest request = api::ChatRequestBuilder()
-                .with_model(config_.model)
-                .with_system_prompt(std::string(SYSTEM_PROMPT_TEMPLATE) + task, config_.enable_prompt_caching)
+                .with_model(config_.api.model)
+                .with_system_prompt(std::string(SYSTEM_PROMPT_TEMPLATE) + task, config_.api.enable_prompt_caching)
                 .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
                 .with_tools(tool_registry_)
-                .with_max_tokens(config_.max_tokens)
-                .with_temperature(config_.temperature)
-                .enable_thinking(config_.enable_thinking)
+                .with_max_tokens(config_.api.max_tokens)
+                .with_temperature(config_.api.temperature)
+                .enable_thinking(config_.agent.enable_thinking)
                 .build();
 
         // Save initial state
@@ -510,7 +499,7 @@ private:
         int iteration = saved_state_.iteration;
         bool task_complete = false;
 
-        while (iteration < config_.max_iterations && !stop_requested_ && !task_complete && state_.is_running()) {
+        while (iteration < config_.agent.max_iterations && !stop_requested_ && !task_complete && state_.is_running()) {
             iteration++;
             saved_state_.iteration = iteration;
             api_client_.set_iteration(iteration);
@@ -566,12 +555,12 @@ private:
 
             // Check conversation length and prune if needed
             // todo make based off content window length
-            if (conversation_.message_count() > config_.max_conversation_length) {
+            if (conversation_.message_count() > 200) {  // Default UI max conversation length
                 log(LogLevel::WARNING, "Conversation getting long, consider starting a new analysis");
             }
         }
 
-        if (iteration >= config_.max_iterations && !task_complete) {
+        if (iteration >= config_.agent.max_iterations && !task_complete) {
             log(LogLevel::WARNING, "Reached maximum iterations without completing task");
             state_.set_status(AgentState::Status::Completed);
         } else if (task_complete) {
@@ -682,10 +671,6 @@ private:
     }
 
 public:
-    // Configuration getters/setters
-    Config get_config() const { return config_; }
-    void set_config(const Config& cfg) { config_ = cfg; }
-
     // Tool registry access (for testing/extension)
     tools::ToolRegistry& get_tool_registry() { return tool_registry_; }
     const tools::ToolRegistry& get_tool_registry() const { return tool_registry_; }

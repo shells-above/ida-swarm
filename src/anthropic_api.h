@@ -535,7 +535,8 @@ class AnthropicClient {
     }
 
 public:
-    explicit AnthropicClient(const std::string& key) : api_key(key) {
+    explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages") 
+        : api_key(key), api_url(base_url) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
 

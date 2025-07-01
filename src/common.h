@@ -6,6 +6,9 @@
 #define COMMON_H
 
 #undef fopen
+#undef fclose
+#undef fread
+#undef fwrite
 
 #include <string>
 #include <vector>
@@ -20,7 +23,7 @@
 #include <iostream>
 #include <fstream>
 #include <atomic>
-#include <condition_variable>
+// #include <condition_variable>
 #include <utility>
 #include <algorithm>
 #include <cctype>
@@ -31,6 +34,9 @@
 #include <iomanip>
 
 #define fopen dont_use_fopen
+#define fclose dont_use_fclose
+#define fread dont_use_fread
+#define fwrite dont_use_fwrite
 
 // IDA headers
 #include <ida.hpp>
