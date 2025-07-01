@@ -9,9 +9,6 @@
 #include "message_types.h"
 #include "tool_system.h"
 
-#include <chrono>
-#include <iomanip>
-
 namespace llm_re::api {
 
 // Token usage tracking

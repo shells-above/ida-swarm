@@ -14,11 +14,6 @@
 #include "anthropic_api.h"
 #include "qt_widgets.h"
 
-#include <QMainWindow>
-#include <QThread>
-#include <QTimer>
-#include <chrono>
-
 QT_BEGIN_NAMESPACE
 class QAction;
 class QMenu;

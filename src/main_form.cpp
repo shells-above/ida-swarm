@@ -4,35 +4,6 @@
 
 #include "main_form.h"
 
-#include <QMenuBar>
-#include <QMenu>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QDockWidget>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QTextEdit>
-#include <QPushButton>
-#include <QComboBox>
-#include <QListWidget>
-#include <QTreeWidget>
-#include <QProgressBar>
-#include <QLabel>
-#include <QMessageBox>
-#include <QFileDialog>
-#include <QCloseEvent>
-#include <QTimer>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QSettings>
-#include <QListWidgetItem>
-#include <QTreeWidgetItem>
-
-#include <sstream>
-#include <iomanip>
-#include <fstream>
-
 namespace llm_re {
 
 // Global instance

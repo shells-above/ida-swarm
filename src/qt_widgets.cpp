@@ -4,23 +4,110 @@
 
 #include "qt_widgets.h"
 
-#include <QPainter>
-#include <QMouseEvent>
-#include <QTextBlock>
-#include <QTextCursor>
-#include <QSyntaxHighlighter>
-#include <QRegularExpression>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QGridLayout>
-#include <QListWidget>
-#include <QDialogButtonBox>
-#include <QMessageBox>
-#include <QFileDialog>
-#include <QSettings>
-#include <QDoubleSpinBox>
-#include <cmath>
+namespace llm_re {
+    // Config implementation
+    bool Config::save_to_file(const std::string& path) const {
+        try {
+            json j;
+
+            // API settings
+            j["api"]["api_key"] = api.api_key;
+            j["api"]["base_url"] = api.base_url;
+            j["api"]["model"] = api::model_to_string(api.model);
+            j["api"]["max_tokens"] = api.max_tokens;
+            j["api"]["temperature"] = api.temperature;
+            j["api"]["enable_prompt_caching"] = api.enable_prompt_caching;
+
+            // Agent settings
+            j["agent"]["max_iterations"] = agent.max_iterations;
+            j["agent"]["enable_thinking"] = agent.enable_thinking;
+            j["agent"]["custom_prompt"] = agent.custom_prompt;
+            j["agent"]["tool_timeout"] = agent.tool_timeout;
+            j["agent"]["verbose_logging"] = agent.verbose_logging;
+
+            // UI settings
+            j["ui"]["log_buffer_size"] = ui.log_buffer_size;
+            j["ui"]["auto_scroll"] = ui.auto_scroll;
+            j["ui"]["theme"] = ui.theme;
+            j["ui"]["font_size"] = ui.font_size;
+            j["ui"]["show_timestamps"] = ui.show_timestamps;
+            j["ui"]["show_tool_details"] = ui.show_tool_details;
+
+            // Export settings
+            j["export"]["path"] = export_settings.path;
+            j["export"]["auto_export"] = export_settings.auto_export;
+            j["export"]["format"] = export_settings.format;
+            j["export"]["include_memory"] = export_settings.include_memory;
+            j["export"]["include_logs"] = export_settings.include_logs;
+
+            j["debug_mode"] = debug_mode;
+
+            std::ofstream file(path);
+            file << j.dump(2);
+
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    bool Config::load_from_file(const std::string& path) {
+        try {
+            std::ifstream file(path);
+            if (!file) return false;
+
+            json j;
+            file >> j;
+
+            // API settings
+            if (j.contains("api")) {
+                api.api_key = j["api"].value("api_key", api.api_key);
+                api.base_url = j["api"].value("base_url", api.base_url);
+                if (j["api"].contains("model")) {
+                    api.model = api::model_from_string(j["api"]["model"]);
+                }
+                api.max_tokens = j["api"].value("max_tokens", api.max_tokens);
+                api.temperature = j["api"].value("temperature", api.temperature);
+                api.enable_prompt_caching = j["api"].value("enable_prompt_caching", api.enable_prompt_caching);
+            }
+
+            // Agent settings
+            if (j.contains("agent")) {
+                agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
+                agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
+                agent.custom_prompt = j["agent"].value("custom_prompt", agent.custom_prompt);
+                agent.tool_timeout = j["agent"].value("tool_timeout", agent.tool_timeout);
+                agent.verbose_logging = j["agent"].value("verbose_logging", agent.verbose_logging);
+            }
+
+            // UI settings
+            if (j.contains("ui")) {
+                ui.log_buffer_size = j["ui"].value("log_buffer_size", ui.log_buffer_size);
+                ui.auto_scroll = j["ui"].value("auto_scroll", ui.auto_scroll);
+                ui.theme = j["ui"].value("theme", ui.theme);
+                ui.font_size = j["ui"].value("font_size", ui.font_size);
+                ui.show_timestamps = j["ui"].value("show_timestamps", ui.show_timestamps);
+                ui.show_tool_details = j["ui"].value("show_tool_details", ui.show_tool_details);
+            }
+
+            // Export settings
+            if (j.contains("export")) {
+                export_settings.path = j["export"].value("path", export_settings.path);
+                export_settings.auto_export = j["export"].value("auto_export", export_settings.auto_export);
+                export_settings.format = j["export"].value("format", export_settings.format);
+                export_settings.include_memory = j["export"].value("include_memory", export_settings.include_memory);
+                export_settings.include_logs = j["export"].value("include_logs", export_settings.include_logs);
+            }
+
+            debug_mode = j.value("debug_mode", debug_mode);
+
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+}
+
 
 namespace llm_re::ui {
 

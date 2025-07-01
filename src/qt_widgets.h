@@ -9,38 +9,6 @@
 #include "anthropic_api.h"
 #include "message_types.h"
 
-#include <QWidget>
-#include <QDialog>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFormLayout>
-#include <QTabWidget>
-#include <QTreeWidget>
-#include <QTextBrowser>
-#include <QLineEdit>
-#include <QComboBox>
-#include <QSpinBox>
-#include <QCheckBox>
-#include <QPushButton>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QProgressBar>
-#include <QLabel>
-#include <QFileDialog>
-#include <QDialogButtonBox>
-#include <QTimer>
-#include <QMenu>
-#include <QAction>
-#include <QSplitter>
-#include <QTextEdit>
-#include <QGroupBox>
-#include <QListWidget>
-#include <QDateTime>
-#include <QTime>
-
-#include <optional>
-#include <chrono>
-
 namespace llm_re {
     // Session information
     struct SessionInfo {
@@ -85,7 +53,6 @@ namespace llm_re {
             int max_tokens = 8192;
             double temperature = 0.0;
             bool enable_prompt_caching = true;
-            int timeout_seconds = 300;
         } api;
 
         struct AgentSettings {

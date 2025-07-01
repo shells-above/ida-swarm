@@ -13,10 +13,6 @@
 #include "actions.h"
 #include "qt_widgets.h"
 
-#include <atomic>
-#include <queue>
-#include <mutex>
-
 namespace llm_re {
 
 // Agent state management
