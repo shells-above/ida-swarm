@@ -366,6 +366,10 @@ public:
     }
 
     // Memory management
+    std::shared_ptr<BinaryMemory> get_memory() {
+        return memory_;
+    }
+
     void save_memory(const std::string& filename) {
         std::ofstream file(filename);
         if (file.is_open()) {

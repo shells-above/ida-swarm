@@ -781,7 +781,7 @@ void MainForm::update_memory_view() {
             if (func.contains("descriptions")) {
                 for (const auto& [level, desc] : func["descriptions"].items()) {
                     QTreeWidgetItem* child = new QTreeWidgetItem(item);
-                    child->setText(0, QString("Level %1").arg(level));
+                    child->setText(0, QString("Level %1").arg(level.data()));
                     child->setText(1, QString::fromStdString(desc.get<std::string>().substr(0, 50) + "..."));
                 }
             }

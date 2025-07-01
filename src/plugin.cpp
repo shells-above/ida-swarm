@@ -6,8 +6,6 @@
 #include <idp.hpp>
 #include <loader.hpp>
 #include <kernwin.hpp>
-#include <QtWidgets/QApplication>
-#include <QtCore/QTimer>
 
 #include "main_form.h"
 
@@ -34,10 +32,66 @@ plugin_t PLUGIN = {
     "Ctrl+Shift+L"  // Default hotkey
 };
 
+// Forward declaration
+class llm_plugin_t;
+static llm_plugin_t* g_plugin = nullptr;
+
+// Action handler base class for our actions
+struct llm_action_handler_t : public action_handler_t {
+    llm_plugin_t* plugin;
+
+    llm_action_handler_t(llm_plugin_t* p) : plugin(p) {}
+
+    virtual int idaapi activate(action_activation_ctx_t* ctx) override = 0;
+
+    virtual action_state_t idaapi update(action_update_ctx_t* ctx) override {
+        return AST_ENABLE_ALWAYS;
+    }
+};
+
 // Plugin module
 class llm_plugin_t : public plugmod_t {
     MainForm* main_form = nullptr;
-    std::vector<action_desc_t> action_descs;
+    std::vector<qstring> registered_actions;
+
+    // Action handlers as member variables
+    struct show_ui_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    struct analyze_function_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    struct analyze_selection_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    struct find_vulnerabilities_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    struct identify_crypto_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    struct explain_code_ah_t : public llm_action_handler_t {
+        using llm_action_handler_t::llm_action_handler_t;
+        virtual int idaapi activate(action_activation_ctx_t* ctx) override;
+    };
+
+    // Handler instances
+    show_ui_ah_t show_ui_handler;
+    analyze_function_ah_t analyze_function_handler;
+    analyze_selection_ah_t analyze_selection_handler;
+    find_vulnerabilities_ah_t find_vulnerabilities_handler;
+    identify_crypto_ah_t identify_crypto_handler;
+    explain_code_ah_t explain_code_handler;
 
 public:
     llm_plugin_t();
@@ -49,14 +103,6 @@ public:
     void register_actions();
     void unregister_actions();
 
-    // Action callbacks
-    static int idaapi show_ui_handler(void* user_data, int);
-    static int idaapi analyze_function_handler(void* user_data, int);
-    static int idaapi analyze_selection_handler(void* user_data, int);
-    static int idaapi find_vulnerabilities_handler(void* user_data, int);
-    static int idaapi identify_crypto_handler(void* user_data, int);
-    static int idaapi explain_code_handler(void* user_data, int);
-
     void analyze_function();
     void analyze_selection();
     void find_vulnerabilities();
@@ -64,54 +110,45 @@ public:
     void explain_code();
 };
 
-// Global plugin instance
-static llm_plugin_t* g_plugin = nullptr;
-
-// Action handlers
-int idaapi llm_plugin_t::show_ui_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->show_main_form();
-    }
+// Action handler implementations
+int idaapi llm_plugin_t::show_ui_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->show_main_form();
     return 1;
 }
 
-int idaapi llm_plugin_t::analyze_function_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->analyze_function();
-    }
+int idaapi llm_plugin_t::analyze_function_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->analyze_function();
     return 1;
 }
 
-int idaapi llm_plugin_t::analyze_selection_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->analyze_selection();
-    }
+int idaapi llm_plugin_t::analyze_selection_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->analyze_selection();
     return 1;
 }
 
-int idaapi llm_plugin_t::find_vulnerabilities_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->find_vulnerabilities();
-    }
+int idaapi llm_plugin_t::find_vulnerabilities_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->find_vulnerabilities();
     return 1;
 }
 
-int idaapi llm_plugin_t::identify_crypto_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->identify_crypto();
-    }
+int idaapi llm_plugin_t::identify_crypto_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->identify_crypto();
     return 1;
 }
 
-int idaapi llm_plugin_t::explain_code_handler(void* user_data, int) {
-    if (g_plugin) {
-        g_plugin->explain_code();
-    }
+int idaapi llm_plugin_t::explain_code_ah_t::activate(action_activation_ctx_t* ctx) {
+    plugin->explain_code();
     return 1;
 }
 
 // Implementation
-llm_plugin_t::llm_plugin_t() {
+llm_plugin_t::llm_plugin_t()
+    : show_ui_handler(this),
+      analyze_function_handler(this),
+      analyze_selection_handler(this),
+      find_vulnerabilities_handler(this),
+      identify_crypto_handler(this),
+      explain_code_handler(this) {
     msg("LLM RE: Plugin initialized\n");
     register_actions();
 }
@@ -145,83 +182,101 @@ void llm_plugin_t::show_main_form() {
 }
 
 void llm_plugin_t::register_actions() {
-    // Define actions
-    static const action_desc_t actions[] = {
-        ACTION_DESC_LITERAL(
+    // Define and register actions
+    struct {
+        const char* name;
+        const char* label;
+        action_handler_t* handler;
+        const char* shortcut;
+        const char* tooltip;
+        const char* menupath;
+    } actions[] = {
+        {
             "llm_re:show_ui",
             "LLM RE Assistant",
-            show_ui_handler,
+            &show_ui_handler,
             "Ctrl+Shift+L",
             "Show LLM Reverse Engineering Assistant",
-            -1
-        ),
-        ACTION_DESC_LITERAL(
+            "Edit/LLM RE/Show Assistant"
+        },
+        {
             "llm_re:analyze_function",
             "Analyze with LLM",
-            analyze_function_handler,
+            &analyze_function_handler,
             "Ctrl+Shift+A",
             "Analyze current function with LLM",
-            -1
-        ),
-        ACTION_DESC_LITERAL(
+            "Edit/LLM RE/Analyze Function"
+        },
+        {
             "llm_re:analyze_selection",
             "Analyze Selection with LLM",
-            analyze_selection_handler,
+            &analyze_selection_handler,
             nullptr,
             "Analyze selected code with LLM",
-            -1
-        ),
-        ACTION_DESC_LITERAL(
+            "Edit/LLM RE/Analyze Selection"
+        },
+        {
             "llm_re:find_vulnerabilities",
             "Find Vulnerabilities",
-            find_vulnerabilities_handler,
+            &find_vulnerabilities_handler,
             nullptr,
             "Search for vulnerabilities with LLM",
-            -1
-        ),
-        ACTION_DESC_LITERAL(
+            "Edit/LLM RE/Find Vulnerabilities"
+        },
+        {
             "llm_re:identify_crypto",
             "Identify Cryptography",
-            identify_crypto_handler,
+            &identify_crypto_handler,
             nullptr,
             "Identify cryptographic routines with LLM",
-            -1
-        ),
-        ACTION_DESC_LITERAL(
+            "Edit/LLM RE/Identify Cryptography"
+        },
+        {
             "llm_re:explain_code",
             "Explain Code",
-            explain_code_handler,
+            &explain_code_handler,
             nullptr,
             "Get LLM explanation of current code",
-            -1
-        )
+            "Edit/LLM RE/Explain Code"
+        }
     };
 
-    // Register actions
+    // Register each action
     for (const auto& action : actions) {
-        register_action(action);
-        action_descs.push_back(action);
+        action_desc_t desc = {};
+        desc.cb = sizeof(action_desc_t);
+        desc.name = action.name;
+        desc.label = action.label;
+        desc.handler = action.handler;
+        desc.owner = this;
+        desc.shortcut = action.shortcut;
+        desc.tooltip = action.tooltip;
+        desc.icon = -1;
+        desc.flags = ADF_OT_PLUGMOD;  // Owner is a plugmod_t
+
+        if (register_action(desc)) {
+            registered_actions.push_back(action.name);
+
+            // Attach to menu
+            if (action.menupath) {
+                attach_action_to_menu(action.menupath, action.name, SETMENU_APP);
+            }
+        } else {
+            msg("LLM RE: Failed to register action %s\n", action.name);
+        }
     }
 
-    // Add menu items
-    attach_action_to_menu("Edit/LLM RE/Show Assistant", "llm_re:show_ui", SETMENU_APP);
-    attach_action_to_menu("Edit/LLM RE/Analyze Function", "llm_re:analyze_function", SETMENU_APP);
-    attach_action_to_menu("Edit/LLM RE/Analyze Selection", "llm_re:analyze_selection", SETMENU_APP);
-    attach_action_to_menu("Edit/LLM RE/Find Vulnerabilities", "llm_re:find_vulnerabilities", SETMENU_APP);
-    attach_action_to_menu("Edit/LLM RE/Identify Cryptography", "llm_re:identify_crypto", SETMENU_APP);
-    attach_action_to_menu("Edit/LLM RE/Explain Code", "llm_re:explain_code", SETMENU_APP);
-
-    // Add toolbar button
+    // Add toolbar button for main UI
     attach_action_to_toolbar("AnalysisToolBar", "llm_re:show_ui");
 
-    msg("LLM RE: Registered %d actions\n", action_descs.size());
+    msg("LLM RE: Registered %d actions\n", registered_actions.size());
 }
 
 void llm_plugin_t::unregister_actions() {
-    for (const auto& action : action_descs) {
-        unregister_action(action.name);
+    for (const qstring& action_name: registered_actions) {
+        unregister_action(action_name.c_str());
     }
-    action_descs.clear();
+    registered_actions.clear();
 }
 
 void llm_plugin_t::analyze_function() {

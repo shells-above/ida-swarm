@@ -697,7 +697,7 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
 
         for (const auto& evt : events) {
             auto event_time = std::chrono::duration_cast<std::chrono::milliseconds>(evt.timestamp - start_time).count();
-            int x = timeline_start + (event_time * (timeline_end - timeline_start)) / std::max(duration, (long)1);
+            int x = timeline_start + (event_time * (timeline_end - timeline_start)) / std::max(duration, (long long)1);
             draw_event(painter, evt, x, timeline_y);
         }
     }
@@ -758,7 +758,7 @@ SessionTimelineWidget::Event* SessionTimelineWidget::event_at_point(const QPoint
 
     for (auto& evt : events) {
         auto event_time = std::chrono::duration_cast<std::chrono::milliseconds>(evt.timestamp - start_time).count();
-        int x = timeline_start + (event_time * (timeline_end - timeline_start)) / std::max(duration, (long)1);
+        int x = timeline_start + (event_time * (timeline_end - timeline_start)) / std::max(duration, (long long)1);
 
         QRect event_rect(x - 8, timeline_y - 8, 16, 16);
         if (event_rect.contains(point)) {
@@ -1897,6 +1897,3 @@ void ProgressOverlay::on_update_timer() {
 }
 
 } // namespace llm_re::ui
-
-// Register custom types
-Q_DECLARE_METATYPE(llm_re::ui::SearchDialog::SearchResult)

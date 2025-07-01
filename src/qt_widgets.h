@@ -41,12 +41,86 @@
 #include <optional>
 #include <chrono>
 
-namespace llm_re::ui {
+namespace llm_re {
+    // Session information
+    struct SessionInfo {
+        std::string id;
+        std::string task;
+        std::chrono::system_clock::time_point start_time;
+        std::chrono::system_clock::time_point end_time;
+        api::TokenUsage token_usage;
+        int tool_calls = 0;
+        int message_count = 0;
+        bool success = true;
+        std::string error_message;
+        long duration_ms = 0;
+    };
 
-// Forward declarations
-struct Config;
-struct SessionInfo;
-struct LogEntry;
+    // Log entry
+    struct LogEntry {
+        enum Level { DEBUG, INFO, WARNING, ERROR };
+
+        std::chrono::system_clock::time_point timestamp;
+        Level level;
+        std::string message;
+        std::string source;
+
+        static std::string level_to_string(Level l) {
+            switch (l) {
+                case DEBUG: return "DEBUG";
+                case INFO: return "INFO";
+                case WARNING: return "WARNING";
+                case ERROR: return "ERROR";
+            }
+            return "UNKNOWN";
+        }
+    };
+
+    // Configuration
+    struct Config {
+        struct APISettings {
+            std::string api_key;
+            std::string base_url = "https://api.anthropic.com/v1/messages";
+            api::Model model = api::Model::Sonnet4;
+            int max_tokens = 8192;
+            double temperature = 0.0;
+            bool enable_prompt_caching = true;
+            int timeout_seconds = 300;
+        } api;
+
+        struct AgentSettings {
+            int max_iterations = 100;
+            bool enable_thinking = false;
+            std::string custom_prompt;
+            int tool_timeout = 30;
+            bool verbose_logging = false;
+        } agent;
+
+        struct UISettings {
+            int log_buffer_size = 1000;
+            bool auto_scroll = true;
+            int theme = 0;  // 0=default, 1=dark, 2=light
+            int font_size = 10;
+            bool show_timestamps = true;
+            bool show_tool_details = true;
+        } ui;
+
+        struct ExportSettings {
+            std::string path = ".";
+            bool auto_export = false;
+            int format = 0;  // 0=markdown, 1=html, 2=json
+            bool include_memory = true;
+            bool include_logs = true;
+        } export_settings;
+
+        bool debug_mode = false;
+
+        bool save_to_file(const std::string& path) const;
+        bool load_from_file(const std::string& path);
+    };
+}
+
+namespace llm_re::ui {
 
 // Color scheme for syntax highlighting
 struct ColorScheme {

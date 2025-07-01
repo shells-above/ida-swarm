@@ -5,13 +5,14 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#undef fopen
+
 #include <string>
 #include <vector>
 #include <map>
 #include <set>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <queue>
 #include <functional>
 #include <ctime>
@@ -29,6 +30,7 @@
 #include <chrono>
 #include <iomanip>
 
+#define fopen dont_use_fopen
 
 // IDA headers
 #include <ida.hpp>
