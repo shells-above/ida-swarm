@@ -12,6 +12,7 @@
 #include "memory.h"
 #include "actions.h"
 #include "qt_widgets.h"
+#include "deep_analysis.h"
 
 namespace llm_re {
 
@@ -152,8 +153,9 @@ struct AgentTask {
 class REAgent {
 private:
     // Core components
-    std::shared_ptr<BinaryMemory> memory_;      // memory that can be scripted by the LLM
-    std::shared_ptr<ActionExecutor> executor_;  // action executor, actual integration with IDA
+    std::shared_ptr<BinaryMemory> memory_;                        // memory that can be scripted by the LLM
+    std::shared_ptr<ActionExecutor> executor_;                    // action executor, actual integration with IDA
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;  // manages deep analysis tasks
     tools::ToolRegistry tool_registry_;         // registry of tools that use the action executor
     api::AnthropicClient api_client_;           // api client
 
@@ -216,13 +218,14 @@ public:
         : config_(config),
           api_client_(config.api.api_key, config.api.base_url),
           memory_(std::make_shared<BinaryMemory>()),
-          executor_(std::make_shared<ActionExecutor>(memory_)) {
+          executor_(std::make_shared<ActionExecutor>(memory_)),
+          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config.api.api_key)) {
 
         // Initialize semaphore
         task_semaphore_ = qsem_create(nullptr, 0);
 
         // Register all tools
-        tool_registry_.register_all_tools(memory_, executor_);
+        tool_registry_.register_all_tools(memory_, executor_, config.agent.enable_deep_analysis, deep_analysis_manager_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {

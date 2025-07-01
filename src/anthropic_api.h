@@ -7,7 +7,11 @@
 
 #include "common.h"
 #include "message_types.h"
-#include "tool_system.h"
+
+// Forward declaration
+namespace llm_re::tools {
+    class ToolRegistry;
+}
 
 namespace llm_re::api {
 
@@ -372,10 +376,7 @@ public:
         return *this;
     }
 
-    ChatRequestBuilder& with_tools(const tools::ToolRegistry& registry) {
-        request.tool_definitions = registry.get_api_definitions();
-        return *this;
-    }
+    ChatRequestBuilder& with_tools(const tools::ToolRegistry& registry);
 
     ChatRequestBuilder& with_tool_definitions(const std::vector<json>& tools) {
         request.tool_definitions = tools;

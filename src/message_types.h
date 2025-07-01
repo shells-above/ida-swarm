@@ -7,9 +7,6 @@
 
 #include "common.h"
 
-#include <memory>
-#include <optional>
-
 namespace llm_re::messages {
 
 // Forward declarations

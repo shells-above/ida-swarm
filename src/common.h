@@ -53,6 +53,8 @@
 #include <curl/curl.h>
 #include <chrono>
 #include <cmath>
+#include <optional>
+#include <unordered_map>
 
 // Qt
 #include <QMainWindow>

@@ -143,6 +143,8 @@ find_package(nlohmann_json REQUIRED)
 # Source files
 set(SOURCES
         src/actions.cpp
+        src/anthropic_api.cpp
+        src/deep_analysis.cpp
         src/ida_utils.cpp
         src/main_form.cpp
         src/memory.cpp
@@ -156,6 +158,7 @@ set(HEADERS
         src/agent.h
         src/anthropic_api.h
         src/common.h
+        src/deep_analysis.h
         src/ida_utils.h
         src/main_form.h
         src/memory.h

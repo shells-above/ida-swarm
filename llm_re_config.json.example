@@ -10,6 +10,7 @@
   "agent": {
     "max_iterations": 100,
     "enable_thinking": false,
+    "enable_deep_analysis": false,
     "verbose_logging": false
   },
   "ui": {

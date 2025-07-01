@@ -9,9 +9,9 @@
 #include "message_types.h"
 #include "memory.h"
 #include "actions.h"
+#include "deep_analysis.h"
 
-#include <memory>
-#include <unordered_map>
+
 
 namespace llm_re::tools {
 
@@ -1295,6 +1295,252 @@ public:
     }
 };
 
+
+ // Deep analysis collection tools
+class StartDeepAnalysisCollectionTool : public Tool {
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
+
+public:
+    StartDeepAnalysisCollectionTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+
+    std::string name() const override {
+        return "start_deep_analysis_collection";
+    }
+
+    std::string description() const override {
+        return "EXPENSIVE OPERATION - Start collecting information for an extremely complex reverse engineering task that requires deep expert analysis. "
+               "Use this ONLY when you encounter a system so complex that normal analysis tools are insufficient. "
+               "The flow for performing deep analysis is recognizing a complex task that warrants this process and calling start_deep_analysis_collection. "
+               "Then explore the binary further looking for more information and provide it using the add_to_deep_analysis call. "
+               "Once you have collected enough information, call request_deep_analysis. "
+               "Remember! The result can *only be as good as the information provided*, so your information gathering stage with add_to_deep_analysis is of the utmost importance. "
+               "This will delegate to the more powerful Opus 4 model at SIGNIFICANT cost.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("topic", "A descriptive name for the complex system/task being analyzed")
+            .add_string("description", "Detailed description of what makes this task complex and why deep analysis is needed")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string topic = input.at("topic");
+            std::string description = input.at("description");
+
+            deep_analysis_manager->start_collection(topic, description);
+
+            json result;
+            result["success"] = true;
+            result["message"] = "Started deep analysis collection for: " + topic;
+            result["warning"] = "Remember to add relevant functions and observations (add_to_deep_analysis) before requesting analysis";
+
+            return ToolResult::success(result);
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class AddToDeepAnalysisTool : public Tool {
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
+
+public:
+    AddToDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+
+    std::string name() const override {
+        return "add_to_deep_analysis";
+    }
+
+    std::string description() const override {
+        return "Add observations, findings, or function addresses to the current deep analysis collection. "
+               "Call this as you discover relevant information about the complex system you're analyzing.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("key", "A descriptive key for this piece of information")
+            .add_string("value", "The observation, finding, or analysis to store", false)
+            .add_integer("function_address", "Address of a related function to include in deep analysis. Expected to be formatted as: [ADDR, ADDR] or plainly as ADDR. Do NOT wrap the square brackets with quotes.", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            if (!deep_analysis_manager->has_active_collection()) {
+                return ToolResult::failure("No active deep analysis collection. Call start_deep_analysis_collection first.");
+            }
+
+            std::string key = input.at("key");
+
+            if (input.contains("value")) {
+                std::string value = input.at("value");
+                deep_analysis_manager->add_to_collection(key, value);
+            }
+
+            if (input.contains("function_address")) {
+                std::vector<ea_t> addrs = ActionExecutor::parse_list_address_param(input, "function_address");
+                for (ea_t addr : addrs)
+                    deep_analysis_manager->add_function_to_collection(addr);
+            }
+
+            json result;
+            result["success"] = true;
+            result["message"] = "Added to deep analysis collection";
+
+            return ToolResult::success(result);
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class RequestDeepAnalysisTool : public Tool {
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
+
+public:
+    RequestDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+
+    std::string name() const override {
+        return "request_deep_analysis";
+    }
+
+    std::string description() const override {
+        return "VERY EXPENSIVE - Send the collected information to Opus 4 for deep expert analysis. "
+               "This will include all collected data, memory contents, and full decompilations. "
+               "Only use after collecting sufficient information. Each analysis is VERY expensive. "
+               "The analysis will be stored and can be retrieved later with get_deep_analysis.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("task", "Specific analysis task or questions for Opus 4 to address")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string task = input.at("task");
+
+            if (!deep_analysis_manager->has_active_collection()) {
+                return ToolResult::failure("No active deep analysis collection to analyze");
+            }
+
+            // Get collection info for cost estimate
+            DeepAnalysisCollection collection = deep_analysis_manager->get_current_collection();
+
+            // Execute the analysis
+            DeepAnalysisResult result = deep_analysis_manager->execute_deep_analysis(
+                task,
+                executor,
+                [](const std::string &msg) {
+                    /* Progress callback if needed */
+                }
+            );
+
+            json response;
+            response["success"] = true;
+            response["analysis_key"] = result.key;
+            response["topic"] = result.topic;
+            response["message"] = "Deep analysis completed. Use get_deep_analysis with key: " + result.key;
+
+            return ToolResult::success(response);
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class ListDeepAnalysesTool : public Tool {
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
+
+public:
+    ListDeepAnalysesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+
+    std::string name() const override {
+        return "list_deep_analyses";
+    }
+
+    std::string description() const override {
+        return "List all completed deep analyses with their keys and descriptions. "
+               "Use this to see what complex systems have been analyzed by Opus 4.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder().build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::vector<std::pair<std::string, std::string> > analyses = deep_analysis_manager->list_analyses();
+
+            json result;
+            result["success"] = true;
+            result["analyses"] = json::array();
+
+            for (const auto& [key, description] : analyses) {
+                json analysis_info;
+                analysis_info["key"] = key;
+                analysis_info["description"] = description;
+                result["analyses"].push_back(analysis_info);
+            }
+
+            result["count"] = analyses.size();
+
+            return ToolResult::success(result);
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class GetDeepAnalysisTool : public Tool {
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
+
+public:
+    GetDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+
+    std::string name() const override {
+        return "get_deep_analysis";
+    }
+
+    std::string description() const override {
+        return "Retrieve a completed deep analysis by its key. "
+               "Returns the full expert analysis from Opus 4 for the specified complex system.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("key", "The analysis key (from list_deep_analyses or request_deep_analysis)")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string key = input.at("key");
+
+            std::optional<DeepAnalysisResult> analysis_opt = deep_analysis_manager->get_analysis(key);
+            if (!analysis_opt) {
+                return ToolResult::failure("Deep analysis not found with key: " + key);
+            }
+
+            DeepAnalysisResult& analysis = *analysis_opt;
+
+            json result;
+            result["success"] = true;
+            result["key"] = analysis.key;
+            result["topic"] = analysis.topic;
+            result["task"] = analysis.task_description;
+            result["analysis"] = analysis.analysis;
+
+            return ToolResult::success(result);
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
 // Tool registry with type safety
 class ToolRegistry {
     std::unordered_map<std::string, std::unique_ptr<Tool>> tools;
@@ -1314,7 +1560,7 @@ public:
         register_tool(std::make_unique<ToolType>(std::forward<Args>(args)...));
     }
 
-    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor) {
+    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr ) {
         // Cross-reference tools
         register_tool_type<GetXrefsTool>(memory, executor);
         register_tool_type<GetXrefsFromTool>(memory, executor);
@@ -1392,6 +1638,15 @@ public:
 
         // Final report tool
         register_tool_type<SubmitFinalReportTool>(memory, executor);
+
+
+        // Deep analysis
+        if (enable_deep_analysis) {
+            register_tool_type<AddToDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+            register_tool_type<RequestDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+            register_tool_type<ListDeepAnalysesTool>(memory, executor, deep_analysis_manager);
+            register_tool_type<GetDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+        }
     }
 
     Tool* get_tool(const std::string& name) {
