@@ -1,0 +1,31 @@
+{
+  "api": {
+    "api_key": "YOUR_ANTHROPIC_API_KEY_HERE",
+    "base_url": "https://api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 8192,
+    "temperature": 0.0,
+    "enable_prompt_caching": true
+  },
+  "agent": {
+    "max_iterations": 100,
+    "enable_thinking": false,
+    "verbose_logging": false
+  },
+  "ui": {
+    "log_buffer_size": 1000,
+    "auto_scroll": true,
+    "theme": 0,
+    "font_size": 10,
+    "show_timestamps": true,
+    "show_tool_details": true
+  },
+  "export": {
+    "path": ".",
+    "auto_export": false,
+    "format": 0,
+    "include_memory": true,
+    "include_logs": true
+  },
+  "debug_mode": false
+}

@@ -5,31 +5,6 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#include <string>
-#include <vector>
-#include <map>
-#include <set>
-#include <memory>
-#include <mutex>
-#include <thread>
-#include <queue>
-#include <functional>
-#include <ctime>
-#include <sstream>
-#include <iostream>
-#include <fstream>
-#include <atomic>
-#include <condition_variable>
-#include <utility>
-#include <algorithm>
-#include <cctype>
-#include <regex>
-#include <curl/curl.h>
-#include <cmath>
-#include <chrono>
-#include <iomanip>
-
-
 // IDA headers
 #include <ida.hpp>
 #include <idp.hpp>
@@ -48,6 +23,96 @@
 #include <auto.hpp>
 #include <strlist.hpp>
 #include <diskio.hpp>
+
+
+#undef fopen
+#undef fclose
+#undef fread
+#undef fwrite
+#undef wait
+
+// std
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <functional>
+#include <ctime>
+#include <sstream>
+#include <iostream>
+#include <fstream>
+#include <atomic>
+#include <condition_variable>
+#include <utility>
+#include <algorithm>
+#include <cctype>
+#include <regex>
+#include <curl/curl.h>
+#include <chrono>
+#include <cmath>
+
+// Qt
+#include <QMainWindow>
+#include <QThread>
+#include <QMenuBar>
+#include <QMenu>
+#include <QToolBar>
+#include <QStatusBar>
+#include <QDockWidget>
+#include <QSplitter>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QTextEdit>
+#include <QPushButton>
+#include <QComboBox>
+#include <QListWidget>
+#include <QTreeWidget>
+#include <QProgressBar>
+#include <QLabel>
+#include <QMessageBox>
+#include <QFileDialog>
+#include <QCloseEvent>
+#include <QTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSettings>
+#include <QListWidgetItem>
+#include <QTreeWidgetItem>
+#include <QPainter>
+#include <QMouseEvent>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QSyntaxHighlighter>
+#include <QRegularExpression>
+#include <QJsonArray>
+#include <QGridLayout>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QWidget>
+#include <QDialog>
+#include <QFormLayout>
+#include <QTabWidget>
+#include <QTextBrowser>
+#include <QLineEdit>
+#include <QSpinBox>
+#include <QCheckBox>
+#include <QAction>
+#include <QGroupBox>
+#include <QDateTime>
+#include <QHeaderView>
+#include <QTime>
+#include <QTableWidget>
+
+#define fopen dont_use_fopen
+#define fclose dont_use_fclose
+#define fread dont_use_fread
+#define fwrite dont_use_fwrite
+// #define wait dont_use_wait
+
+
 
 #undef fgetc
 #undef snprintf
@@ -171,8 +236,6 @@ namespace llm_re {
         WARNING,
         ERROR
     };
-
-    void log(LogLevel level, const std::string& message);
 
     // Common structures
     struct FunctionInfo {

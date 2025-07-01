@@ -10,25 +10,12 @@
 
 namespace llm_re {
 
-struct AuditEntry {
-    std::time_t timestamp;
-    std::string action;
-    ea_t address;
-    std::string old_value;
-    std::string new_value;
-    bool success;
-    std::string error_message;
-};
-
 class ActionExecutor {
 public:
     using ActionFunction = std::function<json(const json&)>;
     using ActionMap = std::unordered_map<std::string, ActionFunction>;
 
     explicit ActionExecutor(std::shared_ptr<BinaryMemory> mem);
-
-    // Main action execution interface
-    json execute_action(const std::string& action_name, const json& params);
 
     // Helpers to convert any LLM address format to ea_t
     static std::vector<ea_t> parse_list_address_param(const json &params, const std::string &key);
@@ -48,10 +35,8 @@ public:
     json get_data_name(ea_t address);
     json set_data_name(ea_t address, const std::string& name);
     json get_data(ea_t address);
-    json add_disassembly_comment(ea_t address, const std::string& comment);
-    json add_pseudocode_comment(ea_t address, const std::string& comment);
-    json clear_disassembly_comment(ea_t address);
-    json clear_pseudocode_comments(ea_t address);
+    json add_comment(ea_t address, const std::string& comment);
+    json clear_comment(ea_t address);
     json get_imports();
     json get_exports();
     json search_strings(const std::string& text, bool is_case_sensitive = false);
@@ -76,22 +61,8 @@ public:
     json get_cluster_analysis(const std::string& cluster_name);
     json summarize_region(ea_t start_addr, ea_t end_addr);
 
-    // Audit system
-    void log_action(const std::string& action, ea_t address = BADADDR,
-                   const std::string& old_value = "", const std::string& new_value = "",
-                   bool success = true, const std::string& error_msg = "");
-    void save_audit_log(const std::string& filename) const;
-    std::vector<AuditEntry> get_recent_audit_entries(size_t count = 100) const;
-
 private:
-    void register_actions();
-
     std::shared_ptr<BinaryMemory> memory;
-    ActionMap action_map;
-
-    // Audit system
-    mutable std::mutex audit_mutex;
-    std::vector<AuditEntry> audit_log;
 };
 
 } // namespace llm_re
