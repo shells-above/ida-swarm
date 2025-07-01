@@ -254,13 +254,10 @@ public:
         if (worker_thread_) return;
 
         stop_requested_ = false;
-        worker_thread_ = qthread_create(
-            [](void* ud) -> int {
-                static_cast<REAgent*>(ud)->worker_loop();
-                return 0;
-            },
-            this
-        );
+        worker_thread_ = qthread_create([](void* ud) -> int {
+            static_cast<REAgent*>(ud)->worker_loop();
+            return 0;
+        }, this);
     }
 
     void stop() {
@@ -268,7 +265,7 @@ public:
 
         stop_requested_ = true;
 
-        // Wake up worker thread
+        // Wake up worker thread so it can shut down
         if (task_semaphore_) {
             qsem_post(task_semaphore_);
         }
@@ -452,15 +449,15 @@ private:
         api_client_.set_iteration(0);
 
         // Build initial request
-        auto request = api::ChatRequestBuilder()
-            .with_model(config_.model)
-            .with_system_prompt(std::string(SYSTEM_PROMPT_TEMPLATE) + task, config_.enable_prompt_caching)
-            .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
-            .with_tools(tool_registry_)
-            .with_max_tokens(config_.max_tokens)
-            .with_temperature(config_.temperature)
-            .enable_thinking(config_.enable_thinking)
-            .build();
+        api::ChatRequest request = api::ChatRequestBuilder()
+                .with_model(config_.model)
+                .with_system_prompt(std::string(SYSTEM_PROMPT_TEMPLATE) + task, config_.enable_prompt_caching)
+                .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
+                .with_tools(tool_registry_)
+                .with_max_tokens(config_.max_tokens)
+                .with_temperature(config_.temperature)
+                .enable_thinking(config_.enable_thinking)
+                .build();
 
         // Save initial state
         saved_state_.request = request;
@@ -517,14 +514,15 @@ private:
             log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
             // Prune old content if needed
-            auto pruned_request = saved_state_.request;
+            api::ChatRequest pruned_request = saved_state_.request;
             if (iteration > 1) {
-                auto tool_iterations = conversation_.get_tool_iterations();
+                std::map<std::string, int> tool_iterations = conversation_.get_tool_iterations();
                 pruned_request = saved_state_.request.create_pruned_copy(tool_iterations, iteration);
             }
 
+
             // Send request
-            auto response = api_client_.send_request(pruned_request);
+            api::ChatResponse response = api_client_.send_request(pruned_request);
 
             if (!response.success) {
                 handle_api_error(response);
@@ -540,9 +538,9 @@ private:
             conversation_.add_message(response.message);
 
             // Process tool calls
-            auto tool_results = process_tool_calls(response.message, iteration);
+            std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
-            for (const auto& result : tool_results) {
+            for (const messages::Message &result: tool_results) {
                 saved_state_.request.messages.push_back(result);
                 conversation_.add_message(result);
             }
@@ -563,6 +561,7 @@ private:
             }
 
             // Check conversation length and prune if needed
+            // todo make based off content window length
             if (conversation_.message_count() > config_.max_conversation_length) {
                 log(LogLevel::WARNING, "Conversation getting long, consider starting a new analysis");
             }
@@ -580,16 +579,16 @@ private:
     std::vector<messages::Message> process_tool_calls(const messages::Message& msg, int iteration) {
         std::vector<messages::Message> results;
 
-        auto tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
+        std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
 
-        for (const auto* tool_use : tool_calls) {
+        for (const messages::ToolUseContent* tool_use: tool_calls) {
             log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
 
             // Track tool call
             conversation_.track_tool_call(tool_use->id, tool_use->name, iteration);
 
             // Execute tool
-            auto result_msg = tool_registry_.execute_tool_call(*tool_use);
+            messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
             results.push_back(result_msg);
 
             // Special handling for final report
@@ -603,9 +602,9 @@ private:
 
     // Check if task is complete
     bool check_task_complete(const messages::Message& msg) {
-        auto tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
+        std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
 
-        for (const auto* tool_use : tool_calls) {
+        for (const messages::ToolUseContent *tool_use: tool_calls) {
             if (tool_use->name == "submit_final_report") {
                 return true;
             }
@@ -624,7 +623,7 @@ private:
 
         if (api::AnthropicClient::is_recoverable_error(response)) {
             log(LogLevel::WARNING, "Recoverable API error: " + *response.error);
-            log(LogLevel::INFO, "You can resume the analysis using the resume() function");
+            log(LogLevel::INFO, "You can resume the analysis");
             state_.set_status(AgentState::Status::Paused);
             saved_state_.valid = true;
         } else {
@@ -644,7 +643,7 @@ private:
             final_report_callback_(report);
         }
 
-        log(LogLevel::INFO, "Task completed. You can continue with additional instructions using continue_with_task()");
+        log(LogLevel::INFO, "Task completed. You can continue with additional instructions");
     }
 
     // Logging helpers
