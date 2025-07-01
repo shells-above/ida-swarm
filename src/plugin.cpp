@@ -175,11 +175,11 @@ void llm_plugin_t::register_actions() {
     } actions[] = {
         {
             "llm_re:show_ui",
-            "LLM RE Assistant",
+            "LLM RE Agent",
             &show_ui_handler,
             "Ctrl+Shift+L",
-            "Show LLM Reverse Engineering Assistant",
-            "Edit/LLM RE/Show Assistant"
+            "Show LLM Reverse Engineering Agent",
+            "Edit/LLM RE/Show Agent"
         },
         {
             "llm_re:analyze_function",

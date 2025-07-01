@@ -81,6 +81,7 @@ private slots:
     void on_export_clicked();
     void on_settings_clicked();
     void on_templates_clicked();
+    void on_open_log_dir();
     void on_search_clicked();
     void on_about_clicked();
 
@@ -125,6 +126,9 @@ private:
     void connect_signals();
 
     // Helper methods
+    void init_file_logging();
+    void log_to_file(LogLevel level, const std::string& message);
+    void log_message_to_file(const std::string& type, const json& content);
     void log(LogLevel level, const std::string& message);
     void add_message_to_chat(const messages::Message& msg);
     void export_session(const ui::ExportDialog::ExportOptions& options);
@@ -153,6 +157,12 @@ private:
     QComboBox* log_level_filter_;
     QPushButton* clear_log_button_;
     std::vector<LogEntry> log_entries_;
+
+    // File logging
+    std::ofstream log_file_;
+    std::ofstream message_log_file_;
+    std::string log_file_path_;
+    std::string message_log_file_path_;
 
     // Memory view
     ui::MemoryMapWidget* memory_map_;

@@ -60,6 +60,9 @@ MainForm::MainForm(QWidget* parent) : QMainWindow(parent) {
     config_ = std::make_unique<Config>();
     load_settings();
 
+    // Initialize file logging
+    init_file_logging();
+
     // Setup UI
     setup_ui();
     setup_menus();
@@ -95,6 +98,21 @@ MainForm::~MainForm() {
 
     // Save settings
     save_settings();
+
+    // Close log files
+    if (log_file_.is_open()) {
+        log_file_ << "=== LLM RE Assistant Log Ended ===" << std::endl;
+        log_file_.close();
+    }
+
+    if (message_log_file_.is_open()) {
+        json footer = {
+            {"type", "session_end"},
+            {"timestamp", format_timestamp(std::chrono::system_clock::now())}
+        };
+        message_log_file_ << footer.dump() << std::endl;
+        message_log_file_.close();
+    }
 
     if (g_main_form == this) {
         g_main_form = nullptr;
@@ -151,6 +169,8 @@ void MainForm::setup_menus() {
     tools_menu->addSeparator();
     settings_action_ = tools_menu->addAction("&Settings...", this, &MainForm::on_settings_clicked);
     settings_action_->setShortcut(QKeySequence::Preferences);
+
+    tools_menu->addAction("&Open Log Directory...", this, &MainForm::on_open_log_dir);
 
     // Help menu
     QMenu* help_menu = menuBar()->addMenu("&Help");
@@ -549,6 +569,19 @@ void MainForm::on_templates_clicked() {
     dialog.exec();
 }
 
+void MainForm::on_open_log_dir() {
+    std::string log_dir = std::string(get_user_idadir()) + "/llm_re_logs";
+
+    // Open in system file explorer
+#ifdef _WIN32
+    system(("explorer \"" + log_dir + "\"").c_str());
+#elif __APPLE__
+    system(("open \"" + log_dir + "\"").c_str());
+#else
+    system(("xdg-open \"" + log_dir + "\"").c_str());
+#endif
+}
+
 void MainForm::on_search_clicked() {
     if (!search_dialog_) {
         search_dialog_ = new ui::SearchDialog(this);
@@ -575,6 +608,15 @@ void MainForm::on_agent_log(LogLevel level, const QString& message) {
 }
 
 void MainForm::on_agent_message(const QString& type, const QString& content) {
+    // Log the raw message
+    try {
+        json content_json = json::parse(content.toStdString());
+        log_message_to_file(type.toStdString(), content_json);
+    } catch (...) {
+        // If not JSON, log as string
+        log_message_to_file(type.toStdString(), content.toStdString());
+    }
+
     // Add timeline event
     ui::SessionTimelineWidget::Event event;
     event.timestamp = std::chrono::steady_clock::now();
@@ -911,6 +953,80 @@ void MainForm::save_settings() {
     config_->save_to_file(config_path);
 }
 
+void MainForm::init_file_logging() {
+    // Create log directory if needed
+    std::string log_dir = std::string(get_user_idadir()) + "/llm_re_logs";
+    qmkdir(log_dir.c_str(), 0755);
+
+    // Generate timestamp for unique log files
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    char timestamp[32];
+    std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&time_t));
+
+    // Open log files
+    log_file_path_ = log_dir + "/llm_re_" + timestamp + ".log";
+    message_log_file_path_ = log_dir + "/llm_re_messages_" + timestamp + ".jsonl";
+
+    log_file_.open(log_file_path_, std::ios::app);
+    message_log_file_.open(message_log_file_path_, std::ios::app);
+
+    if (!log_file_.is_open()) {
+        msg("Failed to open log file: %s\n", log_file_path_.c_str());
+    } else {
+        log_file_ << "=== LLM RE Assistant Log Started at " << timestamp << " ===" << std::endl;
+    }
+
+    if (!message_log_file_.is_open()) {
+        msg("Failed to open message log file: %s\n", message_log_file_path_.c_str());
+    } else {
+        // Write header for JSONL file
+        char inBuffer[1024];
+        size_t size = get_input_file_path(inBuffer, sizeof(inBuffer));
+        std::string input_file = std::string(inBuffer, size);
+
+        json header = {
+            {"type", "session_start"},
+            {"timestamp", timestamp},
+            {"ida_database", input_file}
+        };
+        message_log_file_ << header.dump() << std::endl;
+    }
+}
+
+void MainForm::log_to_file(LogLevel level, const std::string& message) {
+    if (!log_file_.is_open()) return;
+
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    char timestamp[32];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&time_t));
+
+    log_file_ << "[" << timestamp << "] "
+              << "[" << LogEntry::level_to_string(level) << "] "
+              << message << std::endl;
+    log_file_.flush();  // Ensure it's written immediately
+}
+
+void MainForm::log_message_to_file(const std::string& type, const json& content) {
+    if (!message_log_file_.is_open()) return;
+
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    char timestamp[32];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&time_t));
+
+    json log_entry = {
+        {"timestamp", timestamp},
+        {"type", type},
+        {"iteration", current_iteration_},
+        {"content", content}
+    };
+
+    message_log_file_ << log_entry.dump() << std::endl;
+    message_log_file_.flush();  // Ensure it's written immediately
+}
+
 void MainForm::log(LogLevel level, const std::string& message) {
     LogEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
@@ -965,6 +1081,8 @@ void MainForm::log(LogLevel level, const std::string& message) {
     if (config_->ui.auto_scroll) {
         log_viewer_->ensureCursorVisible();
     }
+
+    log_to_file(level, message);
 }
 
 void MainForm::add_message_to_chat(const messages::Message& msg) {
