@@ -17,7 +17,28 @@ MainForm* get_main_form() {
 void AgentWorker::process() {
     try {
         agent_->set_task(task_);
-        emit finished();
+
+        // this system is kind of a mess, because i have a jumble of different threads
+        // i have the ui thread (this one), and the agent thread, and the 2 different threading systems (Qt + IDAs)
+        // Wait for the task to complete
+        while (agent_->is_running()) {
+            QThread::msleep(100);  // Check every 100ms
+
+            // Check if we should stop
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                agent_->stop();
+                return;
+            }
+        }
+
+        // Check final status
+        if (agent_->is_completed()) {
+            emit finished();
+        } else if (agent_->is_paused()) {
+            emit error("Task paused due to error");
+        } else {
+            emit error("Task failed");
+        }
     } catch (const std::exception& e) {
         emit error(QString::fromStdString(e.what()));
     }
@@ -53,14 +74,15 @@ MainForm::MainForm(QWidget* parent) : QMainWindow(parent) {
 }
 
 MainForm::~MainForm() {
-    // Stop any running tasks
-    if (agent_ && agent_->is_running()) {
-        agent_->stop();
-    }
-
     if (worker_thread_ && worker_thread_->isRunning()) {
+        worker_thread_->requestInterruption();  // if a task is actively running, this will handle stopping it
         worker_thread_->quit();
         worker_thread_->wait();
+    }
+
+    // Stop agent internal loop in case the agent was idle
+    if (agent_) {
+        agent_->stop();
     }
 
     // Save settings
@@ -312,7 +334,7 @@ void MainForm::setup_central_widget() {
 
 void MainForm::setup_agent() {
     // Create agent
-    agent_ = std::make_unique<REAgent>(*config_);
+    agent_ = std::make_unique<REAgent>(*config_);  // isn't actually copying the object, it's giving it a reference to the Config
 
     // Set callbacks
     agent_->set_log_callback([this](const std::string& msg) {
@@ -344,6 +366,8 @@ void MainForm::setup_agent() {
             add_message_to_chat(msg);
         }, Qt::QueuedConnection);
     });
+
+    agent_->start();
 }
 
 void MainForm::connect_signals() {
@@ -440,6 +464,7 @@ void MainForm::on_stop_clicked() {
     agent_->stop();
 
     if (worker_thread_ && worker_thread_->isRunning()) {
+        worker_thread_->requestInterruption();  // when worker_thread_ sees this, it signals to the agent worker_loop to stop
         worker_thread_->quit();
         worker_thread_->wait();
     }

@@ -235,8 +235,6 @@ namespace llm_re {
         ERROR
     };
 
-    void log(LogLevel level, const std::string& message);
-
     // Common structures
     struct FunctionInfo {
         ea_t address;

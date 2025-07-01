@@ -175,7 +175,7 @@ public:
         messages::Role last_role = messages::Role::System;
         for (const messages::Message &msg: messages) {
             if (msg.role() == last_role && last_role != messages::Role::System) {
-                log(LogLevel::WARNING, "Adjacent messages with same role detected");
+                throw std::runtime_error("Adjacent messages with same role detected");
             }
             last_role = msg.role();
         }
@@ -486,6 +486,12 @@ class AnthropicClient {
         return totalSize;
     }
 
+    void log(LogLevel level, const std::string& message) const {
+        if (general_logger) {
+            general_logger(level, message);
+        }
+    }
+
     // Helper to sanitize logs
     json sanitize_for_logging(const json& j, int max_depth = 3) const {
         if (max_depth <= 0) return "[truncated]";
@@ -523,12 +529,6 @@ class AnthropicClient {
         }
 
         return j;
-    }
-
-    void log(LogLevel level, const std::string& message) const {
-        if (general_logger) {
-            general_logger(level, message);
-        }
     }
 
 public:
