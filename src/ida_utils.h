@@ -227,12 +227,6 @@ public:
      */
     static std::map<std::string, std::vector<std::string>> get_imports();
 
-    /**
-     * Get all exported functions
-     * @return Vector of exported function info (name, address)
-     */
-    static std::vector<std::pair<std::string, ea_t>> get_exports();
-
     // String operations
 
     /**
@@ -249,20 +243,11 @@ public:
      */
     static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive);
 
-    // Utility operations
-
-    /**
-     * Check if an address is within a function
-     * @param address Address to check
-     * @return Function start address or BADADDR if not in function
-     */
-    static ea_t get_function_containing(ea_t address);
-
-    /**
-     * Get all functions in the binary
-     * @return Vector of function addresses
-     */
-    static std::vector<ea_t> get_all_functions();
+    static std::vector<std::pair<ea_t, std::string>> get_named_functions();
+    static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex);
+    static std::vector<std::pair<ea_t, std::string>> get_named_globals();
+    static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length = 4);
+    static std::vector<std::pair<ea_t, std::string>> get_entry_points();
 };
 
 } // namespace llm_re

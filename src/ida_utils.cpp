@@ -457,25 +457,6 @@ std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
     });
 }
 
-std::vector<std::pair<std::string, ea_t>> IDAUtils::get_exports() {
-    return execute_sync_wrapper([]() {
-        std::vector<std::pair<std::string, ea_t>> result;
-
-        // Iterate through all exports
-        for (size_t i = 0; i < get_entry_qty(); i++) {
-            uval_t ord = get_entry_ordinal(i);
-            ea_t ea = get_entry(ord);
-
-            qstring name;
-            if (get_entry_name(&name, ord)) {
-                result.push_back({name.c_str(), ea});
-            }
-        }
-
-        return result;
-    });
-}
-
 std::vector<std::string> IDAUtils::get_strings() {
     return execute_sync_wrapper([]() {
         std::vector<std::string> result;
@@ -538,33 +519,239 @@ std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool 
     });
 }
 
-ea_t IDAUtils::get_function_containing(ea_t address) {
-    return execute_sync_wrapper([address]() {
-        // Validate input
-        if (!IDAValidators::is_valid_address(address)) {
-            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
-        }
 
-        func_t *func = get_func(address);
-        if (func) {
-            return func->start_ea;
-        }
-        return BADADDR;
-    });
-}
-
-std::vector<ea_t> IDAUtils::get_all_functions() {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions() {
     return execute_sync_wrapper([]() {
-        std::vector<ea_t> result;
+        std::vector<std::pair<ea_t, std::string>> result;
 
         // Iterate through all functions
         size_t qty = get_func_qty();
         for (size_t i = 0; i < qty; i++) {
             func_t *func = getn_func(i);
             if (func) {
-                result.push_back(func->start_ea);
+                qstring name;
+                if (get_func_name(&name, func->start_ea) > 0) {
+                    std::string func_name = name.c_str();
+
+                    // Filter out auto-generated names
+                    if (func_name.substr(0, 4) != "sub_" &&
+                        func_name.substr(0, 2) != "j_" &&
+                        func_name.substr(0, 4) != "loc_" &&
+                        func_name.substr(0, 7) != "nullsub_" &&
+                        func_name.substr(0, 4) != "def_") {
+                        result.push_back({func->start_ea, func_name});
+                    }
+                }
             }
         }
+
+        // Sort by address
+        std::sort(result.begin(), result.end());
+
+        return result;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_globals(const std::string& pattern, bool is_regex) {
+    return execute_sync_wrapper([&pattern, is_regex]() {
+        // Validate input
+        if (pattern.empty()) {
+            throw std::invalid_argument("Search pattern cannot be empty");
+        }
+        if (pattern.length() > 1024) {
+            throw std::invalid_argument("Search pattern too long (max 1024 characters)");
+        }
+
+        std::vector<std::pair<ea_t, std::string>> result;
+
+        // Prepare regex if needed
+        std::regex regex_pattern;
+        if (is_regex) {
+            try {
+                regex_pattern = std::regex(pattern);
+            } catch (const std::regex_error& e) {
+                throw std::invalid_argument("Invalid regex pattern: " + std::string(e.what()));
+            }
+        }
+
+        // Iterate through all names
+        size_t qty = get_nlist_size();
+        for (size_t i = 0; i < qty; i++) {
+            ea_t ea = get_nlist_ea(i);
+            if (ea != BADADDR) {
+                // Check if it's not a function
+                func_t *func = get_func(ea);
+                if (!func) {
+                    qstring name;
+                    if (get_name(&name, ea) > 0) {
+                        std::string str_name = name.c_str();
+
+                        // Filter out auto-generated names
+                        if (str_name.substr(0, 4) != "unk_" &&
+                            str_name.substr(0, 5) != "byte_" &&
+                            str_name.substr(0, 5) != "word_" &&
+                            str_name.substr(0, 6) != "dword_" &&
+                            str_name.substr(0, 6) != "qword_" &&
+                            str_name.substr(0, 4) != "off_" &&
+                            str_name.substr(0, 4) != "seg_" &&
+                            str_name.substr(0, 4) != "asc_" &&
+                            str_name.substr(0, 5) != "stru_") {
+
+                            bool matches = false;
+                            if (is_regex) {
+                                matches = std::regex_search(str_name, regex_pattern);
+                            } else {
+                                // Case-insensitive substring search
+                                std::string lower_name = str_name;
+                                std::string lower_pattern = pattern;
+                                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                                std::transform(lower_pattern.begin(), lower_pattern.end(), lower_pattern.begin(), ::tolower);
+                                matches = lower_name.find(lower_pattern) != std::string::npos;
+                            }
+
+                            if (matches) {
+                                result.push_back({ea, str_name});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by address
+        std::sort(result.begin(), result.end());
+
+        return result;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_globals() {
+    return execute_sync_wrapper([]() {
+        std::vector<std::pair<ea_t, std::string>> result;
+
+        // Iterate through all names
+        size_t qty = get_nlist_size();
+        for (size_t i = 0; i < qty; i++) {
+            ea_t ea = get_nlist_ea(i);
+            if (ea != BADADDR) {
+                // Check if it's not a function
+                func_t *func = get_func(ea);
+                if (!func) {
+                    qstring name;
+                    if (get_name(&name, ea) > 0) {
+                        std::string str_name = name.c_str();
+
+                        // Filter out auto-generated names
+                        if (str_name.substr(0, 4) != "unk_" &&
+                            str_name.substr(0, 5) != "byte_" &&
+                            str_name.substr(0, 5) != "word_" &&
+                            str_name.substr(0, 6) != "dword_" &&
+                            str_name.substr(0, 6) != "qword_" &&
+                            str_name.substr(0, 4) != "off_" &&
+                            str_name.substr(0, 4) != "seg_" &&
+                            str_name.substr(0, 4) != "asc_" &&
+                            str_name.substr(0, 5) != "stru_") {
+                            result.push_back({ea, str_name});
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by address
+        std::sort(result.begin(), result.end());
+
+        return result;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(int min_length) {
+    return execute_sync_wrapper([min_length]() {
+        // Validate input
+        if (min_length < 1 || min_length > 1024) {
+            throw std::invalid_argument("Invalid minimum length (must be 1-1024)");
+        }
+
+        std::vector<std::pair<ea_t, std::string>> result;
+
+        // Refresh string list
+        build_strlist();
+
+        // Get all strings
+        size_t qty = get_strlist_qty();
+        for (size_t i = 0; i < qty; i++) {
+            string_info_t si;
+            if (get_strlist_item(&si, i)) {
+                if (si.length >= min_length) {
+                    qstring str;
+                    if (get_strlit_contents(&str, si.ea, si.length, si.type) > 0) {
+                        result.push_back({si.ea, str.c_str()});
+                    }
+                }
+            }
+        }
+
+        return result;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_entry_points() {
+    return execute_sync_wrapper([]() {
+        std::vector<std::pair<ea_t, std::string>> result;
+
+        // Get main entry point
+        ea_t main_ea = inf_get_main();
+        if (main_ea != BADADDR) {
+            result.push_back({main_ea, "main"});
+        }
+
+        // Get start address (program entry)
+        ea_t start_ea = inf_get_start_ea();
+        if (start_ea != BADADDR && start_ea != main_ea) {
+            result.push_back({start_ea, "start"});
+        }
+
+        // Get all exported functions
+        for (size_t i = 0; i < get_entry_qty(); i++) {
+            uval_t ord = get_entry_ordinal(i);
+            ea_t ea = get_entry(ord);
+
+            if (ea != BADADDR) {
+                // Skip if already added
+                bool already_added = false;
+                for (const auto& entry : result) {
+                    if (entry.first == ea) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (!already_added) {
+                    result.push_back({ea, "export"});
+                }
+            }
+        }
+
+        // Get TLS callbacks if present
+        ea_t tls_ea = get_name_ea(BADADDR, "_tls_used");
+        if (tls_ea != BADADDR) {
+            // TLS directory structure has callbacks array
+            ea_t callbacks_ea = tls_ea + 0x18; // Offset to AddressOfCallBacks
+            ea_t callback_ptr = get_qword(callbacks_ea);
+            if (callback_ptr) {
+                while (callback_ptr != 0) {
+                    ea_t callback_ea = get_qword(callback_ptr);
+                    if (callback_ea) {
+                        if (callback_ea != 0) {
+                            result.push_back({callback_ea, "tls_callback"});
+                        }
+                    }
+                    callback_ptr += sizeof(ea_t);
+                }
+            }
+        }
+
+        // Sort by address
+        std::sort(result.begin(), result.end());
 
         return result;
     });
