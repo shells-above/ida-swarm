@@ -13,6 +13,7 @@ set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plug
 
 # IDA Qt build setup
 set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
+add_definitions(-DQT_NAMESPACE=QT)
 
 # Set Qt tool paths explicitly
 set(QT_MOC_EXECUTABLE "${QTDIR}/bin/moc")
