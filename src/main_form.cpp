@@ -797,9 +797,7 @@ void MainForm::load_settings() {
 
     std::string config_path = settings.value("config_path", default_config).toString().toStdString();
 
-    msg(("loading from cfg path: " + config_path).c_str());
     config_->load_from_file(config_path);
-    msg(("loaded api key " + config_->api.api_key).c_str());
 }
 
 void MainForm::save_settings() {
