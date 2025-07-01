@@ -258,7 +258,7 @@ public:
     }
 
     std::string description() const override {
-        return "Find the address of a function by its name. Returns the memory address where the function is located.";
+        return "Find the address of a function by its name. Returns the address where the function is located.";
     }
 
     json parameters_schema() const override {
@@ -565,31 +565,6 @@ public:
     }
 };
 
-class GetExportsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_exports";
-    }
-
-    std::string description() const override {
-        return "Get all exported functions and their addresses. Shows what this binary exposes to other modules.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder().build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->get_exports());
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
 // String search tool
 class SearchStringsTool : public Tool {
 public:
@@ -615,6 +590,144 @@ public:
             std::string text = input.at("text");
             bool is_case_sensitive = input.value("is_case_sensitive", false);
             return ToolResult::success(executor->search_strings(text, is_case_sensitive));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Named functions tool
+class GetNamedFunctionsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_named_functions";
+    }
+
+    std::string description() const override {
+        return "Get all functions with user-defined or meaningful names (excludes auto-generated names like sub_*)";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder().build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            return ToolResult::success(executor->get_named_functions());
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Search named globals tool
+class SearchNamedGlobalsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_named_globals";
+    }
+
+    std::string description() const override {
+        return "Search for global variables/data by name pattern. Supports regex";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("pattern", "The pattern to search for in global names (supports regex)")
+            .add_boolean("is_regex", "Whether to use regex matching (defaults to substring search)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string pattern = input.at("pattern");
+            bool is_regex = input.value("is_regex", false);
+            return ToolResult::success(executor->search_named_globals(pattern, is_regex));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get named globals tool
+class GetNamedGlobalsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_named_globals";
+    }
+
+    std::string description() const override {
+        return "Get all global variables and data with user-defined names";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder().build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            return ToolResult::success(executor->get_named_globals());
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get strings tool
+class GetStringsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_strings";
+    }
+
+    std::string description() const override {
+        return "Get all strings in the binary. Returns addresses and content. Useful for understanding program functionality.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("min_length", "Minimum string length to include (defaults to 5)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            int min_length = input.value("min_length", 5);
+            return ToolResult::success(executor->get_strings(min_length));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get entry points tool
+class GetEntryPointsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_entry_points";
+    }
+
+    std::string description() const override {
+        return "Get all entry points of the binary (main entry, exports, etc). Shows where execution can begin.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder().build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            return ToolResult::success(executor->get_entry_points());
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1230,10 +1343,16 @@ public:
 
         // Import/Export tools
         register_tool_type<GetImportsTool>(memory, executor);
-        register_tool_type<GetExportsTool>(memory, executor);
 
         // String search tool
         register_tool_type<SearchStringsTool>(memory, executor);
+
+        register_tool_type<GetNamedFunctionsTool>(memory, executor);
+        register_tool_type<SearchNamedGlobalsTool>(memory, executor);
+        register_tool_type<GetNamedGlobalsTool>(memory, executor);
+        register_tool_type<GetStringsTool>(memory, executor);
+        register_tool_type<GetEntryPointsTool>(memory, executor);
+
 
         // Global note tools
         register_tool_type<SetGlobalNoteTool>(memory, executor);
