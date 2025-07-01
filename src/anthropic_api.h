@@ -230,8 +230,9 @@ public:
 
         if (enable_thinking) {
             // Enable thinking/reasoning
-            // todo add support for this + interleaved thinking + tool calling
-            // j["thinking"] = {{"budget_tokens", 32768}};
+            // todo add support for interleaved thinking + tool calling
+            j["thinking"]["budget_tokens"] = 2048;
+            j["thinking"]["type"] = "enabled";
         }
 
         return j;

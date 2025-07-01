@@ -71,7 +71,7 @@ public:
     std::optional<DeepAnalysisResult> get_analysis(const std::string& key) const;
 
     // Cost estimation
-    static double estimate_cost(int estimated_tokens);
+    static double estimate_cost(api::TokenUsage usage);
 
 private:
     // Helper to build comprehensive context for Opus

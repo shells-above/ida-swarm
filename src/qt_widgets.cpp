@@ -2163,7 +2163,34 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
 
     tabs_->addTab(queue_tab, "Queue");
 
-    // Tab 5: Memory Stats
+    // Tab 5: Deep Analysis
+    QWidget* deep_analysis_tab = new QWidget();
+    QVBoxLayout* deep_analysis_layout = new QVBoxLayout(deep_analysis_tab);
+
+    // Header with metadata
+    analysis_meta_label_ = new QLabel("Deep Analysis Results");
+    analysis_meta_label_->setStyleSheet("font-weight: bold; padding: 5px;");
+    deep_analysis_layout->addWidget(analysis_meta_label_);
+
+    // Splitter for list and viewer
+    QSplitter* deep_analysis_splitter = new QSplitter(Qt::Vertical);
+
+    // List of analyses
+    deep_analysis_list_ = new QListWidget();
+    deep_analysis_list_->setMaximumHeight(150);
+    connect(deep_analysis_list_, &QListWidget::currentRowChanged, this, &MemoryDockWidget::on_deep_analysis_selected);
+    deep_analysis_splitter->addWidget(deep_analysis_list_);
+
+    // Analysis viewer
+    deep_analysis_viewer_ = new QTextEdit();
+    deep_analysis_viewer_->setReadOnly(true);
+    deep_analysis_viewer_->setFont(QFont("Consolas", 9));
+    deep_analysis_splitter->addWidget(deep_analysis_viewer_);
+
+    deep_analysis_layout->addWidget(deep_analysis_splitter);
+    tabs_->addTab(deep_analysis_tab, "Deep Analysis");
+
+    // Tab 6: Memory Stats
     stats_browser_ = new QTextBrowser();
     tabs_->addTab(stats_browser_, "Statistics");
 }
@@ -2282,6 +2309,47 @@ void MemoryDockWidget::on_insight_selected() {
                 function_tree_->setCurrentItem(tree_item);
                 break;
             }
+        }
+    }
+}
+
+void MemoryDockWidget::on_deep_analysis_selected() {
+    QList<QListWidgetItem*> items = deep_analysis_list_->selectedItems();
+    if (items.isEmpty()) {
+        deep_analysis_viewer_->clear();
+        analysis_meta_label_->setText("Deep Analysis Results");
+        return;
+    }
+
+    QListWidgetItem* item = items.first();
+    
+    // Get the analysis key stored in the item
+    QString analysis_key = item->data(Qt::UserRole).toString();
+    
+    if (!memory_) return;
+    
+    // Get the analysis content from global notes
+    std::string analysis_content = memory_->get_global_note("deep_analysis_" + analysis_key.toStdString());
+    std::string meta_content = memory_->get_global_note("deep_analysis_meta_" + analysis_key.toStdString());
+    
+    // Display the analysis
+    deep_analysis_viewer_->setPlainText(QString::fromStdString(analysis_content));
+    
+    // Update metadata label
+    if (!meta_content.empty()) {
+        try {
+            json metadata = json::parse(meta_content);
+            QString meta_text = QString("Topic: %1 | Task: %2")
+                .arg(QString::fromStdString(metadata["topic"].get<std::string>()))
+                .arg(QString::fromStdString(metadata["task"].get<std::string>()));
+            
+            if (metadata.contains("cost_estimate")) {
+                meta_text += QString(" | Cost: $%1").arg(metadata["cost_estimate"].get<double>(), 0, 'f', 4);
+            }
+            
+            analysis_meta_label_->setText(meta_text);
+        } catch (...) {
+            analysis_meta_label_->setText("Deep Analysis Results");
         }
     }
 }
@@ -2409,6 +2477,41 @@ void MemoryDockWidget::on_insight_selected() {
         }
         item->setText(text);
         item->setData(Qt::UserRole, QVariant::fromValue(addresses));
+    }
+
+    // Update deep analysis list
+    deep_analysis_list_->clear();
+    
+    // Get all global notes and find deep analysis entries
+    std::vector<std::string> all_notes = memory_->list_global_notes();
+    std::vector<std::pair<std::string, std::string>> deep_analyses;
+    
+    for (const std::string& note_key : all_notes) {
+        if (note_key.find("deep_analysis_meta_") == 0) {
+            std::string key = note_key.substr(19); // Remove "deep_analysis_meta_" prefix
+            std::string meta_json = memory_->get_global_note(note_key);
+            
+            try {
+                json metadata = json::parse(meta_json);
+                std::string description = metadata["topic"].get<std::string>() + " - " +
+                                        metadata["task"].get<std::string>();
+                deep_analyses.push_back({key, description});
+            } catch (...) {
+                deep_analyses.push_back({key, "Unknown analysis"});
+            }
+        }
+    }
+    
+    // Sort by most recent first (key contains timestamp)
+    std::sort(deep_analyses.begin(), deep_analyses.end(), 
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    
+    // Populate the list
+    for (const auto& [key, description] : deep_analyses) {
+        QListWidgetItem* item = new QListWidgetItem(deep_analysis_list_);
+        item->setText(QString::fromStdString(description));
+        item->setData(Qt::UserRole, QString::fromStdString(key));
+        item->setToolTip(QString("Key: %1").arg(QString::fromStdString(key)));
     }
 
     // Update queue

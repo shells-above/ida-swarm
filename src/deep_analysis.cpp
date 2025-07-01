@@ -126,7 +126,7 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
     result.analysis = analysis_text;
     result.completed_at = std::chrono::system_clock::now();
     result.token_usage = response.usage;
-    result.cost_estimate = response.usage.estimated_cost();
+    result.cost_estimate = estimate_cost(response.usage);
 
     // Store the result
     store_analysis_result(result);
@@ -225,16 +225,18 @@ std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::s
     return std::nullopt;
 }
 
-double DeepAnalysisManager::estimate_cost(int estimated_tokens) {
+double DeepAnalysisManager::estimate_cost(api::TokenUsage usage) {
     // Opus 4 pricing estimate
-    const double opus_input_price = 15.0;   // per million tokens
-    const double opus_output_price = 75.0; // per million tokens
+    // TODO just use TokenUsage::estimated_cost() and have it be model aware, this is stupid but i am lazy
+    const double price_input = 15.0;
+    const double price_output = 75.0;
+    const double price_cache_write = 1.25 * price_input;
+    const double price_cache_read = 0.1 * price_input;
 
-    // Assume output is about 20% of input for analysis
-    double input_cost = (estimated_tokens / 1000000.0) * opus_input_price;
-    double output_cost = (estimated_tokens * 0.2 / 1000000.0) * opus_output_price;
-
-    return input_cost + output_cost;
+    return (usage.input_tokens / 1000000.0 * price_input) +
+           (usage.output_tokens / 1000000.0 * price_output) +
+           (usage.cache_creation_tokens / 1000000.0 * price_cache_write) +
+           (usage.cache_read_tokens / 1000000.0 * price_cache_read);
 }
 
 std::string DeepAnalysisManager::build_opus_context(

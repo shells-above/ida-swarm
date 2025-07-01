@@ -264,7 +264,7 @@ void MainForm::setup_docks() {
 
     stats_dashboard_ = new ui::StatsDashboard();
     stats_dock_->setWidget(stats_dashboard_);
-    addDockWidget(Qt::RightDockWidgetArea, stats_dock_);
+    addDockWidget(Qt::LeftDockWidgetArea, stats_dock_);
     stats_dock_->hide();
     connect(toggle_stats_action_, &QAction::toggled,
             stats_dock_, &QDockWidget::setVisible);

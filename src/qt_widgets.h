@@ -479,7 +479,12 @@ private:
     QTableWidget* queue_table_;
     QPushButton* analyze_next_button_;
 
-    // Tab 5: Memory Stats
+    // Tab 5: Deep Analysis
+    QListWidget* deep_analysis_list_;
+    QTextEdit* deep_analysis_viewer_;
+    QLabel* analysis_meta_label_;
+
+    // Tab 6: Memory Stats
     QTextBrowser* stats_browser_;
 
     std::shared_ptr<BinaryMemory> memory_;
@@ -489,6 +494,7 @@ private slots:
     void on_filter_changed();
     void on_analyze_next();
     void on_insight_selected();
+    void on_deep_analysis_selected();
     void refresh_views();
 };
 
