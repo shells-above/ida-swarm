@@ -12,25 +12,7 @@
 namespace llm_re {
 
 // Plugin flags
-constexpr int PLUGIN_FLAGS = PLUGIN_FIX | PLUGIN_MULTI;
-
-// Plugin callbacks
-static plugmod_t* idaapi init();
-static void idaapi term();
-static bool idaapi run(size_t arg);
-
-// Plugin description
-plugin_t PLUGIN = {
-    IDP_INTERFACE_VERSION,
-    PLUGIN_FLAGS,
-    init,
-    term,
-    run,
-    "LLM Reverse Engineering Assistant",
-    "AI-powered reverse engineering assistant",
-    "LLM RE Agent",
-    "Ctrl+Shift+L"  // Default hotkey
-};
+constexpr int PLUGIN_FLAGS = PLUGIN_FIX;
 
 // Forward declaration
 class llm_plugin_t;
@@ -402,3 +384,16 @@ static bool idaapi run(size_t arg) {
 }
 
 } // namespace llm_re
+
+// Plugin description - must be in global namespace for IDA to find it
+plugin_t PLUGIN = {
+    IDP_INTERFACE_VERSION,
+    llm_re::PLUGIN_FLAGS,
+    llm_re::init,
+    llm_re::term,
+    llm_re::run,
+    "LLM Reverse Engineering Assistant",
+    "AI-powered reverse engineering assistant",
+    "LLM RE Agent",
+    "Ctrl+Shift+L"
+};
