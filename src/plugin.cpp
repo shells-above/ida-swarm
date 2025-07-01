@@ -392,8 +392,8 @@ plugin_t PLUGIN = {
     llm_re::init,
     llm_re::term,
     llm_re::run,
-    "LLM Reverse Engineering Assistant",
-    "AI-powered reverse engineering assistant",
+    "LLM Reverse Engineering Agent",
+    "AI-powered reverse engineering agent",
     "LLM RE Agent",
     "Ctrl+Shift+L"
 };

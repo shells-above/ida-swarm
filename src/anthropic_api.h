@@ -431,15 +431,26 @@ struct ApiError {
                (type == ErrorType::NetworkError && message.find("timeout") != std::string::npos);
     }
 
-    static ApiError from_response(const std::string& error_msg, int status_code = 0) {
+    static ApiError from_response(const std::string& error_msg, int status_code = 0, const std::map<std::string, std::string>& headers = {}) {
         ApiError error;
         error.message = error_msg;
         error.status_code = status_code;
 
         // Detect error type from message and status code
-        if (error_msg.find("rate limit") != std::string::npos) {
+        if (status_code == 429 || error_msg.find("rate limit") != std::string::npos) {
             error.type = ErrorType::RateLimitError;
-            error.retry_after_seconds = 60;
+            
+            // Extract retry-after from headers if available
+            auto retry_after_it = headers.find("retry-after");
+            if (retry_after_it != headers.end()) {
+                try {
+                    error.retry_after_seconds = std::stoi(retry_after_it->second);
+                } catch (const std::exception&) {
+                    error.retry_after_seconds = 60; // Default fallback
+                }
+            } else {
+                error.retry_after_seconds = 60; // Default fallback
+            }
         } else if (error_msg.find("Overloaded") != std::string::npos) {
             error.type = ErrorType::ServerError;
         } else if (status_code == 401) {
@@ -479,10 +490,35 @@ class AnthropicClient {
         TokenUsage total_usage;
     } stats;
 
-    // CURL callback
+    // CURL callbacks
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
         size_t totalSize = size * nmemb;
         userp->append((char*)contents, totalSize);
+        return totalSize;
+    }
+
+    static size_t HeaderCallback(char* buffer, size_t size, size_t nitems, std::map<std::string, std::string>* headers) {
+        size_t totalSize = size * nitems;
+        std::string header(buffer, totalSize);
+        
+        // Find the colon separator
+        size_t colonPos = header.find(':');
+        if (colonPos != std::string::npos) {
+            std::string key = header.substr(0, colonPos);
+            std::string value = header.substr(colonPos + 1);
+            
+            // Trim whitespace
+            key.erase(0, key.find_first_not_of(" \t\r\n"));
+            key.erase(key.find_last_not_of(" \t\r\n") + 1);
+            value.erase(0, value.find_first_not_of(" \t\r\n"));
+            value.erase(value.find_last_not_of(" \t\r\n") + 1);
+            
+            // Convert key to lowercase for case-insensitive comparison
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            
+            (*headers)[key] = value;
+        }
+        
         return totalSize;
     }
 
@@ -582,6 +618,7 @@ public:
 
         std::string request_body = request_json.dump();
         std::string response_body;
+        std::map<std::string, std::string> response_headers;
         long http_code = 0;
 
         struct curl_slist* headers = nullptr;
@@ -595,6 +632,8 @@ public:
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response_headers);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         // curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);  // 5 minute timeout
@@ -647,11 +686,16 @@ public:
                 // Enhance error information
                 ApiError api_error = ApiError::from_response(
                     response.error.value_or("Unknown error"),
-                    static_cast<int>(http_code)
+                    static_cast<int>(http_code),
+                    response_headers
                 );
 
                 if (api_error.is_recoverable()) {
-                    log(LogLevel::WARNING, "Recoverable API error: " + api_error.message);
+                    std::string log_message = "Recoverable API error: " + api_error.message;
+                    if (api_error.type == ErrorType::RateLimitError && api_error.retry_after_seconds) {
+                        log_message += " (retry after " + std::to_string(*api_error.retry_after_seconds) + " seconds)";
+                    }
+                    log(LogLevel::WARNING, log_message);
                 } else {
                     log(LogLevel::ERROR, "API error: " + api_error.message);
                 }

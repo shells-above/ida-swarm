@@ -113,7 +113,7 @@ MainForm::~MainForm() {
 
     // Close log files
     if (log_file_.is_open()) {
-        log_file_ << "=== LLM RE Assistant Log Ended ===" << std::endl;
+        log_file_ << "=== LLM RE Agent Log Ended ===" << std::endl;
         log_file_.close();
     }
 
@@ -132,7 +132,7 @@ MainForm::~MainForm() {
 }
 
 void MainForm::setup_ui() {
-    setWindowTitle("LLM Reverse Engineering Assistant");
+    setWindowTitle("LLM Reverse Engineering Agent");
     resize(1200, 800);
 }
 
@@ -225,26 +225,28 @@ void MainForm::setup_status_bar() {
 
 void MainForm::setup_docks() {
     // Memory dock
-    memory_dock_ = new QDockWidget("Memory", this);
+    memory_dock_ = new QDockWidget("Memory & Analysis", this);
     memory_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
-    QWidget* memory_widget = new QWidget();
-    QVBoxLayout* memory_layout = new QVBoxLayout(memory_widget);
-
-    memory_map_ = new ui::MemoryMapWidget();
-    connect(memory_map_, &ui::MemoryMapWidget::address_clicked,
+    memory_widget_ = new ui::MemoryDockWidget();
+    connect(memory_widget_, &ui::MemoryDockWidget::address_clicked,
             this, &MainForm::on_address_clicked);
-    memory_layout->addWidget(memory_map_);
+    connect(memory_widget_, &ui::MemoryDockWidget::continue_requested,
+            [this](const QString& instruction) {
+                // Use the continue functionality
+                if (!agent_->is_completed() && !agent_->is_idle()) {
+                    QMessageBox::warning(this, "Cannot Continue",
+                        "Please wait for the current analysis to complete.");
+                    return;
+                }
 
-    memory_tree_ = new QTreeWidget();
-    memory_tree_->setHeaderLabels({"Address", "Name", "Level", "Status"});
-    memory_tree_->setAlternatingRowColors(true);
-    memory_layout->addWidget(memory_tree_);
+                // Set the continue input and trigger continue
+                continue_input_->setText(instruction);
+                on_continue_clicked();
+            });
 
-    memory_dock_->setWidget(memory_widget);
+    memory_dock_->setWidget(memory_widget_);
     addDockWidget(Qt::RightDockWidgetArea, memory_dock_);
-    connect(toggle_memory_action_, &QAction::toggled,
-            memory_dock_, &QDockWidget::setVisible);
 
     // Tools dock
     tools_dock_ = new QDockWidget("Tool Execution", this);
@@ -467,7 +469,7 @@ void MainForm::execute_task(const std::string& task) {
 void MainForm::set_current_address(ea_t addr) {
     current_address_ = addr;
     status_label_->setText(QString("Current: 0x%1").arg(addr, 0, 16));
-    memory_map_->highlight_address(addr);
+    memory_widget_->set_current_focus(addr);
 }
 
 void MainForm::on_execute_clicked() {
@@ -582,8 +584,7 @@ void MainForm::on_clear_clicked() {
     log_viewer_->clear();
     log_entries_.clear();
     timeline_->clear_events();
-    memory_map_->clear_highlights();
-    memory_tree_->clear();
+    memory_widget_->update_memory(nullptr);  // clear memory view
 
     log(LogLevel::INFO, "Cleared all data");
 }
@@ -671,9 +672,9 @@ void MainForm::on_search_clicked() {
 
 void MainForm::on_about_clicked() {
     QMessageBox::about(this, "About",
-        "<h3>LLM Reverse Engineering Assistant</h3>"
+        "<h3>LLM Reverse Engineering Agent</h3>"
         "<p>Version 1.0.0</p>"
-        "<p>An AI-powered reverse engineering assistant for IDA Pro.</p>"
+        "<p>An AI-powered reverse engineering agent for IDA Pro.</p>"
         "<p>Uses Claude API to provide intelligent analysis and automation.</p>"
         "<p>Copyright © 2025</p>");
 }
@@ -847,7 +848,7 @@ void MainForm::on_agent_tool_executed(const QString& tool, const QString& input,
         timeline_->add_event(event);
 
         // Update memory view if needed
-        update_memory_view();
+        memory_widget_->update_memory(agent_->get_memory());
 
     } catch (const std::exception& e) {
         log(LogLevel::ERROR, "Failed to parse tool execution: " + std::string(e.what()));
@@ -991,34 +992,6 @@ void MainForm::update_ui_state() {
     }
 }
 
-void MainForm::update_memory_view() {
-    // Get memory snapshot
-    json memory_snapshot = agent_->get_memory()->export_memory_snapshot();
-
-    // Update memory map
-    memory_map_->update_memory(memory_snapshot);
-
-    // Update memory tree
-    memory_tree_->clear();
-
-    if (memory_snapshot.contains("functions")) {
-        for (const auto& func : memory_snapshot["functions"]) {
-            QTreeWidgetItem* item = new QTreeWidgetItem(memory_tree_);
-            item->setText(0, QString::fromStdString(func["address"].get<std::string>()));
-            item->setText(1, QString::fromStdString(func.value("name", "unknown")));
-            item->setText(2, QString::number(func.value("current_level", 0)));
-
-            // Add analysis levels as children
-            if (func.contains("descriptions")) {
-                for (const auto& [level, desc] : func["descriptions"].items()) {
-                    QTreeWidgetItem* child = new QTreeWidgetItem(item);
-                    child->setText(0, QString("Level %1").arg(level.data()));
-                    child->setText(1, QString::fromStdString(desc.get<std::string>().substr(0, 50) + "..."));
-                }
-            }
-        }
-    }
-}
 
 void MainForm::on_tab_changed(int index) {
     // Update focus based on tab
@@ -1142,7 +1115,7 @@ void MainForm::init_file_logging() {
     if (!log_file_.is_open()) {
         msg("Failed to open log file: %s\n", log_file_path_.c_str());
     } else {
-        log_file_ << "=== LLM RE Assistant Log Started at " << timestamp << " ===" << std::endl;
+        log_file_ << "=== LLM RE Agent Log Started at " << timestamp << " ===" << std::endl;
     }
 
     if (!message_log_file_.is_open()) {

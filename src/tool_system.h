@@ -1065,7 +1065,7 @@ public:
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_string("type", "The type/category of insight")
+            .add_string("type", "The type/category of insight (valid types: Pattern, Hypothesis, Question, Finding)")
             .add_string("description", "Description of the insight")
             .add_array("related_addresses", "integer", "List of related addresses")
             .build();

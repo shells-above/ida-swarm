@@ -72,8 +72,10 @@ public:
     void execute_task(const std::string& task);
     void set_current_address(ea_t addr);
 
-    // lets qt_widgets get the config (for themes). not great
+    // helpers for qt_widgets, not great
     const Config* get_config() const { return config_.get(); }
+    bool can_continue() const { return agent_ && (agent_->is_completed() || agent_->is_idle()); }
+    void log(LogLevel level, const std::string& message);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -111,7 +113,6 @@ private slots:
     void on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& tmpl);
     void update_statistics();
     void update_ui_state();
-    void update_memory_view();
 
     // Tab management
     void on_tab_changed(int index);
@@ -137,7 +138,6 @@ private:
     void init_file_logging();
     void log_to_file(LogLevel level, const std::string& message);
     void log_message_to_file(const std::string& type, const json& content);
-    void log(LogLevel level, const std::string& message);
     void add_message_to_chat(const messages::Message& msg);
     void export_session(const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
@@ -178,8 +178,7 @@ private:
     std::string message_log_file_path_;
 
     // Memory view
-    ui::MemoryMapWidget* memory_map_;
-    QTreeWidget* memory_tree_;
+    ui::MemoryDockWidget* memory_widget_;
 
     // Tools view
     ui::ToolExecutionWidget* tool_execution_;
