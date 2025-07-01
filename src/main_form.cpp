@@ -916,10 +916,18 @@ void MainForm::add_message_to_chat(const messages::Message& msg) {
     msg_widget->set_content(viewer);
 
     // Style based on role
-    if (msg.role() == messages::Role::User) {
-        msg_widget->setStyleSheet("background-color: #e3f2fd;");
-    } else {
-        msg_widget->setStyleSheet("background-color: #f5f5f5;");
+    if (config_->ui.theme == 0 || config_->ui.theme == 1) {  // Dark themes
+        if (msg.role() == messages::Role::User) {
+            msg_widget->setStyleSheet("background-color: #1e3a5f;");  // Dark blue
+        } else {
+            msg_widget->setStyleSheet("background-color: #3c3c3c;");  // Dark gray
+        }
+    } else {  // Light theme
+        if (msg.role() == messages::Role::User) {
+            msg_widget->setStyleSheet("background-color: #e3f2fd;");
+        } else {
+            msg_widget->setStyleSheet("background-color: #f5f5f5;");
+        }
     }
 
     item->setSizeHint(msg_widget->sizeHint());
@@ -987,33 +995,57 @@ void MainForm::apply_theme(int theme_index) {
     QString style;
 
     switch (theme_index) {
+        case 0:  // Default theme (should be dark for IDA Pro)
         case 1:  // Dark theme
             style = R"(
                 QWidget {
                     background-color: #2b2b2b;
                     color: #ffffff;
                 }
-                QTextEdit, QLineEdit, QListWidget, QTreeWidget {
+                QTextEdit, QLineEdit, QListWidget, QTreeWidget, QTextBrowser {
                     background-color: #3c3c3c;
                     border: 1px solid #555555;
+                    color: #ffffff;
                 }
                 QPushButton {
                     background-color: #3c3c3c;
                     border: 1px solid #555555;
                     padding: 5px;
+                    color: #ffffff;
                 }
                 QPushButton:hover {
                     background-color: #484848;
                 }
                 QTabWidget::pane {
                     border: 1px solid #555555;
+                    background-color: #2b2b2b;
                 }
                 QTabBar::tab {
                     background-color: #3c3c3c;
                     padding: 5px;
+                    color: #ffffff;
                 }
                 QTabBar::tab:selected {
                     background-color: #484848;
+                }
+                QComboBox {
+                    background-color: #3c3c3c;
+                    border: 1px solid #555555;
+                    color: #ffffff;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #3c3c3c;
+                    color: #ffffff;
+                    selection-background-color: #484848;
+                }
+                QProgressBar {
+                    background-color: #3c3c3c;
+                    border: 1px solid #555555;
+                    text-align: center;
+                    color: #ffffff;
+                }
+                QProgressBar::chunk {
+                    background-color: #5a5a5a;
                 }
             )";
             break;
@@ -1024,7 +1056,7 @@ void MainForm::apply_theme(int theme_index) {
                     background-color: #f5f5f5;
                     color: #000000;
                 }
-                QTextEdit, QLineEdit, QListWidget, QTreeWidget {
+                QTextEdit, QLineEdit, QListWidget, QTreeWidget, QTextBrowser {
                     background-color: #ffffff;
                     border: 1px solid #cccccc;
                 }
@@ -1037,10 +1069,6 @@ void MainForm::apply_theme(int theme_index) {
                     background-color: #e0e0e0;
                 }
             )";
-            break;
-
-        default:  // Default theme
-            style = "";
             break;
     }
 

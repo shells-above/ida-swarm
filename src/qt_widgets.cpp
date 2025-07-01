@@ -107,7 +107,6 @@ namespace llm_re {
 
 namespace llm_re::ui {
 
-// CollapsibleMessageWidget implementation
 CollapsibleMessageWidget::CollapsibleMessageWidget(const QString& title, QWidget* parent)
     : QWidget(parent) {
     layout = new QVBoxLayout(this);
@@ -115,17 +114,8 @@ CollapsibleMessageWidget::CollapsibleMessageWidget(const QString& title, QWidget
 
     // Create header button
     header_button = new QPushButton(title);
-    header_button->setStyleSheet(
-        "QPushButton {"
-        "  text-align: left;"
-        "  padding: 5px;"
-        "  border: 1px solid #ccc;"
-        "  background-color: #f0f0f0;"
-        "}"
-        "QPushButton:hover {"
-        "  background-color: #e0e0e0;"
-        "}"
-    );
+    // theme will handle styling
+    header_button->setProperty("class", "collapsible-header");
 
     connect(header_button, &QPushButton::clicked, this, &CollapsibleMessageWidget::on_header_clicked);
     layout->addWidget(header_button);
