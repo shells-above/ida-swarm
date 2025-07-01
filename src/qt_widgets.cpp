@@ -1545,11 +1545,6 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     QWidget* advanced_tab = new QWidget();
     QVBoxLayout* advanced_layout = new QVBoxLayout(advanced_tab);
 
-    advanced_layout->addWidget(new QLabel("Custom System Prompt:"));
-    custom_prompt_edit = new QTextEdit();
-    custom_prompt_edit->setMaximumHeight(150);
-    advanced_layout->addWidget(custom_prompt_edit);
-
     QFormLayout* advanced_form = new QFormLayout();
 
     debug_mode_check = new QCheckBox("Enable debug mode");

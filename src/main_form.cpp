@@ -792,10 +792,14 @@ void MainForm::load_settings() {
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("windowState").toByteArray());
 
-    // Load config from file
-    std::string config_path = settings.value("config_path",
-        "llm_re_config.json").toString().toStdString();
+    QString plugins_dir = QString::fromUtf8(idadir("plugins"));
+    QString default_config = plugins_dir + "/llm_re_config.json";
+
+    std::string config_path = settings.value("config_path", default_config).toString().toStdString();
+
+    msg(("loading from cfg path: " + config_path).c_str());
     config_->load_from_file(config_path);
+    msg(("loaded api key " + config_->api.api_key).c_str());
 }
 
 void MainForm::save_settings() {
@@ -805,9 +809,11 @@ void MainForm::save_settings() {
     settings.setValue("geometry", saveGeometry());
     settings.setValue("windowState", saveState());
 
-    // Save config to file
-    std::string config_path = settings.value("config_path",
-        "llm_re_config.json").toString().toStdString();
+    QString plugins_dir = QString::fromUtf8(idadir("plugins"));
+    QString default_config = plugins_dir + "/llm_re_config.json";
+
+    std::string config_path = settings.value("config_path", default_config).toString().toStdString();
+
     config_->save_to_file(config_path);
 }
 

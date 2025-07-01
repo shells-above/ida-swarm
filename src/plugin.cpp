@@ -385,7 +385,7 @@ static bool idaapi run(size_t arg) {
 
 } // namespace llm_re
 
-// Plugin description - must be in global namespace for IDA to find it
+// Plugin description - must be in global namespace for IDA to load it
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
     llm_re::PLUGIN_FLAGS,
