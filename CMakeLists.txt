@@ -14,6 +14,52 @@ set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plug
 # IDA Qt build setup
 set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
 
+# Set Qt tool paths explicitly
+set(QT_MOC_EXECUTABLE "${QTDIR}/bin/moc")
+set(QT_UIC_EXECUTABLE "${QTDIR}/bin/uic")
+set(QT_RCC_EXECUTABLE "${QTDIR}/bin/rcc")
+
+# Verify Qt tools exist
+if(NOT EXISTS ${QT_MOC_EXECUTABLE})
+    message(FATAL_ERROR "MOC tool not found at: ${QT_MOC_EXECUTABLE}")
+endif()
+if(NOT EXISTS ${QT_UIC_EXECUTABLE})
+    message(FATAL_ERROR "UIC tool not found at: ${QT_UIC_EXECUTABLE}")
+endif()
+if(NOT EXISTS ${QT_RCC_EXECUTABLE})
+    message(FATAL_ERROR "RCC tool not found at: ${QT_RCC_EXECUTABLE}")
+endif()
+
+# Set Qt version variables that AUTOMOC expects (Qt 5.15.2)
+set(Qt5Core_VERSION_MAJOR 5)
+set(Qt5Core_VERSION_MINOR 15)
+set(Qt5Core_VERSION_PATCH 2)
+set(Qt5Core_VERSION "${Qt5Core_VERSION_MAJOR}.${Qt5Core_VERSION_MINOR}.${Qt5Core_VERSION_PATCH}")
+
+# Set directory properties for Qt version (required by AUTOMOC)
+set_property(DIRECTORY PROPERTY Qt5Core_VERSION_MAJOR ${Qt5Core_VERSION_MAJOR})
+set_property(DIRECTORY PROPERTY Qt5Core_VERSION_MINOR ${Qt5Core_VERSION_MINOR})
+
+# Create IMPORTED targets for Qt tools so AUTOMOC/AUTOUIC/AUTORCC can find them
+add_executable(Qt5::moc IMPORTED)
+set_property(TARGET Qt5::moc PROPERTY IMPORTED_LOCATION ${QT_MOC_EXECUTABLE})
+
+add_executable(Qt5::uic IMPORTED)
+set_property(TARGET Qt5::uic PROPERTY IMPORTED_LOCATION ${QT_UIC_EXECUTABLE})
+
+add_executable(Qt5::rcc IMPORTED)
+set_property(TARGET Qt5::rcc PROPERTY IMPORTED_LOCATION ${QT_RCC_EXECUTABLE})
+
+# Create Qt5::Core IMPORTED target with proper version info for AUTOMOC
+add_library(Qt5::Core SHARED IMPORTED)
+set_property(TARGET Qt5::Core PROPERTY IMPORTED_LOCATION ${QT_CORE_FRAMEWORK})
+set_property(TARGET Qt5::Core PROPERTY INTERFACE_QT_MAJOR_VERSION 5)
+
+# Enable Qt AUTO features - they will now use our custom Qt tools
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
 # Add Qt framework search path
 if(APPLE)
     set(CMAKE_FRAMEWORK_PATH ${CMAKE_FRAMEWORK_PATH} "${QTDIR}/lib")
@@ -50,11 +96,6 @@ find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-
-# Enable Qt MOC, UIC, and RCC (you may need to specify custom Qt tools if available)
-#set(CMAKE_AUTOMOC ON)
-#set(CMAKE_AUTOUIC ON)
-#set(CMAKE_AUTORCC ON)
 
 # Detect system and architecture
 if(APPLE)
@@ -131,7 +172,7 @@ target_link_libraries(ida_llm_agent64
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
-        ${QT_CORE_FRAMEWORK}
+        Qt5::Core
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
         ${QT_PRINTSUPPORT_FRAMEWORK}
