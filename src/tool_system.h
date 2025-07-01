@@ -1637,6 +1637,9 @@ public:
         register_tool_type<GetEntryPointsTool>(memory, executor);
 
 
+
+        // memory tools
+
         // Global note tools
         register_tool_type<SetGlobalNoteTool>(memory, executor);
         register_tool_type<GetGlobalNoteTool>(memory, executor);
@@ -1673,9 +1676,12 @@ public:
         // Region summary tool
         register_tool_type<SummarizeRegionTool>(memory, executor);
 
+
+
+        // special tools
+
         // Final report tool
         register_tool_type<SubmitFinalReportTool>(memory, executor);
-
 
         // Deep analysis
         if (enable_deep_analysis) {
