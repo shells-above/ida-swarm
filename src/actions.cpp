@@ -441,26 +441,6 @@ json ActionExecutor::get_imports() {
     return result;
 }
 
-json ActionExecutor::get_exports() {
-    json result;
-    try {
-        std::vector<std::pair<std::string, ea_t>> exports = IDAUtils::get_exports();
-        result["success"] = true;
-        json exports_json = json::array();
-        for (const std::pair<std::string, ea_t>& exp: exports) {
-            json exp_obj;
-            exp_obj["name"] = exp.first;
-            exp_obj["address"] = HexAddress(exp.second);
-            exports_json.push_back(exp_obj);
-        }
-        result["exports"] = exports_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
 json ActionExecutor::search_strings(const std::string& text, bool is_case_sensitive) {
     json result;
     try {
@@ -473,6 +453,107 @@ json ActionExecutor::search_strings(const std::string& text, bool is_case_sensit
     }
     return result;
 }
+
+json ActionExecutor::get_named_functions() {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::get_named_functions();
+        result["success"] = true;
+        json funcs_json = json::array();
+        for (const auto& func : functions) {
+            json func_obj;
+            func_obj["address"] = HexAddress(func.first);
+            func_obj["name"] = func.second;
+            funcs_json.push_back(func_obj);
+        }
+        result["functions"] = funcs_json;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::search_named_globals(const std::string& pattern, bool is_regex) {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> globals = IDAUtils::search_named_globals(pattern, is_regex);
+        result["success"] = true;
+        json globals_json = json::array();
+        for (const auto& global : globals) {
+            json global_obj;
+            global_obj["address"] = HexAddress(global.first);
+            global_obj["name"] = global.second;
+            globals_json.push_back(global_obj);
+        }
+        result["globals"] = globals_json;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_named_globals() {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> globals = IDAUtils::get_named_globals();
+        result["success"] = true;
+        json globals_json = json::array();
+        for (const auto& global : globals) {
+            json global_obj;
+            global_obj["address"] = HexAddress(global.first);
+            global_obj["name"] = global.second;
+            globals_json.push_back(global_obj);
+        }
+        result["globals"] = globals_json;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_strings(int min_length) {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> strings = IDAUtils::get_strings_with_addresses(min_length);
+        result["success"] = true;
+        json strings_json = json::array();
+        for (const auto& str : strings) {
+            json str_obj;
+            str_obj["address"] = HexAddress(str.first);
+            str_obj["content"] = str.second;
+            strings_json.push_back(str_obj);
+        }
+        result["strings"] = strings_json;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_entry_points() {
+    json result;
+    try {
+        std::vector<std::pair<ea_t, std::string>> entries = IDAUtils::get_entry_points();
+        result["success"] = true;
+        json entries_json = json::array();
+        for (const auto& entry : entries) {
+            json entry_obj;
+            entry_obj["address"] = HexAddress(entry.first);
+            entry_obj["type"] = entry.second;
+            entries_json.push_back(entry_obj);
+        }
+        result["entry_points"] = entries_json;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
 
 // Memory System Actions
 

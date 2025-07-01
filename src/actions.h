@@ -38,8 +38,12 @@ public:
     json add_comment(ea_t address, const std::string& comment);
     json clear_comment(ea_t address);
     json get_imports();
-    json get_exports();
     json search_strings(const std::string& text, bool is_case_sensitive = false);
+    json get_named_functions();
+    json search_named_globals(const std::string& pattern, bool is_regex);
+    json get_named_globals();
+    json get_strings(int min_length);
+    json get_entry_points();
 
     // Memory System Actions
     json set_global_note(const std::string& key, const std::string& content);
