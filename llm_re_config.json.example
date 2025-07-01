@@ -10,8 +10,6 @@
   "agent": {
     "max_iterations": 100,
     "enable_thinking": false,
-    "custom_prompt": "",
-    "tool_timeout": 30,
     "verbose_logging": false
   },
   "ui": {

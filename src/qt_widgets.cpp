@@ -21,8 +21,6 @@ namespace llm_re {
             // Agent settings
             j["agent"]["max_iterations"] = agent.max_iterations;
             j["agent"]["enable_thinking"] = agent.enable_thinking;
-            j["agent"]["custom_prompt"] = agent.custom_prompt;
-            j["agent"]["tool_timeout"] = agent.tool_timeout;
             j["agent"]["verbose_logging"] = agent.verbose_logging;
 
             // UI settings
@@ -75,8 +73,6 @@ namespace llm_re {
             if (j.contains("agent")) {
                 agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
                 agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
-                agent.custom_prompt = j["agent"].value("custom_prompt", agent.custom_prompt);
-                agent.tool_timeout = j["agent"].value("tool_timeout", agent.tool_timeout);
                 agent.verbose_logging = j["agent"].value("verbose_logging", agent.verbose_logging);
             }
 
@@ -1556,9 +1552,6 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
 
     QFormLayout* advanced_form = new QFormLayout();
 
-    tool_timeout_edit = new QLineEdit("30");
-    advanced_form->addRow("Tool Timeout (s):", tool_timeout_edit);
-
     debug_mode_check = new QCheckBox("Enable debug mode");
     advanced_form->addRow("", debug_mode_check);
 
@@ -1608,8 +1601,6 @@ void ConfigWidget::load_settings(const Config& config) {
     auto_export_check->setChecked(config.export_settings.auto_export);
     export_format_combo->setCurrentIndex(config.export_settings.format);
 
-    custom_prompt_edit->setPlainText(QString::fromStdString(config.agent.custom_prompt));
-    tool_timeout_edit->setText(QString::number(config.agent.tool_timeout));
     debug_mode_check->setChecked(config.debug_mode);
 }
 
@@ -1638,8 +1629,6 @@ void ConfigWidget::save_settings(Config& config) {
     config.export_settings.auto_export = auto_export_check->isChecked();
     config.export_settings.format = export_format_combo->currentIndex();
 
-    config.agent.custom_prompt = custom_prompt_edit->toPlainText().toStdString();
-    config.agent.tool_timeout = tool_timeout_edit->text().toInt();
     config.debug_mode = debug_mode_check->isChecked();
 }
 

@@ -58,8 +58,6 @@ namespace llm_re {
         struct AgentSettings {
             int max_iterations = 100;
             bool enable_thinking = false;
-            std::string custom_prompt;
-            int tool_timeout = 30;
             bool verbose_logging = false;
         } agent;
 
@@ -381,8 +379,6 @@ class ConfigWidget : public QWidget {
     QComboBox* export_format_combo;
 
     // Advanced settings
-    QTextEdit* custom_prompt_edit;
-    QLineEdit* tool_timeout_edit;
     QCheckBox* debug_mode_check;
 
 public:
