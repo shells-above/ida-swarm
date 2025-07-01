@@ -18,17 +18,25 @@ void AgentWorker::process() {
     try {
         agent_->set_task(task_);
 
-        // this system is kind of a mess, because i have a jumble of different threads
-        // i have the ui thread (this one), and the agent thread, and the 2 different threading systems (Qt + IDAs)
-        // Wait for the task to complete
+        // Poll for completion or interruption
         while (agent_->is_running()) {
-            QThread::msleep(100);  // Check every 100ms
-
-            // Check if we should stop
+            // Check for interruption request
             if (QThread::currentThread()->isInterruptionRequested()) {
-                agent_->stop();
+                agent_->stop();  // This tells the agent to stop
+                emit progress("Stopping...");
+
+                // Wait a bit for agent to actually stop
+                int wait_count = 0;
+                while (agent_->is_running() && wait_count < 50) {  // 5 second timeout
+                    QThread::msleep(100);
+                    wait_count++;
+                }
+
+                emit error("Task cancelled by user");
                 return;
             }
+
+            QThread::msleep(100);  // Check every 100ms
         }
 
         // Check final status
@@ -37,7 +45,7 @@ void AgentWorker::process() {
         } else if (agent_->is_paused()) {
             emit error("Task paused due to error");
         } else {
-            emit error("Task failed");
+            emit error("Task stopped");
         }
     } catch (const std::exception& e) {
         emit error(QString::fromStdString(e.what()));
@@ -96,10 +104,6 @@ MainForm::~MainForm() {
 void MainForm::setup_ui() {
     setWindowTitle("LLM Reverse Engineering Assistant");
     resize(1200, 800);
-
-    // Create progress overlay
-    progress_overlay_ = new ui::ProgressOverlay(this);
-    progress_overlay_->hide();
 }
 
 void MainForm::setup_menus() {
@@ -337,9 +341,10 @@ void MainForm::setup_agent() {
     agent_ = std::make_unique<REAgent>(*config_);  // isn't actually copying the object, it's giving it a reference to the Config
 
     // Set callbacks
-    agent_->set_log_callback([this](const std::string& msg) {
+    agent_->set_log_callback([this](LogLevel level, const std::string& msg) {
         QMetaObject::invokeMethod(this, "on_agent_log",
                                  Qt::QueuedConnection,
+                                 Q_ARG(llm_re::LogLevel, level),
                                  Q_ARG(QString, QString::fromStdString(msg)));
     });
 
@@ -352,13 +357,21 @@ void MainForm::setup_agent() {
         QMetaObject::invokeMethod(this, "on_agent_message",
                                  Qt::QueuedConnection,
                                  Q_ARG(QString, QString::fromStdString(type)),
-                                 Q_ARG(QString, QString::fromStdString(content_str)));
+                                  Q_ARG(QString, QString::fromStdString(content_str)));
+    });
+
+    agent_->set_tool_callback([this](const std::string& tool, const json& input, const json& result) {
+        QMetaObject::invokeMethod(this, "on_agent_tool_executed",
+                                 Qt::QueuedConnection,
+                                 Q_ARG(QString, QString::fromStdString(tool)),
+                                  Q_ARG(QString, QString::fromStdString(input.dump())),
+                                 Q_ARG(QString, QString::fromStdString(result.dump())));
     });
 
     agent_->set_final_report_callback([this](const std::string& report) {
-        log(LogEntry::INFO, "=== FINAL REPORT ===");
-        log(LogEntry::INFO, report);
-        log(LogEntry::INFO, "===================");
+        log(LogLevel::INFO, "=== FINAL REPORT ===");
+        log(LogLevel::INFO, report);
+        log(LogLevel::INFO, "===================");
 
         // Add as message to chat
         messages::Message msg = messages::Message::assistant_text(report);
@@ -421,8 +434,6 @@ void MainForm::on_execute_clicked() {
     // Update UI
     is_running_ = true;
     update_ui_state();
-    progress_overlay_->show_progress("Executing task...");
-    progress_overlay_->set_cancelable(true);
 
     // Add timeline event
     ui::SessionTimelineWidget::Event start_event;
@@ -432,7 +443,7 @@ void MainForm::on_execute_clicked() {
     timeline_->add_event(start_event);
 
     // Log
-    log(LogEntry::INFO, "Starting task: " + task);
+    log(LogLevel::INFO, "Starting task: " + task);
 
     // Add initial user message to chat
     messages::Message user_msg = messages::Message::user_text(task);
@@ -450,9 +461,6 @@ void MainForm::on_execute_clicked() {
     connect(worker_, &AgentWorker::finished, worker_thread_, &QThread::quit);
     connect(worker_, &AgentWorker::finished, worker_, &QObject::deleteLater);
     connect(worker_thread_, &QThread::finished, worker_thread_, &QObject::deleteLater);
-    connect(progress_overlay_, &ui::ProgressOverlay::cancelled, [this]() {
-        agent_->stop();
-    });
 
     worker_thread_->start();
 }
@@ -460,13 +468,11 @@ void MainForm::on_execute_clicked() {
 void MainForm::on_stop_clicked() {
     if (!is_running_) return;
 
-    log(LogEntry::WARNING, "Stopping task...");
+    log(LogLevel::WARNING, "Stopping task...");
     agent_->stop();
 
     if (worker_thread_ && worker_thread_->isRunning()) {
         worker_thread_->requestInterruption();  // when worker_thread_ sees this, it signals to the agent worker_loop to stop
-        worker_thread_->quit();
-        worker_thread_->wait();
     }
 }
 
@@ -484,7 +490,7 @@ void MainForm::on_clear_clicked() {
     memory_map_->clear_highlights();
     memory_tree_->clear();
 
-    log(LogEntry::INFO, "Cleared all data");
+    log(LogLevel::INFO, "Cleared all data");
 }
 
 void MainForm::on_export_clicked() {
@@ -564,8 +570,8 @@ void MainForm::on_about_clicked() {
         "<p>Copyright © 2025</p>");
 }
 
-void MainForm::on_agent_log(const QString& message) {
-    log(LogEntry::INFO, message.toStdString());
+void MainForm::on_agent_log(LogLevel level, const QString& message) {
+    log(level, message.toStdString());
 }
 
 void MainForm::on_agent_message(const QString& type, const QString& content) {
@@ -577,27 +583,59 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
     timeline_->add_event(event);
 
     // Update UI based on message type
-    if (type == "REQUEST" || type == "RESPONSE") {
+    if (type == "RESPONSE") {
         try {
             json msg_json = json::parse(content.toStdString());
 
-            // If it's a response with content, show it in chat
-            if (type == "RESPONSE" && msg_json.contains("content")) {
-                // Convert API response to message
-                if (msg_json.contains("stop_reason")) {
-                    std::string stop_reason = msg_json["stop_reason"];
-                    on_agent_state_changed(QString::fromStdString(stop_reason));
+            // Convert API response to Message and add to chat
+            if (msg_json.contains("content")) {
+                // Parse the message content
+                std::vector<std::unique_ptr<messages::Content>> contents;
+
+                for (const auto& content_item : msg_json["content"]) {
+                    if (content_item.contains("type")) {
+                        std::string content_type = content_item["type"];
+
+                        if (content_type == "text" && content_item.contains("text")) {
+                            contents.push_back(std::make_unique<messages::TextContent>(
+                                content_item["text"].get<std::string>()
+                            ));
+                        } else if (content_type == "tool_use") {
+                            auto tool_use = std::make_unique<messages::ToolUseContent>(
+                                content_item["id"].get<std::string>(),
+                                content_item["name"].get<std::string>(),
+                                content_item["input"]
+                            );
+                            contents.push_back(std::move(tool_use));
+                        }
+                    }
                 }
 
-                // Handle usage stats
-                if (msg_json.contains("usage")) {
-                    json usage = msg_json["usage"];
-                    int total = usage.value("input_tokens", 0) + usage.value("output_tokens", 0);
-                    token_label_->setText(QString("Tokens: %1").arg(total));
+                if (!contents.empty()) {
+                    messages::Message assistant_msg(messages::Role::Assistant);
+                    for (auto& content_obj : contents) {
+                        assistant_msg.add_content(std::move(content_obj));
+                    }
+                    add_message_to_chat(assistant_msg);
                 }
             }
-        } catch (...) {
-            // Not JSON, just log it
+
+            // Handle stop reason
+            if (msg_json.contains("stop_reason")) {
+                std::string stop_reason = msg_json["stop_reason"];
+                on_agent_state_changed(QString::fromStdString(stop_reason));
+            }
+
+            // Handle usage stats
+            if (msg_json.contains("usage")) {
+                json usage = msg_json["usage"];
+                int total = usage.value("input_tokens", 0) + usage.value("output_tokens", 0);
+                token_label_->setText(QString("Tokens: %1").arg(total));
+            }
+        } catch (const std::exception& e) {
+            log(LogLevel::ERROR, "Failed to parse message: " + std::string(e.what()));
+            // Add more detailed error info for debugging
+            log(LogLevel::DEBUG, "Content was: " + content.toStdString());
         }
     }
 
@@ -626,18 +664,12 @@ void MainForm::on_agent_tool_executed(const QString& tool, const QString& input,
         update_memory_view();
 
     } catch (const std::exception& e) {
-        log(LogEntry::ERROR, "Failed to parse tool execution: " + std::string(e.what()));
+        log(LogLevel::ERROR, "Failed to parse tool execution: " + std::string(e.what()));
     }
 }
 
 void MainForm::on_agent_state_changed(const QString& state) {
     status_label_->setText(state);
-
-    if (state.contains("thinking", Qt::CaseInsensitive)) {
-        progress_overlay_->update_progress(-1, "AI is thinking...");
-    } else if (state.contains("tool", Qt::CaseInsensitive)) {
-        progress_overlay_->update_progress(-1, state);
-    }
 }
 
 void MainForm::on_agent_progress(int iteration, int total_tokens) {
@@ -647,7 +679,6 @@ void MainForm::on_agent_progress(int iteration, int total_tokens) {
 
 void MainForm::on_worker_finished() {
     is_running_ = false;
-    progress_overlay_->hide();
     update_ui_state();
 
     // Complete session
@@ -665,31 +696,34 @@ void MainForm::on_worker_finished() {
     // Update statistics
     update_statistics();
 
-    log(LogEntry::INFO, "Task completed successfully");
+    log(LogLevel::INFO, "Task completed successfully");
     worker_thread_ = nullptr;
     worker_ = nullptr;
 }
 
 void MainForm::on_worker_error(const QString& error) {
     is_running_ = false;
-    progress_overlay_->hide();
     update_ui_state();
 
     // Complete session with error
-    auto& session = sessions_.back();
+    SessionInfo& session = sessions_.back();
     session.end_time = std::chrono::system_clock::now();
     session.success = false;
     session.error_message = error.toStdString();
 
-    log(LogEntry::ERROR, "Task failed: " + error.toStdString());
-    QMessageBox::critical(this, "Error", QString("Task failed: %1").arg(error));
+    log(LogLevel::ERROR, "Task failed: " + error.toStdString());
+
+    // Only show message box for actual errors, not cancellations
+    if (!error.contains("cancelled", Qt::CaseInsensitive)) {
+        QMessageBox::critical(this, "Error", QString("Task failed: %1").arg(error));
+    }
 
     worker_thread_ = nullptr;
     worker_ = nullptr;
 }
 
 void MainForm::on_worker_progress(const QString& message) {
-    progress_overlay_->update_progress(-1, message);
+
 }
 
 void MainForm::on_address_clicked(ea_t addr) {
@@ -784,17 +818,54 @@ void MainForm::on_log_level_changed(int index) {
     // Re-filter logs
     log_viewer_->clear();
 
-    for (const auto& entry : log_entries_) {
-        if (index > 0 && entry.level < index - 1) {
-            continue;
+    for (const LogEntry& entry: log_entries_) {
+        if (index > 0) {
+            LogLevel min_level = static_cast<LogLevel>(index - 1);
+            if (entry.level < min_level) {
+                continue;
+            }
         }
 
-        QString formatted = QString("[%1] %2: %3\n")
+        // Use the same formatting as log() method
+        QString formatted = QString("[%1] %2: %3")
             .arg(QString::fromStdString(format_timestamp(entry.timestamp)))
             .arg(QString::fromStdString(LogEntry::level_to_string(entry.level)))
             .arg(QString::fromStdString(entry.message));
 
-        log_viewer_->append(formatted);
+        // Apply color based on level
+        QTextCursor cursor = log_viewer_->textCursor();
+        cursor.movePosition(QTextCursor::End);
+
+        QTextCharFormat format;
+
+        // Set base text color for theme
+        if (config_->ui.theme == 0 || config_->ui.theme == 1) {  // Dark themes
+            format.setForeground(Qt::white);  // Base text is white
+        } else {
+            format.setForeground(Qt::black);  // Base text is black
+        }
+
+        // Then apply level-specific colors
+        switch (entry.level) {
+            case LogLevel::DEBUG:
+                format.setForeground(Qt::gray);
+                break;
+            case LogLevel::INFO:
+                // Keep the base color (white/black)
+                break;
+            case LogLevel::WARNING:
+                format.setForeground(QColor(255, 140, 0));  // Orange
+                break;
+            case LogLevel::ERROR:
+                format.setForeground(Qt::red);
+                break;
+        }
+
+        cursor.insertText(formatted + "\n", format);
+    }
+
+    if (config_->ui.auto_scroll) {
+        log_viewer_->ensureCursorVisible();
     }
 }
 
@@ -840,7 +911,7 @@ void MainForm::save_settings() {
     config_->save_to_file(config_path);
 }
 
-void MainForm::log(LogEntry::Level level, const std::string& message) {
+void MainForm::log(LogLevel level, const std::string& message) {
     LogEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.level = level;
@@ -851,7 +922,7 @@ void MainForm::log(LogEntry::Level level, const std::string& message) {
 
     // Apply filter
     int filter_level = log_level_filter_->currentIndex();
-    if (filter_level > 0 && entry.level < filter_level - 1) {
+    if (filter_level > 0 && (int)entry.level < filter_level - 1) {
         return;
     }
 
@@ -866,17 +937,25 @@ void MainForm::log(LogEntry::Level level, const std::string& message) {
     cursor.movePosition(QTextCursor::End);
 
     QTextCharFormat format;
+
+    // Set base text color for theme
+    if (config_->ui.theme == 0 || config_->ui.theme == 1) {  // Dark themes
+        format.setForeground(Qt::white);
+    } else {
+        format.setForeground(Qt::black);
+    }
+
     switch (entry.level) {
-        case LogEntry::DEBUG:
+        case LogLevel::DEBUG:
             format.setForeground(Qt::gray);
             break;
-        case LogEntry::INFO:
-            format.setForeground(Qt::black);
+        case LogLevel::INFO:
+            // Keep base color
             break;
-        case LogEntry::WARNING:
+        case LogLevel::WARNING:
             format.setForeground(QColor(255, 140, 0));  // Orange
             break;
-        case LogEntry::ERROR:
+        case LogLevel::ERROR:
             format.setForeground(Qt::red);
             break;
     }
@@ -983,7 +1062,7 @@ void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
         // Write based on format
         file << export_data.dump(2);
 
-        log(LogEntry::INFO, "Session exported to: " + filename.toStdString());
+        log(LogLevel::INFO, "Session exported to: " + filename.toStdString());
 
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Export Error",

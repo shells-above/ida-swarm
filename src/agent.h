@@ -181,9 +181,10 @@ private:
     } saved_state_;
 
     // Callbacks
-    std::function<void(const std::string&)> log_callback_;
+    std::function<void(LogLevel, const std::string&)> log_callback_;
     std::function<void(const std::string&, const json&, int)> message_log_callback_;
     std::function<void(const std::string&)> final_report_callback_;
+    std::function<void(const std::string&, const json&, const json&)> tool_callback_;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT_TEMPLATE = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
@@ -314,7 +315,7 @@ public:
     }
 
     // Callbacks
-    void set_log_callback(std::function<void(const std::string&)> callback) {
+    void set_log_callback(std::function<void(LogLevel, const std::string&)> callback) {
         log_callback_ = callback;
     }
 
@@ -325,6 +326,10 @@ public:
 
     void set_final_report_callback(std::function<void(const std::string&)> callback) {
         final_report_callback_ = callback;
+    }
+
+    void set_tool_callback(std::function<void(const std::string&, const json&, const json&)> callback) {
+        tool_callback_ = callback;
     }
 
     // State queries
@@ -580,6 +585,23 @@ private:
             messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
             results.push_back(result_msg);
 
+            // Call the tool callback
+            if (tool_callback_) {
+                // Extract result content from the message
+                json result_json;
+                for (const std::unique_ptr<messages::Content>& content: result_msg.contents()) {
+                    if (auto tool_result = dynamic_cast<const messages::ToolResultContent*>(content.get())) {
+                        try {
+                            result_json = json::parse(tool_result->content);
+                        } catch (...) {
+                            result_json = {{"content", tool_result->content}};
+                        }
+                        break;
+                    }
+                }
+                tool_callback_(tool_use->name, tool_use->input, result_json);
+            }
+
             // Special handling for final report
             if (tool_use->name == "submit_final_report") {
                 handle_final_report(tool_use->input["report"]);
@@ -638,14 +660,7 @@ private:
     // Logging helpers
     void log(LogLevel level, const std::string& message) {
         if (log_callback_) {
-            std::string prefix;
-            switch (level) {
-                case LogLevel::DEBUG: prefix = "[DEBUG] "; break;
-                case LogLevel::INFO: prefix = "[INFO] "; break;
-                case LogLevel::WARNING: prefix = "[WARNING] "; break;
-                case LogLevel::ERROR: prefix = "[ERROR] "; break;
-            }
-            log_callback_(prefix + message);
+            log_callback_(level, message);
         }
     }
 

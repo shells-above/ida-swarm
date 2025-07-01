@@ -4,6 +4,9 @@
 
 #include "qt_widgets.h"
 
+#include "main_form.h"
+
+
 namespace llm_re {
     // Config implementation
     bool Config::save_to_file(const std::string& path) const {
@@ -752,8 +755,27 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
-    // Draw background
-    painter.fillRect(rect(), Qt::white);
+    // Get theme from main form
+    MainForm* main_form = get_main_form();
+    bool is_dark_theme = false;
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
+    }
+
+    // Draw background based on theme
+    if (is_dark_theme) {
+        painter.fillRect(rect(), QColor(0x3c, 0x3c, 0x3c));  // Dark gray like other widgets
+    } else {
+        painter.fillRect(rect(), Qt::white);
+    }
+
+    // Set text color based on theme
+    if (is_dark_theme) {
+        painter.setPen(Qt::white);
+    } else {
+        painter.setPen(Qt::black);
+    }
 
     // Draw timeline
     draw_timeline(painter);
@@ -775,9 +797,9 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
         }
     }
 
-    // Draw session info
+    // Draw session info with theme-aware text
     if (!session_task.empty()) {
-        painter.setPen(Qt::black);
+        // Text is already set to correct color above
         painter.drawText(10, 20, QString("Task: %1").arg(QString::fromStdString(session_task)));
         painter.drawText(10, height() - 20,
             QString("Tokens: %1 in / %2 out / %3 total")
@@ -786,7 +808,7 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
                 .arg(token_usage.total()));
     }
 
-    // Draw hover tooltip
+    // Draw hover tooltip with theme colors
     if (hover_event && !hover_event->description.empty()) {
         QPoint cursor_pos = mapFromGlobal(QCursor::pos());
         QRect tooltip_rect(cursor_pos.x() + 10, cursor_pos.y() - 30, 250, 60);
@@ -799,8 +821,15 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
             tooltip_rect.moveTop(cursor_pos.y() + 10);
         }
 
-        painter.fillRect(tooltip_rect, QColor(255, 255, 200, 230));
-        painter.setPen(Qt::black);
+        // Theme-aware tooltip
+        if (is_dark_theme) {
+            painter.fillRect(tooltip_rect, QColor(70, 70, 70, 230));  // Dark tooltip
+            painter.setPen(Qt::white);
+        } else {
+            painter.fillRect(tooltip_rect, QColor(255, 255, 200, 230));  // Light tooltip
+            painter.setPen(Qt::black);
+        }
+
         painter.drawRect(tooltip_rect);
         painter.drawText(tooltip_rect.adjusted(5, 5, -5, -5),
                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
@@ -847,12 +876,15 @@ void SessionTimelineWidget::draw_timeline(QPainter& painter) {
     int timeline_end = width() - 40;
     int y = height() / 2;
 
+    // Save current pen
+    QPen current_pen = painter.pen();
+
     // Draw horizontal line
-    painter.setPen(QPen(Qt::gray, 2));
+    painter.setPen(QPen(current_pen.color(), 2));  // Use current color
     painter.drawLine(timeline_start, y, timeline_end, y);
 
     // Draw tick marks
-    painter.setPen(QPen(Qt::gray, 1));
+    painter.setPen(QPen(current_pen.color(), 1));
     for (int i = 0; i <= 10; i++) {
         int x = timeline_start + i * (timeline_end - timeline_start) / 10;
         painter.drawLine(x, y - 5, x, y + 5);
@@ -1863,98 +1895,6 @@ void TaskTemplateWidget::on_delete_template() {
             load_templates();
         }
     }
-}
-
-// ProgressOverlay implementation
-ProgressOverlay::ProgressOverlay(QWidget* parent) : QWidget(parent) {
-    setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-    setAttribute(Qt::WA_TranslucentBackground);
-
-    QVBoxLayout* layout = new QVBoxLayout(this);
-    layout->setAlignment(Qt::AlignCenter);
-
-    // Create content widget
-    QWidget* content = new QWidget();
-    content->setStyleSheet(
-        "QWidget {"
-        "  background-color: rgba(50, 50, 50, 230);"
-        "  border-radius: 10px;"
-        "  padding: 20px;"
-        "}"
-    );
-
-    QVBoxLayout* content_layout = new QVBoxLayout(content);
-
-    title_label = new QLabel("Processing...");
-    title_label->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
-    title_label->setAlignment(Qt::AlignCenter);
-    content_layout->addWidget(title_label);
-
-    progress_bar = new QProgressBar();
-    progress_bar->setMinimum(0);
-    progress_bar->setMaximum(100);
-    progress_bar->setTextVisible(true);
-    content_layout->addWidget(progress_bar);
-
-    status_label = new QLabel("Please wait...");
-    status_label->setStyleSheet("color: white;");
-    status_label->setAlignment(Qt::AlignCenter);
-    content_layout->addWidget(status_label);
-
-    cancel_button = new QPushButton("Cancel");
-    cancel_button->setVisible(false);
-    connect(cancel_button, &QPushButton::clicked, this, &ProgressOverlay::cancelled);
-    content_layout->addWidget(cancel_button, 0, Qt::AlignCenter);
-
-    layout->addWidget(content);
-
-    // Update timer for indeterminate progress
-    update_timer = new QTimer(this);
-    connect(update_timer, &QTimer::timeout, this, &ProgressOverlay::on_update_timer);
-}
-
-void ProgressOverlay::show_progress(const QString& title) {
-    title_label->setText(title);
-    progress_bar->setValue(0);
-    status_label->setText("Please wait...");
-
-    // Center on parent
-    if (parentWidget()) {
-        resize(parentWidget()->size());
-        move(0, 0);
-    }
-
-    show();
-    raise();
-}
-
-void ProgressOverlay::update_progress(int value, const QString& status) {
-    progress_bar->setValue(value);
-    status_label->setText(status);
-
-    if (value < 0) {
-        // Indeterminate progress
-        progress_bar->setMaximum(0);
-        update_timer->start(100);
-    } else {
-        progress_bar->setMaximum(100);
-        update_timer->stop();
-    }
-}
-
-void ProgressOverlay::set_cancelable(bool can_cancel) {
-    cancel_button->setVisible(can_cancel);
-}
-
-void ProgressOverlay::paintEvent(QPaintEvent* event) {
-    // Semi-transparent background
-    QPainter painter(this);
-    painter.fillRect(rect(), QColor(0, 0, 0, 150));
-}
-
-void ProgressOverlay::on_update_timer() {
-    // Animate indeterminate progress
-    // This is handled by Qt's progress bar animation
 }
 
 } // namespace llm_re::ui

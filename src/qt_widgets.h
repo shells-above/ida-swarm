@@ -26,19 +26,17 @@ namespace llm_re {
 
     // Log entry
     struct LogEntry {
-        enum Level { DEBUG, INFO, WARNING, ERROR };
-
         std::chrono::system_clock::time_point timestamp;
-        Level level;
+        LogLevel level;
         std::string message;
         std::string source;
 
-        static std::string level_to_string(Level l) {
+        static std::string level_to_string(LogLevel l) {
             switch (l) {
-                case DEBUG: return "DEBUG";
-                case INFO: return "INFO";
-                case WARNING: return "WARNING";
-                case ERROR: return "ERROR";
+                case LogLevel::DEBUG: return "DEBUG";
+                case LogLevel::INFO: return "INFO";
+                case LogLevel::WARNING: return "WARNING";
+                case LogLevel::ERROR: return "ERROR";
             }
             return "UNKNOWN";
         }
@@ -434,36 +432,11 @@ private:
     std::vector<TaskTemplate> templates;
 };
 
-// Floating progress overlay
-class ProgressOverlay : public QWidget {
-    Q_OBJECT
-
-    QLabel* title_label;
-    QLabel* status_label;
-    QProgressBar* progress_bar;
-    QPushButton* cancel_button;
-    QTimer* update_timer;
-
-public:
-    ProgressOverlay(QWidget* parent = nullptr);
-
-    void show_progress(const QString& title);
-    void update_progress(int value, const QString& status);
-    void set_cancelable(bool can_cancel);
-
-signals:
-    void cancelled();
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-
-private slots:
-    void on_update_timer();
-};
 
 } // namespace llm_re::ui
 
 // Register custom types for Qt
 Q_DECLARE_METATYPE(llm_re::ui::SearchDialog::SearchResult)
+Q_DECLARE_METATYPE(llm_re::LogLevel)
 
 #endif //QT_WIDGETS_H

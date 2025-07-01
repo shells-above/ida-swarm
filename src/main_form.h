@@ -67,6 +67,9 @@ public:
     void execute_task(const std::string& task);
     void set_current_address(ea_t addr);
 
+    // lets qt_widgets get the config (for themes). not great
+    const Config* get_config() const { return config_.get(); }
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -82,7 +85,7 @@ private slots:
     void on_about_clicked();
 
     // Agent callbacks
-    void on_agent_log(const QString& message);
+    void on_agent_log(LogLevel level, const QString& message);
     void on_agent_message(const QString& type, const QString& content);
     void on_agent_tool_executed(const QString& tool, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
@@ -122,7 +125,7 @@ private:
     void connect_signals();
 
     // Helper methods
-    void log(LogEntry::Level level, const std::string& message);
+    void log(LogLevel level, const std::string& message);
     void add_message_to_chat(const messages::Message& msg);
     void export_session(const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
@@ -144,7 +147,6 @@ private:
     // Chat view
     QWidget* chat_widget_;
     QListWidget* message_list_;
-    ui::ProgressOverlay* progress_overlay_;
 
     // Log view
     QTextEdit* log_viewer_;
