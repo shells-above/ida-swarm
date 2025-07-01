@@ -11,6 +11,50 @@ set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
 # IDA Pro plugins directory path
 set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
 
+# IDA Qt build setup
+set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
+
+# Add Qt framework search path
+if(APPLE)
+    set(CMAKE_FRAMEWORK_PATH ${CMAKE_FRAMEWORK_PATH} "${QTDIR}/lib")
+endif()
+
+# Qt include directories
+include_directories(
+        "${QTDIR}/lib/QtCore.framework/Headers"
+        "${QTDIR}/lib/QtGui.framework/Headers"
+        "${QTDIR}/lib/QtWidgets.framework/Headers"
+        "${QTDIR}/lib/QtPrintSupport.framework/Headers"
+        "${QTDIR}/lib/QtNetwork.framework/Headers"
+        "${QTDIR}/lib/QtCLucene.framework/Headers"
+        "${QTDIR}/lib/QtConcurrent.framework/Headers"
+        "${QTDIR}/lib/QtDBus.framework/Headers"
+        "${QTDIR}/lib/QtDesigner.framework/Headers"
+        "${QTDIR}/lib/QtDesignerComponents.framework/Headers"
+        "${QTDIR}/lib/QtHelp.framework/Headers"
+        "${QTDIR}/lib/QtOpenGL.framework/Headers"
+        "${QTDIR}/lib/QtSql.framework/Headers"
+        "${QTDIR}/lib/QtTest.framework/Headers"
+        "${QTDIR}/lib/QtUiPlugin.framework/Headers"
+        "${QTDIR}/lib/QtXml.framework/Headers"
+)
+
+# Find Qt frameworks manually
+find_library(QT_CORE_FRAMEWORK QtCore PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+
+# Enable Qt MOC, UIC, and RCC (you may need to specify custom Qt tools if available)
+#set(CMAKE_AUTOMOC ON)
+#set(CMAKE_AUTOUIC ON)
+#set(CMAKE_AUTORCC ON)
 
 # Detect system and architecture
 if(APPLE)
@@ -57,18 +101,15 @@ endif()
 
 # end IDA SDK setup
 
-
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # Source files
 set(SOURCES
-        src/plugin.cpp
-        src/agent.cpp
-        src/memory.cpp
         src/actions.cpp
         src/ida_utils.cpp
-        src/anthropic_client.cpp
+        src/plugin.cpp
+        src/memory.cpp
 )
 
 # Create shared library with correct naming convention (end in "64", wont be loaded if it doesn't)
@@ -84,40 +125,20 @@ target_compile_options(sample_file PRIVATE
         -g0          # No debug info
         -DNDEBUG     # Release mode
 )
-# Link libraries
+
+# Link libraries including custom Qt frameworks
 target_link_libraries(ida_llm_agent64
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        ${QT_CORE_FRAMEWORK}
+        ${QT_GUI_FRAMEWORK}
+        ${QT_WIDGETS_FRAMEWORK}
+        ${QT_PRINTSUPPORT_FRAMEWORK}
+        ${QT_NETWORK_FRAMEWORK}
+        ${QT_CONCURRENT_FRAMEWORK}
+        ${QT_SQL_FRAMEWORK}
+        ${QT_XML_FRAMEWORK}
+        ${QT_OPENGL_FRAMEWORK}
+        ${QT_TEST_FRAMEWORK}
 )
-
-
-
-# Windows specific
-if(WIN32)
-    target_compile_definitions(ida_llm_agent PRIVATE __NT__)
-endif()
-
-# Set RPATH for finding libraries at runtime
-if(APPLE)
-    set_target_properties(ida_llm_agent64 PROPERTIES
-            BUILD_RPATH "@executable_path;${IDA_LIBDIR}"
-            INSTALL_RPATH "@executable_path;${IDA_LIBDIR}"
-    )
-elseif(UNIX AND NOT APPLE)
-    set_target_properties(ida_llm_agent64 PROPERTIES
-            BUILD_RPATH "$ORIGIN;${IDA_LIBDIR}"
-            INSTALL_RPATH "$ORIGIN;${IDA_LIBDIR}"
-    )
-endif()
-
-# Option to copy built plugin to IDA Pro plugins directory
-option(INSTALL_TO_IDA "Copy built plugin to IDA Pro plugins directory" ON)
-if(INSTALL_TO_IDA)
-    add_custom_command(TARGET ida_llm_agent64 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:ida_llm_agent64>
-            "${IDA_PLUGINS_PATH}/ida_llm_agent64.dylib"
-            COMMENT "Installing plugin to IDA Pro plugins directory: ${IDA_PLUGINS_PATH}"
-    )
-endif()
