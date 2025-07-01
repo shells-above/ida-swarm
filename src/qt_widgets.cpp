@@ -700,8 +700,34 @@ void ToolExecutionWidget::on_item_selected() {
 
     QTreeWidgetItem* item = items.first();
 
+    // Get theme info
+    MainForm* main_form = get_main_form();
+    bool is_dark_theme = false;
+    if (main_form && main_form->get_config()) {
+        is_dark_theme = (main_form->get_config()->ui.theme == 0 ||
+                        main_form->get_config()->ui.theme == 1);
+    }
+
+    // Theme-aware colors
+    QString bg_color = is_dark_theme ? "#2b2b2b" : "#f0f0f0";
+    QString text_color = is_dark_theme ? "#ffffff" : "#000000";
+    QString code_bg = is_dark_theme ? "#1e1e1e" : "#f5f5f5";
+
     // Show input and result
-    QString html = "<h3>Tool: " + item->text(0) + "</h3>";
+    QString html = QString(R"(
+        <html>
+        <head>
+        <style>
+            body { background-color: %1; color: %2; font-family: Arial, sans-serif; }
+            pre { background-color: %3; color: %2; padding: 10px; border-radius: 5px; overflow-x: auto; }
+            h3, h4 { color: %2; }
+            b { color: %2; }
+        </style>
+        </head>
+        <body>
+    )").arg(bg_color).arg(text_color).arg(code_bg);
+
+    html += "<h3>Tool: " + item->text(0) + "</h3>";
     html += "<p><b>Status:</b> " + item->text(1) + "</p>";
     html += "<p><b>Time:</b> " + item->text(2) + "</p>";
     html += "<p><b>Duration:</b> " + item->text(3) + "</p>";
@@ -711,7 +737,7 @@ void ToolExecutionWidget::on_item_selected() {
     if (!input_str.isEmpty()) {
         try {
             json input = json::parse(input_str.toStdString());
-            html += "<h4>Input:</h4><pre style='background-color: #f0f0f0; padding: 10px;'>" +
+            html += "<h4>Input:</h4><pre>" +
                     QString::fromStdString(input.dump(2)) + "</pre>";
         } catch (...) {}
     }
@@ -721,11 +747,12 @@ void ToolExecutionWidget::on_item_selected() {
     if (!result_str.isEmpty()) {
         try {
             json result = json::parse(result_str.toStdString());
-            html += "<h4>Result:</h4><pre style='background-color: #f0f0f0; padding: 10px;'>" +
+            html += "<h4>Result:</h4><pre>" +
                     QString::fromStdString(result.dump(2)) + "</pre>";
         } catch (...) {}
     }
 
+    html += "</body></html>";
     result_viewer->setHtml(html);
 }
 
@@ -892,19 +919,27 @@ void SessionTimelineWidget::draw_timeline(QPainter& painter) {
 }
 
 void SessionTimelineWidget::draw_event(QPainter& painter, const Event& event, int x, int y) {
+    // Get theme
+    MainForm* main_form = get_main_form();
+    bool is_dark_theme = false;
+    if (main_form && main_form->get_config()) {
+        is_dark_theme = (main_form->get_config()->ui.theme == 0 ||
+                        main_form->get_config()->ui.theme == 1);
+    }
+
     // Select color based on event type
     QColor color;
 
     if (event.type == "start") {
         color = Qt::green;
     } else if (event.type == "tool") {
-        color = Qt::blue;
+        color = is_dark_theme ? QColor(100, 150, 255) : Qt::blue;  // Lighter blue for dark theme
     } else if (event.type == "message") {
-        color = QColor(100, 100, 255);
+        color = is_dark_theme ? QColor(150, 150, 255) : QColor(100, 100, 255);  // Lighter for dark theme
     } else if (event.type == "error") {
         color = Qt::red;
     } else if (event.type == "complete") {
-        color = Qt::darkGreen;
+        color = is_dark_theme ? QColor(100, 255, 100) : Qt::darkGreen;  // Lighter green for dark theme
     } else {
         color = Qt::gray;
     }
