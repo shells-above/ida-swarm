@@ -209,13 +209,13 @@ void MainForm::setup_status_bar() {
 
     statusBar()->addWidget(new QLabel(" | "));
 
-    token_label_ = new QLabel("Tokens: 0");
-    statusBar()->addWidget(token_label_);
+    iteration_label_ = new QLabel("Iteration: 0");
+    statusBar()->addWidget(iteration_label_);
 
     statusBar()->addWidget(new QLabel(" | "));
 
-    iteration_label_ = new QLabel("Iteration: 0");
-    statusBar()->addWidget(iteration_label_);
+    token_label_ = new QLabel("Tokens: 0");
+    statusBar()->addWidget(token_label_);
 
     status_progress_ = new QProgressBar();
     status_progress_->setMaximumWidth(200);
@@ -1347,7 +1347,6 @@ void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
             export_data["statistics"] = {
                 {"task", session.task},
                 {"duration_ms", session.duration_ms},
-                {"tokens", session.token_usage.total()},
                 {"tool_calls", session.tool_calls},
                 {"success", session.success}
             };

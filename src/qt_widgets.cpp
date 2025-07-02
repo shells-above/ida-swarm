@@ -658,10 +658,11 @@ void SessionTimelineWidget::paintEvent(QPaintEvent* event) {
         // Text is already set to correct color above
         painter.drawText(10, 20, QString("Task: %1").arg(QString::fromStdString(session_task)));
         painter.drawText(10, height() - 20,
-            QString("Tokens: %1 in / %2 out / %3 total")
+            QString("Tokens: %1 in / %2 out / %3 cache read / %4 cache write")
                 .arg(token_usage.input_tokens)
                 .arg(token_usage.output_tokens)
-                .arg(token_usage.total()));
+                .arg(token_usage.cache_read_tokens)
+                .arg(token_usage.cache_creation_tokens));
     }
 
     // Draw hover tooltip with theme colors
@@ -1108,9 +1109,6 @@ StatsDashboard::StatsDashboard(QWidget* parent) : QWidget(parent) {
     layout = new QGridLayout(this);
 
     // Create charts
-    token_chart = new ChartWidget("Token Usage");
-    layout->addWidget(token_chart, 0, 0);
-
     tool_chart = new ChartWidget("Tool Calls");
     layout->addWidget(tool_chart, 0, 1);
 
@@ -1126,9 +1124,6 @@ StatsDashboard::StatsDashboard(QWidget* parent) : QWidget(parent) {
 void StatsDashboard::update_stats(const json& agent_state,
                                  const std::vector<SessionInfo>& sessions,
                                  const json& tool_stats) {
-    // Update token chart
-    update_token_chart(sessions);
-
     // Update tool chart
     update_tool_chart(tool_stats);
 
@@ -1138,11 +1133,9 @@ void StatsDashboard::update_stats(const json& agent_state,
     // Update summary
     json stats;
     stats["total_sessions"] = sessions.size();
-    stats["total_tokens"] = 0;
     stats["total_time_ms"] = 0;
 
     for (const auto& session : sessions) {
-        stats["total_tokens"] = stats["total_tokens"].get<int>() + session.token_usage.total();
         stats["total_time_ms"] = stats["total_time_ms"].get<int>() + session.duration_ms;
     }
 
@@ -1156,9 +1149,6 @@ QString StatsDashboard::generate_summary_html(const json& stats) {
     html += QString("<tr><td><b>Total Sessions:</b></td><td>%1</td></tr>")
         .arg(stats.value("total_sessions", 0));
 
-    html += QString("<tr><td><b>Total Tokens:</b></td><td>%1</td></tr>")
-        .arg(stats.value("total_tokens", 0));
-
     int total_ms = stats.value("total_time_ms", 0);
     html += QString("<tr><td><b>Total Time:</b></td><td>%1s</td></tr>")
         .arg(total_ms / 1000.0, 0, 'f', 2);
@@ -1166,21 +1156,6 @@ QString StatsDashboard::generate_summary_html(const json& stats) {
     html += "</table>";
 
     return html;
-}
-
-void StatsDashboard::update_token_chart(const std::vector<SessionInfo>& sessions) {
-    std::vector<std::pair<QString, double>> data;
-
-    // Show last 5 sessions
-    int start = std::max(0, (int)sessions.size() - 5);
-    for (int i = start; i < sessions.size(); ++i) {
-        data.push_back({
-            QString("Session %1").arg(i + 1),
-            (double)sessions[i].token_usage.total()
-        });
-    }
-
-    token_chart->set_data(data);
 }
 
 void StatsDashboard::update_tool_chart(const json& tool_stats) {

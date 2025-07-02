@@ -296,7 +296,6 @@ class StatsDashboard : public QWidget {
     struct ChartWidget;
 
     QGridLayout* layout;
-    ChartWidget* token_chart;
     ChartWidget* tool_chart;
     ChartWidget* time_chart;
     QTextBrowser* summary_browser;
@@ -310,7 +309,6 @@ public:
 
 private:
     QString generate_summary_html(const json& stats);
-    void update_token_chart(const std::vector<SessionInfo>& sessions);
     void update_tool_chart(const json& tool_stats);
     void update_time_chart(const std::vector<SessionInfo>& sessions);
 };

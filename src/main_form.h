@@ -202,8 +202,8 @@ private:
 
     // Status bar components
     QLabel* status_label_;
-    QLabel* token_label_;
     QLabel* iteration_label_;
+    QLabel* token_label_;
     QProgressBar* status_progress_;
 
     // State
