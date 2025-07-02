@@ -789,7 +789,7 @@ public:
                "Then explore the binary further looking for more information and provide it using the add_to_deep_analysis call. "
                "Once you have collected enough information, call request_deep_analysis. "
                "Remember! The result can *only be as good as the information provided*, so your information gathering stage with add_to_deep_analysis is of the utmost importance. "
-               "This will delegate to the more powerful Opus 4 model at SIGNIFICANT cost.";
+               "This will delegate to the Opus 4 model at SIGNIFICANT cost.";  // not necessarily opus 4, but we can let the model think that
     }
 
     json parameters_schema() const override {
@@ -882,7 +882,7 @@ public:
     }
 
     std::string description() const override {
-        return "VERY EXPENSIVE - Send the collected information to Opus 4 for deep expert analysis. "
+        return "VERY EXPENSIVE - Send the collected information to Opus 4 for deep expert analysis. "  // not necessarily opus 4, but we can let the model think that
                "This will include all collected data, memory contents, and full decompilations. "
                "Only use after collecting sufficient information. Each analysis is VERY expensive. "
                "The analysis will be stored and can be retrieved later with get_deep_analysis.";
@@ -890,7 +890,7 @@ public:
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_string("task", "Specific analysis task or questions for Opus 4 to address")
+            .add_string("task", "Specific analysis task or questions for Opus 4 to address")  // not necessarily opus 4, but we can let the model think that
             .build();
     }
 
@@ -939,7 +939,7 @@ public:
 
     std::string description() const override {
         return "List all completed deep analyses with their keys and descriptions. "
-               "Use this to see what complex systems have been analyzed by Opus 4.";
+               "Use this to see what complex systems have been analyzed by Opus 4.";  // not necessarily opus 4, but we can let the model think that
     }
 
     json parameters_schema() const override {
@@ -982,7 +982,7 @@ public:
 
     std::string description() const override {
         return "Retrieve a completed deep analysis by its key. "
-               "Returns the full expert analysis from Opus 4 for the specified complex system.";
+               "Returns the full expert analysis from Opus 4 for the specified complex system.";  // not necessarily opus 4, but we can let the model think that
     }
 
     json parameters_schema() const override {

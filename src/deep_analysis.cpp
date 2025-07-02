@@ -3,6 +3,8 @@
 //
 
 #include "deep_analysis.h"
+
+#include <utility>
 #include "actions.h"
 
 namespace llm_re {
@@ -69,13 +71,11 @@ DeepAnalysisResult DeepAnalysisManager::execute_deep_analysis(
     }
 
     if (progress_callback) {
-        progress_callback("Building comprehensive context for Opus 4...");
+        progress_callback("Building comprehensive context...");
     }
 
-    // Build the comprehensive context
-    std::string context = build_opus_context(current_collection_, executor);
+    std::string context = build_context(current_collection_, executor);
 
-    // Create the system prompt for Opus
     std::string system_prompt = R"(You are an expert reverse engineer tasked with performing deep analysis on a complex binary system. You have been provided with:
 
 1. Collected information and observations from initial analysis
@@ -96,10 +96,10 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
     std::string user_prompt = "Task: " + task + "\n\nContext and collected information:\n\n" + context;
 
     if (progress_callback) {
-        progress_callback("Sending request to Opus 4 for deep analysis...");
+        progress_callback("Sending request for deep analysis...");
     }
 
-    // Build and send the request to Opus 4
+    // Build and send the request
     api::ChatRequest request = api::ChatRequestBuilder()
         .with_model(api::Model::Opus4)
         .with_system_prompt(system_prompt, true)
@@ -109,10 +109,10 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
         .enable_thinking(true)   // Enable thinking for complex reasoning
         .build();
 
-    api::ChatResponse response = opus_client_->send_request(request);
+    api::ChatResponse response = deep_analysis_client_->send_request(request);
 
     if (!response.success) {
-        throw std::runtime_error("Opus 4 analysis failed: " + response.error.value_or("Unknown error"));
+        throw std::runtime_error("Deep analysis failed: " + response.error.value_or("Unknown error"));
     }
 
     // Extract the analysis text
@@ -256,9 +256,9 @@ double DeepAnalysisManager::estimate_cost(api::TokenUsage usage) {
            (usage.cache_read_tokens / 1000000.0 * price_cache_read);
 }
 
-std::string DeepAnalysisManager::build_opus_context(
+std::string DeepAnalysisManager::build_context(
     const DeepAnalysisCollection& collection,
-    std::shared_ptr<ActionExecutor> executor) {
+    const std::shared_ptr<ActionExecutor>& executor) {
 
     std::stringstream context;
 

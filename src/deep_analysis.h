@@ -41,13 +41,12 @@ private:
     std::map<std::string, DeepAnalysisResult> completed_analyses_;
     mutable std::mutex mutex_;
 
-    // API client for Opus 4
-    std::unique_ptr<api::AnthropicClient> opus_client_;
+    std::unique_ptr<api::AnthropicClient> deep_analysis_client_;
 
 public:
     DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const std::string& api_key)
         : memory_(memory) {
-        opus_client_ = std::make_unique<api::AnthropicClient>(api_key);
+        deep_analysis_client_ = std::make_unique<api::AnthropicClient>(api_key);
     }
 
     // Collection management
@@ -74,10 +73,9 @@ public:
     static double estimate_cost(api::TokenUsage usage);
 
 private:
-    // Helper to build comprehensive context for Opus
-    std::string build_opus_context(
+    std::string build_context(
         const DeepAnalysisCollection& collection,
-        std::shared_ptr<ActionExecutor> executor
+        const std::shared_ptr<ActionExecutor>& executor
     );
 
     // Helper to create a sanitized key from topic
