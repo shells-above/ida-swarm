@@ -1732,6 +1732,7 @@ public:
 
         // Deep analysis
         if (enable_deep_analysis) {
+            register_tool_type<StartDeepAnalysisCollectionTool>(memory, executor, deep_analysis_manager);
             register_tool_type<AddToDeepAnalysisTool>(memory, executor, deep_analysis_manager);
             register_tool_type<RequestDeepAnalysisTool>(memory, executor, deep_analysis_manager);
             register_tool_type<ListDeepAnalysesTool>(memory, executor, deep_analysis_manager);
