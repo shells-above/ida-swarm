@@ -299,8 +299,7 @@ public:
     }
 
     std::string description() const override {
-        return "Analyze a function with optional disassembly and decompilation. Includes cross-references, strings, data refs, and code. Use this for deep function understanding. "
-                  "Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.";
+        return "Analyze a function with optional disassembly and decompilation. Includes cross-references, strings, data refs, and code. Use this for deep function understanding.";
     }
 
     json parameters_schema() const override {
@@ -389,7 +388,6 @@ public:
             .add_integer("address", "Find analysis related to this address", false)
             .add_string("type", "Filter by type (note, finding, hypothesis, question, analysis)", false)
             .add_string("pattern", "Search pattern in content", false)
-            .add_integer("max_results", "Maximum results (defaults to 100)", false)
             .build();
     }
 
@@ -402,9 +400,8 @@ public:
             }
             std::string type = input.value("type", "");
             std::string pattern = input.value("pattern", "");
-            int max_results = input.value("max_results", 100);
 
-            return ToolResult::success(executor->get_analysis(key, address, type, pattern, max_results));
+            return ToolResult::success(executor->get_analysis(key, address, type, pattern));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -619,12 +616,14 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder().build();
+        return ParameterBuilder()
+            .add_integer("max_count", "Max number of entry points to return")
+            .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_entry_points());
+            return ToolResult::success(executor->get_entry_points(input.at("max_count")));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }

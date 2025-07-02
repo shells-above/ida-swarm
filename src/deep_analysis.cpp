@@ -183,7 +183,7 @@ std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analy
     }
 
     // Also check BinaryMemory for any stored analyses we don't have loaded
-    auto stored_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "", -1);
+    auto stored_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
 
     for (const auto& entry : stored_analyses) {
         // Extract key from "deep_analysis_meta_" prefix
@@ -279,7 +279,7 @@ std::string DeepAnalysisManager::build_opus_context(
     context << "=== BINARY ANALYSIS MEMORY ===\n";
 
     // Get all non-deep-analysis entries
-    auto all_analyses = memory_->get_analysis("", std::nullopt, "", "", -1);
+    auto all_analyses = memory_->get_analysis("", std::nullopt, "", "");
 
     // Group by type for better organization
     std::map<std::string, std::vector<AnalysisEntry>> by_type;
@@ -389,9 +389,9 @@ std::string DeepAnalysisManager::build_opus_context(
     }
 
     // Add any insights/findings/hypotheses
-    std::vector<AnalysisEntry> insights = memory_->get_analysis("", std::nullopt, "finding", "", -1);
-    std::vector<AnalysisEntry> hypotheses = memory_->get_analysis("", std::nullopt, "hypothesis", "", -1);
-    std::vector<AnalysisEntry> questions = memory_->get_analysis("", std::nullopt, "question", "", -1);
+    std::vector<AnalysisEntry> insights = memory_->get_analysis("", std::nullopt, "finding", "");
+    std::vector<AnalysisEntry> hypotheses = memory_->get_analysis("", std::nullopt, "hypothesis", "");
+    std::vector<AnalysisEntry> questions = memory_->get_analysis("", std::nullopt, "question", "");
 
     if (!insights.empty() || !hypotheses.empty() || !questions.empty()) {
         context << "\n=== INSIGHTS, HYPOTHESES, AND QUESTIONS ===\n";

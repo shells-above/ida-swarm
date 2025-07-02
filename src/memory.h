@@ -98,8 +98,7 @@ public:
     std::vector<AnalysisEntry> get_analysis(const std::string& key = "",
                                            std::optional<ea_t> address = std::nullopt,
                                            const std::string& type = "",
-                                           const std::string& pattern = "",
-                                           int max_results = -1) const;
+                                           const std::string& pattern = "") const;
 
     // Function memory management
     void set_function_analysis(ea_t address, DetailLevel level, const std::string& analysis);

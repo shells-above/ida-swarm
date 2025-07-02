@@ -210,6 +210,7 @@ Guidelines:
 8. Do NOT use decimal to represent your function / data addresses, STICK TO HEXADECIMAL!
 
 When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
+Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.
 Be systematic and thorough. Build your understanding incrementally.
 
 Remember that you can execute multiple tool calls at once, in fact I encourage it!

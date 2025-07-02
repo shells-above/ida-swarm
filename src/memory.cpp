@@ -139,8 +139,7 @@ void BinaryMemory::store_analysis(const std::string& key, const std::string& con
 std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key,
                                                      std::optional<ea_t> address,
                                                      const std::string& type,
-                                                     const std::string& pattern,
-                                                     int max_results) const {
+                                                     const std::string& pattern) const {
     std::lock_guard<std::mutex> lock(memory_mutex);
     std::vector<AnalysisEntry> results;
 
@@ -191,9 +190,6 @@ std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key,
         }
 
         results.push_back(entry);
-
-        // Check max results
-        if (max_results > 0 && results.size() >= max_results) break;
     }
 
     // Sort by timestamp (newest first)
@@ -268,7 +264,7 @@ MemoryContext BinaryMemory::get_memory_context(ea_t address, int radius) const {
     std::sort(context.context_functions.begin(), context.context_functions.end(), sort_by_distance);
 
     // Build LLM memory summary from relevant analyses
-    auto relevant_analyses = get_analysis("", std::nullopt, "", "", 50);
+    auto relevant_analyses = get_analysis("", std::nullopt, "", "");
     for (const auto& entry : relevant_analyses) {
         if (entry.type == "note" || entry.type == "finding") {
             std::string summary_key = entry.type + "_" + entry.key.substr(0, 20);
