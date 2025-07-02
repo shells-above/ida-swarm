@@ -701,8 +701,6 @@ private:
 
             // Replace the message
             saved_state_.request.messages[cache_position] = std::move(new_msg);
-
-            log(LogLevel::DEBUG, std::format("Moved cache control to position {} (removed from earlier positions)", cache_position));
         }
     }
 
@@ -984,21 +982,21 @@ private:
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
         api::TokenUsage total = token_tracker_.get_total();
 
-        // Debug logging for cache token tracking
-        if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
-            log(LogLevel::DEBUG, std::format("Cache tokens detected - Read: {}, Write: {}, Model: {}", 
-                usage.cache_read_tokens, usage.cache_creation_tokens, api::model_to_string(usage.model)));
-        }
-
-        // Debug cost calculation
-        log(LogLevel::DEBUG, std::format("Cost breakdown - Input: ${:.4f}, Output: ${:.4f}, Cache Read: ${:.4f}, Cache Write: ${:.4f}, Total Model: {}", 
-            usage.input_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.0 : 0.0),
-            usage.output_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 15.0 : 0.0),
-            usage.cache_read_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 0.30 : 0.0),
-            usage.cache_creation_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.75 : 0.0),
-            api::model_to_string(total.model)));
-        log(LogLevel::DEBUG, std::format("Total cost: ${:.4f} (Input: {}, Output: {}, Cache Read: {}, Cache Write: {})", 
-            total.estimated_cost(), total.input_tokens, total.output_tokens, total.cache_read_tokens, total.cache_creation_tokens));
+        // // Debug logging for cache token tracking
+        // if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
+        //     log(LogLevel::DEBUG, std::format("Cache tokens detected - Read: {}, Write: {}, Model: {}",
+        //         usage.cache_read_tokens, usage.cache_creation_tokens, api::model_to_string(usage.model)));
+        // }
+        //
+        // // Debug cost calculation
+        // log(LogLevel::DEBUG, std::format("Cost breakdown - Input: ${:.4f}, Output: ${:.4f}, Cache Read: ${:.4f}, Cache Write: ${:.4f}, Total Model: {}",
+        //     usage.input_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.0 : 0.0),
+        //     usage.output_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 15.0 : 0.0),
+        //     usage.cache_read_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 0.30 : 0.0),
+        //     usage.cache_creation_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.75 : 0.0),
+        //     api::model_to_string(total.model)));
+        // log(LogLevel::DEBUG, std::format("Total cost: ${:.4f} (Input: {}, Output: {}, Cache Read: {}, Cache Write: {})",
+        //     total.estimated_cost(), total.input_tokens, total.output_tokens, total.cache_read_tokens, total.cache_creation_tokens));
 
         std::stringstream ss;
         ss << "[Iteration " << iteration << "] ";
