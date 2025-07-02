@@ -72,12 +72,14 @@ struct TokenUsage {
      * @return returns new summed TokenUsage
      */
     TokenUsage operator+(const TokenUsage& other) const {
-        return {
+        TokenUsage result = {
             input_tokens + other.input_tokens,
             output_tokens + other.output_tokens,
             cache_creation_tokens + other.cache_creation_tokens,
-            cache_read_tokens + other.cache_read_tokens
+            cache_read_tokens + other.cache_read_tokens,
+            model  // Preserve model from this instance
         };
+        return result;
     }
 
     /**
@@ -86,19 +88,19 @@ struct TokenUsage {
      * @return returns this
      */
     TokenUsage& operator+=(const TokenUsage& other) {
+        // Set model from the first non-zero usage (preserve model context)
+        bool was_empty = (input_tokens == 0 && output_tokens == 0 && cache_creation_tokens == 0 && cache_read_tokens == 0);
+        
         input_tokens += other.input_tokens;
         output_tokens += other.output_tokens;
         cache_creation_tokens += other.cache_creation_tokens;
         cache_read_tokens += other.cache_read_tokens;
+        
+        // If this was empty, adopt the model from the other usage
+        if (was_empty) {
+            model = other.model;
+        }
         return *this;
-    }
-
-    /**
-     * returns total number of in + out tokens (excludes cache)
-     * @return total number of in + out tokens
-     */
-    int total() const {
-        return input_tokens + output_tokens;
     }
 
     double estimated_cost() const {
@@ -157,9 +159,7 @@ struct TokenUsage {
             {"output_tokens", output_tokens},
             {"cache_creation_input_tokens", cache_creation_tokens},
             {"cache_read_input_tokens", cache_read_tokens},
-            {"model", model_to_string(model)},
-            {"total", total()},
-            {"estimated_cost", estimated_cost()}
+            {"model", model_to_string(model)}
         };
     }
 };
@@ -842,17 +842,10 @@ public:
         return duration.count();
     }
 
-    double get_tokens_per_minute() const {
-        double minutes = get_session_duration_minutes();
-        if (minutes < 1.0) minutes = 1.0;  // Avoid division by zero
-        return session_total.total() / minutes;
-    }
-
     json to_json() const {
         json j;
         j["session_total"] = session_total.to_json();
         j["session_duration_minutes"] = get_session_duration_minutes();
-        j["tokens_per_minute"] = get_tokens_per_minute();
         j["request_count"] = history.size();
         return j;
     }

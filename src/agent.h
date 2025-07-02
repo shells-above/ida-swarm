@@ -984,6 +984,22 @@ private:
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
         api::TokenUsage total = token_tracker_.get_total();
 
+        // Debug logging for cache token tracking
+        if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
+            log(LogLevel::DEBUG, std::format("Cache tokens detected - Read: {}, Write: {}, Model: {}", 
+                usage.cache_read_tokens, usage.cache_creation_tokens, api::model_to_string(usage.model)));
+        }
+
+        // Debug cost calculation
+        log(LogLevel::DEBUG, std::format("Cost breakdown - Input: ${:.4f}, Output: ${:.4f}, Cache Read: ${:.4f}, Cache Write: ${:.4f}, Total Model: {}", 
+            usage.input_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.0 : 0.0),
+            usage.output_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 15.0 : 0.0),
+            usage.cache_read_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 0.30 : 0.0),
+            usage.cache_creation_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.75 : 0.0),
+            api::model_to_string(total.model)));
+        log(LogLevel::DEBUG, std::format("Total cost: ${:.4f} (Input: {}, Output: {}, Cache Read: {}, Cache Write: {})", 
+            total.estimated_cost(), total.input_tokens, total.output_tokens, total.cache_read_tokens, total.cache_creation_tokens));
+
         std::stringstream ss;
         ss << "[Iteration " << iteration << "] ";
         ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
@@ -991,6 +1007,7 @@ private:
         ss << " [" << usage.cache_read_tokens << " cache read, " << usage.cache_creation_tokens << " cache write]";
 
         ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << " out";
+        ss << " [" << total.cache_read_tokens << " cache read, " << total.cache_creation_tokens << " cache write]";
         ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();
 
         // Add overall cache statistics
