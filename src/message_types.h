@@ -141,12 +141,10 @@ struct ToolResultContent : public Content {
     std::string tool_use_id;
     std::string content;
     bool is_error = false;
+    std::optional<CacheControl> cache_control;
 
-    ToolResultContent(std::string id, std::string c)
-        : tool_use_id(std::move(id)), content(std::move(c)) {}
-
-    ToolResultContent(std::string id, std::string c, bool error)
-        : tool_use_id(std::move(id)), content(std::move(c)), is_error(error) {}
+    ToolResultContent(std::string id, std::string c, bool error, std::optional<CacheControl> cache = std::nullopt)
+        : tool_use_id(std::move(id)), content(std::move(c)), is_error(error), cache_control(cache) {}
 
     void accept(ContentVisitor& visitor) const override {
         visitor.visit(*this);
@@ -160,6 +158,9 @@ struct ToolResultContent : public Content {
         };
         if (is_error) {
             j["is_error"] = true;
+        }
+        if (cache_control) {
+            j["cache_control"] = cache_control->to_json();
         }
         return j;
     }
@@ -175,8 +176,17 @@ struct ToolResultContent : public Content {
             return nullptr;
         }
         bool is_error = j.contains("is_error") && j["is_error"].get<bool>();
+
+        std::optional<CacheControl> cache_control;
+        if (j.contains("cache_control")) {
+            cache_control = CacheControl::from_json(j["cache_control"]);
+        }
+
         return std::make_unique<ToolResultContent>(
-            j["tool_use_id"], j["content"], is_error
+            j["tool_use_id"],
+            j["content"],
+            is_error,
+            cache_control
         );
     }
 };
@@ -411,17 +421,31 @@ public:
         json j;
         j["role"] = role_to_string(role_);
 
-        if (contents_.size() == 1) {
-            // Single content can be sent as string (for simple text messages)
-            if (const TextContent* text = dynamic_cast<const TextContent*>(contents_[0].get())) {
-                if (!text->cache_control) {  // todo should i be checking this?
-                    j["content"] = text->text;
-                    return j;
+        // Always use array format if we have cache control anywhere
+        bool has_cache_control = false;
+        for (const std::unique_ptr<Content>& content: contents_) {
+            if (auto* text = dynamic_cast<const TextContent*>(content.get())) {
+                if (text->cache_control) {
+                    has_cache_control = true;
+                    break;
+                }
+            } else if (auto* tool_result = dynamic_cast<const ToolResultContent*>(content.get())) {
+                if (tool_result->cache_control) {
+                    has_cache_control = true;
+                    break;
                 }
             }
         }
 
-        // Multiple contents or special content types need array format
+        if (contents_.size() == 1 && !has_cache_control) {
+            // Single content without cache control can be sent as string
+            if (const TextContent* text = dynamic_cast<const TextContent*>(contents_[0].get())) {
+                j["content"] = text->text;
+                return j;
+            }
+        }
+
+        // Use array format for multiple contents or when cache control is present
         json content_array = json::array();
         for (const std::unique_ptr<Content>& content: contents_) {
             content_array.push_back(content->to_json());

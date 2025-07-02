@@ -170,10 +170,10 @@ private:
 
     // Cache performance tracking
     struct CacheStats {
-        int total_cache_hits = 0;
-        int total_cache_misses = 0;
-        int total_cache_writes = 0;
-        double total_cache_savings = 0.0;  // estimated cost savings from cache hits
+        int total_cache_hits = 0;      // Total cached tokens read
+        int total_cache_misses = 0;    // Total non-cached input tokens
+        int total_cache_writes = 0;    // Number of cache write operations
+        double total_cache_savings = 0.0;
 
         double get_hit_rate() const {
             int total = total_cache_hits + total_cache_misses;
@@ -182,8 +182,8 @@ private:
 
         json to_json() const {
             return {
-                {"cache_hits", total_cache_hits},
-                {"cache_misses", total_cache_misses},
+                {"cache_hit_tokens", total_cache_hits},
+                {"cache_miss_tokens", total_cache_misses},
                 {"cache_writes", total_cache_writes},
                 {"hit_rate", get_hit_rate()},
                 {"estimated_savings", total_cache_savings}
@@ -619,38 +619,61 @@ private:
         return false;
     }
 
-    // Add cache control to the last content block of a message
-    void add_cache_control_to_last_block(messages::Message& msg) {
-        auto& contents = msg.mutable_contents();
-        if (!contents.empty()) {
-            // Find the last non-thinking content block
-            for (auto it = contents.rbegin(); it != contents.rend(); ++it) {
-                auto& content = *it;
+    void apply_incremental_caching_to_saved_state() {
+        if (saved_state_.request.messages.empty()) return;
 
-                // Skip thinking blocks as they cannot be cached directly
-                if (dynamic_cast<messages::ThinkingContent*>(content.get()) ||
-                    dynamic_cast<messages::RedactedThinkingContent*>(content.get())) {
-                    continue;
-                }
+        // Find the last message to cache (excluding the very last one which is new)
+        int cache_position = -1;
 
-                // Add cache control to text content
-                if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
-                    // Create a new text content with cache control
-                    auto cached_text = std::make_unique<messages::TextContent>(
-                        text->text,
-                        messages::CacheControl{messages::CacheControl::Type::Ephemeral}
-                    );
-                    *it = std::move(cached_text);
-                    break;
-                }
+        // We want to cache up to but not including the most recent message
+        for (int i = saved_state_.request.messages.size() - 2; i >= 0; i--) {
+            const messages::Message& msg = saved_state_.request.messages[i];
 
-                // For tool results, we can add cache control
-                if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(content.get())) {
-                    // Tool results already support caching in the messages array
-                    // The cache control is added at the message level, not the content level
-                    break;
+            if (msg.role() == messages::Role::Assistant) {
+                cache_position = i;
+                break;
+            } else if (msg.role() == messages::Role::User && has_tool_results(msg)) {
+                cache_position = i;
+                break;
+            }
+        }
+
+        if (cache_position >= 0) {
+            // Modify the message IN PLACE in saved_state
+            messages::Message& msg_to_cache = saved_state_.request.messages[cache_position];
+
+            auto& contents = msg_to_cache.mutable_contents();
+            if (!contents.empty()) {
+                // Find the last cacheable content block
+                for (auto it = contents.rbegin(); it != contents.rend(); ++it) {
+                    // Skip thinking blocks
+                    if (dynamic_cast<messages::ThinkingContent*>(it->get()) ||
+                        dynamic_cast<messages::RedactedThinkingContent*>(it->get())) {
+                        continue;
+                    }
+
+                    // Replace with cached version
+                    if (auto* text = dynamic_cast<messages::TextContent*>(it->get())) {
+                        *it = std::make_unique<messages::TextContent>(
+                            text->text,
+                            messages::CacheControl{messages::CacheControl::Type::Ephemeral}
+                        );
+                        break;
+                    } else if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(it->get())) {
+                        *it = std::make_unique<messages::ToolResultContent>(
+                            tool_result->tool_use_id,
+                            tool_result->content,
+                            tool_result->is_error,
+                            messages::CacheControl{messages::CacheControl::Type::Ephemeral}
+                        );
+                        break;
+                    }
                 }
             }
+
+            log(LogLevel::DEBUG, std::format("Added cache control to {} message at position {} (persistent)",
+                msg_to_cache.role() == messages::Role::Assistant ? "assistant" : "user",
+                cache_position));
         }
     }
 
@@ -666,30 +689,14 @@ private:
 
             log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
-            // Create request for this iteration
-            api::ChatRequest current_request = saved_state_.request;
-
-            // Incremental caching
-            if (iteration > 1 && !current_request.messages.empty()) {
-                auto& last_msg = current_request.messages.back();
-
-                if (last_msg.role() == messages::Role::User) {
-                    // Only cache user messages with tool results
-                    if (has_tool_results(last_msg)) {
-                        add_cache_control_to_last_block(last_msg);
-                        log(LogLevel::DEBUG, "Adding cache control to user message with tool results");
-                    } else {
-                        // Warn about potential cache invalidation
-                        if (current_request.enable_thinking && has_non_tool_result_content(last_msg)) {
-                            log(LogLevel::WARNING, "User message without tool results may invalidate thinking cache");
-                        }
-                    }
-                } else if (last_msg.role() == messages::Role::Assistant) {
-                    // Always cache assistant messages for conversation continuity
-                    add_cache_control_to_last_block(last_msg);
-                    log(LogLevel::DEBUG, "Adding cache control to assistant message");
-                }
+            // Apply incremental caching BEFORE creating the request copy
+            if (iteration > 1 && config_.api.enable_prompt_caching) {
+                // Apply cache control to the SAVED state, not a copy
+                apply_incremental_caching_to_saved_state();
             }
+
+            // NOW create request for this iteration
+            api::ChatRequest current_request = saved_state_.request;
 
             // Send request
             api::ChatResponse response = api_client_.send_request(current_request);
@@ -704,7 +711,8 @@ private:
                 std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
                 std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
-                log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
+                log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks",
+                    thinking_blocks.size(), redacted_blocks.size()));
 
                 // Log thinking summary if available
                 if (!thinking_blocks.empty()) {
@@ -728,9 +736,16 @@ private:
             std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
             // Add tool results to conversation
-            for (const messages::Message& result: tool_results) {
-                saved_state_.request.messages.push_back(result);
-                conversation_.add_message(result);
+            // Combine tool results into a single user message for better caching
+            if (!tool_results.empty()) {
+                messages::Message combined_results = messages::Message(messages::Role::User);
+                for (const messages::Message& result : tool_results) {
+                    for (const std::unique_ptr<messages::Content>& content: result.contents()) {
+                        combined_results.add_content(content->clone());
+                    }
+                }
+                saved_state_.request.messages.push_back(combined_results);
+                conversation_.add_message(combined_results);
             }
 
             // Check if task is complete
@@ -749,10 +764,6 @@ private:
             }
 
             // Check conversation length and provide cache efficiency info
-            // todo make this be based off context window, and when it gets too long it tells
-            // the llm to store all the information it gathered in BinaryMemory, and summarize it
-            // so the next llm 'chat' can see that and index the memory
-            // and then clears message history and resumes
             if (conversation_.message_count() > 200) {
                 log(LogLevel::WARNING,
                     std::format("Conversation getting long ({} messages). Cache hit rate: {:.1f}%",
@@ -772,17 +783,23 @@ private:
 
     // Update cache statistics
     void update_cache_stats(const api::TokenUsage& usage) {
-        if (usage.cache_read_tokens > 0) {
-            cache_stats_.total_cache_hits++;
-            // Estimate savings based on the difference in pricing
-            double saved = usage.cache_read_tokens / 1000000.0 * (get_input_price(usage.model) - get_cache_read_price(usage.model));
-            cache_stats_.total_cache_savings += saved;
-        } else if (usage.input_tokens > 0) {
-            cache_stats_.total_cache_misses++;
-        }
+        // Track based on actual tokens, not requests
+        if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0 || usage.input_tokens > 0) {
+            int total_input = usage.cache_read_tokens + usage.input_tokens;
 
-        if (usage.cache_creation_tokens > 0) {
-            cache_stats_.total_cache_writes++;
+            cache_stats_.total_cache_hits += usage.cache_read_tokens;
+            cache_stats_.total_cache_misses += usage.input_tokens;
+
+            if (usage.cache_creation_tokens > 0) {
+                cache_stats_.total_cache_writes++;
+            }
+
+            // Estimate savings based on the difference in pricing
+            if (usage.cache_read_tokens > 0) {
+                double saved = usage.cache_read_tokens / 1000000.0 *
+                              (get_input_price(usage.model) - get_cache_read_price(usage.model));
+                cache_stats_.total_cache_savings += saved;
+            }
         }
     }
 
