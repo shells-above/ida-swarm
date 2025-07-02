@@ -466,6 +466,7 @@ private:
                 .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
                 .with_tools(tool_registry_)
                 .with_max_tokens(config_.api.max_tokens)
+                .with_max_thinking_tokens(config_.api.max_thinking_tokens)
                 .with_temperature(config_.api.temperature)
                 .enable_thinking(config_.agent.enable_thinking)
                 .build();

@@ -18,6 +18,7 @@ namespace llm_re {
             j["api"]["base_url"] = api.base_url;
             j["api"]["model"] = api::model_to_string(api.model);
             j["api"]["max_tokens"] = api.max_tokens;
+            j["api"]["max_thinking_tokens"] = api.max_thinking_tokens;
             j["api"]["temperature"] = api.temperature;
             j["api"]["enable_prompt_caching"] = api.enable_prompt_caching;
 
@@ -69,6 +70,7 @@ namespace llm_re {
                     api.model = api::model_from_string(j["api"]["model"]);
                 }
                 api.max_tokens = j["api"].value("max_tokens", api.max_tokens);
+                api.max_thinking_tokens = j["api"].value("max_thinking_tokens", api.max_thinking_tokens);
                 api.temperature = j["api"].value("temperature", api.temperature);
                 api.enable_prompt_caching = j["api"].value("enable_prompt_caching", api.enable_prompt_caching);
             }
@@ -1357,6 +1359,11 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     max_tokens_spin->setValue(8192);
     model_layout->addRow("Max Tokens:", max_tokens_spin);
 
+    max_thinking_tokens_spin = new QSpinBox();
+    max_thinking_tokens_spin->setRange(1024, 8192);
+    max_thinking_tokens_spin->setValue(2048);
+    model_layout->addRow("Max Thinking Tokens:", max_tokens_spin);
+
     max_iterations_spin = new QSpinBox();
     max_iterations_spin->setRange(1, 200);
     max_iterations_spin->setValue(100);
@@ -1470,6 +1477,7 @@ void ConfigWidget::load_settings(const Config& config) {
     }
 
     max_tokens_spin->setValue(config.api.max_tokens);
+    max_thinking_tokens_spin->setValue(config.api.max_thinking_tokens);
     max_iterations_spin->setValue(config.agent.max_iterations);
     temperature_spin->setValue(config.api.temperature);
     enable_thinking_check->setChecked(config.agent.enable_thinking);
@@ -1499,6 +1507,7 @@ void ConfigWidget::save_settings(Config& config) {
     }
 
     config.api.max_tokens = max_tokens_spin->value();
+    config.api.max_thinking_tokens = max_thinking_tokens_spin->value();
     config.agent.max_iterations = max_iterations_spin->value();
     config.api.temperature = temperature_spin->value();
     config.agent.enable_thinking = enable_thinking_check->isChecked();

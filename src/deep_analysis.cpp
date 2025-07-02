@@ -101,12 +101,13 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
 
     // Build and send the request
     api::ChatRequest request = api::ChatRequestBuilder()
-        .with_model(api::Model::Opus4)
+        .with_model(api::Model::Sonnet4)
         .with_system_prompt(system_prompt, true)
         .add_message(messages::Message::user_text(user_prompt))
-        .with_max_tokens(32768)  // Large token budget for comprehensive analysis
-        .with_temperature(0.0)   // We want consistency for technical analysis
-        .enable_thinking(true)   // Enable thinking for complex reasoning
+        .with_max_tokens(32768)
+        .with_max_thinking_tokens(8192)
+        .with_temperature(0.0)
+        .enable_thinking(true)
         .build();
 
     api::ChatResponse response = deep_analysis_client_->send_request(request);

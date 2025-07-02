@@ -50,6 +50,7 @@ namespace llm_re {
             std::string base_url = "https://api.anthropic.com/v1/messages";
             api::Model model = api::Model::Sonnet4;
             int max_tokens = 8192;
+            int max_thinking_tokens = 2048;
             double temperature = 0.0;
             bool enable_prompt_caching = true;
         } api;
@@ -326,6 +327,7 @@ class ConfigWidget : public QWidget {
     // Model settings
     QComboBox* model_combo;
     QSpinBox* max_tokens_spin;
+    QSpinBox* max_thinking_tokens_spin;
     QSpinBox* max_iterations_spin;
     QDoubleSpinBox* temperature_spin;
     QCheckBox* enable_thinking_check;

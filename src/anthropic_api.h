@@ -162,6 +162,7 @@ public:
     std::vector<messages::Message> messages;
     std::vector<json> tool_definitions;
     int max_tokens = 8192;
+    int max_thinking_tokens = 2048;
     double temperature = 0.0;
     bool enable_thinking = false;
     std::vector<std::string> stop_sequences;
@@ -231,7 +232,7 @@ public:
         if (enable_thinking) {
             // Enable thinking/reasoning
             // todo add support for interleaved thinking + tool calling
-            j["thinking"]["budget_tokens"] = 2048;
+            j["thinking"]["budget_tokens"] = max_thinking_tokens;
             j["thinking"]["type"] = "enabled";
         }
 
@@ -386,6 +387,11 @@ public:
 
     ChatRequestBuilder& with_max_tokens(int tokens) {
         request.max_tokens = tokens;
+        return *this;
+    }
+
+    ChatRequestBuilder& with_max_thinking_tokens(int tokens) {
+        request.max_thinking_tokens = tokens;
         return *this;
     }
 
