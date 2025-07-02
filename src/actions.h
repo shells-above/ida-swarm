@@ -23,27 +23,28 @@ public:
 
 
     // IDA Core Actions
-    json get_xrefs_to(ea_t address);
-    json get_xrefs_from(ea_t address);
+    json get_xrefs_to(ea_t address, int max_count = 100);
+    json get_xrefs_from(ea_t address, int max_count = 100);
     json get_function_disassembly(ea_t address);
     json get_function_decompilation(ea_t address);
     json get_function_address(const std::string& name);
     json get_function_name(ea_t address);
     json set_function_name(ea_t address, const std::string& name);
-    json get_function_string_refs(ea_t address);
-    json get_function_data_refs(ea_t address);
+    json get_function_string_refs(ea_t address, int max_count = 100);
+    json get_function_data_refs(ea_t address, int max_count = 100);
     json get_data_name(ea_t address);
     json set_data_name(ea_t address, const std::string& name);
     json get_data(ea_t address);
     json add_comment(ea_t address, const std::string& comment);
     json clear_comment(ea_t address);
     json get_imports(int max_count);
-    json search_strings(const std::string& text, bool is_case_sensitive = false);
+    json search_strings(const std::string& text, bool is_case_sensitive, int max_count = 100);
     json get_named_functions(int max_count);
     json search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
-    json search_named_globals(const std::string& pattern, bool is_regex);
+    json search_named_globals(const std::string& pattern, bool is_regex, int max_count);
+    json get_global_by_name(const std::string& name);
     json get_named_globals(int max_count);
-    json get_strings(int min_length);
+    json get_strings(int min_length, int max_count = 1000);
     json get_entry_points();
 
     // Memory System Actions

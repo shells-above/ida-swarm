@@ -92,11 +92,15 @@ public:
         }
     }
 
+    // external helpers
+    static ea_t get_name_address(const std::string& name);
+    static bool is_function(ea_t address);
+
 
     // Cross-reference operations
 
-    static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address);
-    static std::vector<std::pair<ea_t, std::string>> get_xrefs_from_with_names(ea_t address);
+    static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address, int max_count = -1);
+    static std::vector<std::pair<ea_t, std::string>> get_xrefs_from_with_names(ea_t address, int max_count = -1);
 
     // Disassembly and decompilation
 
@@ -143,14 +147,14 @@ public:
      * @param address Function address
      * @return Vector of string values
      */
-    static std::vector<std::string> get_function_string_refs(ea_t address);
+    static std::vector<std::string> get_function_string_refs(ea_t address, int max_count = -1);
 
     /**
      * Get all data references accessed by a function
      * @param address Function address
      * @return Vector of data addresses
      */
-    static std::vector<ea_t> get_function_data_refs(ea_t address);
+    static std::vector<ea_t> get_function_data_refs(ea_t address, int max_count = -1);
 
     // Data operations
 
@@ -230,13 +234,13 @@ public:
      * @param is_case_sensitive Case sensitivity flag
      * @return Vector of matching strings
      */
-    static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive);
+    static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive, int max_count = -1);
 
     static std::vector<std::pair<ea_t, std::string>> get_named_functions(int max_count);
     static std::vector<std::pair<ea_t, std::string>> search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
-    static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex);
+    static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex, int max_count = -1);
     static std::vector<std::pair<ea_t, std::string>> get_named_globals();
-    static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length = 4);
+    static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length, int max_count = -1);
     static std::vector<std::tuple<ea_t, std::string, std::string>> get_entry_points();
 };
 

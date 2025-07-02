@@ -14,15 +14,33 @@ std::string format_address_hex(ea_t address) {
     return ss.str();
 }
 
-std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t address) {
+ea_t IDAUtils::get_name_address(const std::string& name) {
+    return execute_sync_wrapper([&name]() {
+        return get_name_ea(BADADDR, name.c_str());
+    });
+}
+
+bool IDAUtils::is_function(ea_t address) {
     return execute_sync_wrapper([address]() {
+        func_t *func = get_func(address);
+        return func != nullptr;
+    });
+}
+
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t address, int max_count) {
+    return execute_sync_wrapper([address, max_count]() {
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         std::vector<std::pair<ea_t, std::string>> result;
+        int count = 0;
         xrefblk_t xb;
         for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             qstring name;
             std::string func_name;
 
@@ -34,20 +52,26 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t
             }
 
             result.push_back({xb.from, func_name});
+            count++;
         }
         return result;
     });
 }
 
-std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_from_with_names(ea_t address) {
-    return execute_sync_wrapper([address]() {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_from_with_names(ea_t address, int max_count) {
+    return execute_sync_wrapper([address, max_count]() {
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
         std::vector<std::pair<ea_t, std::string>> result;
+        int count = 0;
         xrefblk_t xb;
         for (bool ok = xb.first_from(address, XREF_ALL); ok; ok = xb.next_from()) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             qstring name;
             std::string func_name;
 
@@ -59,6 +83,7 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_from_with_names(ea
             }
 
             result.push_back({xb.to, func_name});
+            count++;
         }
         return result;
     });
@@ -185,8 +210,8 @@ bool IDAUtils::set_function_name(ea_t address, const std::string& name) {
     });
 }
 
-std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
-    return execute_sync_wrapper([address]() {
+std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address, int max_count) {
+    return execute_sync_wrapper([address, max_count]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
@@ -198,11 +223,20 @@ std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
             return result;
         }
 
+        int count = 0;
         // Iterate through function instructions
         for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             // Check for data references from this instruction
             xrefblk_t xb;
             for (bool ok = xb.first_from(ea, XREF_DATA); ok; ok = xb.next_from()) {
+                if (max_count > 0 && count >= max_count) {
+                    break;
+                }
+
                 // Check if the target is a string
                 flags_t flags = get_flags(xb.to);
                 if (is_strlit(flags)) {
@@ -210,23 +244,24 @@ std::vector<std::string> IDAUtils::get_function_string_refs(ea_t address) {
                     qstring str;
                     size_t len = get_max_strlit_length(xb.to, STRTYPE_C);
                     if (get_strlit_contents(&str, xb.to, len, STRTYPE_C) > 0) {
-                        result.push_back(str.c_str());
+                        // Check if already in result to avoid duplicates
+                        if (std::find(result.begin(), result.end(), str.c_str()) == result.end()) {
+                            result.push_back(str.c_str());
+                            count++;
+                        }
                     }
                 }
             }
             ea = next_head(ea, func->end_ea);
         }
 
-        // Remove duplicates
-        std::sort(result.begin(), result.end());
-        result.erase(std::unique(result.begin(), result.end()), result.end());
-
         return result;
     });
 }
 
-std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address) {
-    return execute_sync_wrapper([address]() {
+
+std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address, int max_count) {
+    return execute_sync_wrapper([address, max_count]() {
         // Validate input
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
@@ -238,19 +273,32 @@ std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address) {
             return result;
         }
 
+        std::set<ea_t> unique_refs; // Use set to avoid duplicates
+        int count = 0;
+
         // Iterate through function instructions
         for (ea_t ea = func->start_ea; ea < func->end_ea; ) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             // Get data references from this instruction
             xrefblk_t xb;
             for (bool ok = xb.first_from(ea, XREF_DATA); ok; ok = xb.next_from()) {
-                result.push_back(xb.to);
+                if (max_count > 0 && count >= max_count) {
+                    break;
+                }
+
+                if (unique_refs.insert(xb.to).second) {
+                    result.push_back(xb.to);
+                    count++;
+                }
             }
             ea = next_head(ea, func->end_ea);
         }
 
-        // Remove duplicates
+        // Sort by address
         std::sort(result.begin(), result.end());
-        result.erase(std::unique(result.begin(), result.end()), result.end());
 
         return result;
     });
@@ -498,8 +546,8 @@ std::vector<std::string> IDAUtils::get_strings() {
     });
 }
 
-std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool is_case_sensitive) {
-    return execute_sync_wrapper([&text, is_case_sensitive]() {
+std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool is_case_sensitive, int max_count) {
+    return execute_sync_wrapper([&text, is_case_sensitive, max_count]() {
         // Validate input
         if (text.empty()) {
             throw std::invalid_argument("Search text cannot be empty");
@@ -509,12 +557,17 @@ std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool 
         }
 
         std::vector<std::string> result;
+        int count = 0;
 
         // Get all strings first
         std::vector<std::string> all_strings = get_strings();
 
         // Search through them
         for (const auto& str : all_strings) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             bool found = false;
 
             if (is_case_sensitive) {
@@ -530,12 +583,14 @@ std::vector<std::string> IDAUtils::search_strings(const std::string& text, bool 
 
             if (found) {
                 result.push_back(str);
+                count++;
             }
         }
 
         return result;
     });
 }
+
 
 
 std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_functions(int max_count) {
@@ -626,8 +681,8 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_functions(const
     });
 }
 
-std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_globals(const std::string& pattern, bool is_regex) {
-    return execute_sync_wrapper([&pattern, is_regex]() {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_globals(const std::string& pattern, bool is_regex, int max_count) {
+    return execute_sync_wrapper([&pattern, is_regex, max_count]() {
         // Validate input
         if (pattern.empty()) {
             throw std::invalid_argument("Search pattern cannot be empty");
@@ -648,9 +703,14 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_globals(const s
             }
         }
 
+        int count = 0;
         // Iterate through all names
         size_t qty = get_nlist_size();
         for (size_t i = 0; i < qty; i++) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             ea_t ea = get_nlist_ea(i);
             if (ea != BADADDR) {
                 // Check if it's not a function
@@ -685,6 +745,7 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::search_named_globals(const s
 
                             if (matches) {
                                 result.push_back({ea, str_name});
+                                count++;
                             }
                         }
                     }
@@ -739,8 +800,8 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_named_globals() {
     });
 }
 
-std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(int min_length) {
-    return execute_sync_wrapper([min_length]() {
+std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(int min_length, int max_count) {
+    return execute_sync_wrapper([min_length, max_count]() {
         // Validate input
         if (min_length < 1 || min_length > 1024) {
             throw std::invalid_argument("Invalid minimum length (must be 1-1024)");
@@ -753,13 +814,20 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(i
 
         // Get all strings
         size_t qty = get_strlist_qty();
+        int count = 0;
+
         for (size_t i = 0; i < qty; i++) {
+            if (max_count > 0 && count >= max_count) {
+                break;
+            }
+
             string_info_t si;
             if (get_strlist_item(&si, i)) {
                 if (si.length >= min_length) {
                     qstring str;
                     if (get_strlit_contents(&str, si.ea, si.length, si.type) > 0) {
                         result.push_back({si.ea, str.c_str()});
+                        count++;
                     }
                 }
             }
@@ -768,6 +836,7 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_strings_with_addresses(i
         return result;
     });
 }
+
 std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_entry_points() {
     return execute_sync_wrapper([]() {
         std::vector<std::tuple<ea_t, std::string, std::string>> result;

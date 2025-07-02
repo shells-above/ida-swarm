@@ -143,26 +143,27 @@ public:
     }
 
     std::string description() const override {
-        return "Find what calls or references this address. Returns caller addresses with names. Essential for understanding how functions are used.";
+        return "Find what calls or references this address. Returns caller addresses with names. Essential for understanding how functions are used. Large functions may have many xrefs.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address to find references to")
+            .add_integer("max_count", "Maximum number of xrefs to return (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_xrefs_to(address));
+            int max_count = input.value("max_count", 100);
+            return ToolResult::success(executor->get_xrefs_to(address, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-// Get xrefs from
 class GetXrefsFromTool : public Tool {
 public:
     using Tool::Tool;
@@ -178,13 +179,15 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address to find references from")
+            .add_integer("max_count", "Maximum number of xrefs to return (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_xrefs_from(address));
+            int max_count = input.value("max_count", 100);
+            return ToolResult::success(executor->get_xrefs_from(address, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -345,19 +348,21 @@ public:
     }
 
     std::string description() const override {
-        return "Get all string references used within a function. Auto-updates memory. Helps understand function behavior.";
+        return "Get all string references used within a function. Auto-updates memory. Helps understand function behavior. Large functions may reference many strings.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address of the function")
+            .add_integer("max_count", "Maximum number of strings to return (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_string_refs(address));
+            int max_count = input.value("max_count", 100);
+            return ToolResult::success(executor->get_function_string_refs(address, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -373,19 +378,21 @@ public:
     }
 
     std::string description() const override {
-        return "Get all data references used within a function. Auto-updates memory. Shows what data the function accesses.";
+        return "Get all data references used within a function. Auto-updates memory. Shows what data the function accesses. Large functions may have many data references.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address of the function")
+            .add_integer("max_count", "Maximum number of data refs to return (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_data_refs(address));
+            int max_count = input.value("max_count", 100);
+            return ToolResult::success(executor->get_function_data_refs(address, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -569,34 +576,37 @@ public:
 
 // String search tool
 class SearchStringsTool : public Tool {
-public:
-    using Tool::Tool;
+    public:
+        using Tool::Tool;
 
-    std::string name() const override {
-        return "search_strings";
-    }
-
-    std::string description() const override {
-        return "Search for strings containing the given text. Case sensitivity is optional. Useful for finding specific functionality.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("text", "The text to search for in strings")
-            .add_boolean("is_case_sensitive", "Whether the search is case sensitive", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string text = input.at("text");
-            bool is_case_sensitive = input.value("is_case_sensitive", false);
-            return ToolResult::success(executor->search_strings(text, is_case_sensitive));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+        std::string name() const override {
+            return "search_strings";
         }
-    }
-};
+
+        std::string description() const override {
+            return "Search for strings containing the given text. Case sensitivity is optional. Useful for finding specific functionality. Results are limited to avoid overwhelming output.";
+        }
+
+        json parameters_schema() const override {
+            return ParameterBuilder()
+                .add_string("text", "The text to search for in strings")
+                .add_boolean("is_case_sensitive", "Whether the search is case sensitive", false)
+                .add_integer("max_count", "Maximum number of results to return (defaults to 100)", false)
+                .build();
+        }
+
+        ToolResult execute(const json& input) override {
+            try {
+                std::string text = input.at("text");
+                bool is_case_sensitive = input.value("is_case_sensitive", false);
+                int max_count = input.value("max_count", 100);
+                return ToolResult::success(executor->search_strings(text, is_case_sensitive, max_count));
+            } catch (const std::exception& e) {
+                return ToolResult::failure(e.what());
+            }
+        }
+    };
+
 
 // Named functions tool
 class GetNamedFunctionsTool : public Tool {
@@ -670,13 +680,14 @@ public:
     }
 
     std::string description() const override {
-        return "Search for global variables/data by name pattern. Supports regex";
+        return "Search for global variables/data by name pattern. Supports regex. Returns limited results to avoid overwhelming output.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_string("pattern", "The pattern to search for in global names (supports regex)")
             .add_boolean("is_regex", "Whether to use regex matching (defaults to substring search)", false)
+            .add_integer("max_count", "Maximum number of results to return (defaults to 100)", false)
             .build();
     }
 
@@ -684,7 +695,36 @@ public:
         try {
             std::string pattern = input.at("pattern");
             bool is_regex = input.value("is_regex", false);
-            return ToolResult::success(executor->search_named_globals(pattern, is_regex));
+            int max_count = input.value("max_count", 100);
+            return ToolResult::success(executor->search_named_globals(pattern, is_regex, max_count));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class GetGlobalByNameTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_global_by_name";
+    }
+
+    std::string description() const override {
+        return "Get a specific global variable by its exact name. Returns address, name, value, and type.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("name", "The exact name of the global variable")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string name = input.at("name");
+            return ToolResult::success(executor->get_global_by_name(name));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -729,19 +769,21 @@ public:
     }
 
     std::string description() const override {
-        return "Get all strings in the binary. Returns addresses and content. Useful for understanding program functionality.";
+        return "Get all strings in the binary. Returns addresses and content. Useful for understanding program functionality. Results are limited to avoid overwhelming output.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("min_length", "Minimum string length to include (defaults to 5)", false)
+            .add_integer("max_count", "Maximum number of strings to return (defaults to 1000)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             int min_length = input.value("min_length", 5);
-            return ToolResult::success(executor->get_strings(min_length));
+            int max_count = input.value("max_count", 1000);
+            return ToolResult::success(executor->get_strings(min_length, max_count));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1636,6 +1678,7 @@ public:
         register_tool_type<GetNamedFunctionsTool>(memory, executor);
         register_tool_type<SearchNamedFunctionsTool>(memory, executor);
         register_tool_type<SearchNamedGlobalsTool>(memory, executor);
+        register_tool_type<GetGlobalByNameTool>(memory, executor);
         register_tool_type<GetNamedGlobalsTool>(memory, executor);
         register_tool_type<GetStringsTool>(memory, executor);
         register_tool_type<GetEntryPointsTool>(memory, executor);
