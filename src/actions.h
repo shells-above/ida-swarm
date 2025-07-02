@@ -40,11 +40,11 @@ public:
 
     // Binary info actions
     json get_imports(int max_results);
-    json get_entry_points();
+    json get_entry_points(int max_results);
 
     // Consolidated knowledge management
     json store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses);
-    json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern, int max_results);
+    json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern);
 
     // Batch operations
     json analyze_functions(const std::vector<ea_t>& addresses, int level, const std::string& group_name);

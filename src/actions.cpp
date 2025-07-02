@@ -338,10 +338,6 @@ json ActionExecutor::get_data_info(ea_t address) {
         }
         result["xrefs_to"] = xrefs_to_json;
         result["xrefs_to_count"] = info.xrefs_to.size();
-
-        if (info.xrefs_to.size() == 20) {
-            result["xrefs_truncated"] = true;
-        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -504,6 +500,7 @@ json ActionExecutor::set_comment(ea_t address, const std::string& comment) {
 }
 
 // Binary info actions
+// Binary info actions
 json ActionExecutor::get_imports(int max_results) {
     json result;
     try {
@@ -512,13 +509,16 @@ json ActionExecutor::get_imports(int max_results) {
 
         int count = 0;
         json imports_json = json::object();
+        bool truncated = false;
 
         for (const auto& [library, functions] : imports) {
-            if (count >= max_results) break;
-
             std::vector<std::string> limited_functions;
+
             for (const std::string& function : functions) {
-                if (count >= max_results) break;
+                if (count >= max_results) {
+                    truncated = true;
+                    break;
+                }
                 limited_functions.push_back(function);
                 count++;
             }
@@ -526,12 +526,14 @@ json ActionExecutor::get_imports(int max_results) {
             if (!limited_functions.empty()) {
                 imports_json[library] = limited_functions;
             }
+
+            if (truncated) break;
         }
 
         result["imports"] = imports_json;
         result["count"] = count;
 
-        if (count == max_results) {
+        if (truncated) {
             result["truncated"] = true;
             result["truncated_at"] = max_results;
         }
@@ -542,21 +544,37 @@ json ActionExecutor::get_imports(int max_results) {
     return result;
 }
 
-json ActionExecutor::get_entry_points() {
+json ActionExecutor::get_entry_points(int max_results) {
     json result;
     try {
         std::vector<std::tuple<ea_t, std::string, std::string>> entries = IDAUtils::get_entry_points();
         result["success"] = true;
         json entries_json = json::array();
+
+        int count = 0;
+        bool truncated = false;
+
         for (const auto& entry : entries) {
+            if (count >= max_results) {
+                truncated = true;
+                break;
+            }
+
             json entry_obj;
             entry_obj["address"] = HexAddress(std::get<0>(entry));
             entry_obj["type"] = std::get<1>(entry);
             entry_obj["name"] = std::get<2>(entry);
             entries_json.push_back(entry_obj);
+            count++;
         }
+
         result["entry_points"] = entries_json;
-        result["count"] = entries_json.size();
+        result["count"] = count;
+
+        if (truncated) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
+        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -585,10 +603,10 @@ json ActionExecutor::store_analysis(const std::string& key, const std::string& c
 }
 
 json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> address,
-                                 const std::string& type, const std::string& pattern, int max_results) {
+                                 const std::string& type, const std::string& pattern) {
     json result;
     try {
-        auto analyses = memory->get_analysis(key, address, type, pattern, max_results);
+        auto analyses = memory->get_analysis(key, address, type, pattern);
         result["success"] = true;
 
         json analyses_json = json::array();
@@ -612,11 +630,6 @@ json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> ad
 
         result["analyses"] = analyses_json;
         result["count"] = analyses_json.size();
-
-        if (analyses.size() == max_results) {
-            result["truncated"] = true;
-            result["truncated_at"] = max_results;
-        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
