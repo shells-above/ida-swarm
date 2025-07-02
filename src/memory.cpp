@@ -3,9 +3,11 @@
 //
 
 #include "memory.h"
+#include <sstream>
+#include <iomanip>
+#include <regex>
 
 namespace llm_re {
-
 
 BinaryMemory::BinaryMemory() : current_focus(0) {}
 
@@ -74,73 +76,168 @@ int BinaryMemory::compute_call_graph_distance(ea_t from, ea_t to) const {
     return 10; // Default far distance
 }
 
-void BinaryMemory::set_global_note(const std::string& key, const std::string& content) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    global_notes[key] = content;
-}
-
-std::string BinaryMemory::get_global_note(const std::string& key) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    auto it = global_notes.find(key);
-    return (it != global_notes.end()) ? it->second : "";
-}
-
-std::vector<std::string> BinaryMemory::list_global_notes() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    std::vector<std::string> keys;
-    for (const auto& pair : global_notes) {
-        keys.push_back(pair.first);
+std::string BinaryMemory::generate_analysis_key(const std::string& base_key) const {
+    // If key already exists, append a number
+    if (analyses.find(base_key) == analyses.end()) {
+        return base_key;
     }
-    return keys;
+
+    int counter = 1;
+    std::string new_key;
+    do {
+        new_key = base_key + "_" + std::to_string(counter++);
+    } while (analyses.find(new_key) != analyses.end());
+
+    return new_key;
 }
 
-std::vector<std::pair<std::string, std::string>> BinaryMemory::search_notes(const std::string& query) const {
+// Unified analysis management
+void BinaryMemory::store_analysis(const std::string& key, const std::string& content,
+                                 std::optional<ea_t> address, const std::string& type,
+                                 const std::vector<ea_t>& related_addresses) {
     std::lock_guard<std::mutex> lock(memory_mutex);
-    std::vector<std::pair<std::string, std::string>> results;
 
-    std::regex pattern(query, std::regex_constants::icase);
-    for (const auto& pair : global_notes) {
-        if (std::regex_search(pair.second, pattern)) {
-            // Extract snippet around match
-            size_t pos = pair.second.find(query);
-            size_t start = (pos > 50) ? pos - 50 : 0;
-            size_t end = std::min(pos + query.length() + 50, pair.second.length());
-            std::string snippet = pair.second.substr(start, end - start);
-            results.push_back({pair.first, snippet});
+    // Generate unique key if needed
+    std::string actual_key = generate_analysis_key(key);
+
+    AnalysisEntry entry;
+    entry.key = actual_key;
+    entry.content = content;
+    entry.type = type;
+    entry.address = address;
+    entry.related_addresses = related_addresses;
+    entry.timestamp = std::time(nullptr);
+
+    // Determine detail level for function analysis
+    if (address && type == "analysis") {
+        DetailLevel level = get_required_detail_level(*address);
+        entry.detail_level = level;
+    }
+
+    analyses[actual_key] = entry;
+
+    // Update function memory if address is provided
+    if (address) {
+        auto& func_mem = function_memories[*address];
+        func_mem.address = *address;
+        func_mem.analysis_keys.insert(actual_key);
+        func_mem.last_updated = std::time(nullptr);
+
+        if (entry.detail_level) {
+            func_mem.current_level = std::max(func_mem.current_level, *entry.detail_level);
         }
     }
+
+    // Update function memories for related addresses
+    for (ea_t related : related_addresses) {
+        auto& func_mem = function_memories[related];
+        func_mem.address = related;
+        func_mem.analysis_keys.insert(actual_key);
+    }
+}
+
+std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key,
+                                                     std::optional<ea_t> address,
+                                                     const std::string& type,
+                                                     const std::string& pattern,
+                                                     int max_results) const {
+    std::lock_guard<std::mutex> lock(memory_mutex);
+    std::vector<AnalysisEntry> results;
+
+    // If specific key requested
+    if (!key.empty()) {
+        auto it = analyses.find(key);
+        if (it != analyses.end()) {
+            results.push_back(it->second);
+        }
+        return results;
+    }
+
+    // Build regex pattern if provided
+    std::regex regex_pattern;
+    bool use_regex = !pattern.empty();
+    if (use_regex) {
+        try {
+            regex_pattern = std::regex(pattern, std::regex_constants::icase);
+        } catch (...) {
+            use_regex = false;
+        }
+    }
+
+    // Search through all analyses
+    for (const auto& [analysis_key, entry] : analyses) {
+        // Check type filter
+        if (!type.empty() && entry.type != type) continue;
+
+        // Check address filter
+        if (address) {
+            bool address_match = false;
+            if (entry.address && *entry.address == *address) {
+                address_match = true;
+            } else {
+                for (ea_t related : entry.related_addresses) {
+                    if (related == *address) {
+                        address_match = true;
+                        break;
+                    }
+                }
+            }
+            if (!address_match) continue;
+        }
+
+        // Check pattern filter
+        if (use_regex) {
+            if (!std::regex_search(entry.content, regex_pattern)) continue;
+        }
+
+        results.push_back(entry);
+
+        // Check max results
+        if (max_results > 0 && results.size() >= max_results) break;
+    }
+
+    // Sort by timestamp (newest first)
+    std::sort(results.begin(), results.end(),
+              [](const AnalysisEntry& a, const AnalysisEntry& b) {
+                  return a.timestamp > b.timestamp;
+              });
+
     return results;
 }
 
+// Function memory management
 void BinaryMemory::set_function_analysis(ea_t address, DetailLevel level, const std::string& analysis) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    auto& func_mem = function_memories[address];
-    func_mem.address = address;
-    func_mem.descriptions[level] = analysis;
-    func_mem.current_level = std::max(func_mem.current_level, level);
-    func_mem.last_updated = std::time(nullptr);
+    // Store as unified analysis
+    std::string key = "func_" + std::to_string(address) + "_level" + std::to_string(static_cast<int>(level));
+    store_analysis(key, analysis, address, "analysis", {});
 }
 
 std::string BinaryMemory::get_function_analysis(ea_t address, DetailLevel level) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    auto it = function_memories.find(address);
-    if (it == function_memories.end()) return "";
-
-    const auto& func_mem = it->second;
-    if (level == DetailLevel::SUMMARY) {
-        // Return best available
-        for (int l = static_cast<int>(DetailLevel::COMPREHENSIVE); l >= static_cast<int>(DetailLevel::SUMMARY); --l) {
-            auto desc_it = func_mem.descriptions.find(static_cast<DetailLevel>(l));
-            if (desc_it != func_mem.descriptions.end()) {
-                return desc_it->second;
-            }
-        }
-    } else {
-        auto desc_it = func_mem.descriptions.find(level);
-        if (desc_it != func_mem.descriptions.end()) {
-            return desc_it->second;
+    // Try to get analysis at specific level
+    if (level != DetailLevel::SUMMARY) {
+        std::string key = "func_" + std::to_string(address) + "_level" + std::to_string(static_cast<int>(level));
+        auto entries = get_analysis(key);
+        if (!entries.empty()) {
+            return entries[0].content;
         }
     }
+
+    // For SUMMARY or if specific level not found, get best available
+    auto entries = get_analysis("", address, "analysis");
+
+    // Sort by detail level (highest first)
+    std::sort(entries.begin(), entries.end(),
+              [](const AnalysisEntry& a, const AnalysisEntry& b) {
+                  if (a.detail_level && b.detail_level) {
+                      return *a.detail_level > *b.detail_level;
+                  }
+                  return false;
+              });
+
+    if (!entries.empty()) {
+        return entries[0].content;
+    }
+
     return "";
 }
 
@@ -149,18 +246,34 @@ MemoryContext BinaryMemory::get_memory_context(ea_t address, int radius) const {
     MemoryContext context;
 
     // Get functions within radius
-    for (const auto& pair : function_memories) {
-        int distance = calculateDistance(address, pair.first);
+    for (const auto& [func_addr, func_mem] : function_memories) {
+        int distance = calculateDistance(address, func_addr);
+
+        // Create a copy for the context
+        FunctionMemory func_copy = func_mem;
+        func_copy.distance_from_anchor = distance;
+
         if (distance <= radius) {
-            context.nearby_functions.push_back(pair.second);
+            context.nearby_functions.push_back(func_copy);
         } else if (distance <= radius * 2) {
-            context.context_functions.push_back(pair.second);
+            context.context_functions.push_back(func_copy);
         }
     }
 
-    // Include all global notes
-    for (const auto& pair : global_notes) {
-        context.llm_memory[pair.first] = pair.second;
+    // Sort by distance
+    auto sort_by_distance = [](const FunctionMemory& a, const FunctionMemory& b) {
+        return a.distance_from_anchor < b.distance_from_anchor;
+    };
+    std::sort(context.nearby_functions.begin(), context.nearby_functions.end(), sort_by_distance);
+    std::sort(context.context_functions.begin(), context.context_functions.end(), sort_by_distance);
+
+    // Build LLM memory summary from relevant analyses
+    auto relevant_analyses = get_analysis("", std::nullopt, "", "", 50);
+    for (const auto& entry : relevant_analyses) {
+        if (entry.type == "note" || entry.type == "finding") {
+            std::string summary_key = entry.type + "_" + entry.key.substr(0, 20);
+            context.llm_memory[summary_key] = entry.content.substr(0, 200) + "...";
+        }
     }
 
     return context;
@@ -170,25 +283,42 @@ std::vector<std::tuple<ea_t, std::string, DetailLevel>> BinaryMemory::get_analyz
     std::lock_guard<std::mutex> lock(memory_mutex);
     std::vector<std::tuple<ea_t, std::string, DetailLevel>> result;
 
-    for (const auto& pair : function_memories) {
-        result.push_back({pair.first, pair.second.name, pair.second.current_level});
+    for (const auto& [address, func_mem] : function_memories) {
+        if (!func_mem.analysis_keys.empty()) {
+            result.push_back({address, func_mem.name, func_mem.current_level});
+        }
     }
+
     return result;
 }
 
 std::vector<ea_t> BinaryMemory::find_functions_by_pattern(const std::string& pattern) const {
     std::lock_guard<std::mutex> lock(memory_mutex);
     std::vector<ea_t> results;
+    std::set<ea_t> unique_results;
+
     std::regex re(pattern, std::regex_constants::icase);
 
-    for (const auto& pair : function_memories) {
-        for (const auto& desc_pair : pair.second.descriptions) {
-            if (std::regex_search(desc_pair.second, re)) {
-                results.push_back(pair.first);
-                break;
+    // Search through all analyses
+    for (const auto& [key, entry] : analyses) {
+        if (std::regex_search(entry.content, re)) {
+            if (entry.address) {
+                unique_results.insert(*entry.address);
+            }
+            for (ea_t related : entry.related_addresses) {
+                unique_results.insert(related);
             }
         }
     }
+
+    // Also search function names
+    for (const auto& [address, func_mem] : function_memories) {
+        if (std::regex_search(func_mem.name, re)) {
+            unique_results.insert(address);
+        }
+    }
+
+    results.assign(unique_results.begin(), unique_results.end());
     return results;
 }
 
@@ -196,14 +326,21 @@ std::vector<std::tuple<ea_t, std::string, std::string>> BinaryMemory::get_explor
     std::lock_guard<std::mutex> lock(memory_mutex);
     std::vector<std::tuple<ea_t, std::string, std::string>> frontier;
 
-    // Convert queue to vector (queue doesn't allow iteration)
+    // Get items from analysis queue
     std::priority_queue<AnalysisQueueItem> temp_queue = analysis_queue;
-    while (!temp_queue.empty()) {
+    while (!temp_queue.empty() && frontier.size() < 20) {
         const auto& item = temp_queue.top();
         auto it = function_memories.find(item.address);
         std::string name = (it != function_memories.end()) ? it->second.name : "";
         frontier.push_back({item.address, name, item.reason});
         temp_queue.pop();
+    }
+
+    // Add functions that need reanalysis
+    for (const auto& [address, func_mem] : function_memories) {
+        if (func_mem.needs_reanalysis && frontier.size() < 30) {
+            frontier.push_back({address, func_mem.name, "Needs reanalysis due to updated dependencies"});
+        }
     }
 
     return frontier;
@@ -212,6 +349,11 @@ std::vector<std::tuple<ea_t, std::string, std::string>> BinaryMemory::get_explor
 void BinaryMemory::mark_for_analysis(ea_t address, const std::string& reason, int priority) {
     std::lock_guard<std::mutex> lock(memory_mutex);
     analysis_queue.push({address, reason, priority});
+
+    // Initialize function memory if not exists
+    if (function_memories.find(address) == function_memories.end()) {
+        function_memories[address].address = address;
+    }
 }
 
 std::vector<std::tuple<ea_t, std::string, int>> BinaryMemory::get_analysis_queue() const {
@@ -231,6 +373,11 @@ std::vector<std::tuple<ea_t, std::string, int>> BinaryMemory::get_analysis_queue
 void BinaryMemory::set_current_focus(ea_t address) {
     std::lock_guard<std::mutex> lock(memory_mutex);
     current_focus = address;
+
+    // Initialize function memory if not exists
+    if (function_memories.find(address) == function_memories.end()) {
+        function_memories[address].address = address;
+    }
 }
 
 ea_t BinaryMemory::get_current_focus() const {
@@ -238,32 +385,22 @@ ea_t BinaryMemory::get_current_focus() const {
     return current_focus;
 }
 
-void BinaryMemory::add_insight(const std::string& type, const std::string& description, const std::vector<ea_t>& related_addresses) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    insights.push_back({type, description, related_addresses, std::time(nullptr)});
-}
-
-std::vector<std::tuple<std::string, std::vector<ea_t>>> BinaryMemory::get_insights(const std::string& type) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    std::vector<std::tuple<std::string, std::vector<ea_t>>> result;
-
-    for (const auto& insight : insights) {
-        if (type.empty() || insight.type == type) {
-            result.push_back({insight.description, insight.related_addresses});
-        }
-    }
-    return result;
-}
-
 void BinaryMemory::analyze_cluster(const std::vector<ea_t>& addresses, const std::string& cluster_name, DetailLevel initial_level) {
     std::lock_guard<std::mutex> lock(memory_mutex);
 
+    // Create cluster analysis entry
+    std::string cluster_key = "cluster_" + cluster_name;
+    std::stringstream content;
+    content << "Cluster analysis for: " << cluster_name << "\n";
+    content << "Functions in cluster: " << addresses.size() << "\n";
+
+    store_analysis(cluster_key, content.str(), std::nullopt, "analysis", addresses);
+
+    // Mark all functions for analysis
     for (ea_t addr : addresses) {
         auto& func_mem = function_memories[addr];
         func_mem.address = addr;
-        // Tag as part of cluster
-        func_mem.descriptions[DetailLevel::SUMMARY] = "Part of cluster: " + cluster_name;
-        mark_for_analysis(addr, "Cluster analysis: " + cluster_name, 7);
+        mark_for_analysis(addr, "Part of cluster: " + cluster_name, 7);
     }
 }
 
@@ -271,34 +408,21 @@ std::map<ea_t, std::string> BinaryMemory::get_cluster_analysis(const std::string
     std::lock_guard<std::mutex> lock(memory_mutex);
     std::map<ea_t, std::string> result;
 
-    for (const auto& pair : function_memories) {
-        for (const auto& desc_pair : pair.second.descriptions) {
-            if (desc_pair.second.find("cluster: " + cluster_name) != std::string::npos) {
-                result[pair.first] = get_function_analysis(pair.first);
-                break;
+    // Find cluster analysis
+    std::string cluster_key = "cluster_" + cluster_name;
+    auto entries = get_analysis(cluster_key);
+
+    if (!entries.empty()) {
+        // Get analyses for all related addresses
+        for (ea_t addr : entries[0].related_addresses) {
+            std::string analysis = get_function_analysis(addr);
+            if (!analysis.empty()) {
+                result[addr] = analysis;
             }
         }
     }
+
     return result;
-}
-
-std::string BinaryMemory::summarize_region(ea_t start_addr, ea_t end_addr) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    std::stringstream summary;
-
-    summary << "Region summary [0x" << std::hex << start_addr << " - 0x" << end_addr << "]:\n";
-
-    int func_count = 0;
-    for (const auto& pair : function_memories) {
-        if (pair.first >= start_addr && pair.first <= end_addr) {
-            func_count++;
-            summary << "- " << pair.second.name << " (0x" << std::hex << pair.first << "): ";
-            summary << get_function_analysis(pair.first) << "\n";
-        }
-    }
-
-    summary << "Total functions: " << func_count << "\n";
-    return summary.str();
 }
 
 json BinaryMemory::export_memory_snapshot() const {
@@ -307,59 +431,88 @@ json BinaryMemory::export_memory_snapshot() const {
 
     // Export function memories
     json functions = json::array();
-    for (const auto& pair : function_memories) {
+    for (const auto& [address, func_mem] : function_memories) {
         json func;
-        func["address"] = HexAddress(pair.first);
-        func["name"] = pair.second.name;
-        func["distance_from_anchor"] = pair.second.distance_from_anchor;
-        func["current_level"] = static_cast<int>(pair.second.current_level);
-
-        json descriptions;
-        for (const auto& desc_pair : pair.second.descriptions) {
-            descriptions[std::to_string(static_cast<int>(desc_pair.first))] = desc_pair.second;
-        }
-        func["descriptions"] = descriptions;
+        func["address"] = HexAddress(address);
+        func["name"] = func_mem.name;
+        func["distance_from_anchor"] = func_mem.distance_from_anchor;
+        func["current_level"] = static_cast<int>(func_mem.current_level);
 
         func["callers"] = json::array();
-        for (ea_t caller : pair.second.callers) {
+        for (ea_t caller : func_mem.callers) {
             func["callers"].push_back(HexAddress(caller));
         }
 
         func["callees"] = json::array();
-        for (ea_t callee : pair.second.callees) {
+        for (ea_t callee : func_mem.callees) {
             func["callees"].push_back(HexAddress(callee));
         }
 
-        func["string_refs"] = pair.second.string_refs;
-        func["data_refs"] = pair.second.data_refs;
-        func["last_updated"] = pair.second.last_updated;
-        func["needs_reanalysis"] = pair.second.needs_reanalysis;
+        func["string_refs"] = func_mem.string_refs;
+
+        func["data_refs"] = json::array();
+        for (ea_t ref : func_mem.data_refs) {
+            func["data_refs"].push_back(HexAddress(ref));
+        }
+
+        func["last_updated"] = func_mem.last_updated;
+        func["needs_reanalysis"] = func_mem.needs_reanalysis;
+
+        func["analysis_keys"] = json::array();
+        for (const std::string& key : func_mem.analysis_keys) {
+            func["analysis_keys"].push_back(key);
+        }
 
         functions.push_back(func);
     }
     snapshot["functions"] = functions;
 
-    // Export global notes
-    snapshot["global_notes"] = global_notes;
+    // Export analyses
+    json analyses_json = json::array();
+    for (const auto& [key, entry] : analyses) {
+        json analysis;
+        analysis["key"] = entry.key;
+        analysis["content"] = entry.content;
+        analysis["type"] = entry.type;
+        if (entry.address) {
+            analysis["address"] = HexAddress(*entry.address);
+        }
 
-    // Export insights
-    json insights_json = json::array();
-    for (const auto& insight : insights) {
-        json ins;
-        ins["type"] = insight.type;
-        ins["description"] = insight.description;
-        ins["related_addresses"] = insight.related_addresses;
-        ins["timestamp"] = insight.timestamp;
-        insights_json.push_back(ins);
+        analysis["related_addresses"] = json::array();
+        for (ea_t addr : entry.related_addresses) {
+            analysis["related_addresses"].push_back(HexAddress(addr));
+        }
+
+        analysis["timestamp"] = entry.timestamp;
+        if (entry.detail_level) {
+            analysis["detail_level"] = static_cast<int>(*entry.detail_level);
+        }
+
+        analyses_json.push_back(analysis);
     }
-    snapshot["insights"] = insights_json;
+    snapshot["analyses"] = analyses_json;
 
     // Export state
-    snapshot["current_focus"] = current_focus;
+    snapshot["current_focus"] = HexAddress(current_focus);
+
     snapshot["anchor_points"] = json::array();
     for (ea_t anchor : anchor_points) {
-        snapshot["anchor_points"].push_back(anchor);
+        snapshot["anchor_points"].push_back(HexAddress(anchor));
     }
+
+    // Export queue
+    json queue_json = json::array();
+    std::priority_queue<AnalysisQueueItem> temp_queue = analysis_queue;
+    while (!temp_queue.empty()) {
+        const auto& item = temp_queue.top();
+        json queue_item;
+        queue_item["address"] = HexAddress(item.address);
+        queue_item["reason"] = item.reason;
+        queue_item["priority"] = item.priority;
+        queue_json.push_back(queue_item);
+        temp_queue.pop();
+    }
+    snapshot["analysis_queue"] = queue_json;
 
     return snapshot;
 }
@@ -369,61 +522,82 @@ void BinaryMemory::import_memory_snapshot(const json& snapshot) {
 
     // Clear existing data
     function_memories.clear();
-    global_notes.clear();
-    insights.clear();
+    analyses.clear();
     anchor_points.clear();
+    call_graph_cache.clear();
+    while (!analysis_queue.empty()) {
+        analysis_queue.pop();
+    }
 
     // Import function memories
     if (snapshot.contains("functions")) {
         for (const auto& func : snapshot["functions"]) {
             FunctionMemory fm;
             fm.address = func["address"];
-            fm.name = func["name"];
+            fm.name = func.value("name", "");
             fm.distance_from_anchor = func["distance_from_anchor"];
             fm.current_level = static_cast<DetailLevel>(func["current_level"].get<int>());
 
-            if (func.contains("descriptions")) {
-                for (const auto& [level_str, desc] : func["descriptions"].items()) {
-                    DetailLevel level = static_cast<DetailLevel>(std::stoi(level_str));
-                    fm.descriptions[level] = desc;
-                }
-            }
-
             if (func.contains("callers")) {
-                for (const nlohmann::basic_json<> &caller: func["callers"]) {
+                for (const auto& caller : func["callers"]) {
                     fm.callers.insert(caller.get<ea_t>());
                 }
             }
 
             if (func.contains("callees")) {
-                for (const nlohmann::basic_json<> &callee: func["callees"]) {
+                for (const auto& callee : func["callees"]) {
                     fm.callees.insert(callee.get<ea_t>());
                 }
             }
 
-            fm.string_refs = func["string_refs"].get<std::vector<std::string>>();
-            fm.data_refs = func["data_refs"].get<std::vector<ea_t>>();
+            if (func.contains("string_refs")) {
+                fm.string_refs = func["string_refs"].get<std::vector<std::string>>();
+            }
+
+            if (func.contains("data_refs")) {
+                for (const auto& ref : func["data_refs"]) {
+                    fm.data_refs.push_back(ref.get<ea_t>());
+                }
+            }
+
             fm.last_updated = func["last_updated"];
             fm.needs_reanalysis = func["needs_reanalysis"];
+
+            if (func.contains("analysis_keys")) {
+                for (const auto& key : func["analysis_keys"]) {
+                    fm.analysis_keys.insert(key.get<std::string>());
+                }
+            }
 
             function_memories[fm.address] = fm;
         }
     }
 
-    // Import global notes
-    if (snapshot.contains("global_notes")) {
-        global_notes = snapshot["global_notes"].get<std::map<std::string, std::string>>();
-    }
+    // Import analyses
+    if (snapshot.contains("analyses")) {
+        for (const auto& analysis : snapshot["analyses"]) {
+            AnalysisEntry entry;
+            entry.key = analysis["key"];
+            entry.content = analysis["content"];
+            entry.type = analysis["type"];
 
-    // Import insights
-    if (snapshot.contains("insights")) {
-        for (const auto& ins : snapshot["insights"]) {
-            Insight insight;
-            insight.type = ins["type"];
-            insight.description = ins["description"];
-            insight.related_addresses = ins["related_addresses"].get<std::vector<ea_t>>();
-            insight.timestamp = ins["timestamp"];
-            insights.push_back(insight);
+            if (analysis.contains("address")) {
+                entry.address = analysis["address"].get<ea_t>();
+            }
+
+            if (analysis.contains("related_addresses")) {
+                for (const auto& addr : analysis["related_addresses"]) {
+                    entry.related_addresses.push_back(addr.get<ea_t>());
+                }
+            }
+
+            entry.timestamp = analysis["timestamp"];
+
+            if (analysis.contains("detail_level")) {
+                entry.detail_level = static_cast<DetailLevel>(analysis["detail_level"].get<int>());
+            }
+
+            analyses[entry.key] = entry;
         }
     }
 
@@ -433,8 +607,19 @@ void BinaryMemory::import_memory_snapshot(const json& snapshot) {
     }
 
     if (snapshot.contains("anchor_points")) {
-        for (const nlohmann::basic_json<> &anchor: snapshot["anchor_points"]) {
+        for (const auto& anchor : snapshot["anchor_points"]) {
             anchor_points.insert(anchor.get<ea_t>());
+        }
+    }
+
+    // Import queue
+    if (snapshot.contains("analysis_queue")) {
+        for (const auto& item : snapshot["analysis_queue"]) {
+            AnalysisQueueItem queue_item;
+            queue_item.address = item["address"];
+            queue_item.reason = item["reason"];
+            queue_item.priority = item["priority"];
+            analysis_queue.push(queue_item);
         }
     }
 }
@@ -488,6 +673,7 @@ void BinaryMemory::update_function_relationships(ea_t func_addr, const std::set<
     std::lock_guard<std::mutex> lock(memory_mutex);
 
     auto& func = function_memories[func_addr];
+    func.address = func_addr;
     func.callers = callers;
     func.callees = callees;
     func.last_updated = std::time(nullptr);
@@ -497,9 +683,65 @@ void BinaryMemory::update_function_refs(ea_t func_addr, const std::vector<std::s
     std::lock_guard<std::mutex> lock(memory_mutex);
 
     auto& func = function_memories[func_addr];
+    func.address = func_addr;
     func.string_refs = string_refs;
     func.data_refs = data_refs;
     func.last_updated = std::time(nullptr);
+}
+
+// Legacy compatibility helpers
+void BinaryMemory::set_global_note(const std::string& key, const std::string& content) {
+    store_analysis(key, content, std::nullopt, "note", {});
+}
+
+std::string BinaryMemory::get_global_note(const std::string& key) const {
+    auto entries = get_analysis(key);
+    return entries.empty() ? "" : entries[0].content;
+}
+
+std::vector<std::string> BinaryMemory::list_global_notes() const {
+    auto entries = get_analysis("", std::nullopt, "note");
+    std::vector<std::string> keys;
+    for (const auto& entry : entries) {
+        keys.push_back(entry.key);
+    }
+    return keys;
+}
+
+std::vector<std::pair<std::string, std::string>> BinaryMemory::search_notes(const std::string& query) const {
+    auto entries = get_analysis("", std::nullopt, "note", query);
+    std::vector<std::pair<std::string, std::string>> results;
+
+    for (const auto& entry : entries) {
+        // Extract snippet around match
+        size_t pos = entry.content.find(query);
+        if (pos != std::string::npos) {
+            size_t start = (pos > 50) ? pos - 50 : 0;
+            size_t end = std::min(pos + query.length() + 50, entry.content.length());
+            std::string snippet = entry.content.substr(start, end - start);
+            results.push_back({entry.key, snippet});
+        }
+    }
+
+    return results;
+}
+
+void BinaryMemory::add_insight(const std::string& type, const std::string& description, const std::vector<ea_t>& related_addresses) {
+    std::string key = "insight_" + type + "_" + std::to_string(std::time(nullptr));
+    store_analysis(key, description, std::nullopt, type, related_addresses);
+}
+
+std::vector<std::tuple<std::string, std::vector<ea_t>>> BinaryMemory::get_insights(const std::string& type) const {
+    auto entries = get_analysis("", std::nullopt, type);
+    std::vector<std::tuple<std::string, std::vector<ea_t>>> results;
+
+    for (const auto& entry : entries) {
+        if (type.empty() || entry.type == type) {
+            results.push_back({entry.content, entry.related_addresses});
+        }
+    }
+
+    return results;
 }
 
 } // namespace llm_re

@@ -203,375 +203,30 @@ ea_t ActionExecutor::parse_single_address_value(const json& param) {
     }
 }
 
-/*
- * Supported formats:
- * - Single values: Same as before
- * - Arrays: ["0x100006008", "0x100007d55"], [16384, "0x4000", "$8000"]
- * - String arrays: "[0x100006008, 0x100007d55]", "[0x5000, 0x4000]"
- * - Mixed formats in arrays: ["0x4000", 16384, "040000", "0b100"]
- *
- * Examples:
- * - "address": "0x4000" -> single address
- * - "related_addresses": ["0x100006008", "0x100007d55"] -> array of addresses
- * - "related_addresses": "[0x100006008, 0x100007d55]" -> string containing array
- * - "targets": [16384, "0x4000", "$8000", "16,384"] -> mixed format array
- * - "targets": "[0x5000, 0x4000]" -> string containing hex array
- */
-
-
 ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) { }
 
-json ActionExecutor::get_xrefs_to(ea_t address, int max_count) {
+// Consolidated search actions
+json ActionExecutor::search_functions(const std::string& pattern, bool named_only, int max_results) {
     json result;
     try {
-        std::vector<std::pair<ea_t, std::string>> xrefs = IDAUtils::get_xrefs_to_with_names(address, max_count);
-        result["success"] = true;
-        json xrefs_json = json::array();
-        for (const auto& xref : xrefs) {
-            json xref_obj;
-            xref_obj["address"] = HexAddress(xref.first);
-            xref_obj["name"] = xref.second;
-            xrefs_json.push_back(xref_obj);
-        }
-        result["xrefs"] = xrefs_json;
-        result["count"] = xrefs_json.size();
+        std::vector<std::tuple<ea_t, std::string, bool>> functions =
+            IDAUtils::search_functions(pattern, named_only, max_results);
 
-        if (xrefs.size() == max_count) {
-            result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
-        }
-
-        // Update memory with caller information (limited set)
-        std::set<ea_t> callers;
-        for (const auto& xref : xrefs) {
-            callers.insert(xref.first);
-        }
-        memory->update_function_relationships(address, callers, {});
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_xrefs_from(ea_t address, int max_count) {
-    json result;
-    try {
-        std::vector<std::pair<ea_t, std::string>> xrefs = IDAUtils::get_xrefs_from_with_names(address, max_count);
-        result["success"] = true;
-        json xrefs_json = json::array();
-        for (const auto& xref : xrefs) {
-            json xref_obj;
-            xref_obj["address"] = HexAddress(xref.first);
-            xref_obj["name"] = xref.second;
-            xrefs_json.push_back(xref_obj);
-        }
-        result["xrefs"] = xrefs_json;
-        result["count"] = xrefs_json.size();
-
-        if (xrefs.size() == max_count) {
-            result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
-        }
-
-        // Update memory with callee information (limited set)
-        std::set<ea_t> callees;
-        for (const auto& xref : xrefs) {
-            callees.insert(xref.first);
-        }
-        memory->update_function_relationships(address, {}, callees);
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_function_disassembly(ea_t address) {
-    json result;
-    try {
-        std::string disasm = IDAUtils::get_function_disassembly(address);
-        result["success"] = true;
-        result["disassembly"] = disasm;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_function_decompilation(ea_t address) {
-    json result;
-    try {
-        std::string decomp = IDAUtils::get_function_decompilation(address);
-        result["success"] = true;
-        result["decompilation"] = decomp;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_function_address(const std::string& name) {
-    json result;
-    try {
-        ea_t addr = IDAUtils::get_function_address(name);
-        result["success"] = (addr != BADADDR);
-        result["address"] = HexAddress(addr);
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_function_name(ea_t address) {
-    json result;
-    try {
-        std::string name = IDAUtils::get_function_name(address);
-        result["success"] = true;
-        result["name"] = name;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::set_function_name(ea_t address, const std::string& name) {
-    json result;
-    try {
-        bool success = IDAUtils::set_function_name(address, name);
-        result["success"] = success;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-
-json ActionExecutor::get_function_string_refs(ea_t address, int max_count) {
-    json result;
-    try {
-        std::vector<std::string> strings = IDAUtils::get_function_string_refs(address, max_count);
-        result["success"] = true;
-        result["strings"] = strings;
-        result["count"] = strings.size();
-
-        if (strings.size() == max_count) {
-            result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
-        }
-
-        // Update memory (with limited set)
-        memory->update_function_refs(address, strings, {});
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-
-json ActionExecutor::get_function_data_refs(ea_t address, int max_count) {
-    json result;
-    try {
-        std::vector<ea_t> data_refs = IDAUtils::get_function_data_refs(address, max_count);
-        result["success"] = true;
-        json data_refs_json = json::array();
-        for (ea_t addr : data_refs) {
-            data_refs_json.push_back(HexAddress(addr));
-        }
-        result["data_refs"] = data_refs_json;
-        result["count"] = data_refs_json.size();
-
-        if (data_refs.size() == max_count) {
-            result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
-        }
-
-        // Update memory (with limited set)
-        memory->update_function_refs(address, {}, data_refs);
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_data_name(ea_t address) {
-    json result;
-    try {
-        std::string name = IDAUtils::get_data_name(address);
-        result["success"] = true;
-        result["name"] = name;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::set_data_name(ea_t address, const std::string& name) {
-    json result;
-    try {
-        bool success = IDAUtils::set_data_name(address, name);
-        result["success"] = success;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_data(ea_t address) {
-    json result;
-    try {
-        auto data = IDAUtils::get_data(address);
-        result["success"] = true;
-        result["value"] = data.first;
-        result["type"] = data.second;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::add_comment(ea_t address, const std::string& comment) {
-    json result;
-    try {
-        bool success_dis = IDAUtils::add_disassembly_comment(address, comment);
-        bool success_dec = IDAUtils::add_pseudocode_comment(address, comment);
-        result["success"] = success_dis && success_dec;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::clear_comment(ea_t address) {
-    json result;
-    try {
-        bool success_dis = IDAUtils::clear_disassembly_comment(address);
-        bool success_dec = IDAUtils::clear_pseudocode_comments(address);
-        result["success"] = success_dis && success_dec;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_imports(int max_count) {
-    json result;
-    try {
-        std::map<std::string, std::vector<std::string>> imports = IDAUtils::get_imports();
-        int count = 0;
-        for (const auto& [library, functions] : imports) {
-            if (count >= max_count) break;
-
-            std::vector<std::string> limited_functions;
-            for (const std::string& function: functions) {
-                if (count >= max_count) break;
-                limited_functions.push_back(function);
-                count++;
-            }
-
-            if (!limited_functions.empty()) {
-                result["imports"][library] = limited_functions;
-            }
-        }
-        result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::search_strings(const std::string& text, bool is_case_sensitive, int max_count) {
-    json result;
-    try {
-        std::vector<std::string> strings = IDAUtils::search_strings(text, is_case_sensitive, max_count);
-        result["success"] = true;
-        result["strings"] = strings;
-        result["count"] = strings.size();
-
-        if (strings.size() == max_count) {
-            result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
-        }
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_named_functions(int max_count) {
-    json result;
-    try {
-        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::get_named_functions(max_count);
         result["success"] = true;
         json funcs_json = json::array();
         for (const auto& func : functions) {
             json func_obj;
-            func_obj["address"] = HexAddress(func.first);
-            func_obj["name"] = func.second;
+            func_obj["address"] = HexAddress(std::get<0>(func));
+            func_obj["name"] = std::get<1>(func);
+            func_obj["is_user_named"] = std::get<2>(func);
             funcs_json.push_back(func_obj);
         }
         result["functions"] = funcs_json;
         result["count"] = funcs_json.size();
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
 
-json ActionExecutor::search_named_functions(const std::string& text, bool is_case_sensitive, int max_count) {
-    json result;
-    try {
-        std::vector<std::pair<ea_t, std::string>> functions = IDAUtils::search_named_functions(text, is_case_sensitive, max_count);
-        result["success"] = true;
-        json funcs_json = json::array();
-        for (const auto& func : functions) {
-            json func_obj;
-            func_obj["address"] = HexAddress(func.first);
-            func_obj["name"] = func.second;
-            funcs_json.push_back(func_obj);
-        }
-        result["functions"] = funcs_json;
-        result["count"] = funcs_json.size();
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::search_named_globals(const std::string& pattern, bool is_regex, int max_count) {
-    json result;
-    try {
-        std::vector<std::pair<ea_t, std::string>> globals = IDAUtils::search_named_globals(pattern, is_regex, max_count);
-        result["success"] = true;
-        json globals_json = json::array();
-        for (const auto& global : globals) {
-            json global_obj;
-            global_obj["address"] = HexAddress(global.first);
-            global_obj["name"] = global.second;
-            globals_json.push_back(global_obj);
-        }
-        result["globals"] = globals_json;
-        result["count"] = globals.size();
-
-        if (globals.size() == max_count) {
+        if (functions.size() == max_results) {
             result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
+            result["truncated_at"] = max_results;
         }
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -580,61 +235,29 @@ json ActionExecutor::search_named_globals(const std::string& pattern, bool is_re
     return result;
 }
 
-
-json ActionExecutor::get_global_by_name(const std::string& name) {
+json ActionExecutor::search_globals(const std::string& pattern, int max_results) {
     json result;
     try {
-        ea_t addr = IDAUtils::get_name_address(name);
-        if (addr == BADADDR) {
-            result["success"] = false;
-            result["error"] = "Global not found: " + name;
-            return result;
-        }
+        std::vector<std::tuple<ea_t, std::string, std::string, std::string>> globals =
+            IDAUtils::search_globals(pattern, max_results);
 
-        // Verify it's not a function
-        if (IDAUtils::is_function(addr)) {
-            result["success"] = false;
-            result["error"] = "Name refers to a function, not a global: " + name;
-            return result;
-        }
-
-        result["success"] = true;
-        result["address"] = HexAddress(addr);
-        result["name"] = name;
-
-        // Try to get the data value and type
-        try {
-            auto data = IDAUtils::get_data(addr);
-            result["value"] = data.first;
-            result["type"] = data.second;
-        } catch (const std::exception& e) {
-            result["value"] = "";
-            result["type"] = "unknown";
-            result["data_error"] = e.what();
-        }
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_named_globals(int max_count) {
-    json result;
-    try {
-        std::vector<std::pair<ea_t, std::string>> globals = IDAUtils::get_named_globals();
         result["success"] = true;
         json globals_json = json::array();
-        int count = 0;
         for (const auto& global : globals) {
-            if (count >= max_count) break;
             json global_obj;
-            global_obj["address"] = HexAddress(global.first);
-            global_obj["name"] = global.second;
+            global_obj["address"] = HexAddress(std::get<0>(global));
+            global_obj["name"] = std::get<1>(global);
+            global_obj["value_preview"] = std::get<2>(global);
+            global_obj["type"] = std::get<3>(global);
             globals_json.push_back(global_obj);
-            count++;
         }
         result["globals"] = globals_json;
+        result["count"] = globals_json.size();
+
+        if (globals.size() == max_results) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
+        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -642,10 +265,12 @@ json ActionExecutor::get_named_globals(int max_count) {
     return result;
 }
 
-json ActionExecutor::get_strings(int min_length, int max_count) {
+json ActionExecutor::search_strings(const std::string& pattern, int min_length, int max_results) {
     json result;
     try {
-        std::vector<std::pair<ea_t, std::string>> strings = IDAUtils::get_strings_with_addresses(min_length, max_count);
+        std::vector<std::pair<ea_t, std::string>> strings =
+            IDAUtils::search_strings_unified(pattern, min_length, max_results);
+
         result["success"] = true;
         json strings_json = json::array();
         for (const auto& str : strings) {
@@ -657,9 +282,258 @@ json ActionExecutor::get_strings(int min_length, int max_count) {
         result["strings"] = strings_json;
         result["count"] = strings_json.size();
 
-        if (strings.size() == max_count) {
+        if (strings.size() == max_results) {
             result["truncated"] = true;
-            result["message"] = "Results truncated to " + std::to_string(max_count) + " entries";
+            result["truncated_at"] = max_results;
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Unified info actions
+json ActionExecutor::get_function_info(ea_t address) {
+    json result;
+    try {
+        auto info = IDAUtils::get_function_info(address);
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+        result["name"] = info.name;
+        result["start_address"] = HexAddress(info.start_ea);
+        result["end_address"] = HexAddress(info.end_ea);
+        result["size"] = info.size;
+        result["xrefs_to_count"] = info.xrefs_to_count;
+        result["xrefs_from_count"] = info.xrefs_from_count;
+        result["string_refs_count"] = info.string_refs_count;
+        result["data_refs_count"] = info.data_refs_count;
+        result["is_library"] = info.is_library;
+        result["is_thunk"] = info.is_thunk;
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_data_info(ea_t address) {
+    json result;
+    try {
+        auto info = IDAUtils::get_data_info(address);
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+        result["name"] = info.name;
+        result["value"] = info.value;
+        result["type"] = info.type;
+        result["size"] = info.size;
+
+        // Add xrefs
+        json xrefs_to_json = json::array();
+        for (const auto& xref : info.xrefs_to) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_to_json.push_back(xref_obj);
+        }
+        result["xrefs_to"] = xrefs_to_json;
+        result["xrefs_to_count"] = info.xrefs_to.size();
+
+        if (info.xrefs_to.size() == 20) {
+            result["xrefs_truncated"] = true;
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::analyze_function(ea_t address, bool include_disasm, bool include_decomp, int max_xrefs) {
+    json result;
+    try {
+        // Get basic info first
+        auto info = IDAUtils::get_function_info(address);
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+        result["name"] = info.name;
+        result["start_address"] = HexAddress(info.start_ea);
+        result["end_address"] = HexAddress(info.end_ea);
+        result["size"] = info.size;
+
+        // Get cross-references
+        auto xrefs_to = IDAUtils::get_xrefs_to_with_names(address, max_xrefs);
+        auto xrefs_from = IDAUtils::get_xrefs_from_with_names(address, max_xrefs);
+
+        json xrefs_to_json = json::array();
+        for (const auto& xref : xrefs_to) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_to_json.push_back(xref_obj);
+        }
+        result["xrefs_to"] = xrefs_to_json;
+
+        json xrefs_from_json = json::array();
+        for (const auto& xref : xrefs_from) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_from_json.push_back(xref_obj);
+        }
+        result["xrefs_from"] = xrefs_from_json;
+
+        // Get string and data refs
+        auto string_refs = IDAUtils::get_function_string_refs(address, max_xrefs);
+        result["string_refs"] = string_refs;
+
+        auto data_refs = IDAUtils::get_function_data_refs(address, max_xrefs);
+        json data_refs_json = json::array();
+        for (ea_t addr : data_refs) {
+            data_refs_json.push_back(HexAddress(addr));
+        }
+        result["data_refs"] = data_refs_json;
+
+        // Include code if requested
+        if (include_decomp) {
+            result["decompilation"] = IDAUtils::get_function_decompilation(address);
+        }
+        if (include_disasm) {
+            result["disassembly"] = IDAUtils::get_function_disassembly(address);
+        }
+
+        // Update memory
+        std::set<ea_t> callers, callees;
+        for (const auto& xref : xrefs_to) callers.insert(xref.first);
+        for (const auto& xref : xrefs_from) callees.insert(xref.first);
+        memory->update_function_relationships(address, callers, callees);
+        memory->update_function_refs(address, string_refs, data_refs);
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Simplified cross-reference action
+json ActionExecutor::get_xrefs(ea_t address, int max_results) {
+    json result;
+    try {
+        auto xrefs_to = IDAUtils::get_xrefs_to_with_names(address, max_results);
+        auto xrefs_from = IDAUtils::get_xrefs_from_with_names(address, max_results);
+
+        result["success"] = true;
+
+        json xrefs_to_json = json::array();
+        for (const auto& xref : xrefs_to) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_to_json.push_back(xref_obj);
+        }
+        result["xrefs_to"] = xrefs_to_json;
+        result["xrefs_to_count"] = xrefs_to.size();
+
+        json xrefs_from_json = json::array();
+        for (const auto& xref : xrefs_from) {
+            json xref_obj;
+            xref_obj["address"] = HexAddress(xref.first);
+            xref_obj["name"] = xref.second;
+            xrefs_from_json.push_back(xref_obj);
+        }
+        result["xrefs_from"] = xrefs_from_json;
+        result["xrefs_from_count"] = xrefs_from.size();
+
+        if (xrefs_to.size() == max_results || xrefs_from.size() == max_results) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
+        }
+
+        // Update memory
+        std::set<ea_t> callers, callees;
+        for (const auto& xref : xrefs_to) callers.insert(xref.first);
+        for (const auto& xref : xrefs_from) callees.insert(xref.first);
+        memory->update_function_relationships(address, callers, callees);
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Unified name/comment actions
+json ActionExecutor::set_name(ea_t address, const std::string& name) {
+    json result;
+    try {
+        bool success = IDAUtils::set_name(address, name);
+        result["success"] = success;
+        if (!success) {
+            result["error"] = "Failed to set name";
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::set_comment(ea_t address, const std::string& comment) {
+    json result;
+    try {
+        bool success;
+        if (comment.empty()) {
+            // Clear comment
+            success = IDAUtils::clear_disassembly_comment(address) &&
+                     IDAUtils::clear_pseudocode_comments(address);
+        } else {
+            // Set comment
+            success = IDAUtils::add_disassembly_comment(address, comment) &&
+                     IDAUtils::add_pseudocode_comment(address, comment);
+        }
+        result["success"] = success;
+        if (!success) {
+            result["error"] = "Failed to set comment";
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Binary info actions
+json ActionExecutor::get_imports(int max_results) {
+    json result;
+    try {
+        std::map<std::string, std::vector<std::string>> imports = IDAUtils::get_imports();
+        result["success"] = true;
+
+        int count = 0;
+        json imports_json = json::object();
+
+        for (const auto& [library, functions] : imports) {
+            if (count >= max_results) break;
+
+            std::vector<std::string> limited_functions;
+            for (const std::string& function : functions) {
+                if (count >= max_results) break;
+                limited_functions.push_back(function);
+                count++;
+            }
+
+            if (!limited_functions.empty()) {
+                imports_json[library] = limited_functions;
+            }
+        }
+
+        result["imports"] = imports_json;
+        result["count"] = count;
+
+        if (count == max_results) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
         }
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -682,6 +556,7 @@ json ActionExecutor::get_entry_points() {
             entries_json.push_back(entry_obj);
         }
         result["entry_points"] = entries_json;
+        result["count"] = entries_json.size();
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -689,60 +564,19 @@ json ActionExecutor::get_entry_points() {
     return result;
 }
 
-
-// Memory System Actions
-
-json ActionExecutor::set_global_note(const std::string& key, const std::string& content) {
+// Consolidated knowledge management
+json ActionExecutor::store_analysis(const std::string& key, const std::string& content,
+                                   std::optional<ea_t> address, const std::string& type,
+                                   const std::vector<ea_t>& related_addresses) {
     json result;
     try {
-        memory->set_global_note(key, content);
+        memory->store_analysis(key, content, address, type, related_addresses);
         result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_global_note(const std::string& key) {
-    json result;
-    try {
-        std::string content = memory->get_global_note(key);
-        result["success"] = true;
-        result["content"] = content;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::list_global_notes() {
-    json result;
-    try {
-        std::vector<std::string> keys = memory->list_global_notes();
-        result["success"] = true;
-        result["keys"] = keys;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::search_notes(const std::string& query) {
-    json result;
-    try {
-        std::vector<std::pair<std::string, std::string>> matches = memory->search_notes(query);
-        result["success"] = true;
-        json matches_json = json::array();
-        for (const std::pair<std::string, std::string> &match: matches) {
-            json match_obj;
-            match_obj["key"] = match.first;
-            match_obj["snippet"] = match.second;
-            matches_json.push_back(match_obj);
+        result["key"] = key;
+        result["type"] = type;
+        if (address) {
+            result["address"] = HexAddress(*address);
         }
-        result["matches"] = matches_json;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -750,11 +584,39 @@ json ActionExecutor::search_notes(const std::string& query) {
     return result;
 }
 
-json ActionExecutor::set_function_analysis(ea_t address, int level, const std::string& analysis) {
+json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> address,
+                                 const std::string& type, const std::string& pattern, int max_results) {
     json result;
     try {
-        memory->set_function_analysis(address, static_cast<DetailLevel>(level), analysis);
+        auto analyses = memory->get_analysis(key, address, type, pattern, max_results);
         result["success"] = true;
+
+        json analyses_json = json::array();
+        for (const auto& analysis : analyses) {
+            json analysis_obj;
+            analysis_obj["key"] = analysis.key;
+            analysis_obj["content"] = analysis.content;
+            analysis_obj["type"] = analysis.type;
+            if (analysis.address) {
+                analysis_obj["address"] = HexAddress(*analysis.address);
+            }
+            if (!analysis.related_addresses.empty()) {
+                json related = json::array();
+                for (ea_t addr : analysis.related_addresses) {
+                    related.push_back(HexAddress(addr));
+                }
+                analysis_obj["related_addresses"] = related;
+            }
+            analyses_json.push_back(analysis_obj);
+        }
+
+        result["analyses"] = analyses_json;
+        result["count"] = analyses_json.size();
+
+        if (analyses.size() == max_results) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
+        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -762,12 +624,83 @@ json ActionExecutor::set_function_analysis(ea_t address, int level, const std::s
     return result;
 }
 
-json ActionExecutor::get_function_analysis(ea_t address, int level) {
+// Batch operations
+json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int level, const std::string& group_name) {
     json result;
     try {
-        std::string analysis = memory->get_function_analysis(address, static_cast<DetailLevel>(level));
         result["success"] = true;
-        result["analysis"] = analysis;
+        result["group_name"] = group_name;
+
+        json functions_json = json::array();
+
+        for (ea_t address : addresses) {
+            json func_result;
+            func_result["address"] = HexAddress(address);
+
+            try {
+                // Get basic info
+                auto info = IDAUtils::get_function_info(address);
+                func_result["name"] = info.name;
+                func_result["size"] = info.size;
+
+                if (level >= 1) {
+                    // Include decompilation
+                    func_result["decompilation"] = IDAUtils::get_function_decompilation(address);
+
+                    // Include string refs
+                    auto string_refs = IDAUtils::get_function_string_refs(address, 10);
+                    func_result["string_refs"] = string_refs;
+                }
+
+                if (level >= 2) {
+                    // Include disassembly
+                    func_result["disassembly"] = IDAUtils::get_function_disassembly(address);
+
+                    // Include cross-references
+                    auto xrefs_to = IDAUtils::get_xrefs_to_with_names(address, 10);
+                    auto xrefs_from = IDAUtils::get_xrefs_from_with_names(address, 10);
+
+                    json xrefs_to_json = json::array();
+                    for (const auto& xref : xrefs_to) {
+                        json xref_obj;
+                        xref_obj["address"] = HexAddress(xref.first);
+                        xref_obj["name"] = xref.second;
+                        xrefs_to_json.push_back(xref_obj);
+                    }
+                    func_result["xrefs_to"] = xrefs_to_json;
+
+                    json xrefs_from_json = json::array();
+                    for (const auto& xref : xrefs_from) {
+                        json xref_obj;
+                        xref_obj["address"] = HexAddress(xref.first);
+                        xref_obj["name"] = xref.second;
+                        xrefs_from_json.push_back(xref_obj);
+                    }
+                    func_result["xrefs_from"] = xrefs_from_json;
+                }
+
+                func_result["success"] = true;
+
+                // Update memory
+                memory->set_function_analysis(address, static_cast<DetailLevel>(level),
+                                            "Analyzed as part of batch: " + group_name);
+
+            } catch (const std::exception& e) {
+                func_result["success"] = false;
+                func_result["error"] = e.what();
+            }
+
+            functions_json.push_back(func_result);
+        }
+
+        result["functions"] = functions_json;
+        result["count"] = functions_json.size();
+
+        // Store as cluster if group name provided
+        if (!group_name.empty()) {
+            memory->analyze_cluster(addresses, group_name, static_cast<DetailLevel>(level));
+        }
+
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -775,102 +708,79 @@ json ActionExecutor::get_function_analysis(ea_t address, int level) {
     return result;
 }
 
-json ActionExecutor::get_memory_context(ea_t address, int radius) {
+// Context and workflow
+json ActionExecutor::get_analysis_context(std::optional<ea_t> address, int radius) {
     json result;
     try {
-        MemoryContext context = memory->get_memory_context(address, radius);
-        result["success"] = true;
+        // Use current focus if no address provided
+        ea_t context_addr = address.value_or(memory->get_current_focus());
 
-        // Convert context to JSON
+        result["success"] = true;
+        result["center_address"] = HexAddress(context_addr);
+
+        // Get memory context
+        MemoryContext context = memory->get_memory_context(context_addr, radius);
+
+        // Add nearby functions
         json nearby = json::array();
-        for (const FunctionMemory& func: context.nearby_functions) {
+        for (const FunctionMemory& func : context.nearby_functions) {
             json func_obj;
             func_obj["address"] = HexAddress(func.address);
             func_obj["name"] = func.name;
-            func_obj["distance_from_anchor"] = func.distance_from_anchor;
-            func_obj["current_level"] = static_cast<int>(func.current_level);
+            func_obj["distance_from_center"] = func.distance_from_anchor;
+            func_obj["analysis_level"] = static_cast<int>(func.current_level);
             nearby.push_back(func_obj);
         }
         result["nearby_functions"] = nearby;
 
+        // Add context functions
         json context_funcs = json::array();
-        for (const FunctionMemory& func: context.context_functions) {
+        for (const FunctionMemory& func : context.context_functions) {
             json func_obj;
             func_obj["address"] = HexAddress(func.address);
             func_obj["name"] = func.name;
-            func_obj["distance_from_anchor"] = func.distance_from_anchor;
-            func_obj["current_level"] = static_cast<int>(func.current_level);
+            func_obj["distance_from_center"] = func.distance_from_anchor;
+            func_obj["analysis_level"] = static_cast<int>(func.current_level);
             context_funcs.push_back(func_obj);
         }
         result["context_functions"] = context_funcs;
 
-        result["llm_memory"] = context.llm_memory;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_analyzed_functions() {
-    json result;
-    try {
-        std::vector<std::tuple<ea_t, std::string, DetailLevel>> functions = memory->get_analyzed_functions();
-        result["success"] = true;
-        json funcs_json = json::array();
-        for (const std::tuple<ea_t, std::string, DetailLevel>& func: functions) {
-            json func_obj;
-            func_obj["address"] = HexAddress(std::get<0>(func));
-            func_obj["name"] = std::get<1>(func);
-            func_obj["max_level"] = static_cast<int>(std::get<2>(func));
-            funcs_json.push_back(func_obj);
-        }
-        result["functions"] = funcs_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-    json ActionExecutor::find_functions_by_pattern(const std::string& pattern) {
-    json result;
-    try {
-        std::vector<ea_t> addresses = memory->find_functions_by_pattern(pattern);
-        result["success"] = true;
-        json functions_json = json::array();
-        for (ea_t addr : addresses) {
-            json func_obj;
-            func_obj["address"] = HexAddress(addr);
-
-            // Get the function name
-            std::string name = IDAUtils::get_function_name(addr);
-            func_obj["name"] = name;
-
-            functions_json.push_back(func_obj);
-        }
-        result["functions"] = functions_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_exploration_frontier() {
-    json result;
-    try {
-        std::vector<std::tuple<ea_t, std::string, std::string>> frontier = memory->get_exploration_frontier();
-        result["success"] = true;
+        // Add exploration frontier
+        auto frontier = memory->get_exploration_frontier();
         json frontier_json = json::array();
-        for (const std::tuple<ea_t, std::string, std::string>& item: frontier) {
+        for (const auto& item : frontier) {
             json item_obj;
             item_obj["address"] = HexAddress(std::get<0>(item));
             item_obj["name"] = std::get<1>(item);
             item_obj["reason"] = std::get<2>(item);
             frontier_json.push_back(item_obj);
         }
-        result["frontier"] = frontier_json;
+        result["exploration_frontier"] = frontier_json;
+
+        // Add analysis queue
+        auto queue = memory->get_analysis_queue();
+        json queue_json = json::array();
+        for (const auto& item : queue) {
+            json item_obj;
+            item_obj["address"] = HexAddress(std::get<0>(item));
+            item_obj["reason"] = std::get<1>(item);
+            item_obj["priority"] = std::get<2>(item);
+
+            // Get function name
+            std::string name = IDAUtils::get_function_name(std::get<0>(item));
+            item_obj["name"] = name;
+
+            queue_json.push_back(item_obj);
+        }
+        result["analysis_queue"] = queue_json;
+
+        // Add LLM memory summary
+        result["memory_summary"] = context.llm_memory;
+
+        // Add stats
+        auto analyzed = memory->get_analyzed_functions();
+        result["total_analyzed_functions"] = analyzed.size();
+
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -883,33 +793,9 @@ json ActionExecutor::mark_for_analysis(ea_t address, const std::string& reason, 
     try {
         memory->mark_for_analysis(address, reason, priority);
         result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_analysis_queue() {
-    json result;
-    try {
-        std::vector<std::tuple<ea_t, std::string, int>> queue = memory->get_analysis_queue();
-        result["success"] = true;
-        json queue_json = json::array();
-        for (const std::tuple<ea_t, std::string, int>& item: queue) {
-            json item_obj;
-            ea_t addr = std::get<0>(item);
-            item_obj["address"] = HexAddress(addr);
-            item_obj["reason"] = std::get<1>(item);
-            item_obj["priority"] = std::get<2>(item);
-
-            // Get the function name
-            std::string name = IDAUtils::get_function_name(addr);
-            item_obj["name"] = name;
-
-            queue_json.push_back(item_obj);
-        }
-        result["queue"] = queue_json;
+        result["address"] = HexAddress(address);
+        result["reason"] = reason;
+        result["priority"] = priority;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -922,84 +808,7 @@ json ActionExecutor::set_current_focus(ea_t address) {
     try {
         memory->set_current_focus(address);
         result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::add_insight(const std::string& type, const std::string& description, const std::vector<ea_t>& related_addresses) {
-    json result;
-    try {
-        memory->add_insight(type, description, related_addresses);
-        result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_insights(const std::string& type) {
-    json result;
-    try {
-        std::vector<std::tuple<std::string, std::vector<ea_t>>> insights = memory->get_insights(type);
-        result["success"] = true;
-        json insights_json = json::array();
-        for (const std::tuple<std::string, std::vector<ea_t>> &insight: insights) {
-            json insight_obj;
-            insight_obj["description"] = std::get<0>(insight);
-            json addresses_json = json::array();
-            for (ea_t addr : std::get<1>(insight)) {
-                addresses_json.push_back(HexAddress(addr));
-            }
-            insight_obj["addresses"] = addresses_json;
-            insights_json.push_back(insight_obj);
-        }
-        result["insights"] = insights_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::analyze_cluster(const std::vector<ea_t>& addresses, const std::string& cluster_name, int initial_level) {
-    json result;
-    try {
-        memory->analyze_cluster(addresses, cluster_name, static_cast<DetailLevel>(initial_level));
-        result["success"] = true;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_cluster_analysis(const std::string& cluster_name) {
-    json result;
-    try {
-        std::map<ea_t, std::string> cluster = memory->get_cluster_analysis(cluster_name);
-        result["success"] = true;
-        json cluster_json = json::object();
-        for (const std::pair<const unsigned long long, std::string> &pair: cluster) {
-            cluster_json[std::to_string(pair.first)] = pair.second;
-        }
-        result["cluster"] = cluster_json;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::summarize_region(ea_t start_addr, ea_t end_addr) {
-    json result;
-    try {
-        std::string summary = memory->summarize_region(start_addr, end_addr);
-        result["success"] = true;
-        result["summary"] = summary;
+        result["address"] = HexAddress(address);
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

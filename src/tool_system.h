@@ -11,8 +11,6 @@
 #include "actions.h"
 #include "deep_analysis.h"
 
-
-
 namespace llm_re::tools {
 
 // Base tool result type
@@ -133,197 +131,404 @@ public:
     }
 };
 
+// Unified search functions tool
+class SearchFunctionsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_functions";
+    }
+
+    std::string description() const override {
+        return "Search for functions by name pattern. Can filter to only named functions and limit results. Returns address, name, and whether it's user-named.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all functions", false)
+            .add_boolean("named_only", "Only return user-named functions (exclude auto-generated names)", false)
+            .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string pattern = input.value("pattern", "");
+            bool named_only = input.value("named_only", true);
+            int max_results = input.value("max_results", 100);
+
+            return ToolResult::success(executor->search_functions(pattern, named_only, max_results));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Unified search globals tool
+class SearchGlobalsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_globals";
+    }
+
+    std::string description() const override {
+        return "Search for global variables/data by name pattern. Returns address, name, value preview, and type. Excludes auto-generated names by default.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all globals", false)
+            .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string pattern = input.value("pattern", "");
+            int max_results = input.value("max_results", 100);
+
+            return ToolResult::success(executor->search_globals(pattern, max_results));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Unified search strings tool
+class SearchStringsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_strings";
+    }
+
+    std::string description() const override {
+        return "Search for strings in the binary. Can filter by content pattern and minimum length. Returns address and content.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all strings", false)
+            .add_integer("min_length", "Minimum string length (defaults to 5)", false)
+            .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string pattern = input.value("pattern", "");
+            int min_length = input.value("min_length", 5);
+            int max_results = input.value("max_results", 100);
+
+            return ToolResult::success(executor->search_strings(pattern, min_length, max_results));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get comprehensive function info tool
+class GetFunctionInfoTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_function_info";
+    }
+
+    std::string description() const override {
+        return "Get comprehensive information about a function including name, bounds, cross-references counts, and reference counts. Fast overview without disassembly/decompilation.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The address of the function")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            return ToolResult::success(executor->get_function_info(address));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get comprehensive data info tool
+class GetDataInfoTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_data_info";
+    }
+
+    std::string description() const override {
+        return "Get comprehensive information about data including name, value, type, and cross-references. Provides complete data context.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The address of the data")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            return ToolResult::success(executor->get_data_info(address));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Analyze function tool (replaces decompilation/disassembly tools)
+class AnalyzeFunctionTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "analyze_function";
+    }
+
+    std::string description() const override {
+        return "Analyze a function with optional disassembly and decompilation. Includes cross-references, strings, data refs, and code. Use this for deep function understanding. "
+                  "Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The address of the function")
+            .add_boolean("include_disasm", "Include disassembly (defaults to false)", false)
+            .add_boolean("include_decomp", "Include decompilation (defaults to true)", false)
+            .add_integer("max_xrefs", "Maximum cross-references to include (defaults to 20)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            bool include_disasm = input.value("include_disasm", false);
+            bool include_decomp = input.value("include_decomp", true);
+            int max_xrefs = input.value("max_xrefs", 20);
+
+            return ToolResult::success(executor->analyze_function(address, include_disasm, include_decomp, max_xrefs));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Store analysis tool (unified knowledge storage)
+class StoreAnalysisTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "store_analysis";
+    }
+
+    std::string description() const override {
+        return "Store analysis findings, notes, or insights. Can be associated with addresses or kept as global notes.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("key", "Unique key for this analysis")
+            .add_string("content", "The analysis content")
+            .add_integer("address", "Associated address (optional)", false)
+            .add_string("type", "Type of analysis: note, finding, hypothesis, question, analysis (defaults to note)", false)
+            .add_array("related_addresses", "integer", "Additional related addresses", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string key = input.at("key");
+            std::string content = input.at("content");
+            std::optional<ea_t> address;
+            if (input.contains("address")) {
+                address = ActionExecutor::parse_single_address_value(input.at("address"));
+            }
+            std::string type = input.value("type", "note");
+            std::vector<ea_t> related_addresses;
+            if (input.contains("related_addresses")) {
+                related_addresses = ActionExecutor::parse_list_address_param(input, "related_addresses");
+            }
+
+            return ToolResult::success(executor->store_analysis(key, content, address, type, related_addresses));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get analysis tool
+class GetAnalysisTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_analysis";
+    }
+
+    std::string description() const override {
+        return "Retrieve stored analysis by key, address, type, or search pattern.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("key", "Specific key to retrieve", false)
+            .add_integer("address", "Find analysis related to this address", false)
+            .add_string("type", "Filter by type (note, finding, hypothesis, question, analysis)", false)
+            .add_string("pattern", "Search pattern in content", false)
+            .add_integer("max_results", "Maximum results (defaults to 100)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string key = input.value("key", "");
+            std::optional<ea_t> address;
+            if (input.contains("address")) {
+                address = ActionExecutor::parse_single_address_value(input.at("address"));
+            }
+            std::string type = input.value("type", "");
+            std::string pattern = input.value("pattern", "");
+            int max_results = input.value("max_results", 100);
+
+            return ToolResult::success(executor->get_analysis(key, address, type, pattern, max_results));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Batch analyze functions tool
+class AnalyzeFunctionsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "analyze_functions";
+    }
+
+    std::string description() const override {
+        return "Analyze multiple functions as a batch. Efficient for analyzing related function groups. Returns analysis for each function.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_array("addresses", "integer", "List of function addresses to analyze")
+            .add_integer("level", "Analysis detail level (0=basic info, 1=with decompilation, 2=full with disasm. Defaults to 1)", false)
+            .add_string("group_name", "Optional name for this group of functions", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::vector<ea_t> addresses = ActionExecutor::parse_list_address_param(input, "addresses");
+            int level = input.value("level", 1);
+            std::string group_name = input.value("group_name", "");
+
+            return ToolResult::success(executor->analyze_functions(addresses, level, group_name));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Get analysis context tool (replaces multiple context tools)
+class GetAnalysisContextTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_analysis_context";
+    }
+
+    std::string description() const override {
+        return "Get comprehensive analysis context including nearby functions, analysis queue, exploration frontier, and relationships. Centers around current focus or specified address.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "Center context around this address (uses current focus if not specified)", false)
+            .add_integer("radius", "How many functions away to include (defaults to 2)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::optional<ea_t> address;
+            if (input.contains("address")) {
+                address = ActionExecutor::parse_single_address_value(input.at("address"));
+            }
+            int radius = input.value("radius", 2);
+
+            return ToolResult::success(executor->get_analysis_context(address, radius));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
 // Cross-reference tool
 class GetXrefsTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "get_xrefs_to";
+        return "get_xrefs";
     }
 
     std::string description() const override {
-        return "Find what calls or references this address. Returns caller addresses with names. Essential for understanding how functions are used. Large functions may have many xrefs.";
+        return "Get cross-references to AND from an address. Shows what calls this and what this calls. Essential for understanding code relationships.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("address", "The address to find references to")
-            .add_integer("max_count", "Maximum number of xrefs to return (defaults to 100)", false)
+            .add_integer("address", "The address to get xrefs for")
+            .add_integer("max_results", "Maximum xrefs per direction (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int max_count = input.value("max_count", 100);
-            return ToolResult::success(executor->get_xrefs_to(address, max_count));
+            int max_results = input.value("max_results", 100);
+
+            return ToolResult::success(executor->get_xrefs(address, max_results));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-class GetXrefsFromTool : public Tool {
+// Set name tool (functions + data)
+class SetNameTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "get_xrefs_from";
+        return "set_name";
     }
 
     std::string description() const override {
-        return "Find what this address calls or references. Returns called addresses with names.";
+        return "Set a custom name for a function or data at the given address. Works for both code and data locations.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("address", "The address to find references from")
-            .add_integer("max_count", "Maximum number of xrefs to return (defaults to 100)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int max_count = input.value("max_count", 100);
-            return ToolResult::success(executor->get_xrefs_from(address, max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Function disassembly and decompilation tools
-class GetFunctionDisassemblyTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_disassembly";
-    }
-
-    std::string description() const override {
-        return "Get the disassembly (assembly code) for a function at the given address. Shows the low-level assembly instructions. This is expensive, so only use when you need to really understand a complicated function, or if the decompilation is not making sense.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function to disassemble")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_disassembly(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetFunctionDecompilationTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_decompilation";
-    }
-
-    std::string description() const override {
-        return "Get the decompiled pseudocode for a function at the given address. Shows high-level C-like representation.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function to decompile")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_decompilation(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Function name tools
-class GetFunctionAddressTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_address";
-    }
-
-    std::string description() const override {
-        return "Find the address of a function by its name. Returns the address where the function is located.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("name", "The name of the function to find")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string name = input.at("name");
-            return ToolResult::success(executor->get_function_address(name));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetFunctionNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_name";
-    }
-
-    std::string description() const override {
-        return "Get the name of the function at the given address. Returns the symbol name or generated name.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_name(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class SetFunctionNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_function_name";
-    }
-
-    std::string description() const override {
-        return "Set a custom name for the function at the given address. Useful for organizing and understanding code.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .add_string("name", "The new name for the function")
+            .add_integer("address", "The address to name")
+            .add_string("name", "The new name")
             .build();
     }
 
@@ -331,222 +536,47 @@ public:
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string name = input.at("name");
-            return ToolResult::success(executor->set_function_name(address, name));
+
+            return ToolResult::success(executor->set_name(address, name));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-// Function reference tools
-class GetFunctionStringRefsTool : public Tool {
+// Comment tool
+class SetCommentTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "get_function_string_refs";
+        return "set_comment";
     }
 
     std::string description() const override {
-        return "Get all string references used within a function. Auto-updates memory. Helps understand function behavior. Large functions may reference many strings.";
+        return "Set or clear a comment at the given address. Empty comment clears existing. Adds to both disassembly and decompilation views.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .add_integer("max_count", "Maximum number of strings to return (defaults to 100)", false)
+            .add_integer("address", "The address for the comment")
+            .add_string("comment", "The comment text (empty to clear)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int max_count = input.value("max_count", 100);
-            return ToolResult::success(executor->get_function_string_refs(address, max_count));
+            std::string comment = input.value("comment", "");
+
+            return ToolResult::success(executor->set_comment(address, comment));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-class GetFunctionDataRefsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_data_refs";
-    }
-
-    std::string description() const override {
-        return "Get all data references used within a function. Auto-updates memory. Shows what data the function accesses. Large functions may have many data references.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .add_integer("max_count", "Maximum number of data refs to return (defaults to 100)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int max_count = input.value("max_count", 100);
-            return ToolResult::success(executor->get_function_data_refs(address, max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Data tools
-class GetDataNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_data_name";
-    }
-
-    std::string description() const override {
-        return "Get the name of the data variable or symbol at the given address.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the data")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_data_name(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class SetDataNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_data_name";
-    }
-
-    std::string description() const override {
-        return "Set a custom name for the data variable or symbol at the given address.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the data")
-            .add_string("name", "The new name for the data")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            std::string name = input.at("name");
-            return ToolResult::success(executor->set_data_name(address, name));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetDataTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_data";
-    }
-
-    std::string description() const override {
-        return "Get the value and type information for data at the given address. Returns both the data value and its type.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the data")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_data(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Comment tools
-class AddCommentTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "add_comment";
-    }
-
-    std::string description() const override {
-        return "Add a comment to the disassembly and pseudocode at the given address. Helps document your analysis findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to add the comment to")
-            .add_string("comment", "The comment text")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            std::string comment = input.at("comment");
-
-            return ToolResult::success(executor->add_comment(address, comment));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class ClearCommentTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "clear_comment";
-    }
-
-    std::string description() const override {
-        return "Clear/remove the disassembly and pseudocode comment at the given address.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to clear the comment from")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->clear_comment(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Import tools
+// Get imports tool
 class GetImportsTool : public Tool {
 public:
     using Tool::Tool;
@@ -561,236 +591,21 @@ public:
 
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("max_count", "Max number of imports to return")
+            .add_integer("max_results", "Maximum imports to return (defaults to 100)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_imports(input.at("max_count")));
+            int max_results = input.value("max_results", 100);
+            return ToolResult::success(executor->get_imports(max_results));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
     }
 };
 
-// String search tool
-class SearchStringsTool : public Tool {
-    public:
-        using Tool::Tool;
-
-        std::string name() const override {
-            return "search_strings";
-        }
-
-        std::string description() const override {
-            return "Search for strings containing the given text. Case sensitivity is optional. Useful for finding specific functionality. Results are limited to avoid overwhelming output.";
-        }
-
-        json parameters_schema() const override {
-            return ParameterBuilder()
-                .add_string("text", "The text to search for in strings")
-                .add_boolean("is_case_sensitive", "Whether the search is case sensitive", false)
-                .add_integer("max_count", "Maximum number of results to return (defaults to 100)", false)
-                .build();
-        }
-
-        ToolResult execute(const json& input) override {
-            try {
-                std::string text = input.at("text");
-                bool is_case_sensitive = input.value("is_case_sensitive", false);
-                int max_count = input.value("max_count", 100);
-                return ToolResult::success(executor->search_strings(text, is_case_sensitive, max_count));
-            } catch (const std::exception& e) {
-                return ToolResult::failure(e.what());
-            }
-        }
-    };
-
-
-// Named functions tool
-class GetNamedFunctionsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_named_functions";
-    }
-
-    std::string description() const override {
-        return "Get all functions with user-defined or meaningful names (excludes auto-generated names like sub_*)";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("max_count", "Maximum number of functions to return")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            int max_count = input.value("max_count", -1); // -1 means unlimited
-            return ToolResult::success(executor->get_named_functions(max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Search named functions tool
-class SearchNamedFunctionsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "search_named_functions";
-    }
-
-    std::string description() const override {
-        return "Search for named functions containing the given text in their names. Case sensitivity is optional.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("text", "The text to search for in function names")
-            .add_integer("max_count", "Maximum number of functions to return")
-            .add_boolean("is_case_sensitive", "Whether the search is case sensitive", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string text = input.at("text");
-            bool is_case_sensitive = input.value("is_case_sensitive", false);
-            int max_count = input.value("max_count", -1); // -1 means unlimited
-            return ToolResult::success(executor->search_named_functions(text, is_case_sensitive, max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Search named globals tool
-class SearchNamedGlobalsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "search_named_globals";
-    }
-
-    std::string description() const override {
-        return "Search for global variables/data by name pattern. Supports regex. Returns limited results to avoid overwhelming output.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("pattern", "The pattern to search for in global names (supports regex)")
-            .add_boolean("is_regex", "Whether to use regex matching (defaults to substring search)", false)
-            .add_integer("max_count", "Maximum number of results to return (defaults to 100)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string pattern = input.at("pattern");
-            bool is_regex = input.value("is_regex", false);
-            int max_count = input.value("max_count", 100);
-            return ToolResult::success(executor->search_named_globals(pattern, is_regex, max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetGlobalByNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_global_by_name";
-    }
-
-    std::string description() const override {
-        return "Get a specific global variable by its exact name. Returns address, name, value, and type.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("name", "The exact name of the global variable")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string name = input.at("name");
-            return ToolResult::success(executor->get_global_by_name(name));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Get named globals tool
-class GetNamedGlobalsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_named_globals";
-    }
-
-    std::string description() const override {
-        return "Get all global variables and data with user-defined names";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("max_count", "Max number of globals to return")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->get_named_globals(input.at("max_count")));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Get strings tool
-class GetStringsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_strings";
-    }
-
-    std::string description() const override {
-        return "Get all strings in the binary. Returns addresses and content. Useful for understanding program functionality. Results are limited to avoid overwhelming output.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("min_length", "Minimum string length to include (defaults to 5)", false)
-            .add_integer("max_count", "Maximum number of strings to return (defaults to 1000)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            int min_length = input.value("min_length", 5);
-            int max_count = input.value("max_count", 1000);
-            return ToolResult::success(executor->get_strings(min_length, max_count));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Get entry points tool
+// Get entry points tool (kept as is)
 class GetEntryPointsTool : public Tool {
 public:
     using Tool::Tool;
@@ -800,7 +615,7 @@ public:
     }
 
     std::string description() const override {
-        return "Get all entry points of the binary (main entry, exports, etc). Shows where execution can begin.";
+        return "Get all entry points of the binary (main entry, exports, TLS callbacks). Shows where execution can begin.";
     }
 
     json parameters_schema() const override {
@@ -816,292 +631,7 @@ public:
     }
 };
 
-// Global note tools
-class SetGlobalNoteTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_global_note";
-    }
-
-    std::string description() const override {
-        return "Store a global note with a key for later retrieval. Use for persistent analysis findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("key", "The key/name for the note")
-            .add_string("content", "The content of the note")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string key = input.at("key");
-            std::string content = input.at("content");
-            return ToolResult::success(executor->set_global_note(key, content));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetGlobalNoteTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_global_note";
-    }
-
-    std::string description() const override {
-        return "Retrieve a global note by its key. Access your previously stored analysis findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("key", "The key/name of the note to retrieve")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string key = input.at("key");
-            return ToolResult::success(executor->get_global_note(key));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class ListGlobalNotesTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "list_global_notes";
-    }
-
-    std::string description() const override {
-        return "List all available global note keys. See what analysis findings you have stored.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder().build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->list_global_notes());
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class SearchNotesTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "search_notes";
-    }
-
-    std::string description() const override {
-        return "Search through all global notes for the given query text. Find relevant analysis findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("query", "The text to search for in notes")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string query = input.at("query");
-            return ToolResult::success(executor->search_notes(query));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Function analysis tools
-class SetFunctionAnalysisTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_function_analysis";
-    }
-
-    std::string description() const override {
-        return "Store detailed analysis for a function at a specific detail level. Builds persistent knowledge.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .add_integer("level", "The detail level (0=basic, 1=detailed, 2=comprehensive)")
-            .add_string("analysis", "The analysis content")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int level = input.at("level");
-            std::string analysis = input.at("analysis");
-            return ToolResult::success(executor->set_function_analysis(address, level, analysis));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetFunctionAnalysisTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_function_analysis";
-    }
-
-    std::string description() const override {
-        return "Retrieve stored analysis for a function at a specific detail level. Access your previous findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address of the function")
-            .add_integer("level", "The detail level to retrieve (defaults to 0)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int level = input.value("level", 0);
-            return ToolResult::success(executor->get_function_analysis(address, level));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Memory context tool
-class GetMemoryContextTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_memory_context";
-    }
-
-    std::string description() const override {
-        return "Get memory context around an address - nearby functions, relationships, and LLM memory. Essential for understanding code structure.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The anchor address")
-            .add_integer("radius", "Search radius for nearby functions (defaults to 2)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int radius = input.value("radius", 2);
-            return ToolResult::success(executor->get_memory_context(address, radius));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Analysis tracking tools
-class GetAnalyzedFunctionsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_analyzed_functions";
-    }
-
-    std::string description() const override {
-        return "Get list of all functions that have been analyzed, with their names and analysis levels.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder().build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->get_analyzed_functions());
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class FindFunctionsByPatternTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "find_functions_by_pattern";
-    }
-
-    std::string description() const override {
-        return "Find functions matching a pattern in their name or analysis. Use regex patterns to locate similar functions.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("pattern", "The pattern to search for (supports regex)")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string pattern = input.at("pattern");
-            return ToolResult::success(executor->find_functions_by_pattern(pattern));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Exploration tools
-class GetExplorationFrontierTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_exploration_frontier";
-    }
-
-    std::string description() const override {
-        return "Get the current exploration frontier - functions that should be analyzed next based on relationships.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder().build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->get_exploration_frontier());
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
+// Mark for analysis tool
 class MarkForAnalysisTool : public Tool {
 public:
     using Tool::Tool;
@@ -1111,7 +641,7 @@ public:
     }
 
     std::string description() const override {
-        return "Mark a function for future analysis with a reason and priority. Helps organize analysis workflow.";
+        return "Mark a function for future analysis with a reason and priority. Helps you organize your analysis workflow.";
     }
 
     json parameters_schema() const override {
@@ -1127,6 +657,7 @@ public:
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string reason = input.at("reason");
             int priority = input.value("priority", 5);
+
             return ToolResult::success(executor->mark_for_analysis(address, reason, priority));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
@@ -1134,32 +665,7 @@ public:
     }
 };
 
-class GetAnalysisQueueTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_analysis_queue";
-    }
-
-    std::string description() const override {
-        return "Get the current analysis queue with priorities and reasons. See what's pending analysis.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder().build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            return ToolResult::success(executor->get_analysis_queue());
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Focus tool
+// Set focus tool
 class SetCurrentFocusTool : public Tool {
 public:
     using Tool::Tool;
@@ -1182,159 +688,6 @@ public:
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             return ToolResult::success(executor->set_current_focus(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Insight tools
-class AddInsightTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "add_insight";
-    }
-
-    std::string description() const override {
-        return "Add an insight/finding with type, description, and related addresses. Build knowledge base of discoveries.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("type", "The type/category of insight (valid types: Pattern, Hypothesis, Question, Finding)")
-            .add_string("description", "Description of the insight")
-            .add_array("related_addresses", "integer", "List of related addresses")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string type = input.at("type");
-            std::string description = input.at("description");
-            std::vector<ea_t> related_addresses = ActionExecutor::parse_list_address_param(input, "related_addresses");
-            return ToolResult::success(executor->add_insight(type, description, related_addresses));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetInsightsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_insights";
-    }
-
-    std::string description() const override {
-        return "Get insights by type (or all if type is empty). Access your accumulated knowledge and findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("type", "Filter by insight type (empty for all)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string type = input.value("type", "");
-            return ToolResult::success(executor->get_insights(type));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Cluster analysis tools
-class AnalyzeClusterTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "analyze_cluster";
-    }
-
-    std::string description() const override {
-        return "Analyze a cluster of related functions together. Groups related functionality for comprehensive understanding.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_array("addresses", "integer", "List of function addresses to analyze as a cluster")
-            .add_string("cluster_name", "Name for this cluster")
-            .add_integer("initial_level", "Initial analysis detail level")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::vector<ea_t> addresses = input.at("addresses").get<std::vector<ea_t>>();
-            std::string cluster_name = input.at("cluster_name");
-            int initial_level = input.at("initial_level");
-            return ToolResult::success(executor->analyze_cluster(addresses, cluster_name, initial_level));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-class GetClusterAnalysisTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_cluster_analysis";
-    }
-
-    std::string description() const override {
-        return "Get the analysis results for a named cluster. Access comprehensive cluster findings.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("cluster_name", "Name of the cluster to retrieve")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string cluster_name = input.at("cluster_name");
-            return ToolResult::success(executor->get_cluster_analysis(cluster_name));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Region summary tool
-class SummarizeRegionTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "summarize_region";
-    }
-
-    std::string description() const override {
-        return "Generate a summary of a memory region between two addresses. Understand larger code sections.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("start_addr", "Starting address of the region")
-            .add_integer("end_addr", "Ending address of the region")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t start_addr = ActionExecutor::parse_single_address_value(input.at("start_addr"));
-            ea_t end_addr = ActionExecutor::parse_single_address_value(input.at("end_addr"));
-            return ToolResult::success(executor->summarize_region(start_addr, end_addr));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1377,8 +730,7 @@ public:
     }
 };
 
-
- // Deep analysis collection tools
+// Deep analysis collection tools (kept as is)
 class StartDeepAnalysisCollectionTool : public Tool {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
@@ -1555,7 +907,7 @@ public:
 
     ToolResult execute(const json& input) override {
         try {
-            std::vector<std::pair<std::string, std::string> > analyses = deep_analysis_manager->list_analyses();
+            std::vector<std::pair<std::string, std::string>> analyses = deep_analysis_manager->list_analyses();
 
             json result;
             result["success"] = true;
@@ -1642,92 +994,37 @@ public:
         register_tool(std::make_unique<ToolType>(std::forward<Args>(args)...));
     }
 
-    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr ) {
-        // Cross-reference tools
+    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr) {
+        // Core navigation and info tools
         register_tool_type<GetXrefsTool>(memory, executor);
-        register_tool_type<GetXrefsFromTool>(memory, executor);
+        register_tool_type<GetFunctionInfoTool>(memory, executor);
+        register_tool_type<GetDataInfoTool>(memory, executor);
+        register_tool_type<AnalyzeFunctionTool>(memory, executor);
 
-        // Function disassembly and decompilation tools
-        register_tool_type<GetFunctionDisassemblyTool>(memory, executor);
-        register_tool_type<GetFunctionDecompilationTool>(memory, executor);
-
-        // Function name tools
-        register_tool_type<GetFunctionAddressTool>(memory, executor);
-        register_tool_type<GetFunctionNameTool>(memory, executor);
-        register_tool_type<SetFunctionNameTool>(memory, executor);
-
-        // Function reference tools
-        register_tool_type<GetFunctionStringRefsTool>(memory, executor);
-        register_tool_type<GetFunctionDataRefsTool>(memory, executor);
-
-        // Data tools
-        register_tool_type<GetDataNameTool>(memory, executor);
-        register_tool_type<SetDataNameTool>(memory, executor);
-        register_tool_type<GetDataTool>(memory, executor);
-
-        // Comment tools
-        register_tool_type<AddCommentTool>(memory, executor);
-        register_tool_type<ClearCommentTool>(memory, executor);
-
-        // Import/Export tools
-        register_tool_type<GetImportsTool>(memory, executor);
-
-        // String search tool
+        // Search tools
+        register_tool_type<SearchFunctionsTool>(memory, executor);
+        register_tool_type<SearchGlobalsTool>(memory, executor);
         register_tool_type<SearchStringsTool>(memory, executor);
 
-        register_tool_type<GetNamedFunctionsTool>(memory, executor);
-        register_tool_type<SearchNamedFunctionsTool>(memory, executor);
-        register_tool_type<SearchNamedGlobalsTool>(memory, executor);
-        register_tool_type<GetGlobalByNameTool>(memory, executor);
-        register_tool_type<GetNamedGlobalsTool>(memory, executor);
-        register_tool_type<GetStringsTool>(memory, executor);
-        register_tool_type<GetEntryPointsTool>(memory, executor);
+        // Modification tools
+        register_tool_type<SetNameTool>(memory, executor);
+        register_tool_type<SetCommentTool>(memory, executor);
 
+        // Analysis tools
+        register_tool_type<StoreAnalysisTool>(memory, executor);
+        register_tool_type<GetAnalysisTool>(memory, executor);
+        register_tool_type<AnalyzeFunctionsTool>(memory, executor);
+        register_tool_type<GetAnalysisContextTool>(memory, executor);
 
-
-        // memory tools
-
-        // Global note tools
-        register_tool_type<SetGlobalNoteTool>(memory, executor);
-        register_tool_type<GetGlobalNoteTool>(memory, executor);
-        register_tool_type<ListGlobalNotesTool>(memory, executor);
-        register_tool_type<SearchNotesTool>(memory, executor);
-
-        // Function analysis tools
-        register_tool_type<SetFunctionAnalysisTool>(memory, executor);
-        register_tool_type<GetFunctionAnalysisTool>(memory, executor);
-
-        // Memory context tool
-        register_tool_type<GetMemoryContextTool>(memory, executor);
-
-        // Analysis tracking tools
-        register_tool_type<GetAnalyzedFunctionsTool>(memory, executor);
-        register_tool_type<FindFunctionsByPatternTool>(memory, executor);
-
-        // Exploration tools
-        register_tool_type<GetExplorationFrontierTool>(memory, executor);
+        // Workflow tools
         register_tool_type<MarkForAnalysisTool>(memory, executor);
-        register_tool_type<GetAnalysisQueueTool>(memory, executor);
-
-        // Focus tool
         register_tool_type<SetCurrentFocusTool>(memory, executor);
 
-        // Insight tools
-        register_tool_type<AddInsightTool>(memory, executor);
-        register_tool_type<GetInsightsTool>(memory, executor);
+        // Binary info tools
+        register_tool_type<GetImportsTool>(memory, executor);
+        register_tool_type<GetEntryPointsTool>(memory, executor);
 
-        // Cluster analysis tools
-        register_tool_type<AnalyzeClusterTool>(memory, executor);
-        register_tool_type<GetClusterAnalysisTool>(memory, executor);
-
-        // Region summary tool
-        register_tool_type<SummarizeRegionTool>(memory, executor);
-
-
-
-        // special tools
-
-        // Final report tool
+        // Special tools
         register_tool_type<SubmitFinalReportTool>(memory, executor);
 
         // Deep analysis

@@ -2328,17 +2328,21 @@ void MemoryDockWidget::on_deep_analysis_selected() {
     
     if (!memory_) return;
     
-    // Get the analysis content from global notes
-    std::string analysis_content = memory_->get_global_note("deep_analysis_" + analysis_key.toStdString());
-    std::string meta_content = memory_->get_global_note("deep_analysis_meta_" + analysis_key.toStdString());
-    
-    // Display the analysis
-    deep_analysis_viewer_->setPlainText(QString::fromStdString(analysis_content));
-    
+    // Get the analysis content using the new unified system
+    auto analysis_entries = memory_->get_analysis("deep_analysis_" + analysis_key.toStdString());
+    auto meta_entries = memory_->get_analysis("deep_analysis_meta_" + analysis_key.toStdString());
+
+    if (!analysis_entries.empty()) {
+        // Display the analysis
+        deep_analysis_viewer_->setPlainText(QString::fromStdString(analysis_entries[0].content));
+    } else {
+        deep_analysis_viewer_->setPlainText("Analysis content not found");
+    }
+
     // Update metadata label
-    if (!meta_content.empty()) {
+    if (!meta_entries.empty()) {
         try {
-            json metadata = json::parse(meta_content);
+            json metadata = json::parse(meta_entries[0].content);
             QString meta_text = QString("Topic: %1 | Task: %2")
                 .arg(QString::fromStdString(metadata["topic"].get<std::string>()))
                 .arg(QString::fromStdString(metadata["task"].get<std::string>()));
@@ -2355,7 +2359,7 @@ void MemoryDockWidget::on_deep_analysis_selected() {
 }
 
 
-    void MemoryDockWidget::refresh_views() {
+void MemoryDockWidget::refresh_views() {
     if (!memory_) return;
 
     // Update function tree
@@ -2464,54 +2468,58 @@ void MemoryDockWidget::on_deep_analysis_selected() {
     // Update call graph
     call_graph_->update_graph(memory_);
 
-    // Update insights
+    // Update insights using the new unified system
     insights_list_->clear();
-    QString type_filter = insight_filter_->currentText();
-    auto insights = memory_->get_insights(type_filter == "All" ? "" : type_filter.toStdString());
+    QString type_filter = insight_filter_->currentText().toLower();
+    if (type_filter == "all") type_filter = "";
 
-    for (const auto& [description, addresses] : insights) {
-        QListWidgetItem* item = new QListWidgetItem(insights_list_);
-        QString text = QString::fromStdString(description);
-        if (!addresses.empty()) {
-            text += QString(" [%1 functions]").arg(addresses.size());
-        }
-        item->setText(text);
-        item->setData(Qt::UserRole, QVariant::fromValue(addresses));
-    }
+    // Get analyses of the selected type
+    auto analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "", -1);
 
-    // Update deep analysis list
-    deep_analysis_list_->clear();
-    
-    // Get all global notes and find deep analysis entries
-    std::vector<std::string> all_notes = memory_->list_global_notes();
-    std::vector<std::pair<std::string, std::string>> deep_analyses;
-    
-    for (const std::string& note_key : all_notes) {
-        if (note_key.find("deep_analysis_meta_") == 0) {
-            std::string key = note_key.substr(19); // Remove "deep_analysis_meta_" prefix
-            std::string meta_json = memory_->get_global_note(note_key);
-            
-            try {
-                json metadata = json::parse(meta_json);
-                std::string description = metadata["topic"].get<std::string>() + " - " +
-                                        metadata["task"].get<std::string>();
-                deep_analyses.push_back({key, description});
-            } catch (...) {
-                deep_analyses.push_back({key, "Unknown analysis"});
+    for (const auto& entry : analyses) {
+        // Only show entries that are insights (not regular analysis)
+        if (entry.type == "finding" || entry.type == "hypothesis" ||
+            entry.type == "question" || entry.type == "pattern") {
+            QListWidgetItem* item = new QListWidgetItem(insights_list_);
+            QString text = QString::fromStdString(entry.content);
+            if (!entry.related_addresses.empty()) {
+                text += QString(" [%1 functions]").arg(entry.related_addresses.size());
             }
+            item->setText(text);
+            item->setData(Qt::UserRole, QVariant::fromValue(entry.related_addresses));
         }
     }
-    
-    // Sort by most recent first (key contains timestamp)
-    std::sort(deep_analyses.begin(), deep_analyses.end(), 
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-    
+
+    // Update deep analysis list using the new unified system
+    deep_analysis_list_->clear();
+
+    // Get all deep analysis entries
+    auto deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "", -1);
+
+    // Sort by timestamp (most recent first)
+    std::sort(deep_analyses.begin(), deep_analyses.end(),
+              [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
+
     // Populate the list
-    for (const auto& [key, description] : deep_analyses) {
-        QListWidgetItem* item = new QListWidgetItem(deep_analysis_list_);
-        item->setText(QString::fromStdString(description));
-        item->setData(Qt::UserRole, QString::fromStdString(key));
-        item->setToolTip(QString("Key: %1").arg(QString::fromStdString(key)));
+    for (const auto& entry : deep_analyses) {
+        // Extract key from "deep_analysis_meta_" prefix
+        std::string key = entry.key;
+        if (key.find("deep_analysis_meta_") == 0) {
+            key = key.substr(19);
+        }
+
+        try {
+            json metadata = json::parse(entry.content);
+            std::string description = metadata["topic"].get<std::string>() + " - " +
+                                    metadata["task"].get<std::string>();
+
+            QListWidgetItem* item = new QListWidgetItem(deep_analysis_list_);
+            item->setText(QString::fromStdString(description));
+            item->setData(Qt::UserRole, QString::fromStdString(key));
+            item->setToolTip(QString("Key: %1").arg(QString::fromStdString(key)));
+        } catch (...) {
+            // Skip malformed entries
+        }
     }
 
     // Update queue

@@ -21,51 +21,38 @@ public:
     static std::vector<ea_t> parse_list_address_param(const json &params, const std::string &key);
     static ea_t parse_single_address_value(const json &param);
 
+    // Consolidated search actions
+    json search_functions(const std::string& pattern, bool named_only, int max_results);
+    json search_globals(const std::string& pattern, int max_results);
+    json search_strings(const std::string& pattern, int min_length, int max_results);
 
-    // IDA Core Actions
-    json get_xrefs_to(ea_t address, int max_count = 100);
-    json get_xrefs_from(ea_t address, int max_count = 100);
-    json get_function_disassembly(ea_t address);
-    json get_function_decompilation(ea_t address);
-    json get_function_address(const std::string& name);
-    json get_function_name(ea_t address);
-    json set_function_name(ea_t address, const std::string& name);
-    json get_function_string_refs(ea_t address, int max_count = 100);
-    json get_function_data_refs(ea_t address, int max_count = 100);
-    json get_data_name(ea_t address);
-    json set_data_name(ea_t address, const std::string& name);
-    json get_data(ea_t address);
-    json add_comment(ea_t address, const std::string& comment);
-    json clear_comment(ea_t address);
-    json get_imports(int max_count);
-    json search_strings(const std::string& text, bool is_case_sensitive, int max_count = 100);
-    json get_named_functions(int max_count);
-    json search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
-    json search_named_globals(const std::string& pattern, bool is_regex, int max_count);
-    json get_global_by_name(const std::string& name);
-    json get_named_globals(int max_count);
-    json get_strings(int min_length, int max_count = 1000);
+    // Unified info actions
+    json get_function_info(ea_t address);
+    json get_data_info(ea_t address);
+    json analyze_function(ea_t address, bool include_disasm, bool include_decomp, int max_xrefs);
+
+    // Simplified cross-reference action
+    json get_xrefs(ea_t address, int max_results);
+
+    // Unified name/comment actions
+    json set_name(ea_t address, const std::string& name);
+    json set_comment(ea_t address, const std::string& comment);
+
+    // Binary info actions
+    json get_imports(int max_results);
     json get_entry_points();
 
-    // Memory System Actions
-    json set_global_note(const std::string& key, const std::string& content);
-    json get_global_note(const std::string& key);
-    json list_global_notes();
-    json search_notes(const std::string& query);
-    json set_function_analysis(ea_t address, int level, const std::string& analysis);
-    json get_function_analysis(ea_t address, int level = 0);
-    json get_memory_context(ea_t address, int radius = 2);
-    json get_analyzed_functions();
-    json find_functions_by_pattern(const std::string& pattern);
-    json get_exploration_frontier();
-    json mark_for_analysis(ea_t address, const std::string& reason, int priority = 5);
-    json get_analysis_queue();
+    // Consolidated knowledge management
+    json store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses);
+    json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern, int max_results);
+
+    // Batch operations
+    json analyze_functions(const std::vector<ea_t>& addresses, int level, const std::string& group_name);
+
+    // Context and workflow
+    json get_analysis_context(std::optional<ea_t> address, int radius);
+    json mark_for_analysis(ea_t address, const std::string& reason, int priority);
     json set_current_focus(ea_t address);
-    json add_insight(const std::string& type, const std::string& description, const std::vector<ea_t>& related_addresses);
-    json get_insights(const std::string& type = "");
-    json analyze_cluster(const std::vector<ea_t>& addresses, const std::string& cluster_name, int initial_level);
-    json get_cluster_analysis(const std::string& cluster_name);
-    json summarize_region(ea_t start_addr, ea_t end_addr);
 
 private:
     std::shared_ptr<BinaryMemory> memory;

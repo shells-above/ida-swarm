@@ -145,10 +145,7 @@ void DeepAnalysisManager::store_analysis_result(const DeepAnalysisResult& result
     // Store in our map
     completed_analyses_[result.key] = result;
 
-    // Also store in BinaryMemory for persistence
-    memory_->set_global_note("deep_analysis_" + result.key, result.analysis);
-
-    // Store metadata
+    // Store using the new unified analysis system
     json metadata;
     metadata["topic"] = result.topic;
     metadata["task"] = result.task_description;
@@ -156,27 +153,47 @@ void DeepAnalysisManager::store_analysis_result(const DeepAnalysisResult& result
     metadata["token_usage"] = result.token_usage.to_json();
     metadata["cost_estimate"] = result.cost_estimate;
 
-    memory_->set_global_note("deep_analysis_meta_" + result.key, metadata.dump());
+    // Store the main analysis
+    memory_->store_analysis(
+        "deep_analysis_" + result.key,
+        result.analysis,
+        std::nullopt,
+        "deep_analysis",
+        {}
+    );
+
+    // Store the metadata
+    memory_->store_analysis(
+        "deep_analysis_meta_" + result.key,
+        metadata.dump(),
+        std::nullopt,
+        "deep_analysis_metadata",
+        {}
+    );
 }
 
 std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analyses() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     std::vector<std::pair<std::string, std::string>> results;
+
+    // Get from cache first
     for (const auto& [key, analysis] : completed_analyses_) {
         results.push_back({key, analysis.topic + " - " + analysis.task_description});
     }
 
     // Also check BinaryMemory for any stored analyses we don't have loaded
-    std::vector<std::string> all_notes = memory_->list_global_notes();
-    for (const std::string& note_key : all_notes) {
-        if (note_key.find("deep_analysis_meta_") == 0) {
-            std::string key = note_key.substr(19); // Remove "deep_analysis_meta_" prefix
+    auto stored_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "", -1);
+
+    for (const auto& entry : stored_analyses) {
+        // Extract key from "deep_analysis_meta_" prefix
+        if (entry.key.find("deep_analysis_meta_") == 0) {
+            std::string key = entry.key.substr(19); // Remove prefix
+
+            // Check if we already have this in cache
             if (completed_analyses_.find(key) == completed_analyses_.end()) {
-                // Load metadata to get description
-                std::string meta_json = memory_->get_global_note(note_key);
                 try {
-                    json metadata = json::parse(meta_json);
+                    json metadata = json::parse(entry.content);
                     std::string description = metadata["topic"].get<std::string>() + " - " +
                                             metadata["task"].get<std::string>();
                     results.push_back({key, description});
@@ -199,19 +216,19 @@ std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::s
         return it->second;
     }
 
-    // Try to load from BinaryMemory
-    std::string analysis = memory_->get_global_note("deep_analysis_" + key);
-    std::string meta_json = memory_->get_global_note("deep_analysis_meta_" + key);
+    // Try to load from BinaryMemory using the new API
+    auto analysis_entries = memory_->get_analysis("deep_analysis_" + key);
+    auto meta_entries = memory_->get_analysis("deep_analysis_meta_" + key);
 
-    if (!analysis.empty() && !meta_json.empty()) {
+    if (!analysis_entries.empty() && !meta_entries.empty()) {
         try {
-            json metadata = json::parse(meta_json);
+            json metadata = json::parse(meta_entries[0].content);
 
             DeepAnalysisResult result;
             result.key = key;
             result.topic = metadata["topic"];
             result.task_description = metadata["task"];
-            result.analysis = analysis;
+            result.analysis = analysis_entries[0].content;
             result.completed_at = std::chrono::system_clock::from_time_t(metadata["completed_at"]);
             result.token_usage = api::TokenUsage::from_json(metadata["token_usage"]);
             result.cost_estimate = metadata["cost_estimate"];
@@ -258,27 +275,39 @@ std::string DeepAnalysisManager::build_opus_context(
         }
     }
 
-    // Add all relevant memory context
+    // Add all relevant memory context using the new unified system
     context << "=== BINARY ANALYSIS MEMORY ===\n";
 
-    // Export all global notes
-    std::vector<std::string> note_keys = memory_->list_global_notes();
-    for (const std::string& key : note_keys) {
+    // Get all non-deep-analysis entries
+    auto all_analyses = memory_->get_analysis("", std::nullopt, "", "", -1);
+
+    // Group by type for better organization
+    std::map<std::string, std::vector<AnalysisEntry>> by_type;
+    for (const auto& entry : all_analyses) {
         // Skip deep analysis results to avoid recursion
-        if (key.find("deep_analysis_") != 0) {
-            std::string content = memory_->get_global_note(key);
-            if (!content.empty()) {
-                context << "Note [" << key << "]:\n" << content << "\n\n";
+        if (entry.type != "deep_analysis" && entry.type != "deep_analysis_metadata") {
+            by_type[entry.type].push_back(entry);
+        }
+    }
+
+    // Output grouped analyses
+    for (const auto& [type, entries] : by_type) {
+        context << "\n--- " << type << " entries ---\n";
+        for (const auto& entry : entries) {
+            context << "[" << entry.key << "]";
+            if (entry.address) {
+                context << " (address: 0x" << std::hex << *entry.address << ")";
             }
+            context << ":\n" << entry.content << "\n\n";
         }
     }
 
     // Add all analyzed functions summary
     auto analyzed_functions = memory_->get_analyzed_functions();
     if (!analyzed_functions.empty()) {
-        context << "=== ANALYZED FUNCTIONS ===\n";
+        context << "\n=== ANALYZED FUNCTIONS ===\n";
         for (const auto& [addr, name, level] : analyzed_functions) {
-            context << std::hex << "0x" << addr << " " << name << ":\n";
+            context << std::hex << "0x" << addr << " " << name << " (level: " << static_cast<int>(level) << "):\n";
             std::string analysis = memory_->get_function_analysis(addr);
             if (!analysis.empty()) {
                 context << analysis << "\n\n";
@@ -286,62 +315,96 @@ std::string DeepAnalysisManager::build_opus_context(
         }
     }
 
-    // Add all insights
-    auto insights = memory_->get_insights();
-    if (!insights.empty()) {
-        context << "=== INSIGHTS AND FINDINGS ===\n";
-        for (const auto& [description, addresses] : insights) {
-            context << description << "\n";
-            if (!addresses.empty()) {
-                context << "Related addresses: ";
-                for (ea_t addr : addresses) {
-                    context << std::hex << "0x" << addr << " ";
+    // Add full analysis for all related functions using the new API
+    if (!collection.related_functions.empty()) {
+        context << "\n=== FUNCTION DECOMPILATIONS AND ANALYSIS ===\n";
+
+        for (ea_t func_addr : collection.related_functions) {
+            // Use analyze_function to get comprehensive info
+            json func_analysis = executor->analyze_function(func_addr, true, true, 50);
+
+            if (!func_analysis["success"]) {
+                context << "\n--- Function at 0x" << std::hex << func_addr << " ---\n";
+                context << "Error: " << func_analysis.value("error", "Unknown error") << "\n\n";
+                continue;
+            }
+
+            context << "\n--- Function at 0x" << std::hex << func_addr;
+            if (func_analysis.contains("name")) {
+                context << " (" << func_analysis["name"].get<std::string>() << ")";
+            }
+            context << " ---\n";
+
+            // Add basic info
+            context << "Size: " << func_analysis.value("size", 0) << " bytes\n";
+
+            // Add decompilation
+            if (func_analysis.contains("decompilation")) {
+                context << "\nDecompilation:\n";
+                context << func_analysis["decompilation"].get<std::string>() << "\n";
+            }
+
+            // Add disassembly
+            if (func_analysis.contains("disassembly")) {
+                context << "\nDisassembly:\n";
+                context << func_analysis["disassembly"].get<std::string>() << "\n";
+            }
+
+            // Add cross-references
+            if (func_analysis.contains("xrefs_to") && !func_analysis["xrefs_to"].empty()) {
+                context << "\nCalled by: ";
+                for (const auto& xref : func_analysis["xrefs_to"]) {
+                    context << xref["name"].get<std::string>() << " ";
                 }
                 context << "\n";
             }
+
+            if (func_analysis.contains("xrefs_from") && !func_analysis["xrefs_from"].empty()) {
+                context << "Calls: ";
+                for (const auto& xref : func_analysis["xrefs_from"]) {
+                    context << xref["name"].get<std::string>() << " ";
+                }
+                context << "\n";
+            }
+
+            // Add string references
+            if (func_analysis.contains("string_refs") && !func_analysis["string_refs"].empty()) {
+                context << "\nString references:\n";
+                for (const auto& str : func_analysis["string_refs"]) {
+                    context << "  \"" << str.get<std::string>() << "\"\n";
+                }
+            }
+
+            // Add data references
+            if (func_analysis.contains("data_refs") && !func_analysis["data_refs"].empty()) {
+                context << "\nData references: ";
+                for (const auto& ref : func_analysis["data_refs"]) {
+                    context << ref.get<std::string>() << " ";
+                }
+                context << "\n";
+            }
+
             context << "\n";
         }
     }
 
-    // Add decompilations for all related functions
-    if (!collection.related_functions.empty()) {
-        context << "=== FUNCTION DECOMPILATIONS AND DISASSEMBLY ===\n";
-        for (ea_t func_addr : collection.related_functions) {
-            json decompilation = executor->get_function_decompilation(func_addr);
+    // Add any insights/findings/hypotheses
+    std::vector<AnalysisEntry> insights = memory_->get_analysis("", std::nullopt, "finding", "", -1);
+    std::vector<AnalysisEntry> hypotheses = memory_->get_analysis("", std::nullopt, "hypothesis", "", -1);
+    std::vector<AnalysisEntry> questions = memory_->get_analysis("", std::nullopt, "question", "", -1);
 
-            context << "\n--- Function at 0x" << std::hex << func_addr;
-            if (decompilation.contains("name")) {
-                context << " (" << decompilation["name"].get<std::string>() << ")";
-            }
-            context << " ---\n";
+    if (!insights.empty() || !hypotheses.empty() || !questions.empty()) {
+        context << "\n=== INSIGHTS, HYPOTHESES, AND QUESTIONS ===\n";
 
-            if (decompilation.contains("decompilation")) {
-                context << decompilation["decompilation"].get<std::string>() << "\n";
-            }
-
-            // Also add disassembly for critical functions
-            json disassembly = executor->get_function_disassembly(func_addr);
-            if (disassembly.contains("disassembly")) {
-                context << "\nDisassembly:\n";
-                context << disassembly["disassembly"].get<std::string>() << "\n";
-            }
-
-            // Add cross-references
-            json xrefs_to = executor->get_xrefs_to(func_addr);
-            json xrefs_from = executor->get_xrefs_from(func_addr);
-
-            if (xrefs_to.contains("xrefs") && !xrefs_to["xrefs"].empty()) {
-                context << "\nCalled by: ";
-                for (const auto& xref : xrefs_to["xrefs"]) {
-                    context << xref["from_name"].get<std::string>() << " ";
-                }
-                context << "\n";
-            }
-
-            if (xrefs_from.contains("xrefs") && !xrefs_from["xrefs"].empty()) {
-                context << "Calls: ";
-                for (const auto& xref : xrefs_from["xrefs"]) {
-                    context << xref["to_name"].get<std::string>() << " ";
+        for (const auto& entries : {insights, hypotheses, questions}) {
+            for (const auto& entry : entries) {
+                context << "[" << entry.type << "] " << entry.content << "\n";
+                if (!entry.related_addresses.empty()) {
+                    context << "Related addresses: ";
+                    for (ea_t addr : entry.related_addresses) {
+                        context << std::hex << "0x" << addr << " ";
+                    }
+                    context << "\n";
                 }
                 context << "\n";
             }

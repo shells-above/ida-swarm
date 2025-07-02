@@ -238,21 +238,6 @@ namespace llm_re {
         WARNING,
         ERROR
     };
-
-    // Common structures
-    struct FunctionInfo {
-        ea_t address;
-        std::string name;
-        int distance_from_anchor;
-        std::time_t last_updated;
-    };
-
-    struct AnalysisResult {
-        bool success;
-        std::string result;
-        std::string error;
-    };
-
 } // namespace llm_re
 
 #endif //COMMON_H

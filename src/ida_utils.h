@@ -9,12 +9,34 @@
 
 namespace llm_re {
 
+// Structures for returning comprehensive info
+struct FunctionInfo {
+    std::string name;
+    ea_t start_ea;
+    ea_t end_ea;
+    size_t size;
+    size_t xrefs_to_count;
+    size_t xrefs_from_count;
+    size_t string_refs_count;
+    size_t data_refs_count;
+    bool is_library;
+    bool is_thunk;
+};
+
+struct DataInfo {
+    std::string name;
+    std::string value;
+    std::string type;
+    size_t size;
+    std::vector<std::pair<ea_t, std::string>> xrefs_to;  // Limited to 20
+};
+
 // Utility class that bridges our actions to IDA API calls
 // All methods here will be called from worker thread and use execute_sync
 class IDAUtils {
 private:
     template<typename Func>
-class exec_request_wrapper_t : public exec_request_t {
+    class exec_request_wrapper_t : public exec_request_t {
     private:
         Func func;
         using RetType = decltype(std::declval<Func>()());
@@ -92,155 +114,46 @@ public:
         }
     }
 
-    // external helpers
+    // Helpers
     static ea_t get_name_address(const std::string& name);
     static bool is_function(ea_t address);
 
+    // Consolidated search functions
+    static std::vector<std::tuple<ea_t, std::string, bool>> search_functions(const std::string& pattern, bool named_only, int max_results);
+    static std::vector<std::tuple<ea_t, std::string, std::string, std::string>> search_globals(const std::string& pattern, int max_results);
+    static std::vector<std::pair<ea_t, std::string>> search_strings_unified(const std::string& pattern, int min_length, int max_results);
 
-    // Cross-reference operations
+    // Comprehensive info functions
+    static FunctionInfo get_function_info(ea_t address);
+    static DataInfo get_data_info(ea_t address);
 
+    // Cross-reference operations (kept for detailed analysis)
     static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address, int max_count = -1);
     static std::vector<std::pair<ea_t, std::string>> get_xrefs_from_with_names(ea_t address, int max_count = -1);
 
-    // Disassembly and decompilation
-
-    /**
-     * Get the disassembly for a function with comments
-     * @param address Function start address
-     * @return Disassembly text with comments
-     */
+    // Disassembly and decompilation (kept for analyze_function)
     static std::string get_function_disassembly(ea_t address);
-
-    /**
-     * Get the decompilation for a function with comments
-     * @param address Function start address
-     * @return Decompiled code with comments
-     */
     static std::string get_function_decompilation(ea_t address);
 
-    // Function operations
-
-    /**
-     * Get a function's address from its name
-     * @param name Function name
-     * @return Function address or BADADDR if not found
-     */
-    static ea_t get_function_address(const std::string& name);
-
-    /**
-     * Get a function's name from its address
-     * @param address Function address
-     * @return Function name or empty string if unnamed
-     */
+    // Function operations (simplified)
     static std::string get_function_name(ea_t address);
-
-    /**
-     * Set a function's name
-     * @param address Function address
-     * @param name New name
-     * @return Success status
-     */
-    static bool set_function_name(ea_t address, const std::string& name);
-
-    /**
-     * Get all string references used by a function
-     * @param address Function address
-     * @return Vector of string values
-     */
     static std::vector<std::string> get_function_string_refs(ea_t address, int max_count = -1);
-
-    /**
-     * Get all data references accessed by a function
-     * @param address Function address
-     * @return Vector of data addresses
-     */
     static std::vector<ea_t> get_function_data_refs(ea_t address, int max_count = -1);
 
-    // Data operations
+    // Unified name setter
+    static bool set_name(ea_t address, const std::string& name);
 
-    /**
-     * Get the name of a data item
-     * @param address Data address
-     * @return Data name or empty string if unnamed
-     */
-    static std::string get_data_name(ea_t address);
-
-    /**
-     * Set the name of a data item
-     * @param address Data address
-     * @param name New name
-     * @return Success status
-     */
-    static bool set_data_name(ea_t address, const std::string& name);
-
-    /**
-     * Returns the value and type of the data item
-     * @param address Data address
-     * @return Value and type of data
-     */
+    // Data operations (kept for compatibility)
     static std::pair<std::string, std::string> get_data(ea_t address);
 
-    // Comment operations
-
-    /**
-     * Add a comment to disassembly at an address
-     * @param address Target address
-     * @param comment Comment text
-     * @return Success status
-     */
+    // Comment operations (kept as is)
     static bool add_disassembly_comment(ea_t address, const std::string& comment);
-
-    /**
-     * Add a comment to pseudocode
-     * @param address Function address
-     * @param comment Comment text
-     * @return Success status
-     */
     static bool add_pseudocode_comment(ea_t address, const std::string& comment);
-
-    /**
-     * Clear disassembly comment at an address
-     * @param address Target address
-     * @return Success status
-     */
     static bool clear_disassembly_comment(ea_t address);
-
-    /**
-     * Clear all pseudocode comments for a function
-     * @param address Function address
-     * @return Success status
-     */
     static bool clear_pseudocode_comments(ea_t address);
 
-    // Import/Export operations
-
-    /**
-     * Get all imported functions
-     * @return Map of module names to imported function names
-     */
+    // Binary info operations (kept as is)
     static std::map<std::string, std::vector<std::string>> get_imports();
-
-    // String operations
-
-    /**
-     * Get all strings in the binary
-     * @return Vector of string values
-     */
-    static std::vector<std::string> get_strings();
-
-    /**
-     * Search for strings containing text
-     * @param text Search text
-     * @param is_case_sensitive Case sensitivity flag
-     * @return Vector of matching strings
-     */
-    static std::vector<std::string> search_strings(const std::string& text, bool is_case_sensitive, int max_count = -1);
-
-    static std::vector<std::pair<ea_t, std::string>> get_named_functions(int max_count);
-    static std::vector<std::pair<ea_t, std::string>> search_named_functions(const std::string& text, bool is_case_sensitive, int max_count);
-    static std::vector<std::pair<ea_t, std::string>> search_named_globals(const std::string& pattern, bool is_regex, int max_count = -1);
-    static std::vector<std::pair<ea_t, std::string>> get_named_globals();
-    static std::vector<std::pair<ea_t, std::string>> get_strings_with_addresses(int min_length, int max_count = -1);
     static std::vector<std::tuple<ea_t, std::string, std::string>> get_entry_points();
 };
 
