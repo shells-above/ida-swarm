@@ -779,14 +779,14 @@ private:
     }
 
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
-        auto total = token_tracker_.get_total();
+        api::TokenUsage total = token_tracker_.get_total();
 
         std::stringstream ss;
         ss << "[Iteration " << iteration << "] ";
         ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
 
         if (usage.cache_read_tokens > 0) {
-            ss << " (" << usage.cache_read_tokens << " cached)";
+            ss << " [" << usage.cache_read_tokens << " cached]";
         }
 
         ss << " | Session Total: " << total.total();

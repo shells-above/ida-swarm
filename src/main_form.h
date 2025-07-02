@@ -101,7 +101,6 @@ private slots:
     void on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input);
     void on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
-    void on_agent_progress(int iteration, int total_tokens);
 
     // Worker thread
     void on_worker_finished();

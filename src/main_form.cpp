@@ -209,7 +209,7 @@ void MainForm::setup_status_bar() {
 
     statusBar()->addWidget(new QLabel(" | "));
 
-    token_label_ = new QLabel("Input Tokens: 0");
+    token_label_ = new QLabel("Tokens: 0");
     statusBar()->addWidget(token_label_);
 
     statusBar()->addWidget(new QLabel(" | "));
@@ -841,8 +841,11 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
             // Handle usage stats
             if (msg_json.contains("usage")) {
                 json usage = msg_json["usage"];
-                int total = usage.value("input_tokens", 0) + usage.value("output_tokens", 0);
-                token_label_->setText(QString("Input Tokens: %1").arg(total));
+                int input = usage.value("input_tokens", 0);
+                int output = usage.value("output_tokens", 0);
+                int total = input + output;
+                
+                token_label_->setText(QString("Tokens: %1 (%2 in, %3 out)").arg(total).arg(input).arg(output));
             }
         } catch (const std::exception& e) {
             log(LogLevel::ERROR, "Failed to parse message: " + std::string(e.what()));
@@ -893,11 +896,6 @@ void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& too
 
 void MainForm::on_agent_state_changed(const QString& state) {
     status_label_->setText(state);
-}
-
-void MainForm::on_agent_progress(int iteration, int total_tokens) {
-    iteration_label_->setText(QString("Iteration: %1").arg(iteration));
-    token_label_->setText(QString("Input Tokens: %1").arg(total_tokens));
 }
 
 void MainForm::on_worker_finished() {
