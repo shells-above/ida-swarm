@@ -539,7 +539,7 @@ public:
     }
 };
 
-// Import/Export tools
+// Import tools
 class GetImportsTool : public Tool {
 public:
     using Tool::Tool;
@@ -553,12 +553,14 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder().build();
+        return ParameterBuilder()
+            .add_integer("max_count", "Max number of imports to return")
+            .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_imports());
+            return ToolResult::success(executor->get_imports(input.at("max_count")));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }

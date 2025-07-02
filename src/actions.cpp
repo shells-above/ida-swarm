@@ -440,12 +440,26 @@ json ActionExecutor::clear_comment(ea_t address) {
     return result;
 }
 
-json ActionExecutor::get_imports() {
+json ActionExecutor::get_imports(int max_count) {
     json result;
     try {
         std::map<std::string, std::vector<std::string>> imports = IDAUtils::get_imports();
+        int count = 0;
+        for (const auto& [library, functions] : imports) {
+            if (count >= max_count) break;
+
+            std::vector<std::string> limited_functions;
+            for (const std::string& function: functions) {
+                if (count >= max_count) break;
+                limited_functions.push_back(function);
+                count++;
+            }
+
+            if (!limited_functions.empty()) {
+                result["imports"][library] = limited_functions;
+            }
+        }
         result["success"] = true;
-        result["imports"] = imports;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
