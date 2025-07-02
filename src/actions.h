@@ -28,7 +28,7 @@ public:
 
     // Unified info actions
     json get_function_info(ea_t address);
-    json get_data_info(ea_t address);
+    json get_data_info(ea_t address, int max_xrefs = 20);
     json dump_data(ea_t address, size_t size, int bytes_per_line = 16);
     json analyze_function(ea_t address, bool include_disasm, bool include_decomp, int max_xrefs);
 

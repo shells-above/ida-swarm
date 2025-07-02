@@ -217,8 +217,7 @@ Be systematic and thorough. Build your understanding incrementally.
 Remember that you can execute multiple tool calls at once, in fact I encourage it!
 If you realize you need information from multiple tool calls, don't wait to do it in multiple messages.
 Do it all in one! But do NOT go crazy, *only do the tool calls you need*.
-
-Current task: )";
+)";
 
 public:
     REAgent(const Config& config)
@@ -374,6 +373,32 @@ public:
         return j;
     }
 
+    json get_thinking_stats() const {
+        json stats;
+        stats["thinking_enabled"] = config_.agent.enable_thinking;
+        stats["interleaved_thinking_possible"] = tool_registry_.has_tools();
+
+        // Get thinking block count from conversation
+        int total_thinking_blocks = 0;
+        int total_redacted_blocks = 0;
+
+        std::vector<messages::Message> messages = conversation_.get_messages();
+        for (const messages::Message& msg: messages) {
+            if (msg.role() == messages::Role::Assistant) {
+                std::vector<const messages::ThinkingContent*> thinking = messages::ContentExtractor::extract_thinking_blocks(msg);
+                std::vector<const messages::RedactedThinkingContent*> redacted = messages::ContentExtractor::extract_redacted_thinking_blocks(msg);
+                total_thinking_blocks += thinking.size();
+                total_redacted_blocks += redacted.size();
+            }
+        }
+
+        stats["total_thinking_blocks"] = total_thinking_blocks;
+        stats["total_redacted_blocks"] = total_redacted_blocks;
+        stats["max_thinking_budget"] = config_.api.max_thinking_tokens;
+
+        return stats;
+    }
+
     // Memory management
     std::shared_ptr<BinaryMemory> get_memory() {
         return memory_;
@@ -459,16 +484,28 @@ private:
         conversation_.clear();
         api_client_.set_iteration(0);
 
+        // Dynamic thinking budget when tools are involved
+        int thinking_budget = config_.api.max_thinking_tokens;
+        bool enable_interleaved = config_.agent.enable_thinking &&
+                                 config_.agent.auto_enable_interleaved_thinking &&
+                                 tool_registry_.has_tools();
+        if (enable_interleaved) {
+            // Increase thinking budget for tool-heavy tasks
+            thinking_budget = std::min(thinking_budget * 2, 32768);
+            log(LogLevel::INFO, "Interleaved thinking enabled with budget: " + std::to_string(thinking_budget));
+        }
+
         // Build initial request
         api::ChatRequest request = api::ChatRequestBuilder()
                 .with_model(config_.api.model)
-                .with_system_prompt(std::string(SYSTEM_PROMPT_TEMPLATE) + task, config_.api.enable_prompt_caching)
-                .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
+                .with_system_prompt(SYSTEM_PROMPT_TEMPLATE, config_.api.enable_prompt_caching)
                 .with_tools(tool_registry_)
                 .with_max_tokens(config_.api.max_tokens)
-                .with_max_thinking_tokens(config_.api.max_thinking_tokens)
+                .with_max_thinking_tokens(thinking_budget)
                 .with_temperature(config_.api.temperature)
                 .enable_thinking(config_.agent.enable_thinking)
+                .enable_interleaved_thinking(enable_interleaved)
+                .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
                 .build();
 
         // Save initial state
@@ -503,6 +540,16 @@ private:
             log(LogLevel::WARNING, "No saved state found while continuing");
             state_.set_status(AgentState::Status::Idle);
             return;
+        }
+
+        // Check if we should re-enable or adjust thinking for continuation
+        bool had_thinking = saved_state_.request.enable_thinking;
+        bool should_use_interleaved = had_thinking && tool_registry_.has_tools();
+
+        // Update thinking settings if needed
+        if (should_use_interleaved && !saved_state_.request.enable_interleaved_thinking) {
+            saved_state_.request.enable_interleaved_thinking = true;
+            log(LogLevel::INFO, "Enabling interleaved thinking for continuation");
         }
 
         // Add user message to saved request
@@ -540,6 +587,21 @@ private:
                 handle_api_error(response);
                 break;
             }
+
+            // Log thinking information
+            if (response.has_thinking()) {
+                std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
+                std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
+
+                log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
+
+                // Log thinking summary if available
+                if (!thinking_blocks.empty()) {
+                    log(LogLevel::DEBUG, "Thinking: " + thinking_blocks[0]->thinking);
+                }
+            }
+
+            validate_thinking_preservation(response);
 
             // Track token usage
             token_tracker_.add_usage(response.usage);
@@ -652,12 +714,18 @@ private:
         if (!response.error) {
             log(LogLevel::ERROR, "Unknown API error");
             state_.set_status(AgentState::Status::Idle);
-            // Store error for worker to retrieve
             last_error_ = "Unknown API error";
             return;
         }
 
         std::string error_msg = *response.error;
+
+        // Check for thinking-specific errors
+        if (error_msg.find("thinking") != std::string::npos ||
+            error_msg.find("budget_tokens") != std::string::npos) {
+            log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
+            log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
+            }
 
         if (api::AnthropicClient::is_recoverable_error(response)) {
             log(LogLevel::INFO, "You can resume the analysis");
@@ -669,6 +737,24 @@ private:
             state_.set_status(AgentState::Status::Idle);
             saved_state_.valid = false;
             last_error_ = "API Error: " + error_msg;
+        }
+    }
+
+    void validate_thinking_preservation(const api::ChatResponse& response) {
+        if (!response.has_thinking() || !response.has_tool_calls()) {
+            return;  // No validation needed
+        }
+
+        // Ensure the message being saved includes thinking blocks
+        std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
+        std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.
+                get_redacted_thinking_blocks();
+
+        if (thinking_blocks.empty() && redacted_blocks.empty()) {
+            log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
+        } else {
+            log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
+                thinking_blocks.size() + redacted_blocks.size()));
         }
     }
 

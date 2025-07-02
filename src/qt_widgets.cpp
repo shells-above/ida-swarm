@@ -25,6 +25,7 @@ namespace llm_re {
             // Agent settings
             j["agent"]["max_iterations"] = agent.max_iterations;
             j["agent"]["enable_thinking"] = agent.enable_thinking;
+            j["agent"]["auto_enable_interleaved_thinking"] = agent.auto_enable_interleaved_thinking;
             j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
             j["agent"]["verbose_logging"] = agent.verbose_logging;
 
@@ -79,6 +80,7 @@ namespace llm_re {
             if (j.contains("agent")) {
                 agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
                 agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
+                agent.auto_enable_interleaved_thinking = j["agent"].value("auto_enable_interleaved_thinking", agent.auto_enable_interleaved_thinking);
                 agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
                 agent.verbose_logging = j["agent"].value("verbose_logging", agent.verbose_logging);
             }
@@ -1351,7 +1353,7 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     QFormLayout* model_layout = new QFormLayout(model_tab);
 
     model_combo = new QComboBox();
-    model_combo->addItems({"Opus 4", "Sonnet 4", "Haiku 3.5"});
+    model_combo->addItems({"Opus 4", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
     model_layout->addRow("Model:", model_combo);
 
     max_tokens_spin = new QSpinBox();
@@ -1362,7 +1364,7 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     max_thinking_tokens_spin = new QSpinBox();
     max_thinking_tokens_spin->setRange(1024, 8192);
     max_thinking_tokens_spin->setValue(2048);
-    model_layout->addRow("Max Thinking Tokens:", max_tokens_spin);
+    model_layout->addRow("Max Thinking Tokens:", max_thinking_tokens_spin);
 
     max_iterations_spin = new QSpinBox();
     max_iterations_spin->setRange(1, 200);
@@ -1378,6 +1380,10 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     enable_thinking_check = new QCheckBox("Enable thinking mode");
     enable_thinking_check->setChecked(false);
     model_layout->addRow("", enable_thinking_check);
+
+    auto_enable_interleaved_thinking_check = new QCheckBox("Auto enable interleaved thinking mode");
+    auto_enable_interleaved_thinking_check->setChecked(false);
+    model_layout->addRow("", auto_enable_interleaved_thinking_check);
 
     enable_deep_analysis_check = new QCheckBox("Enable deep analysis mode");
     enable_deep_analysis_check->setChecked(false);
@@ -1473,7 +1479,8 @@ void ConfigWidget::load_settings(const Config& config) {
     switch (config.api.model) {
         case api::Model::Opus4: model_combo->setCurrentIndex(0); break;
         case api::Model::Sonnet4: model_combo->setCurrentIndex(1); break;
-        case api::Model::Haiku35: model_combo->setCurrentIndex(2); break;
+        case api::Model::Sonnet37: model_combo->setCurrentIndex(2); break;
+        case api::Model::Haiku35: model_combo->setCurrentIndex(3); break;
     }
 
     max_tokens_spin->setValue(config.api.max_tokens);
@@ -1481,6 +1488,7 @@ void ConfigWidget::load_settings(const Config& config) {
     max_iterations_spin->setValue(config.agent.max_iterations);
     temperature_spin->setValue(config.api.temperature);
     enable_thinking_check->setChecked(config.agent.enable_thinking);
+    auto_enable_interleaved_thinking_check->setChecked(config.agent.auto_enable_interleaved_thinking);
     enable_deep_analysis_check->setChecked(config.agent.enable_deep_analysis);
     prompt_caching_check->setChecked(config.api.enable_prompt_caching);
 
@@ -1503,7 +1511,8 @@ void ConfigWidget::save_settings(Config& config) {
     switch (model_combo->currentIndex()) {
         case 0: config.api.model = api::Model::Opus4; break;
         case 1: config.api.model = api::Model::Sonnet4; break;
-        case 2: config.api.model = api::Model::Haiku35; break;
+        case 2: config.api.model = api::Model::Sonnet37; break;
+        case 3: config.api.model = api::Model::Haiku35; break;
     }
 
     config.api.max_tokens = max_tokens_spin->value();
@@ -1511,6 +1520,7 @@ void ConfigWidget::save_settings(Config& config) {
     config.agent.max_iterations = max_iterations_spin->value();
     config.api.temperature = temperature_spin->value();
     config.agent.enable_thinking = enable_thinking_check->isChecked();
+    config.agent.auto_enable_interleaved_thinking = auto_enable_interleaved_thinking_check->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check->isChecked();
     config.api.enable_prompt_caching = prompt_caching_check->isChecked();
 

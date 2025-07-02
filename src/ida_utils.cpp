@@ -270,8 +270,8 @@ FunctionInfo IDAUtils::get_function_info(ea_t address) {
     });
 }
 
-DataInfo IDAUtils::get_data_info(ea_t address) {
-    return execute_sync_wrapper([address]() {
+DataInfo IDAUtils::get_data_info(ea_t address, int max_xrefs) {
+    return execute_sync_wrapper([address, max_xrefs]() {
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
@@ -317,9 +317,10 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
             info.size = 0;
         }
 
-        // Get all xrefs
+        // Get xrefs with truncation
         xrefblk_t xb;
-        for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
+        int xref_count = 0;
+        for (bool ok = xb.first_to(address, XREF_ALL); ok && xref_count < max_xrefs; ok = xb.next_to()) {
             qstring xref_name;
             std::string name_str;
             if (get_func_name(&xref_name, xb.from) > 0) {
@@ -328,6 +329,16 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
                 name_str = xref_name.c_str();
             }
             info.xrefs_to.push_back({xb.from, name_str});
+            xref_count++;
+        }
+
+        // Check if we hit the limit and there are more xrefs
+        if (xref_count == max_xrefs) {
+            bool has_more = xb.next_to();
+            if (has_more) {
+                info.xrefs_truncated = true;
+                info.xrefs_truncated_at = max_xrefs;
+            }
         }
 
         return info;

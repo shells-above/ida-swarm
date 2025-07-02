@@ -105,9 +105,10 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
         .with_system_prompt(system_prompt, true)
         .add_message(messages::Message::user_text(user_prompt))
         .with_max_tokens(32768)
-        .with_max_thinking_tokens(8192)
+        .with_max_thinking_tokens(16384)
         .with_temperature(0.0)
         .enable_thinking(true)
+        .enable_interleaved_thinking(false)
         .build();
 
     api::ChatResponse response = deep_analysis_client_->send_request(request);
@@ -127,7 +128,7 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
     result.analysis = analysis_text;
     result.completed_at = std::chrono::system_clock::now();
     result.token_usage = response.usage;
-    result.cost_estimate = estimate_cost(response.usage);
+    result.cost_estimate = response.usage.estimated_cost();
 
     // Store the result
     store_analysis_result(result);
@@ -241,20 +242,6 @@ std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::s
     }
 
     return std::nullopt;
-}
-
-double DeepAnalysisManager::estimate_cost(api::TokenUsage usage) {
-    // Opus 4 pricing estimate
-    // TODO just use TokenUsage::estimated_cost() and have it be model aware, this is stupid but i am lazy
-    const double price_input = 15.0;
-    const double price_output = 75.0;
-    const double price_cache_write = 1.25 * price_input;
-    const double price_cache_read = 0.1 * price_input;
-
-    return (usage.input_tokens / 1000000.0 * price_input) +
-           (usage.output_tokens / 1000000.0 * price_output) +
-           (usage.cache_creation_tokens / 1000000.0 * price_cache_write) +
-           (usage.cache_read_tokens / 1000000.0 * price_cache_read);
 }
 
 std::string DeepAnalysisManager::build_context(

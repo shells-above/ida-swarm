@@ -276,13 +276,15 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address of the data")
+            .add_integer("max_xrefs", "Maximum cross-references to return (defaults to 20)", false)
             .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_data_info(address));
+            int max_xrefs = input.value("max_xrefs", 20);
+            return ToolResult::success(executor->get_data_info(address, max_xrefs));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1082,6 +1084,10 @@ public:
     Tool* get_tool(const std::string& name) {
         auto it = tools.find(name);
         return it != tools.end() ? it->second.get() : nullptr;
+    }
+
+    bool has_tools() const {
+        return !tools.empty();
     }
 
     std::vector<json> get_api_definitions() const {

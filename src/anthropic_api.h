@@ -15,12 +15,56 @@ namespace llm_re::tools {
 
 namespace llm_re::api {
 
+// Model selection
+enum class Model {
+    Opus4,
+    Sonnet4,
+    Sonnet37,
+    Haiku35
+};
+
+inline std::string model_to_string(Model model) {
+    switch (model) {
+        case Model::Opus4: return "claude-opus-4-20250514";
+        case Model::Sonnet4: return "claude-sonnet-4-20250514";
+        case Model::Sonnet37: return "claude-3-7-sonnet-latest";
+        case Model::Haiku35: return "claude-3-5-haiku-latest";
+    }
+    return "";
+}
+
+inline Model model_from_string(const std::string& s) {
+    if (s == "claude-opus-4-20250514") return Model::Opus4;
+    if (s == "claude-sonnet-4-20250514") return Model::Sonnet4;
+    if (s == "claude-3-7-sonnet-latest") return Model::Sonnet37;
+    if (s == "claude-3-5-haiku-latest") return Model::Haiku35;
+    throw std::runtime_error("Unknown model: " + s);
+}
+
+// Stop reason enum
+enum class StopReason {
+    EndTurn,
+    MaxTokens,
+    StopSequence,
+    ToolUse,
+    Unknown
+};
+
+inline StopReason stop_reason_from_string(const std::string& s) {
+    if (s == "end_turn") return StopReason::EndTurn;
+    if (s == "max_tokens") return StopReason::MaxTokens;
+    if (s == "stop_sequence") return StopReason::StopSequence;
+    if (s == "tool_use") return StopReason::ToolUse;
+    return StopReason::Unknown;
+}
+
 // Token usage tracking
 struct TokenUsage {
     int input_tokens = 0;
     int output_tokens = 0;
     int cache_creation_tokens = 0;
     int cache_read_tokens = 0;
+    Model model;
 
     /**
      * sums 2 TokenUsage objects and returns a new object
@@ -58,11 +102,29 @@ struct TokenUsage {
     }
 
     double estimated_cost() const {
-        // Claude Sonnet 4 pricing per million tokens
-        const double price_input = 3.0;
-        const double price_output = 15.0;
-        const double price_cache_write = 1.25 * price_input;
-        const double price_cache_read = 0.1 * price_input;
+        double price_input, price_output, price_cache_write, price_cache_read;
+
+        switch (model) {
+            case Model::Opus4:
+                price_input = 15.0;
+                price_output = 75.0;
+                price_cache_write = 18.75;
+                price_cache_read = 1.5;
+                break;
+            case Model::Sonnet4:
+            case Model::Sonnet37:
+                price_input = 3.0;
+                price_output = 15.0;
+                price_cache_write = 3.75;
+                price_cache_read = 0.30;
+                break;
+            case Model::Haiku35:
+                price_input = 0.8;
+                price_output = 4.0;
+                price_cache_write = 1.0;
+                price_cache_read = 0.08;
+                break;
+        }
 
         return (input_tokens / 1000000.0 * price_input) +
                (output_tokens / 1000000.0 * price_output) +
@@ -76,6 +138,16 @@ struct TokenUsage {
         if (j.contains("output_tokens")) usage.output_tokens = j["output_tokens"];
         if (j.contains("cache_creation_input_tokens")) usage.cache_creation_tokens = j["cache_creation_input_tokens"];
         if (j.contains("cache_read_input_tokens")) usage.cache_read_tokens = j["cache_read_input_tokens"];
+        if (j.contains("model")) usage.model = model_from_string(j["model"]);
+        return usage;
+    }
+
+    // Fallback method for cases where model isn't in JSON
+    static TokenUsage from_json(const json& j, Model model) {
+        TokenUsage usage = from_json(j);
+        if (!j.contains("model")) {
+            usage.model = model;
+        }
         return usage;
     }
 
@@ -85,51 +157,12 @@ struct TokenUsage {
             {"output_tokens", output_tokens},
             {"cache_creation_input_tokens", cache_creation_tokens},
             {"cache_read_input_tokens", cache_read_tokens},
+            {"model", model_to_string(model)},
             {"total", total()},
             {"estimated_cost", estimated_cost()}
         };
     }
 };
-
-// Model selection
-enum class Model {
-    Opus4,
-    Sonnet4,
-    Haiku35
-};
-
-inline std::string model_to_string(Model model) {
-    switch (model) {
-        case Model::Opus4: return "claude-opus-4-20250514";
-        case Model::Sonnet4: return "claude-sonnet-4-20250514";
-        case Model::Haiku35: return "claude-3-5-haiku-latest";
-    }
-    return "";
-}
-
-inline Model model_from_string(const std::string& s) {
-    if (s == "claude-opus-4-20250514") return Model::Opus4;
-    if (s == "claude-sonnet-4-20250514") return Model::Sonnet4;
-    if (s == "claude-3-5-haiku-latest") return Model::Haiku35;
-    throw std::runtime_error("Unknown model: " + s);
-}
-
-// Stop reason enum
-enum class StopReason {
-    EndTurn,
-    MaxTokens,
-    StopSequence,
-    ToolUse,
-    Unknown
-};
-
-inline StopReason stop_reason_from_string(const std::string& s) {
-    if (s == "end_turn") return StopReason::EndTurn;
-    if (s == "max_tokens") return StopReason::MaxTokens;
-    if (s == "stop_sequence") return StopReason::StopSequence;
-    if (s == "tool_use") return StopReason::ToolUse;
-    return StopReason::Unknown;
-}
 
 // System prompt with cache control
 struct SystemPrompt {
@@ -165,6 +198,7 @@ public:
     int max_thinking_tokens = 2048;
     double temperature = 0.0;
     bool enable_thinking = false;
+    bool enable_interleaved_thinking = false;
     std::vector<std::string> stop_sequences;
 
 
@@ -191,6 +225,35 @@ public:
 
         if (temperature < 0.0 || temperature > 1.0) {
             throw std::runtime_error("temperature must be between 0.0 and 1.0");
+        }
+
+        if (enable_thinking) {
+            if (max_thinking_tokens < 1024) {
+                throw std::runtime_error("max_thinking_tokens must be at least 1024 when thinking is enabled");
+            }
+            if (max_thinking_tokens > max_tokens) {
+                throw std::runtime_error("max_thinking_tokens cannot exceed max_tokens");
+            }
+            // Check model compatibility
+            if (model == Model::Haiku35) {
+                throw std::runtime_error("Extended thinking is not supported on Haiku 3.5 model");
+            }
+            // Temperature restrictions with thinking
+            if (temperature != 1.0) {
+                throw std::runtime_error("temperature must be 1.0 when thinking is enabled (temperature and top_k are not compatible with thinking)");
+            }
+        }
+
+        if (enable_interleaved_thinking) {
+            if (!enable_thinking) {
+                throw std::runtime_error("enable_interleaved_thinking requires enable_thinking to be true");
+            }
+            if (model == Model::Sonnet37) {
+                throw std::runtime_error("Interleaved thinking is only supported on Claude 4 models (Opus 4, Sonnet 4)");
+            }
+            if (model == Model::Haiku35) {
+                throw std::runtime_error("Interleaved thinking is only supported on Claude 4 models (Opus 4, Sonnet 4)");
+            }
         }
     }
 
@@ -231,9 +294,11 @@ public:
 
         if (enable_thinking) {
             // Enable thinking/reasoning
-            // todo add support for interleaved thinking + tool calling
-            j["thinking"]["budget_tokens"] = max_thinking_tokens;
-            j["thinking"]["type"] = "enabled";
+            // Interleaved thinking is automatically enabled via beta header when tools are used
+            j["thinking"] = {
+                {"type", "enabled"},
+                {"budget_tokens", max_thinking_tokens}
+            };
         }
 
         return j;
@@ -277,7 +342,6 @@ struct ChatResponse {
     bool success = false;
     std::optional<std::string> error;
     StopReason stop_reason = StopReason::Unknown;
-    std::optional<std::string> thinking;
     messages::Message message{messages::Role::Assistant};
     TokenUsage usage;
     std::string model_used;
@@ -294,6 +358,41 @@ struct ChatResponse {
 
     std::optional<std::string> get_text() const {
         return messages::ContentExtractor::extract_text(message);
+    }
+
+    std::vector<const messages::ThinkingContent*> get_thinking_blocks() const {
+        return messages::ContentExtractor::extract_thinking_blocks(message);
+    }
+
+    std::vector<const messages::RedactedThinkingContent*> get_redacted_thinking_blocks() const {
+        return messages::ContentExtractor::extract_redacted_thinking_blocks(message);
+    }
+
+    bool has_thinking() const {
+        auto thinking_blocks = get_thinking_blocks();
+        auto redacted_blocks = get_redacted_thinking_blocks();
+        return !thinking_blocks.empty() || !redacted_blocks.empty();
+    }
+
+    // Get combined thinking text (for backward compatibility)
+    std::optional<std::string> get_thinking_text() const {
+        auto thinking_blocks = get_thinking_blocks();
+        if (!thinking_blocks.empty()) {
+            std::string combined;
+            for (const auto* block : thinking_blocks) {
+                if (!combined.empty()) combined += "\n\n";
+                combined += block->thinking;
+            }
+            return combined;
+        }
+        return std::nullopt;
+    }
+
+    // Create an assistant message with preserved thinking blocks for tool use continuation
+    // This is ESSENTIAL when using tools with thinking enabled - the thinking blocks must be
+    // passed back to the API to maintain reasoning continuity
+    messages::Message to_assistant_message() const {
+        return message;  // The message already contains all content blocks including thinking
     }
 
     static ChatResponse from_json(const json& response_json) {
@@ -323,12 +422,8 @@ struct ChatResponse {
             response.stop_reason = stop_reason_from_string(response_json["stop_reason"]);
         }
 
-        if (response_json.contains("thinking") && !response_json["thinking"].is_null()) {
-            response.thinking = response_json["thinking"];
-        }
-
         if (response_json.contains("usage")) {
-            response.usage = TokenUsage::from_json(response_json["usage"]);
+            response.usage = TokenUsage::from_json(response_json["usage"], model_from_string(response.model_used));
         }
 
         // Parse content into message
@@ -344,6 +439,19 @@ struct ChatResponse {
                         content_item["id"],
                         content_item["name"],
                         content_item["input"]
+                    ));
+                } else if (type == "thinking") {
+                    std::string thinking_text = content_item["thinking"];
+                    if (content_item.contains("signature")) {
+                        response.message.add_content(std::make_unique<messages::ThinkingContent>(
+                            thinking_text, content_item["signature"]
+                        ));
+                    } else {
+                        response.message.add_content(std::make_unique<messages::ThinkingContent>(thinking_text));
+                    }
+                } else if (type == "redacted_thinking") {
+                    response.message.add_content(std::make_unique<messages::RedactedThinkingContent>(
+                        content_item["data"]
                     ));
                 }
             }
@@ -407,6 +515,11 @@ public:
 
     ChatRequestBuilder& enable_thinking(bool enable = true) {
         request.enable_thinking = enable;
+        return *this;
+    }
+
+    ChatRequestBuilder& enable_interleaved_thinking(bool enable = true) {
+        request.enable_interleaved_thinking = enable;
         return *this;
     }
 
@@ -633,7 +746,11 @@ public:
         headers = curl_slist_append(headers, "Content-Type: application/json");
         headers = curl_slist_append(headers, ("x-api-key: " + api_key).c_str());
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
-        // headers = curl_slist_append(headers, "anthropic-beta: max-tokens-3-5-sonnet-2024-07-15");  // For higher token limits
+        
+        // Add interleaved thinking beta header if enabled and tools are being used
+        if (request.enable_interleaved_thinking && request.enable_thinking && !request.tool_definitions.empty()) {
+            headers = curl_slist_append(headers, "anthropic-beta: interleaved-thinking-2025-05-14");
+        }
 
         curl_easy_setopt(curl, CURLOPT_URL, api_url.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);

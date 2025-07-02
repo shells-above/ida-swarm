@@ -69,9 +69,6 @@ public:
     std::vector<std::pair<std::string, std::string>> list_analyses() const;
     std::optional<DeepAnalysisResult> get_analysis(const std::string& key) const;
 
-    // Cost estimation
-    static double estimate_cost(api::TokenUsage usage);
-
 private:
     std::string build_context(
         const DeepAnalysisCollection& collection,

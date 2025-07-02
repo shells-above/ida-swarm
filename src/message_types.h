@@ -7,12 +7,19 @@
 
 #include "common.h"
 
+// Forward declaration for ChatResponse
+namespace llm_re::api {
+    struct ChatResponse;
+}
+
 namespace llm_re::messages {
 
 // Forward declarations
 struct TextContent;
 struct ToolUseContent;
 struct ToolResultContent;
+struct ThinkingContent;
+struct RedactedThinkingContent;
 
 // Visitor pattern for type-safe content handling
 class ContentVisitor {
@@ -21,6 +28,8 @@ public:
     virtual void visit(const TextContent& content) = 0;
     virtual void visit(const ToolUseContent& content) = 0;
     virtual void visit(const ToolResultContent& content) = 0;
+    virtual void visit(const ThinkingContent& content) = 0;
+    virtual void visit(const RedactedThinkingContent& content) = 0;
 };
 
 // Base content class
@@ -172,6 +181,75 @@ struct ToolResultContent : public Content {
     }
 };
 
+// Thinking content
+struct ThinkingContent : public Content {
+    std::string thinking;
+    std::optional<std::string> signature;
+
+    explicit ThinkingContent(std::string t) : thinking(std::move(t)) {}
+
+    ThinkingContent(std::string t, std::string sig)
+        : thinking(std::move(t)), signature(std::move(sig)) {}
+
+    void accept(ContentVisitor& visitor) const override {
+        visitor.visit(*this);
+    }
+
+    json to_json() const override {
+        json j;
+        j["type"] = "thinking";
+        j["thinking"] = thinking;
+        if (signature) {
+            j["signature"] = *signature;
+        }
+        return j;
+    }
+
+    std::unique_ptr<Content> clone() const override {
+        return std::make_unique<ThinkingContent>(*this);
+    }
+
+    std::string get_type() const override { return "thinking"; }
+
+    static std::unique_ptr<ThinkingContent> from_json(const json& j) {
+        if (!j.contains("thinking")) return nullptr;
+        std::unique_ptr<ThinkingContent> content = std::make_unique<ThinkingContent>(j["thinking"]);
+        if (j.contains("signature")) {
+            content->signature = j["signature"];
+        }
+        return content;
+    }
+};
+
+// Redacted thinking content
+struct RedactedThinkingContent : public Content {
+    std::string data; // Encrypted thinking data
+
+    explicit RedactedThinkingContent(std::string d) : data(std::move(d)) {}
+
+    void accept(ContentVisitor& visitor) const override {
+        visitor.visit(*this);
+    }
+
+    json to_json() const override {
+        json j;
+        j["type"] = "redacted_thinking";
+        j["data"] = data;
+        return j;
+    }
+
+    std::unique_ptr<Content> clone() const override {
+        return std::make_unique<RedactedThinkingContent>(*this);
+    }
+
+    std::string get_type() const override { return "redacted_thinking"; }
+
+    static std::unique_ptr<RedactedThinkingContent> from_json(const json& j) {
+        if (!j.contains("data")) return nullptr;
+        return std::make_unique<RedactedThinkingContent>(j["data"]);
+    }
+};
+
 // Message role enum
 enum class Role {
     User,
@@ -296,6 +374,28 @@ public:
         return msg;
     }
 
+    // Helper to create assistant message with specific content blocks preserved
+    // This is essential for tool use with thinking enabled - you must preserve
+    // thinking blocks from the assistant's previous response when sending tool results
+    static Message assistant_with_preserved_content(const std::vector<std::unique_ptr<Content>>& preserved_contents) {
+        Message msg(Role::Assistant);
+        for (const auto& content : preserved_contents) {
+            msg.add_content(content->clone());
+        }
+        return msg;
+    }
+
+    // Helper to check if this message contains thinking blocks
+    bool has_thinking_blocks() const {
+        for (const auto& content : contents_) {
+            if (dynamic_cast<const ThinkingContent*>(content.get()) || 
+                dynamic_cast<const RedactedThinkingContent*>(content.get())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static Message system(const std::string& text, bool cache = false) {
         Message msg(Role::System);
         if (cache) {
@@ -356,6 +456,14 @@ public:
                     if (std::unique_ptr<ToolResultContent> tool_result = ToolResultContent::from_json(item)) {
                         msg.add_content(std::move(tool_result));
                     }
+                } else if (type == "thinking") {
+                    if (std::unique_ptr<ThinkingContent> thinking = ThinkingContent::from_json(item)) {
+                        msg.add_content(std::move(thinking));
+                    }
+                } else if (type == "redacted_thinking") {
+                    if (std::unique_ptr<RedactedThinkingContent> redacted_thinking = RedactedThinkingContent::from_json(item)) {
+                        msg.add_content(std::move(redacted_thinking));
+                    }
                 }
             }
         }
@@ -369,6 +477,8 @@ class ContentExtractor : public ContentVisitor {
     std::vector<const TextContent*> texts;
     std::vector<const ToolUseContent*> tool_uses;
     std::vector<const ToolResultContent*> tool_results;
+    std::vector<const ThinkingContent*> thinking_blocks;
+    std::vector<const RedactedThinkingContent*> redacted_thinking_blocks;
 
 public:
     void visit(const TextContent& content) override {
@@ -383,14 +493,26 @@ public:
         tool_results.push_back(&content);
     }
 
+    void visit(const ThinkingContent& content) override {
+        thinking_blocks.push_back(&content);
+    }
+
+    void visit(const RedactedThinkingContent& content) override {
+        redacted_thinking_blocks.push_back(&content);
+    }
+
     const std::vector<const TextContent*>& get_texts() const { return texts; }
     const std::vector<const ToolUseContent*>& get_tool_uses() const { return tool_uses; }
     const std::vector<const ToolResultContent*>& get_tool_results() const { return tool_results; }
+    const std::vector<const ThinkingContent*>& get_thinking_blocks() const { return thinking_blocks; }
+    const std::vector<const RedactedThinkingContent*>& get_redacted_thinking_blocks() const { return redacted_thinking_blocks; }
 
     void clear() {
         texts.clear();
         tool_uses.clear();
         tool_results.clear();
+        thinking_blocks.clear();
+        redacted_thinking_blocks.clear();
     }
 
     // Static helper methods for common extractions
@@ -411,6 +533,22 @@ public:
             return extractor.get_texts()[0]->text;
         }
         return std::nullopt;
+    }
+
+    static std::vector<const ThinkingContent*> extract_thinking_blocks(const Message& msg) {
+        ContentExtractor extractor;
+        for (const std::unique_ptr<Content>& content: msg.contents()) {
+            content->accept(extractor);
+        }
+        return extractor.get_thinking_blocks();
+    }
+
+    static std::vector<const RedactedThinkingContent*> extract_redacted_thinking_blocks(const Message& msg) {
+        ContentExtractor extractor;
+        for (const std::unique_ptr<Content>& content: msg.contents()) {
+            content->accept(extractor);
+        }
+        return extractor.get_redacted_thinking_blocks();
     }
 };
 
@@ -478,6 +616,18 @@ public:
             should_prune = false;
             pruned_content = content.clone();
         }
+    }
+
+    void visit(const ThinkingContent& content) override {
+        // Thinking blocks are important for reasoning continuity and shouldn't be pruned
+        should_prune = false;
+        pruned_content = content.clone();
+    }
+
+    void visit(const RedactedThinkingContent& content) override {
+        // Redacted thinking blocks are important for reasoning continuity and shouldn't be pruned
+        should_prune = false;
+        pruned_content = content.clone();
     }
 
     bool was_pruned() const { return should_prune; }

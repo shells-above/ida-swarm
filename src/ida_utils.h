@@ -28,7 +28,9 @@ struct DataInfo {
     std::string value;
     std::string type;
     size_t size;
-    std::vector<std::pair<ea_t, std::string>> xrefs_to;  // Limited to 20
+    std::vector<std::pair<ea_t, std::string>> xrefs_to;  // Configurable limit (default 20)
+    bool xrefs_truncated = false;  // True if xrefs were truncated
+    int xrefs_truncated_at = 0;    // The limit at which truncation occurred
 };
 
 // Utility class that bridges our actions to IDA API calls
@@ -125,7 +127,7 @@ public:
 
     // Comprehensive info functions
     static FunctionInfo get_function_info(ea_t address);
-    static DataInfo get_data_info(ea_t address);
+    static DataInfo get_data_info(ea_t address, int max_xrefs = 20);
     static std::string dump_data(ea_t address, size_t size, int bytes_per_line = 16);
 
     // Cross-reference operations (kept for detailed analysis)

@@ -317,10 +317,10 @@ json ActionExecutor::get_function_info(ea_t address) {
     return result;
 }
 
-json ActionExecutor::get_data_info(ea_t address) {
+json ActionExecutor::get_data_info(ea_t address, int max_xrefs) {
     json result;
     try {
-        auto info = IDAUtils::get_data_info(address);
+        auto info = IDAUtils::get_data_info(address, max_xrefs);
         result["success"] = true;
         result["address"] = HexAddress(address);
         result["name"] = info.name;
@@ -338,6 +338,12 @@ json ActionExecutor::get_data_info(ea_t address) {
         }
         result["xrefs_to"] = xrefs_to_json;
         result["xrefs_to_count"] = info.xrefs_to.size();
+
+        // Add truncation logging
+        if (info.xrefs_truncated) {
+            result["truncated"] = true;
+            result["truncated_at"] = info.xrefs_truncated_at;
+        }
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
