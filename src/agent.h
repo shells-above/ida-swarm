@@ -789,8 +789,9 @@ private:
             ss << " [" << usage.cache_read_tokens << " cached]";
         }
 
-        ss << " | Session Total: " << total.total();
+        ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << "out";
         ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();
+        // can't account pricing for thinking tokens because they don't return summary token count or redacted token count
 
         log(LogLevel::INFO, ss.str());
     }
