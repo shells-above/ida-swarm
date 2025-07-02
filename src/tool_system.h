@@ -201,7 +201,7 @@ public:
     }
 
     std::string description() const override {
-        return "Get the disassembly (assembly code) for a function at the given address. Shows the low-level assembly instructions.";
+        return "Get the disassembly (assembly code) for a function at the given address. Shows the low-level assembly instructions. This is expensive, so only use when you need to really understand a complicated function, or if the decompilation is not making sense.";
     }
 
     json parameters_schema() const override {

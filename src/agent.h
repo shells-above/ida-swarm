@@ -207,9 +207,14 @@ Guidelines:
 5. Save important findings and speculation to memory for later reference
 6. Save confident information in the IDA database through function name setting and adding comments
 7. When you have gathered enough information, submit your final report
+8. Do NOT use decimal to represent your function / data addresses, STICK TO HEXADECIMAL!
 
 When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
 Be systematic and thorough. Build your understanding incrementally.
+
+Remember that you can execute multiple tool calls at once, in fact I encourage it!
+If you realize you need information from multiple tool calls, don't wait to do it in multiple messages.
+Do it all in one! But do NOT go crazy, *only do the tool calls you need*.
 
 Current task: )";
 
@@ -444,8 +449,6 @@ private:
 
     // Process new task
     void process_new_task(const std::string& task) {
-        log(LogLevel::INFO, "Starting analysis for task: " + task);
-
         // Clear conversation for new task
         conversation_.clear();
         api_client_.set_iteration(0);
@@ -490,8 +493,8 @@ private:
         log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
 
         if (!saved_state_.valid) {
-            // Start fresh if no saved state
-            process_new_task(additional);
+            log(LogLevel::WARNING, "No saved state found while continuing");
+            state_.set_status(AgentState::Status::Idle);
             return;
         }
 
