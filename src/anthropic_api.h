@@ -303,38 +303,6 @@ public:
 
         return j;
     }
-
-
-    /**
-     * creates a pruned copy of this ChatRequest
-     * @param tool_iterations tool call id -> iteration
-     * @param current_iteration current iteration number
-     * @return a copy of this object, but with long messages pruned by messages::ContentPruner
-     */
-    ChatRequest create_pruned_copy(const std::map<std::string, int>& tool_iterations, int current_iteration) const {
-        ChatRequest pruned = *this;
-
-        // Only prune if we're past the first iteration
-        if (current_iteration <= 1) {
-            return pruned;
-        }
-
-        // Prune old tool results in messages
-        for (auto& msg : pruned.messages) {
-            if (msg.role() != messages::Role::User) continue;
-
-            std::vector<std::unique_ptr<messages::Content>> new_contents;
-            for (auto& content : msg.mutable_contents()) {
-                messages::ContentPruner pruner(tool_iterations, current_iteration);
-                content->accept(pruner);
-                new_contents.push_back(pruner.get_result());
-            }
-
-            msg.mutable_contents() = std::move(new_contents);
-        }
-
-        return pruned;
-    }
 };
 
 // Structured chat response
@@ -560,7 +528,7 @@ struct ApiError {
         // Detect error type from message and status code
         if (status_code == 429 || error_msg.find("rate limit") != std::string::npos) {
             error.type = ErrorType::RateLimitError;
-            
+
             // Extract retry-after from headers if available
             auto retry_after_it = headers.find("retry-after");
             if (retry_after_it != headers.end()) {
@@ -621,25 +589,25 @@ class AnthropicClient {
     static size_t HeaderCallback(char* buffer, size_t size, size_t nitems, std::map<std::string, std::string>* headers) {
         size_t totalSize = size * nitems;
         std::string header(buffer, totalSize);
-        
+
         // Find the colon separator
         size_t colonPos = header.find(':');
         if (colonPos != std::string::npos) {
             std::string key = header.substr(0, colonPos);
             std::string value = header.substr(colonPos + 1);
-            
+
             // Trim whitespace
             key.erase(0, key.find_first_not_of(" \t\r\n"));
             key.erase(key.find_last_not_of(" \t\r\n") + 1);
             value.erase(0, value.find_first_not_of(" \t\r\n"));
             value.erase(value.find_last_not_of(" \t\r\n") + 1);
-            
+
             // Convert key to lowercase for case-insensitive comparison
             std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-            
+
             (*headers)[key] = value;
         }
-        
+
         return totalSize;
     }
 
@@ -689,7 +657,7 @@ class AnthropicClient {
     }
 
 public:
-    explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages") 
+    explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
         : api_key(key), api_url(base_url) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
@@ -746,7 +714,7 @@ public:
         headers = curl_slist_append(headers, "Content-Type: application/json");
         headers = curl_slist_append(headers, ("x-api-key: " + api_key).c_str());
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
-        
+
         // Add interleaved thinking beta header if enabled and tools are being used
         if (request.enable_interleaved_thinking && request.enable_thinking && !request.tool_definitions.empty()) {
             headers = curl_slist_append(headers, "anthropic-beta: interleaved-thinking-2025-05-14");

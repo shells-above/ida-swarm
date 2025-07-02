@@ -560,6 +560,41 @@ private:
         run_analysis_loop();
     }
 
+    // Add cache control to the last content block of a message
+    void add_cache_control_to_last_block(messages::Message& msg) {
+        auto& contents = msg.mutable_contents();
+        if (!contents.empty()) {
+            // Find the last non-thinking content block
+            for (auto it = contents.rbegin(); it != contents.rend(); ++it) {
+                auto& content = *it;
+
+                // Skip thinking blocks as they cannot be cached directly
+                if (dynamic_cast<messages::ThinkingContent*>(content.get()) ||
+                    dynamic_cast<messages::RedactedThinkingContent*>(content.get())) {
+                    continue;
+                }
+
+                // Add cache control to text content
+                if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
+                    // Create a new text content with cache control
+                    auto cached_text = std::make_unique<messages::TextContent>(
+                        text->text,
+                        messages::CacheControl{messages::CacheControl::Type::Ephemeral}
+                    );
+                    *it = std::move(cached_text);
+                    break;
+                }
+
+                // For tool results, we can add cache control
+                if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(content.get())) {
+                    // Tool results already support caching in the messages array
+                    // The cache control is added at the message level, not the content level
+                    break;
+                }
+            }
+        }
+    }
+
     // Main analysis loop
     void run_analysis_loop() {
         int iteration = saved_state_.iteration;
@@ -572,16 +607,25 @@ private:
 
             log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
-            // Prune old content if needed
-            api::ChatRequest pruned_request = saved_state_.request;
-            if (iteration > 1) {
-                std::map<std::string, int> tool_iterations = conversation_.get_tool_iterations();
-                pruned_request = saved_state_.request.create_pruned_copy(tool_iterations, iteration);
+            // Create request for this iteration
+            api::ChatRequest current_request = saved_state_.request;
+
+            // On iterations after the first, we want to enable incremental caching
+            // by adding cache_control to the last message
+            if (iteration > 1 && !current_request.messages.empty()) {
+                // Get the last message and add cache control to its last content block
+                auto& last_msg = current_request.messages.back();
+
+                // Only add cache control to user messages containing tool results
+                // or assistant messages (to cache conversation history)
+                if (last_msg.role() == messages::Role::User ||
+                    last_msg.role() == messages::Role::Assistant) {
+                    add_cache_control_to_last_block(last_msg);
+                }
             }
 
-
             // Send request
-            api::ChatResponse response = api_client_.send_request(pruned_request);
+            api::ChatResponse response = api_client_.send_request(current_request);
 
             if (!response.success) {
                 handle_api_error(response);
@@ -607,14 +651,16 @@ private:
             token_tracker_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
 
-            // Add response to conversation
+            // Add response to conversation and saved state
+            // IMPORTANT: We must preserve the entire message including thinking blocks
             saved_state_.request.messages.push_back(response.message);
             conversation_.add_message(response.message);
 
             // Process tool calls
             std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
-            for (const messages::Message &result: tool_results) {
+            // Add tool results to conversation
+            for (const messages::Message& result: tool_results) {
                 saved_state_.request.messages.push_back(result);
                 conversation_.add_message(result);
             }
@@ -625,18 +671,17 @@ private:
             // Handle end turn without tools
             if (response.stop_reason == api::StopReason::EndTurn && !response.has_tool_calls() && !task_complete) {
                 if (iteration > 1) {
-                    saved_state_.request.messages.push_back(
-                        messages::Message::user_text(
-                            "Please continue your analysis and use tools to gather more information or submit your final report."
-                        )
+                    // Add a user message to continue
+                    messages::Message continue_msg = messages::Message::user_text(
+                        "Please continue your analysis and use tools to gather more information or submit your final report."
                     );
-                    conversation_.add_message(saved_state_.request.messages.back());
+                    saved_state_.request.messages.push_back(continue_msg);
+                    conversation_.add_message(continue_msg);
                 }
             }
 
-            // Check conversation length and prune if needed
-            // todo make based off content window length
-            if (conversation_.message_count() > 200) {  // Default UI max conversation length
+            // Check conversation length
+            if (conversation_.message_count() > 200) {
                 log(LogLevel::WARNING, "Conversation getting long, consider starting a new analysis");
             }
         }
@@ -789,9 +834,12 @@ private:
             ss << " [" << usage.cache_read_tokens << " cached]";
         }
 
+        if (usage.cache_creation_tokens > 0) {
+            ss << " [" << usage.cache_creation_tokens << " cache write]";
+        }
+
         ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << " out";
         ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();
-        // can't account pricing for thinking tokens because they don't return summary token count or redacted token count
 
         log(LogLevel::INFO, ss.str());
     }
