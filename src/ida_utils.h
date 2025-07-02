@@ -126,6 +126,7 @@ public:
     // Comprehensive info functions
     static FunctionInfo get_function_info(ea_t address);
     static DataInfo get_data_info(ea_t address);
+    static std::string dump_data(ea_t address, size_t size, int bytes_per_line = 16);
 
     // Cross-reference operations (kept for detailed analysis)
     static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address, int max_count = -1);

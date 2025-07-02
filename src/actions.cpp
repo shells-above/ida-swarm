@@ -345,6 +345,36 @@ json ActionExecutor::get_data_info(ea_t address) {
     return result;
 }
 
+json ActionExecutor::dump_data(ea_t address, size_t size, int bytes_per_line) {
+    json result;
+    try {
+        std::string hex_dump = IDAUtils::dump_data(address, size, bytes_per_line);
+
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+        result["size"] = size;
+        result["hex_dump"] = hex_dump;
+
+        // // Also include just the raw hex bytes for easier processing
+        // bytevec_t bytes;
+        // bytes.resize(size);
+        // if (IDAUtils::get_bytes_raw(address, &bytes[0], size)) {
+        //     std::stringstream raw_hex;
+        //     raw_hex << std::hex << std::setfill('0');
+        //     for (size_t i = 0; i < size; i++) {
+        //         raw_hex << std::setw(2) << static_cast<int>(bytes[i]);
+        //         if (i < size - 1) raw_hex << " ";
+        //     }
+        //     result["raw_hex"] = raw_hex.str();
+        // }
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
 json ActionExecutor::analyze_function(ea_t address, bool include_disasm, bool include_decomp, int max_xrefs) {
     json result;
     try {

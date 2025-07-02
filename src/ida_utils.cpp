@@ -334,6 +334,78 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
     });
 }
 
+std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
+    return execute_sync_wrapper([address, size, bytes_per_line]() {
+        // Validate input
+        if (!IDAValidators::is_valid_address(address)) {
+            throw std::invalid_argument("Invalid address: " + format_address_hex(address));
+        }
+
+        if (size == 0 || size > 0x10000) { // 64KB max for safety
+            throw std::invalid_argument("Invalid size: must be between 1 and 65536 bytes");
+        }
+
+        // Check if we can read the full range
+        if (!is_mapped(address) || !is_mapped(address + size - 1)) {
+            throw std::invalid_argument("Data range is not fully mapped");
+        }
+
+        // Read the bytes
+        bytevec_t bytes;
+        bytes.resize(size);
+        if (!get_bytes(&bytes[0], size, address)) {
+            throw std::runtime_error("Failed to read data");
+        }
+
+        // Format as hex dump
+        std::stringstream result;
+
+        for (size_t offset = 0; offset < size; offset += bytes_per_line) {
+            // Address column
+            result << std::hex << std::setfill('0') << std::setw(8)
+                   << (address + offset) << ":  ";
+
+            // Hex bytes column
+            size_t line_bytes = std::min(static_cast<size_t>(bytes_per_line),
+                                         size - offset);
+
+            for (size_t i = 0; i < bytes_per_line; i++) {
+                if (i < line_bytes) {
+                    result << std::hex << std::setfill('0') << std::setw(2)
+                           << static_cast<int>(bytes[offset + i]) << " ";
+                } else {
+                    result << "   "; // padding for incomplete lines
+                }
+
+                // Extra space in the middle for readability
+                if (i == 7 && bytes_per_line == 16) {
+                    result << " ";
+                }
+            }
+
+            result << " |";
+
+            // ASCII column
+            for (size_t i = 0; i < line_bytes; i++) {
+                unsigned char ch = bytes[offset + i];
+                if (ch >= 32 && ch < 127) {
+                    result << ch;
+                } else {
+                    result << '.';
+                }
+            }
+
+            result << "|";
+
+            if (offset + bytes_per_line < size) {
+                result << "\n";
+            }
+        }
+
+        return result.str();
+    });
+}
+
 // Unified name setter
 bool IDAUtils::set_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {

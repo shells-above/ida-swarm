@@ -289,6 +289,48 @@ public:
     }
 };
 
+// Dump data tool
+class DumpDataTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "dump_data";
+    }
+
+    std::string description() const override {
+        return "Dump memory data at the given address in hexadecimal format. Use this if get_data_info isn't returning the expected information for a global due to it lacking a type. Returns hex dump with ASCII representation.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The starting address to dump")
+            .add_integer("size", "Number of bytes to dump (max 65536)")
+            .add_integer("bytes_per_line", "Bytes per line in the dump (defaults to 16)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            int size = input.at("size");
+            int bytes_per_line = input.value("bytes_per_line", 16);
+
+            if (size <= 0 || size > 65536) {
+                return ToolResult::failure("Size must be between 1 and 65536 bytes");
+            }
+
+            if (bytes_per_line <= 0 || bytes_per_line > 32) {
+                return ToolResult::failure("Bytes per line must be between 1 and 32");
+            }
+
+            return ToolResult::success(executor->dump_data(address, size, bytes_per_line));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
 // Analyze function tool (replaces decompilation/disassembly tools)
 class AnalyzeFunctionTool : public Tool {
 public:
@@ -998,6 +1040,7 @@ public:
         register_tool_type<GetXrefsTool>(memory, executor);
         register_tool_type<GetFunctionInfoTool>(memory, executor);
         register_tool_type<GetDataInfoTool>(memory, executor);
+        register_tool_type<DumpDataTool>(memory, executor);
         register_tool_type<AnalyzeFunctionTool>(memory, executor);
 
         // Search tools
