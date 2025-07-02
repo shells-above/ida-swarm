@@ -5,12 +5,14 @@
 #ifndef DEEP_ANALYSIS_SYSTEM_H
 #define DEEP_ANALYSIS_SYSTEM_H
 
-#include "actions.h"
 #include "common.h"
 #include "memory.h"
 #include "anthropic_api.h"
 
 namespace llm_re {
+
+// Forward declaration
+class ActionExecutor;
 
 // Deep analysis collection state
 struct DeepAnalysisCollection {

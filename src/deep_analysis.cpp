@@ -3,9 +3,9 @@
 //
 
 #include "deep_analysis.h"
+#include "actions.h"
 
 #include <utility>
-#include "actions.h"
 
 namespace llm_re {
 
