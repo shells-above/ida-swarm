@@ -20,7 +20,6 @@ namespace llm_re {
             j["api"]["max_tokens"] = api.max_tokens;
             j["api"]["max_thinking_tokens"] = api.max_thinking_tokens;
             j["api"]["temperature"] = api.temperature;
-            j["api"]["enable_prompt_caching"] = api.enable_prompt_caching;
 
             // Agent settings
             j["agent"]["max_iterations"] = agent.max_iterations;
@@ -73,7 +72,6 @@ namespace llm_re {
                 api.max_tokens = j["api"].value("max_tokens", api.max_tokens);
                 api.max_thinking_tokens = j["api"].value("max_thinking_tokens", api.max_thinking_tokens);
                 api.temperature = j["api"].value("temperature", api.temperature);
-                api.enable_prompt_caching = j["api"].value("enable_prompt_caching", api.enable_prompt_caching);
             }
 
             // Agent settings
@@ -1389,10 +1387,6 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     enable_deep_analysis_check->setChecked(false);
     model_layout->addRow("", enable_deep_analysis_check);
 
-    prompt_caching_check = new QCheckBox("Enable prompt caching");
-    prompt_caching_check->setChecked(true);
-    model_layout->addRow("", prompt_caching_check);
-
     tabs->addTab(model_tab, "Model");
 
     // UI Settings Tab
@@ -1490,7 +1484,6 @@ void ConfigWidget::load_settings(const Config& config) {
     enable_thinking_check->setChecked(config.agent.enable_thinking);
     auto_enable_interleaved_thinking_check->setChecked(config.agent.auto_enable_interleaved_thinking);
     enable_deep_analysis_check->setChecked(config.agent.enable_deep_analysis);
-    prompt_caching_check->setChecked(config.api.enable_prompt_caching);
 
     log_buffer_spin->setValue(config.ui.log_buffer_size);
     auto_scroll_check->setChecked(config.ui.auto_scroll);
@@ -1522,7 +1515,6 @@ void ConfigWidget::save_settings(Config& config) {
     config.agent.enable_thinking = enable_thinking_check->isChecked();
     config.agent.auto_enable_interleaved_thinking = auto_enable_interleaved_thinking_check->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check->isChecked();
-    config.api.enable_prompt_caching = prompt_caching_check->isChecked();
 
     config.ui.log_buffer_size = log_buffer_spin->value();
     config.ui.auto_scroll = auto_scroll_check->isChecked();

@@ -213,17 +213,16 @@ private:
     std::function<void(const std::string&, const std::string&, const json&)> tool_started_callback_;
     std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
 
-    // System prompt with multiple sections for better caching
-    static constexpr const char* SYSTEM_PROMPT_INSTRUCTIONS = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
+    // System prompt
+    static constexpr const char* SYSTEM_PROMPT = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
 
 You have access to various tools to examine the binary:
 - Cross-reference tools to trace function calls and data usage
 - Decompilation and disassembly tools to understand code
 - Pattern matching to find specific code constructs
 - String analysis to understand functionality
-- Memory tools to save and query your findings)";
+- Memory tools to save and query your findings
 
-    static constexpr const char* SYSTEM_PROMPT_GUIDELINES = R"(
 Guidelines:
 1. Start by understanding the overall structure of what you're analyzing
 2. Use cross-references to trace how functions and data are connected
@@ -503,6 +502,13 @@ private:
         }
     }
 
+    // Cache Strategy:
+    // We use 3 of the 4 available cache breakpoints:
+    // 1. Tools (static, rarely changes)
+    // 2. System prompt (static, rarely changes)
+    // 3. Conversation checkpoint (moves with each iteration)
+    // This leaves 1 breakpoint available for future use
+
     // Process new task
     void process_new_task(const std::string& task) {
         // Clear conversation for new task
@@ -520,21 +526,25 @@ private:
             log(LogLevel::INFO, "Interleaved thinking enabled with budget: " + std::to_string(thinking_budget));
         }
 
-        // Build initial request with multiple cache breakpoints
-        api::ChatRequest request = api::ChatRequestBuilder()
-                .with_model(config_.api.model)
-                .with_multiple_system_prompts({
-                    {SYSTEM_PROMPT_INSTRUCTIONS, true},  // First section cached
-                    {SYSTEM_PROMPT_GUIDELINES, true}     // Second section cached separately
-                })
-                .with_tools(tool_registry_)
-                .with_max_tokens(config_.api.max_tokens)
-                .with_max_thinking_tokens(thinking_budget)
-                .with_temperature(config_.api.temperature)
-                .enable_thinking(config_.agent.enable_thinking)
-                .enable_interleaved_thinking(enable_interleaved)
-                .add_message(messages::Message::user_text("Please analyze the binary to answer: " + task))
-                .build();
+        // Build initial request with cache control on tools and system
+        api::ChatRequestBuilder builder;
+        builder.with_model(config_.api.model)
+               .with_system_prompt(SYSTEM_PROMPT)
+               .with_max_tokens(config_.api.max_tokens)
+               .with_max_thinking_tokens(thinking_budget)
+               .with_temperature(config_.api.temperature)
+               .enable_thinking(config_.agent.enable_thinking)
+               .enable_interleaved_thinking(enable_interleaved);
+
+        // Add tools with caching enabled (cache control added automatically in with_tools())
+        if (tool_registry_.has_tools()) {
+            builder.with_tools(tool_registry_);
+        }
+
+        // Add initial user message
+        builder.add_message(messages::Message::user_text("Please analyze the binary to answer: " + task));
+
+        api::ChatRequest request = builder.build();
 
         // Save initial state
         saved_state_.request = request;
@@ -545,6 +555,8 @@ private:
         // Run analysis loop
         run_analysis_loop();
     }
+
+
 
     // Process resume
     void process_resume() {
@@ -619,61 +631,78 @@ private:
         return false;
     }
 
-    void apply_incremental_caching_to_saved_state() {
-        if (saved_state_.request.messages.empty()) return;
+    void apply_incremental_caching() {
+        if (saved_state_.request.messages.size() < 2) {
+            return;
+        }
 
-        // Find the last message to cache (excluding the very last one which is new)
+        // IMPORTANT: We can only have 4 cache breakpoints total
+        // We already use 2 for tools and system prompt, so we can only add 2 more
+
+        // First, remove any existing cache controls from messages to avoid exceeding limit
+        for (auto& msg : saved_state_.request.messages) {
+            messages::Message new_msg(msg.role());
+            for (const auto& content : msg.contents()) {
+                // Clone content without cache control
+                if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
+                    new_msg.add_content(std::make_unique<messages::TextContent>(text->text));
+                } else if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(content.get())) {
+                    new_msg.add_content(std::make_unique<messages::ToolResultContent>(
+                        tool_result->tool_use_id,
+                        tool_result->content,
+                        tool_result->is_error
+                        // Explicitly no cache control
+                    ));
+                } else {
+                    new_msg.add_content(content->clone());
+                }
+            }
+            msg = std::move(new_msg);
+        }
+
+        // Now add cache control only to the LAST tool result message
+        // This creates a single moving cache point for the conversation
         int cache_position = -1;
-
-        // We want to cache up to but not including the most recent message
-        for (int i = saved_state_.request.messages.size() - 2; i >= 0; i--) {
+        for (int i = saved_state_.request.messages.size() - 1; i >= 0; i--) {
             const messages::Message& msg = saved_state_.request.messages[i];
 
-            if (msg.role() == messages::Role::Assistant) {
-                cache_position = i;
-                break;
-            } else if (msg.role() == messages::Role::User && has_tool_results(msg)) {
+            // Find the last user message with tool results
+            if (msg.role() == messages::Role::User && has_tool_results(msg)) {
                 cache_position = i;
                 break;
             }
         }
 
         if (cache_position >= 0) {
-            // Modify the message IN PLACE in saved_state
-            messages::Message& msg_to_cache = saved_state_.request.messages[cache_position];
+            // Create a new message with cache control on the last content block
+            messages::Message& msg_to_modify = saved_state_.request.messages[cache_position];
 
-            auto& contents = msg_to_cache.mutable_contents();
-            if (!contents.empty()) {
-                // Find the last cacheable content block
-                for (auto it = contents.rbegin(); it != contents.rend(); ++it) {
-                    // Skip thinking blocks
-                    if (dynamic_cast<messages::ThinkingContent*>(it->get()) ||
-                        dynamic_cast<messages::RedactedThinkingContent*>(it->get())) {
-                        continue;
-                    }
+            // Clone the message and add cache control to the last tool result
+            messages::Message new_msg(msg_to_modify.role());
+            auto& contents = msg_to_modify.contents();
 
-                    // Replace with cached version
-                    if (auto* text = dynamic_cast<messages::TextContent*>(it->get())) {
-                        *it = std::make_unique<messages::TextContent>(
-                            text->text,
-                            messages::CacheControl{messages::CacheControl::Type::Ephemeral}
-                        );
-                        break;
-                    } else if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(it->get())) {
-                        *it = std::make_unique<messages::ToolResultContent>(
+            for (size_t i = 0; i < contents.size(); i++) {
+                if (i == contents.size() - 1) {
+                    // Last content block - add cache control
+                    if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(contents[i].get())) {
+                        new_msg.add_content(std::make_unique<messages::ToolResultContent>(
                             tool_result->tool_use_id,
                             tool_result->content,
                             tool_result->is_error,
                             messages::CacheControl{messages::CacheControl::Type::Ephemeral}
-                        );
-                        break;
+                        ));
+                    } else {
+                        new_msg.add_content(contents[i]->clone());
                     }
+                } else {
+                    new_msg.add_content(contents[i]->clone());
                 }
             }
 
-            log(LogLevel::DEBUG, std::format("Added cache control to {} message at position {} (persistent)",
-                msg_to_cache.role() == messages::Role::Assistant ? "assistant" : "user",
-                cache_position));
+            // Replace the message
+            saved_state_.request.messages[cache_position] = std::move(new_msg);
+
+            log(LogLevel::DEBUG, std::format("Moved cache control to position {} (removed from earlier positions)", cache_position));
         }
     }
 
@@ -689,13 +718,12 @@ private:
 
             log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
-            // Apply incremental caching BEFORE creating the request copy
-            if (iteration > 1 && config_.api.enable_prompt_caching) {
-                // Apply cache control to the SAVED state, not a copy
-                apply_incremental_caching_to_saved_state();
+            // Apply caching for continuation
+            if (iteration > 1) {
+                apply_incremental_caching();
             }
 
-            // NOW create request for this iteration
+            // Create request for this iteration
             api::ChatRequest current_request = saved_state_.request;
 
             // Send request
@@ -735,15 +763,16 @@ private:
             // Process tool calls
             std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
-            // Add tool results to conversation
-            // Combine tool results into a single user message for better caching
+            // When adding tool results, combine them but don't add cache control here
             if (!tool_results.empty()) {
                 messages::Message combined_results = messages::Message(messages::Role::User);
+
                 for (const messages::Message& result : tool_results) {
                     for (const std::unique_ptr<messages::Content>& content: result.contents()) {
                         combined_results.add_content(content->clone());
                     }
                 }
+
                 saved_state_.request.messages.push_back(combined_results);
                 conversation_.add_message(combined_results);
             }
@@ -959,17 +988,7 @@ private:
         ss << "[Iteration " << iteration << "] ";
         ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
 
-        if (usage.cache_read_tokens > 0) {
-            ss << " [" << usage.cache_read_tokens << " cached";
-
-            // Calculate and show cache hit rate for this request
-            double hit_rate = (double)usage.cache_read_tokens / (usage.cache_read_tokens + usage.input_tokens);
-            ss << ", " << std::fixed << std::setprecision(1) << (hit_rate * 100) << "% hit rate]";
-        }
-
-        if (usage.cache_creation_tokens > 0) {
-            ss << " [" << usage.cache_creation_tokens << " cache write]";
-        }
+        ss << " [" << usage.cache_read_tokens << " cache read, " << usage.cache_creation_tokens << " cache write]";
 
         ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << " out";
         ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();

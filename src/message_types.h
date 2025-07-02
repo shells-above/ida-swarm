@@ -406,13 +406,9 @@ public:
         return false;
     }
 
-    static Message system(const std::string& text, bool cache = false) {
+    static Message system(const std::string& text) {
         Message msg(Role::System);
-        if (cache) {
-            msg.add_content(std::make_unique<TextContent>(text, CacheControl{CacheControl::Type::Ephemeral}));
-        } else {
-            msg.add_content(std::make_unique<TextContent>(text));
-        }
+        msg.add_content(std::make_unique<TextContent>(text, CacheControl{CacheControl::Type::Ephemeral}));
         return msg;
     }
 

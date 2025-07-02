@@ -167,7 +167,6 @@ struct TokenUsage {
 // System prompt with cache control
 struct SystemPrompt {
     std::string text;
-    bool enable_cache = true;
 
     json to_json() const {
         if (text.empty()) return json();
@@ -178,9 +177,7 @@ struct SystemPrompt {
             {"text", text}
         };
 
-        if (enable_cache) {
-            system_obj["cache_control"] = {{"type", "ephemeral"}};
-        }
+        system_obj["cache_control"] = {{"type", "ephemeral"}};
 
         system_array.push_back(system_obj);
         return system_array;
@@ -444,43 +441,8 @@ public:
         return *this;
     }
 
-    ChatRequestBuilder& with_system_prompt(const std::string& prompt, bool cache = true) {
-        request.system_prompt = {prompt, cache};
-        return *this;
-    }
-
-    ChatRequestBuilder& with_multiple_system_prompts(const std::vector<std::pair<std::string, bool>>& prompts) {
-        // Clear existing system prompt
-        request.system_prompt = {};
-
-        // Build multiple system prompts with cache control
-        json system_array = json::array();
-        for (size_t i = 0; i < prompts.size(); ++i) {
-            const auto& [text, enable_cache] = prompts[i];
-            json system_obj = {
-                {"type", "text"},
-                {"text", text}
-            };
-
-            // Add cache control to create separate cache breakpoints
-            if (enable_cache) {
-                system_obj["cache_control"] = {{"type", "ephemeral"}};
-            }
-
-            system_array.push_back(system_obj);
-        }
-
-        // Store as a single concatenated system prompt internally
-        // but use the json array for the API request
-        std::string combined_text;
-        for (const auto& [text, _] : prompts) {
-            combined_text += text;
-        }
-        request.system_prompt = {combined_text, true};
-
-        // Store the multiple prompts for later use in to_json
-        request.multiple_system_prompts = system_array;
-
+    ChatRequestBuilder& with_system_prompt(const std::string& prompt) {
+        request.system_prompt = {prompt};
         return *this;
     }
 
@@ -495,11 +457,6 @@ public:
     }
 
     ChatRequestBuilder& with_tools(const tools::ToolRegistry& registry);
-
-    ChatRequestBuilder& with_tool_definitions(const std::vector<json>& tools) {
-        request.tool_definitions = tools;
-        return *this;
-    }
 
     ChatRequestBuilder& with_max_tokens(int tokens) {
         request.max_tokens = tokens;

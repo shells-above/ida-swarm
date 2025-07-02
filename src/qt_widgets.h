@@ -52,7 +52,6 @@ namespace llm_re {
             int max_tokens = 8192;
             int max_thinking_tokens = 2048;
             double temperature = 0.0;
-            bool enable_prompt_caching = true;
         } api;
 
         struct AgentSettings {
@@ -334,7 +333,6 @@ class ConfigWidget : public QWidget {
     QCheckBox* enable_thinking_check;
     QCheckBox* auto_enable_interleaved_thinking_check;
     QCheckBox* enable_deep_analysis_check;
-    QCheckBox* prompt_caching_check;
 
     // UI settings
     QSpinBox* log_buffer_spin;
