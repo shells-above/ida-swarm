@@ -298,17 +298,16 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
             asize_t item_size = get_item_size(address);
             info.size = item_size;
 
-            if (item_size > 0 && item_size <= 1024) {
+            if (item_size > 0) {
                 bytevec_t bytes;
                 bytes.resize(item_size);
                 if (get_bytes(&bytes[0], item_size, address)) {
                     std::stringstream ss;
                     ss << std::hex << std::setfill('0');
-                    for (size_t i = 0; i < std::min(item_size, (asize_t)32); i++) {
+                    for (size_t i = 0; i < item_size; i++) {
                         ss << std::setw(2) << static_cast<int>(bytes[i]);
                         if (i < item_size - 1) ss << " ";
                     }
-                    if (item_size > 32) ss << "...";
                     info.value = ss.str();
                     info.type = "bytes";
                 }
@@ -318,10 +317,9 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
             info.size = 0;
         }
 
-        // Get xrefs (limited to 20)
+        // Get all xrefs
         xrefblk_t xb;
-        int count = 0;
-        for (bool ok = xb.first_to(address, XREF_ALL); ok && count < 20; ok = xb.next_to()) {
+        for (bool ok = xb.first_to(address, XREF_ALL); ok; ok = xb.next_to()) {
             qstring xref_name;
             std::string name_str;
             if (get_func_name(&xref_name, xb.from) > 0) {
@@ -330,7 +328,6 @@ DataInfo IDAUtils::get_data_info(ea_t address) {
                 name_str = xref_name.c_str();
             }
             info.xrefs_to.push_back({xb.from, name_str});
-            count++;
         }
 
         return info;
