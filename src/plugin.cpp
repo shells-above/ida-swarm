@@ -11,9 +11,6 @@
 
 namespace llm_re {
 
-// Plugin flags
-constexpr int PLUGIN_FLAGS = PLUGIN_FIX;
-
 // Forward declaration
 class llm_plugin_t;
 static llm_plugin_t* g_plugin = nullptr;
@@ -369,31 +366,17 @@ static plugmod_t* idaapi init() {
     return g_plugin;
 }
 
-static void idaapi term() {
-    if (g_plugin) {
-        delete g_plugin;
-        g_plugin = nullptr;
-    }
-}
-
-static bool idaapi run(size_t arg) {
-    if (g_plugin) {
-        return g_plugin->run(arg);
-    }
-    return false;
-}
-
 } // namespace llm_re
 
 // Plugin description - must be in global namespace for IDA to load it
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
-    llm_re::PLUGIN_FLAGS,
+    PLUGIN_FIX | PLUGIN_MULTI,
     llm_re::init,
-    llm_re::term,
-    llm_re::run,
+    nullptr,
+    nullptr,
     "LLM Reverse Engineering Agent",
     "AI-powered reverse engineering agent",
     "LLM RE Agent",
-    "Ctrl+Shift+L"
+    ""
 };
