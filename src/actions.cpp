@@ -542,17 +542,20 @@ json ActionExecutor::search_named_globals(const std::string& pattern, bool is_re
     return result;
 }
 
-json ActionExecutor::get_named_globals() {
+json ActionExecutor::get_named_globals(int max_count) {
     json result;
     try {
         std::vector<std::pair<ea_t, std::string>> globals = IDAUtils::get_named_globals();
         result["success"] = true;
         json globals_json = json::array();
+        int count = 0;
         for (const auto& global : globals) {
+            if (count >= max_count) break;
             json global_obj;
             global_obj["address"] = HexAddress(global.first);
             global_obj["name"] = global.second;
             globals_json.push_back(global_obj);
+            count++;
         }
         result["globals"] = globals_json;
     } catch (const std::exception& e) {

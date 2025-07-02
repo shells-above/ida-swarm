@@ -705,12 +705,14 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder().build();
+        return ParameterBuilder()
+            .add_integer("max_count", "Max number of globals to return")
+            .build();
     }
 
     ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_named_globals());
+            return ToolResult::success(executor->get_named_globals(input.at("max_count")));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
