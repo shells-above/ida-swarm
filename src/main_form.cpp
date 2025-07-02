@@ -843,9 +843,11 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
                 json usage = msg_json["usage"];
                 int input = usage.value("input_tokens", 0);
                 int output = usage.value("output_tokens", 0);
-                int total = input + output;
+                int cache_read = usage.value("cache_read_input_tokens", 0);
+                int cache_write = usage.value("cache_creation_input_tokens", 0);
+                int total = input + output + cache_read + cache_write;
                 
-                token_label_->setText(QString("Tokens: %1 (%2 in, %3 out)").arg(total).arg(input).arg(output));
+                token_label_->setText(QString("Tokens: %1 (%2 in, %3 out, %4 cache read, %5 cache write)").arg(total).arg(input).arg(output).arg(cache_read).arg(cache_write));
             }
         } catch (const std::exception& e) {
             log(LogLevel::ERROR, "Failed to parse message: " + std::string(e.what()));
