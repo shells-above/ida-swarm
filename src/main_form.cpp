@@ -442,6 +442,14 @@ void MainForm::setup_agent() {
                                   Q_ARG(QString, QString::fromStdString(content_str)));
     });
 
+    agent_->set_tool_started_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input) {
+        QMetaObject::invokeMethod(this, "on_agent_tool_started",
+                                 Qt::QueuedConnection,
+                                 Q_ARG(QString, QString::fromStdString(tool_id)),
+                                 Q_ARG(QString, QString::fromStdString(tool_name)),
+                                 Q_ARG(QString, QString::fromStdString(input.dump())));
+    });
+
     agent_->set_tool_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input, const json& result) {
         QMetaObject::invokeMethod(this, "on_agent_tool_executed",
                                  Qt::QueuedConnection,
@@ -847,12 +855,23 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
     iteration_label_->setText(QString("Iteration: %1").arg(current_iteration_));
 }
 
-void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result) {
+void MainForm::on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input) {
     try {
         json input_json = json::parse(input.toStdString());
+        
+        // Add tool call to UI with "Running..." status
+        tool_execution_->add_tool_call(tool_id.toStdString(), tool_name.toStdString(), input_json);
+        
+    } catch (const std::exception& e) {
+        log(LogLevel::ERROR, "Failed to parse tool start: " + std::string(e.what()));
+    }
+}
+
+void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result) {
+    try {
         json result_json = json::parse(result.toStdString());
 
-        tool_execution_->add_tool_call(tool_id.toStdString(), tool_name.toStdString(), input_json);
+        // Update the existing tool call with the result
         tool_execution_->update_tool_result(tool_id.toStdString(), result_json);
 
         // Add timeline event

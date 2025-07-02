@@ -187,6 +187,7 @@ private:
     std::function<void(LogLevel, const std::string&)> log_callback_;
     std::function<void(const std::string&, const json&, int)> message_log_callback_;
     std::function<void(const std::string&)> final_report_callback_;
+    std::function<void(const std::string&, const std::string&, const json&)> tool_started_callback_;
     std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
 
     // System prompt
@@ -340,6 +341,10 @@ public:
 
     void set_final_report_callback(std::function<void(const std::string&)> callback) {
         final_report_callback_ = callback;
+    }
+
+    void set_tool_started_callback(std::function<void(const std::string&, const std::string&, const json&)> callback) {
+        tool_started_callback_ = callback;
     }
 
     void set_tool_callback(std::function<void(const std::string&, const std::string&, const json&, const json&)> callback) {
@@ -592,6 +597,11 @@ private:
 
             // Track tool call
             conversation_.track_tool_call(tool_use->id, tool_use->name, iteration);
+
+            // Call tool started callback
+            if (tool_started_callback_) {
+                tool_started_callback_(tool_use->id, tool_use->name, tool_use->input);
+            }
 
             // Execute tool
             messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);

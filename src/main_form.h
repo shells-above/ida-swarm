@@ -98,6 +98,7 @@ private slots:
     // Agent callbacks
     void on_agent_log(int level, const QString& message);
     void on_agent_message(const QString& type, const QString& content);
+    void on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input);
     void on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
     void on_agent_progress(int iteration, int total_tokens);

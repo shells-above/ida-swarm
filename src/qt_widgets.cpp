@@ -440,6 +440,11 @@ ToolExecutionWidget::ToolExecutionWidget(QWidget* parent) : QWidget(parent) {
 
     result_viewer = new QTextBrowser();
     result_viewer->setFont(QFont("Consolas", 9));
+    
+    // Fix scrollbar issue: ensure horizontal scrollbar doesn't obscure content
+    result_viewer->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    result_viewer->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    
     right_layout->addWidget(result_viewer);
 
     // Progress section
@@ -540,7 +545,7 @@ void ToolExecutionWidget::on_item_selected() {
         <html>
         <head>
         <style>
-            body { background-color: %1; color: %2; font-family: Arial, sans-serif; }
+            body { background-color: %1; color: %2; font-family: Arial, sans-serif; padding-bottom: 20px; }
             pre { background-color: %3; color: %2; padding: 10px; border-radius: 5px; overflow-x: auto; }
             h3, h4 { color: %2; }
             b { color: %2; }
