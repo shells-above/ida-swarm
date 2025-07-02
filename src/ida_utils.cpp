@@ -745,7 +745,7 @@ bool IDAUtils::add_disassembly_comment(ea_t address, const std::string& comment)
         }
 
         return set_cmt(address, comment.c_str(), false);
-    });
+    }, MFF_WRITE);
 }
 
 bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) {
@@ -798,7 +798,7 @@ bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) 
         cfunc->refresh_func_ctext();
 
         return true;
-    });
+    }, MFF_WRITE);
 }
 
 bool IDAUtils::clear_disassembly_comment(ea_t address) {
@@ -809,7 +809,7 @@ bool IDAUtils::clear_disassembly_comment(ea_t address) {
         }
 
         return set_cmt(address, "", false);
-    });
+    }, MFF_WRITE);
 }
 
 bool IDAUtils::clear_pseudocode_comments(ea_t address) {
@@ -835,7 +835,7 @@ bool IDAUtils::clear_pseudocode_comments(ea_t address) {
         user_cmts_free(cmts);
 
         return true;
-    });
+    }, MFF_WRITE);
 }
 
 std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
