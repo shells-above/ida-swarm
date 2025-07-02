@@ -2474,7 +2474,7 @@ void MemoryDockWidget::refresh_views() {
     if (type_filter == "all") type_filter = "";
 
     // Get analyses of the selected type
-    auto analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "", -1);
+    auto analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "");
 
     for (const auto& entry : analyses) {
         // Only show entries that are insights (not regular analysis)
@@ -2494,7 +2494,7 @@ void MemoryDockWidget::refresh_views() {
     deep_analysis_list_->clear();
 
     // Get all deep analysis entries
-    auto deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "", -1);
+    auto deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
 
     // Sort by timestamp (most recent first)
     std::sort(deep_analyses.begin(), deep_analyses.end(),
