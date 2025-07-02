@@ -168,6 +168,29 @@ private:
     // Token tracking
     api::TokenTracker token_tracker_;
 
+    // Cache performance tracking
+    struct CacheStats {
+        int total_cache_hits = 0;
+        int total_cache_misses = 0;
+        int total_cache_writes = 0;
+        double total_cache_savings = 0.0;  // estimated cost savings from cache hits
+
+        double get_hit_rate() const {
+            int total = total_cache_hits + total_cache_misses;
+            return total > 0 ? (double)total_cache_hits / total : 0.0;
+        }
+
+        json to_json() const {
+            return {
+                {"cache_hits", total_cache_hits},
+                {"cache_misses", total_cache_misses},
+                {"cache_writes", total_cache_writes},
+                {"hit_rate", get_hit_rate()},
+                {"estimated_savings", total_cache_savings}
+            };
+        }
+    } cache_stats_;
+
     // Thread management
     qthread_t worker_thread_ = nullptr;
     std::atomic<bool> stop_requested_{false};
@@ -190,16 +213,17 @@ private:
     std::function<void(const std::string&, const std::string&, const json&)> tool_started_callback_;
     std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
 
-    // System prompt
-    static constexpr const char* SYSTEM_PROMPT_TEMPLATE = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
+    // System prompt with multiple sections for better caching
+    static constexpr const char* SYSTEM_PROMPT_INSTRUCTIONS = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
 
 You have access to various tools to examine the binary:
 - Cross-reference tools to trace function calls and data usage
 - Decompilation and disassembly tools to understand code
 - Pattern matching to find specific code constructs
 - String analysis to understand functionality
-- Memory tools to save and query your findings
+- Memory tools to save and query your findings)";
 
+    static constexpr const char* SYSTEM_PROMPT_GUIDELINES = R"(
 Guidelines:
 1. Start by understanding the overall structure of what you're analyzing
 2. Use cross-references to trace how functions and data are connected
@@ -364,6 +388,7 @@ public:
         j["current_task"] = state_.get_task();
         j["conversation"] = conversation_.to_json();
         j["tokens"] = token_tracker_.to_json();
+        j["cache_stats"] = cache_stats_.to_json();
         j["memory"] = memory_->export_memory_snapshot();
         j["has_saved_state"] = saved_state_.valid;
         if (saved_state_.valid) {
@@ -495,10 +520,13 @@ private:
             log(LogLevel::INFO, "Interleaved thinking enabled with budget: " + std::to_string(thinking_budget));
         }
 
-        // Build initial request
+        // Build initial request with multiple cache breakpoints
         api::ChatRequest request = api::ChatRequestBuilder()
                 .with_model(config_.api.model)
-                .with_system_prompt(SYSTEM_PROMPT_TEMPLATE, config_.api.enable_prompt_caching)
+                .with_multiple_system_prompts({
+                    {SYSTEM_PROMPT_INSTRUCTIONS, true},  // First section cached
+                    {SYSTEM_PROMPT_GUIDELINES, true}     // Second section cached separately
+                })
                 .with_tools(tool_registry_)
                 .with_max_tokens(config_.api.max_tokens)
                 .with_max_thinking_tokens(thinking_budget)
@@ -553,11 +581,42 @@ private:
         }
 
         // Add user message to saved request
-        saved_state_.request.messages.push_back(messages::Message::user_text(additional));
+        messages::Message continue_msg = messages::Message::user_text(additional);
+
+        // Check for cache invalidation scenario
+        if (saved_state_.request.enable_thinking && has_non_tool_result_content(continue_msg)) {
+            log(LogLevel::WARNING, "Non-tool-result user message will invalidate thinking block cache.");
+        }
+
+        saved_state_.request.messages.push_back(continue_msg);
         conversation_.add_message(saved_state_.request.messages.back());
 
         // Continue analysis
         run_analysis_loop();
+    }
+
+    // Helper to check if a message contains non-tool-result content
+    bool has_non_tool_result_content(const messages::Message& msg) const {
+        if (msg.role() != messages::Role::User) return false;
+
+        for (const auto& content : msg.contents()) {
+            if (!dynamic_cast<messages::ToolResultContent*>(content.get())) {
+                return true;  // Found non-tool-result content
+            }
+        }
+        return false;
+    }
+
+    // Helper to check if a message contains tool results
+    bool has_tool_results(const messages::Message& msg) const {
+        if (msg.role() != messages::Role::User) return false;
+
+        for (const auto& content : msg.contents()) {
+            if (dynamic_cast<messages::ToolResultContent*>(content.get())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Add cache control to the last content block of a message
@@ -610,17 +669,25 @@ private:
             // Create request for this iteration
             api::ChatRequest current_request = saved_state_.request;
 
-            // On iterations after the first, we want to enable incremental caching
-            // by adding cache_control to the last message
+            // Incremental caching
             if (iteration > 1 && !current_request.messages.empty()) {
-                // Get the last message and add cache control to its last content block
                 auto& last_msg = current_request.messages.back();
 
-                // Only add cache control to user messages containing tool results
-                // or assistant messages (to cache conversation history)
-                if (last_msg.role() == messages::Role::User ||
-                    last_msg.role() == messages::Role::Assistant) {
+                if (last_msg.role() == messages::Role::User) {
+                    // Only cache user messages with tool results
+                    if (has_tool_results(last_msg)) {
+                        add_cache_control_to_last_block(last_msg);
+                        log(LogLevel::DEBUG, "Adding cache control to user message with tool results");
+                    } else {
+                        // Warn about potential cache invalidation
+                        if (current_request.enable_thinking && has_non_tool_result_content(last_msg)) {
+                            log(LogLevel::WARNING, "User message without tool results may invalidate thinking cache");
+                        }
+                    }
+                } else if (last_msg.role() == messages::Role::Assistant) {
+                    // Always cache assistant messages for conversation continuity
                     add_cache_control_to_last_block(last_msg);
+                    log(LogLevel::DEBUG, "Adding cache control to assistant message");
                 }
             }
 
@@ -647,9 +714,10 @@ private:
 
             validate_thinking_preservation(response);
 
-            // Track token usage
+            // Track token usage with enhanced cache monitoring
             token_tracker_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
+            update_cache_stats(response.usage);
 
             // Add response to conversation and saved state
             // IMPORTANT: We must preserve the entire message including thinking blocks
@@ -680,9 +748,17 @@ private:
                 }
             }
 
-            // Check conversation length
+            // Check conversation length and provide cache efficiency info
+            // todo make this be based off context window, and when it gets too long it tells
+            // the llm to store all the information it gathered in BinaryMemory, and summarize it
+            // so the next llm 'chat' can see that and index the memory
+            // and then clears message history and resumes
             if (conversation_.message_count() > 200) {
-                log(LogLevel::WARNING, "Conversation getting long, consider starting a new analysis");
+                log(LogLevel::WARNING,
+                    std::format("Conversation getting long ({} messages). Cache hit rate: {:.1f}%",
+                        conversation_.message_count(),
+                        cache_stats_.get_hit_rate() * 100));
+                log(LogLevel::INFO, "Consider starting a new analysis for better performance");
             }
         }
 
@@ -692,6 +768,42 @@ private:
         } else if (task_complete) {
             state_.set_status(AgentState::Status::Completed);
         }
+    }
+
+    // Update cache statistics
+    void update_cache_stats(const api::TokenUsage& usage) {
+        if (usage.cache_read_tokens > 0) {
+            cache_stats_.total_cache_hits++;
+            // Estimate savings based on the difference in pricing
+            double saved = usage.cache_read_tokens / 1000000.0 * (get_input_price(usage.model) - get_cache_read_price(usage.model));
+            cache_stats_.total_cache_savings += saved;
+        } else if (usage.input_tokens > 0) {
+            cache_stats_.total_cache_misses++;
+        }
+
+        if (usage.cache_creation_tokens > 0) {
+            cache_stats_.total_cache_writes++;
+        }
+    }
+
+    double get_input_price(api::Model model) const {
+        switch (model) {
+            case api::Model::Opus4: return 15.0;
+            case api::Model::Sonnet4:
+            case api::Model::Sonnet37: return 3.0;
+            case api::Model::Haiku35: return 0.8;
+        }
+        return 0.0;
+    }
+
+    double get_cache_read_price(api::Model model) const {
+        switch (model) {
+            case api::Model::Opus4: return 1.5;
+            case api::Model::Sonnet4:
+            case api::Model::Sonnet37: return 0.30;
+            case api::Model::Haiku35: return 0.08;
+        }
+        return 0.0;
     }
 
     // Process tool calls from assistant message
@@ -831,7 +943,11 @@ private:
         ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
 
         if (usage.cache_read_tokens > 0) {
-            ss << " [" << usage.cache_read_tokens << " cached]";
+            ss << " [" << usage.cache_read_tokens << " cached";
+
+            // Calculate and show cache hit rate for this request
+            double hit_rate = (double)usage.cache_read_tokens / (usage.cache_read_tokens + usage.input_tokens);
+            ss << ", " << std::fixed << std::setprecision(1) << (hit_rate * 100) << "% hit rate]";
         }
 
         if (usage.cache_creation_tokens > 0) {
@@ -841,6 +957,14 @@ private:
         ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << " out";
         ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();
 
+        // Add overall cache statistics
+        if (cache_stats_.total_cache_hits + cache_stats_.total_cache_misses > 0) {
+            ss << " | Overall Cache: " << std::fixed << std::setprecision(1)
+               << (cache_stats_.get_hit_rate() * 100) << "% hit rate";
+            ss << ", $" << std::fixed << std::setprecision(4)
+               << cache_stats_.total_cache_savings << " saved";
+        }
+
         log(LogLevel::INFO, ss.str());
     }
 
@@ -848,6 +972,10 @@ public:
     // Tool registry access (for testing/extension)
     tools::ToolRegistry& get_tool_registry() { return tool_registry_; }
     const tools::ToolRegistry& get_tool_registry() const { return tool_registry_; }
+
+    // Cache statistics access
+    CacheStats get_cache_stats() const { return cache_stats_; }
+    void reset_cache_stats() { cache_stats_ = CacheStats{}; }
 };
 
 } // namespace llm_re

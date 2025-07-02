@@ -192,6 +192,7 @@ class ChatRequest {
 public:
     Model model = Model::Sonnet4;
     SystemPrompt system_prompt;
+    json multiple_system_prompts;  // for multiple cache breakpoints
     std::vector<messages::Message> messages;
     std::vector<json> tool_definitions;
     int max_tokens = 8192;
@@ -275,9 +276,13 @@ public:
         }
 
         // system
-        json system_json = system_prompt.to_json();
-        if (!system_json.is_null()) {
-            j["system"] = system_json;
+        if (!multiple_system_prompts.is_null() && !multiple_system_prompts.empty()) {
+            j["system"] = multiple_system_prompts;
+        } else {
+            json system_json = system_prompt.to_json();
+            if (!system_json.is_null()) {
+                j["system"] = system_json;
+            }
         }
 
         // messages
@@ -441,6 +446,41 @@ public:
 
     ChatRequestBuilder& with_system_prompt(const std::string& prompt, bool cache = true) {
         request.system_prompt = {prompt, cache};
+        return *this;
+    }
+
+    ChatRequestBuilder& with_multiple_system_prompts(const std::vector<std::pair<std::string, bool>>& prompts) {
+        // Clear existing system prompt
+        request.system_prompt = {};
+
+        // Build multiple system prompts with cache control
+        json system_array = json::array();
+        for (size_t i = 0; i < prompts.size(); ++i) {
+            const auto& [text, enable_cache] = prompts[i];
+            json system_obj = {
+                {"type", "text"},
+                {"text", text}
+            };
+
+            // Add cache control to create separate cache breakpoints
+            if (enable_cache) {
+                system_obj["cache_control"] = {{"type", "ephemeral"}};
+            }
+
+            system_array.push_back(system_obj);
+        }
+
+        // Store as a single concatenated system prompt internally
+        // but use the json array for the API request
+        std::string combined_text;
+        for (const auto& [text, _] : prompts) {
+            combined_text += text;
+        }
+        request.system_prompt = {combined_text, true};
+
+        // Store the multiple prompts for later use in to_json
+        request.multiple_system_prompts = system_array;
+
         return *this;
     }
 
