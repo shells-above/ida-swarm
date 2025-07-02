@@ -144,7 +144,7 @@ public:
     static std::vector<ea_t> get_function_data_refs(ea_t address, int max_count = -1);
 
     // Unified name setter
-    static bool set_name(ea_t address, const std::string& name);
+    static bool set_addr_name(ea_t address, const std::string& name);
 
     // Data operations (kept for compatibility)
     static std::pair<std::string, std::string> get_data(ea_t address);

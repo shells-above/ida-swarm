@@ -413,7 +413,7 @@ std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
 }
 
 // Unified name setter
-bool IDAUtils::set_name(ea_t address, const std::string& name) {
+bool IDAUtils::set_addr_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
         if (!IDAValidators::is_valid_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));

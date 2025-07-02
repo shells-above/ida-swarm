@@ -499,7 +499,7 @@ json ActionExecutor::get_xrefs(ea_t address, int max_results) {
 json ActionExecutor::set_name(ea_t address, const std::string& name) {
     json result;
     try {
-        bool success = IDAUtils::set_name(address, name);
+        bool success = IDAUtils::set_addr_name(address, name);
         result["success"] = success;
         if (!success) {
             result["error"] = "Failed to set name";
