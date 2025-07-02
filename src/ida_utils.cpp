@@ -429,7 +429,7 @@ bool IDAUtils::set_name(ea_t address, const std::string& name) {
         } else {
             return set_name(address, name.c_str());
         }
-    });
+    }, MFF_WRITE);
 }
 
 // Keep existing implementations for the following functions as they're still used:
