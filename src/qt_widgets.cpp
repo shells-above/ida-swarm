@@ -461,24 +461,26 @@ ToolExecutionWidget::ToolExecutionWidget(QWidget* parent) : QWidget(parent) {
             this, &ToolExecutionWidget::on_item_selected);
 }
 
-void ToolExecutionWidget::add_tool_call(const std::string& tool_name, const json& input) {
+void ToolExecutionWidget::add_tool_call(const std::string& tool_id, const std::string& tool_name, const json& input) {
     QTreeWidgetItem* item = new QTreeWidgetItem(execution_tree);
-    item->setText(0, QString::fromStdString(tool_name));
+    item->setText(0, QString::fromStdString(tool_name));  // Display tool name
     item->setText(1, "Running...");
     item->setText(2, QTime::currentTime().toString("hh:mm:ss"));
 
-    // Store input data and start time
-    item->setData(0, Qt::UserRole, QString::fromStdString(input.dump()));
-    item->setData(2, Qt::UserRole, QDateTime::currentDateTime());
+    // Store tool ID for matching and input data
+    item->setData(0, Qt::UserRole, QString::fromStdString(tool_id));  // Store tool ID for matching
+    item->setData(0, Qt::UserRole + 1, QString::fromStdString(input.dump()));  // Store input data
+    item->setData(2, Qt::UserRole, QDateTime::currentDateTime());  // Store start time
 
     execution_tree->scrollToItem(item);
 }
 
 void ToolExecutionWidget::update_tool_result(const std::string& tool_id, const json& result) {
-    // Find the most recent tool with matching name (or running status)
+    // Find the tool with exact matching ID
     for (int i = execution_tree->topLevelItemCount() - 1; i >= 0; --i) {
         QTreeWidgetItem* item = execution_tree->topLevelItem(i);
-        if (item->text(1) == "Running..." || item->text(0) == QString::fromStdString(tool_id)) {
+        QString stored_tool_id = item->data(0, Qt::UserRole).toString();
+        if (stored_tool_id == QString::fromStdString(tool_id)) {
             // Calculate duration
             QDateTime start_time = item->data(2, Qt::UserRole).toDateTime();
             int duration_ms = start_time.msecsTo(QDateTime::currentDateTime());
@@ -553,7 +555,7 @@ void ToolExecutionWidget::on_item_selected() {
     html += "<p><b>Duration:</b> " + item->text(3) + "</p>";
 
     // Input
-    QString input_str = item->data(0, Qt::UserRole).toString();
+    QString input_str = item->data(0, Qt::UserRole + 1).toString();
     if (!input_str.isEmpty()) {
         try {
             json input = json::parse(input_str.toStdString());

@@ -376,11 +376,6 @@ std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
                 } else {
                     result << "   "; // padding for incomplete lines
                 }
-
-                // Extra space in the middle for readability
-                if (i == 7 && bytes_per_line == 16) {
-                    result << " ";
-                }
             }
 
             result << " |";

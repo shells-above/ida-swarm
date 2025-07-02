@@ -442,19 +442,16 @@ void MainForm::setup_agent() {
                                   Q_ARG(QString, QString::fromStdString(content_str)));
     });
 
-    agent_->set_tool_callback([this](const std::string& tool, const json& input, const json& result) {
+    agent_->set_tool_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input, const json& result) {
         QMetaObject::invokeMethod(this, "on_agent_tool_executed",
                                  Qt::QueuedConnection,
-                                 Q_ARG(QString, QString::fromStdString(tool)),
-                                  Q_ARG(QString, QString::fromStdString(input.dump())),
+                                 Q_ARG(QString, QString::fromStdString(tool_id)),
+                                 Q_ARG(QString, QString::fromStdString(tool_name)),
+                                 Q_ARG(QString, QString::fromStdString(input.dump())),
                                  Q_ARG(QString, QString::fromStdString(result.dump())));
     });
 
     agent_->set_final_report_callback([this](const std::string& report) {
-        log(LogLevel::INFO, "=== FINAL REPORT ===");
-        log(LogLevel::INFO, report);
-        log(LogLevel::INFO, "===================");
-
         // Add as message to chat
         messages::Message msg = messages::Message::assistant_text(report);
         QMetaObject::invokeMethod(this, [this, msg]() {
@@ -850,20 +847,20 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
     iteration_label_->setText(QString("Iteration: %1").arg(current_iteration_));
 }
 
-void MainForm::on_agent_tool_executed(const QString& tool, const QString& input, const QString& result) {
+void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result) {
     try {
         json input_json = json::parse(input.toStdString());
         json result_json = json::parse(result.toStdString());
 
-        tool_execution_->add_tool_call(tool.toStdString(), input_json);
-        tool_execution_->update_tool_result(tool.toStdString(), result_json);
+        tool_execution_->add_tool_call(tool_id.toStdString(), tool_name.toStdString(), input_json);
+        tool_execution_->update_tool_result(tool_id.toStdString(), result_json);
 
         // Add timeline event
         ui::SessionTimelineWidget::Event event;
         event.timestamp = std::chrono::steady_clock::now();
         event.type = "tool";
-        event.description = "Executed: " + tool.toStdString();
-        event.metadata["tool"] = tool.toStdString();
+        event.description = "Executed: " + tool_name.toStdString();
+        event.metadata["tool"] = tool_name.toStdString();
         event.metadata["success"] = result_json.value("success", false);
         timeline_->add_event(event);
 

@@ -157,7 +157,7 @@ class ToolExecutionWidget : public QWidget {
 public:
     ToolExecutionWidget(QWidget* parent = nullptr);
 
-    void add_tool_call(const std::string& tool_name, const json& input);
+    void add_tool_call(const std::string& tool_id, const std::string& tool_name, const json& input);
     void update_tool_result(const std::string& tool_id, const json& result);
     void set_progress(int value, const std::string& status);
 

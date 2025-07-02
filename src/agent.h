@@ -187,7 +187,7 @@ private:
     std::function<void(LogLevel, const std::string&)> log_callback_;
     std::function<void(const std::string&, const json&, int)> message_log_callback_;
     std::function<void(const std::string&)> final_report_callback_;
-    std::function<void(const std::string&, const json&, const json&)> tool_callback_;
+    std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT_TEMPLATE = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
@@ -342,7 +342,7 @@ public:
         final_report_callback_ = callback;
     }
 
-    void set_tool_callback(std::function<void(const std::string&, const json&, const json&)> callback) {
+    void set_tool_callback(std::function<void(const std::string&, const std::string&, const json&, const json&)> callback) {
         tool_callback_ = callback;
     }
 
@@ -611,7 +611,7 @@ private:
                         break;
                     }
                 }
-                tool_callback_(tool_use->name, tool_use->input, result_json);
+                tool_callback_(tool_use->id, tool_use->name, tool_use->input, result_json);
             }
 
             // Special handling for final report
