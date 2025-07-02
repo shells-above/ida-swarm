@@ -8,6 +8,7 @@
 namespace llm_re {
 
 // New function to parse address lists (handles both single values and arrays)
+// New function to parse address lists (handles both single values and arrays)
 std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, const std::string& key) {
     if (!params.contains(key)) {
         throw std::invalid_argument("Missing parameter: " + key);
@@ -35,8 +36,8 @@ std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, c
 
             // Check if it's a JSON array string
             if (!str.empty() && str[0] == '[' && str.back() == ']') {
+                // First try to parse as JSON
                 try {
-                    // Parse the string as JSON
                     json array_json = json::parse(str);
                     if (array_json.is_array()) {
                         // Process each element in the parsed array
@@ -44,15 +45,48 @@ std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, c
                             ea_t addr = parse_single_address_value(element);
                             addresses.push_back(addr);
                         }
-                    } else {
-                        // Not a valid array, treat as single address
-                        ea_t addr = parse_single_address_value(param);
-                        addresses.push_back(addr);
+                        return addresses;
                     }
                 } catch (const json::parse_error& e) {
-                    // Failed to parse as JSON array, treat as single address
-                    ea_t addr = parse_single_address_value(param);
-                    addresses.push_back(addr);
+                    // JSON parse failed - likely due to hex literals
+                    // Fall through to manual parsing
+                }
+
+                // Manual parsing of comma-separated list in brackets
+                // Remove the brackets
+                std::string list_content = str.substr(1, str.length() - 2);
+
+                // Split by comma and parse each address
+                size_t pos = 0;
+                while (true) {
+                    // Find next comma or end of string
+                    size_t comma_pos = list_content.find(',', pos);
+
+                    // Extract the address string
+                    std::string addr_str;
+                    if (comma_pos == std::string::npos) {
+                        addr_str = list_content.substr(pos);
+                    } else {
+                        addr_str = list_content.substr(pos, comma_pos - pos);
+                    }
+
+                    // Trim whitespace from the address string
+                    addr_str.erase(addr_str.find_last_not_of(" \t\n\r\f\v") + 1);
+                    addr_str.erase(0, addr_str.find_first_not_of(" \t\n\r\f\v"));
+
+                    // Parse the address if not empty
+                    if (!addr_str.empty()) {
+                        // Create a JSON string value to pass to parse_single_address_value
+                        json addr_json = addr_str;
+                        ea_t addr = parse_single_address_value(addr_json);
+                        addresses.push_back(addr);
+                    }
+
+                    // Move to next address or break if done
+                    if (comma_pos == std::string::npos) {
+                        break;
+                    }
+                    pos = comma_pos + 1;
                 }
             } else {
                 // Regular string address
