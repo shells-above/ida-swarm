@@ -170,7 +170,6 @@ private:
     std::vector<api::TokenTracker> tracker_sessions_;  // we add to this the previous token_tracker when we hit context limit
 
     static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // Trigger consolidation at 150k
-    static constexpr int CONTEXT_WARNING_TOKENS = 120000; // Warn at 120k
 
     // Cache performance tracking
     struct CacheStats {
