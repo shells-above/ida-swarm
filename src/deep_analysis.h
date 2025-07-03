@@ -41,7 +41,7 @@ private:
     std::shared_ptr<BinaryMemory> memory_;
     DeepAnalysisCollection current_collection_;
     std::map<std::string, DeepAnalysisResult> completed_analyses_;
-    mutable std::mutex mutex_;
+    mutable qmutex_t mutex_;
 
     std::unique_ptr<api::AnthropicClient> deep_analysis_client_;
 
@@ -49,6 +49,11 @@ public:
     DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const std::string& api_key)
         : memory_(memory) {
         deep_analysis_client_ = std::make_unique<api::AnthropicClient>(api_key);
+        mutex_ = qmutex_create();
+    }
+
+    ~DeepAnalysisManager() {
+        qmutex_free(mutex_);
     }
 
     // Collection management

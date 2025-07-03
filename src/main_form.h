@@ -33,31 +33,6 @@ QT_END_NAMESPACE
 
 namespace llm_re {
 
-// Worker thread for agent execution
-class AgentWorker : public QObject {
-    Q_OBJECT
-
-public:
-    AgentWorker(REAgent* agent, const std::string& task) : agent_(agent), task_(task) {}
-
-    void setResumeMode(bool resume) { resume_mode_ = resume; }
-    void setContinueMode(bool cont) { continue_mode_ = cont; }
-
-public slots:
-    void process();
-
-signals:
-    void finished();
-    void error(const QString& error);
-    void progress(const QString& message);
-
-private:
-    REAgent* agent_;
-    std::string task_;
-    bool resume_mode_ = false;
-    bool continue_mode_ = false;
-};
-
 // Main window class
 class MainForm : public QMainWindow {
     Q_OBJECT
@@ -100,11 +75,9 @@ private slots:
     void on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input);
     void on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
-
-    // Worker thread
-    void on_worker_finished();
-    void on_worker_error(const QString& error);
-    void on_worker_progress(const QString& message);
+    void on_task_completed();
+    void on_task_paused();
+    void on_task_stopped();
 
     // UI updates
     void on_address_clicked(ea_t addr);
@@ -136,7 +109,6 @@ private:
     // Shutdown methods
     void prepare_shutdown();
     void cleanup_agent();
-    void cleanup_worker();
 
     // Helper methods
     void init_file_logging();
@@ -156,8 +128,6 @@ private:
     // Core components
     std::unique_ptr<REAgent> agent_;
     std::unique_ptr<Config> config_;
-    QThread* worker_thread_ = nullptr;
-    AgentWorker* worker_ = nullptr;
 
     // UI components - Main
     QTabWidget* main_tabs_;
@@ -221,6 +191,7 @@ private:
     std::vector<SessionInfo> sessions_;
     std::chrono::steady_clock::time_point session_start_;
     int current_iteration_ = 0;
+    QTimer* status_timer_ = nullptr;
 
     // Actions
     QAction* clear_action_;

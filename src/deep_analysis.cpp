@@ -10,7 +10,7 @@
 namespace llm_re {
 
 void DeepAnalysisManager::start_collection(const std::string& topic, const std::string& description) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     current_collection_ = DeepAnalysisCollection();
     current_collection_.topic = topic;
@@ -20,7 +20,7 @@ void DeepAnalysisManager::start_collection(const std::string& topic, const std::
 }
 
 void DeepAnalysisManager::add_to_collection(const std::string& key, const std::string& value) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     if (!current_collection_.is_active) {
         throw std::runtime_error("No active deep analysis collection. Call start_collection first.");
@@ -30,7 +30,7 @@ void DeepAnalysisManager::add_to_collection(const std::string& key, const std::s
 }
 
 void DeepAnalysisManager::add_function_to_collection(ea_t function_addr) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     if (!current_collection_.is_active) {
         throw std::runtime_error("No active deep analysis collection. Call start_collection first.");
@@ -45,17 +45,17 @@ void DeepAnalysisManager::add_function_to_collection(ea_t function_addr) {
 }
 
 bool DeepAnalysisManager::has_active_collection() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
     return current_collection_.is_active;
 }
 
 DeepAnalysisCollection DeepAnalysisManager::get_current_collection() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
     return current_collection_;
 }
 
 void DeepAnalysisManager::clear_collection() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
     current_collection_ = DeepAnalysisCollection();
 }
 
@@ -64,7 +64,7 @@ DeepAnalysisResult DeepAnalysisManager::execute_deep_analysis(
     std::shared_ptr<ActionExecutor> executor,
     std::function<void(const std::string&)> progress_callback) {
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     if (!current_collection_.is_active) {
         throw std::runtime_error("No active deep analysis collection to analyze");
@@ -175,7 +175,7 @@ void DeepAnalysisManager::store_analysis_result(const DeepAnalysisResult& result
 }
 
 std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analyses() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     std::vector<std::pair<std::string, std::string>> results;
 
@@ -210,7 +210,7 @@ std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analy
 }
 
 std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::string& key) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    qmutex_locker_t lock(mutex_);
 
     // Check loaded analyses first
     auto it = completed_analyses_.find(key);

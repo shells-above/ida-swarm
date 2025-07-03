@@ -9,10 +9,6 @@
 
 namespace llm_re {
 
-BinaryMemory::BinaryMemory() : current_focus(0) {}
-
-BinaryMemory::~BinaryMemory() {}
-
 int BinaryMemory::calculateDistance(ea_t from, ea_t to) const {
     if (from == to) return 0;
 
@@ -95,7 +91,7 @@ std::string BinaryMemory::generate_analysis_key(const std::string& base_key) con
 void BinaryMemory::store_analysis(const std::string& key, const std::string& content,
                                  std::optional<ea_t> address, const std::string& type,
                                  const std::vector<ea_t>& related_addresses) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     // Generate unique key if needed
     std::string actual_key = generate_analysis_key(key);
@@ -140,7 +136,7 @@ std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key,
                                                      std::optional<ea_t> address,
                                                      const std::string& type,
                                                      const std::string& pattern) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::vector<AnalysisEntry> results;
 
     // If specific key requested
@@ -238,7 +234,7 @@ std::string BinaryMemory::get_function_analysis(ea_t address, DetailLevel level)
 }
 
 MemoryContext BinaryMemory::get_memory_context(ea_t address, int radius) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     MemoryContext context;
 
     // Get functions within radius
@@ -276,7 +272,7 @@ MemoryContext BinaryMemory::get_memory_context(ea_t address, int radius) const {
 }
 
 std::vector<std::tuple<ea_t, std::string, DetailLevel>> BinaryMemory::get_analyzed_functions() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::vector<std::tuple<ea_t, std::string, DetailLevel>> result;
 
     for (const auto& [address, func_mem] : function_memories) {
@@ -289,7 +285,7 @@ std::vector<std::tuple<ea_t, std::string, DetailLevel>> BinaryMemory::get_analyz
 }
 
 std::vector<ea_t> BinaryMemory::find_functions_by_pattern(const std::string& pattern) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::vector<ea_t> results;
     std::set<ea_t> unique_results;
 
@@ -319,7 +315,7 @@ std::vector<ea_t> BinaryMemory::find_functions_by_pattern(const std::string& pat
 }
 
 std::vector<std::tuple<ea_t, std::string, std::string>> BinaryMemory::get_exploration_frontier() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::vector<std::tuple<ea_t, std::string, std::string>> frontier;
 
     // Get items from analysis queue
@@ -343,7 +339,7 @@ std::vector<std::tuple<ea_t, std::string, std::string>> BinaryMemory::get_explor
 }
 
 void BinaryMemory::mark_for_analysis(ea_t address, const std::string& reason, int priority) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     analysis_queue.push({address, reason, priority});
 
     // Initialize function memory if not exists
@@ -353,7 +349,7 @@ void BinaryMemory::mark_for_analysis(ea_t address, const std::string& reason, in
 }
 
 std::vector<std::tuple<ea_t, std::string, int>> BinaryMemory::get_analysis_queue() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::vector<std::tuple<ea_t, std::string, int>> result;
 
     std::priority_queue<AnalysisQueueItem> temp_queue = analysis_queue;
@@ -367,7 +363,7 @@ std::vector<std::tuple<ea_t, std::string, int>> BinaryMemory::get_analysis_queue
 }
 
 void BinaryMemory::set_current_focus(ea_t address) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     current_focus = address;
 
     // Initialize function memory if not exists
@@ -377,12 +373,12 @@ void BinaryMemory::set_current_focus(ea_t address) {
 }
 
 ea_t BinaryMemory::get_current_focus() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     return current_focus;
 }
 
 void BinaryMemory::analyze_cluster(const std::vector<ea_t>& addresses, const std::string& cluster_name, DetailLevel initial_level) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     // Create cluster analysis entry
     std::string cluster_key = "cluster_" + cluster_name;
@@ -401,7 +397,7 @@ void BinaryMemory::analyze_cluster(const std::vector<ea_t>& addresses, const std
 }
 
 std::map<ea_t, std::string> BinaryMemory::get_cluster_analysis(const std::string& cluster_name) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     std::map<ea_t, std::string> result;
 
     // Find cluster analysis
@@ -422,7 +418,7 @@ std::map<ea_t, std::string> BinaryMemory::get_cluster_analysis(const std::string
 }
 
 json BinaryMemory::export_memory_snapshot() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     json snapshot;
 
     // Export function memories
@@ -514,7 +510,7 @@ json BinaryMemory::export_memory_snapshot() const {
 }
 
 void BinaryMemory::import_memory_snapshot(const json& snapshot) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     // Clear existing data
     function_memories.clear();
@@ -629,7 +625,7 @@ DetailLevel BinaryMemory::get_required_detail_level(ea_t func_addr) const {
 }
 
 void BinaryMemory::propagate_new_information(ea_t updated_func) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     auto it = function_memories.find(updated_func);
     if (it == function_memories.end()) return;
@@ -651,7 +647,7 @@ void BinaryMemory::propagate_new_information(ea_t updated_func) {
 }
 
 void BinaryMemory::add_anchor_point(ea_t address) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     anchor_points.insert(address);
 
     auto it = function_memories.find(address);
@@ -661,12 +657,12 @@ void BinaryMemory::add_anchor_point(ea_t address) {
 }
 
 bool BinaryMemory::is_anchor_point(ea_t address) const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
     return anchor_points.find(address) != anchor_points.end();
 }
 
 void BinaryMemory::update_function_relationships(ea_t func_addr, const std::set<ea_t>& callers, const std::set<ea_t>& callees) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     auto& func = function_memories[func_addr];
     func.address = func_addr;
@@ -676,7 +672,7 @@ void BinaryMemory::update_function_relationships(ea_t func_addr, const std::set<
 }
 
 void BinaryMemory::update_function_refs(ea_t func_addr, const std::vector<std::string>& string_refs, const std::vector<ea_t>& data_refs) {
-    std::lock_guard<std::mutex> lock(memory_mutex);
+    qmutex_locker_t lock(memory_mutex);
 
     auto& func = function_memories[func_addr];
     func.address = func_addr;

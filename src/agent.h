@@ -29,9 +29,19 @@ public:
 private:
     std::atomic<Status> status_{Status::Idle};
     std::string current_task_;
-    mutable std::mutex mutex_;
+    mutable qmutex_t mutex_;
 
 public:
+    AgentState() {
+        mutex_ = qmutex_create();  // Initialize in constructor
+    }
+
+    ~AgentState() {
+        if (mutex_) {
+            qmutex_free(mutex_);
+        }
+    }
+
     Status get_status() const {
         return status_.load();
     }
@@ -41,17 +51,17 @@ public:
     }
 
     std::string get_task() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         return current_task_;
     }
 
     void set_task(const std::string& task) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         current_task_ = task;
     }
 
     void clear_task() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         current_task_.clear();
     }
 
@@ -66,37 +76,47 @@ class ConversationState {
     std::vector<messages::Message> messages_;
     std::map<std::string, int> tool_call_iterations_;     // tool_id -> iteration
     std::map<std::string, std::string> tool_call_names_;  // tool_id -> tool_name
-    mutable std::mutex mutex_;
+    mutable qmutex_t mutex_;
 
 public:
+    ConversationState() {
+        mutex_ = qmutex_create();
+    }
+
+    ~ConversationState() {
+        if (mutex_) {
+            qmutex_free(mutex_);
+        }
+    }
+
     void add_message(const messages::Message& msg) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         messages_.push_back(msg);
     }
 
     void add_messages(const std::vector<messages::Message>& msgs) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         messages_.insert(messages_.end(), msgs.begin(), msgs.end());
     }
 
     std::vector<messages::Message> get_messages() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         return messages_;
     }
 
     void track_tool_call(const std::string& tool_id, const std::string& tool_name, int iteration) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         tool_call_iterations_[tool_id] = iteration;
         tool_call_names_[tool_id] = tool_name;
     }
 
     std::map<std::string, int> get_tool_iterations() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         return tool_call_iterations_;
     }
 
     std::optional<std::string> get_tool_name(const std::string& tool_id) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         auto it = tool_call_names_.find(tool_id);
         if (it != tool_call_names_.end()) {
             return it->second;
@@ -105,19 +125,19 @@ public:
     }
 
     void clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         messages_.clear();
         tool_call_iterations_.clear();
         tool_call_names_.clear();
     }
 
     size_t message_count() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         return messages_.size();
     }
 
     json to_json() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        qmutex_locker_t lock(mutex_);
         json j;
         j["message_count"] = messages_.size();
         j["tool_calls"] = tool_call_iterations_.size();
@@ -250,6 +270,10 @@ Guidelines:
 7. When you have gathered enough information, submit your final report
 8. Do NOT use decimal to represent your function / data addresses, STICK TO HEXADECIMAL!
 
+When finding security vulnerabilities, the most important part is figuring out what the user could control, and what code that implicates.
+Once you find something promising, and you TRULY believe it is a promising angle, you may start spending more compute on the problem to make sure your reasoning is 100% sound (for example spend more time thinking, etc.)
+
+
 When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
 Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.
 Be systematic and thorough. Build your understanding incrementally.
@@ -318,7 +342,7 @@ public:
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config.api.api_key)) {
 
-        // Initialize semaphore
+        queue_mutex_ = qmutex_create();
         task_semaphore_ = qsem_create(nullptr, 0);
 
         // Register all tools
@@ -334,6 +358,9 @@ public:
         stop();
         if (task_semaphore_) {
             qsem_free(task_semaphore_);
+        }
+        if (queue_mutex_) {
+            qmutex_free(queue_mutex_);
         }
     }
 
@@ -358,7 +385,7 @@ public:
             qsem_post(task_semaphore_);
         }
 
-        // Wait for thread to finish
+        // Wait for thread to finish, might be waiting on API response
         qthread_join(worker_thread_);
         qthread_free(worker_thread_);
         worker_thread_ = nullptr;

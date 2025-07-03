@@ -67,7 +67,7 @@ struct AnalysisQueueItem {
 
 class BinaryMemory {
 private:
-    mutable std::mutex memory_mutex;
+    mutable qmutex_t memory_mutex;
 
     // Core memory storage
     std::map<ea_t, FunctionMemory> function_memories;
@@ -87,8 +87,12 @@ private:
     std::string generate_analysis_key(const std::string& base_key) const;
 
 public:
-    BinaryMemory();
-    ~BinaryMemory();
+    BinaryMemory() : current_focus(0) {
+        memory_mutex = qmutex_create();
+    };
+    ~BinaryMemory() {
+        qmutex_free(memory_mutex);
+    };
 
     // Unified analysis management
     void store_analysis(const std::string& key, const std::string& content,
