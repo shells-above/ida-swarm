@@ -1130,9 +1130,19 @@ void MainForm::save_settings() {
 }
 
 void MainForm::init_file_logging() {
-    // Create log directory if needed
-    std::string log_dir = std::string(get_user_idadir()) + "/llm_re_logs";
-    qmkdir(log_dir.c_str(), 0755);
+    qstring filename= get_path(PATH_TYPE_IDB);
+    const char* basename = qbasename(filename.c_str());
+    std::string str(basename);
+    size_t lastdot = str.find_last_of('.');
+    if (lastdot != std::string::npos) {
+        str = str.substr(0, lastdot);
+    }
+    const char* result = str.c_str();
+
+    std::string base_log_dir = std::string(get_user_idadir()) + "/llm_re_logs";
+    std::string specific_log_dir = base_log_dir + "/" + result;
+    qmkdir(base_log_dir.c_str(), 0755);
+    qmkdir(specific_log_dir.c_str(), 0755);
 
     // Generate timestamp for unique log files
     auto now = std::chrono::system_clock::now();
@@ -1141,8 +1151,8 @@ void MainForm::init_file_logging() {
     std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&time_t));
 
     // Open log files
-    log_file_path_ = log_dir + "/llm_re_" + timestamp + ".log";
-    message_log_file_path_ = log_dir + "/llm_re_messages_" + timestamp + ".jsonl";
+    log_file_path_ = specific_log_dir + "/llm_re_" + timestamp + ".log";
+    message_log_file_path_ = specific_log_dir + "/llm_re_messages_" + timestamp + ".jsonl";
 
     log_file_.open(log_file_path_, std::ios::app);
     message_log_file_.open(message_log_file_path_, std::ios::app);
