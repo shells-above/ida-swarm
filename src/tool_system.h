@@ -468,8 +468,7 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_array("addresses", "integer", "List of function addresses to analyze")
-            .add_integer("level", "Analysis detail level (0=basic info, 1=with decompilation, 2=full with disasm. Defaults to 1)", false)
-            .add_string("group_name", "Optional name for this group of functions", false)
+            .add_integer("level", "Analysis detail level (0=basic info, 1=with decompilation + string refs, 2=full with disasm + xrefs. Defaults to 1)", false)
             .build();
     }
 
@@ -477,9 +476,8 @@ public:
         try {
             std::vector<ea_t> addresses = ActionExecutor::parse_list_address_param(input, "addresses");
             int level = input.value("level", 1);
-            std::string group_name = input.value("group_name", "");
 
-            return ToolResult::success(executor->analyze_functions(addresses, level, group_name));
+            return ToolResult::success(executor->analyze_functions(addresses, level));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }

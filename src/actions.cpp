@@ -708,11 +708,10 @@ json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> ad
 }
 
 // Batch operations
-json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int level, const std::string& group_name) {
+json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int level) {
     json result;
     try {
         result["success"] = true;
-        result["group_name"] = group_name;
 
         json functions_json = json::array();
 
@@ -764,10 +763,6 @@ json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int l
 
                 func_result["success"] = true;
 
-                // Update memory
-                memory->set_function_analysis(address, static_cast<DetailLevel>(level),
-                                            "Analyzed as part of batch: " + group_name);
-
             } catch (const std::exception& e) {
                 func_result["success"] = false;
                 func_result["error"] = e.what();
@@ -778,11 +773,6 @@ json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int l
 
         result["functions"] = functions_json;
         result["count"] = functions_json.size();
-
-        // Store as cluster if group name provided
-        if (!group_name.empty()) {
-            memory->analyze_cluster(addresses, group_name, static_cast<DetailLevel>(level));
-        }
 
     } catch (const std::exception& e) {
         result["success"] = false;

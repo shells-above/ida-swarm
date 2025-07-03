@@ -48,7 +48,7 @@ public:
     json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern);
 
     // Batch operations
-    json analyze_functions(const std::vector<ea_t>& addresses, int level, const std::string& group_name);
+    json analyze_functions(const std::vector<ea_t>& addresses, int level);
 
     // Context and workflow
     json get_analysis_context(std::optional<ea_t> address, int radius);
