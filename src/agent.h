@@ -27,7 +27,7 @@ public:
     };
 
 private:
-    std::atomic<Status> status_{Status::Idle};
+    Status status_{Status::Idle};
     std::string current_task_;
     mutable qmutex_t mutex_;
 
@@ -43,11 +43,13 @@ public:
     }
 
     Status get_status() const {
-        return status_.load();
+        qmutex_locker_t lock(mutex_);
+        return status_;
     }
 
     void set_status(Status s) {
-        status_.store(s);
+        qmutex_locker_t lock(mutex_);
+        status_ = s;
     }
 
     std::string get_task() const {
@@ -230,7 +232,7 @@ private:
 
     // Thread management
     qthread_t worker_thread_ = nullptr;
-    std::atomic<bool> stop_requested_{false};
+    bool stop_requested_ = false;
     std::queue<AgentTask> task_queue_;
     mutable qmutex_t queue_mutex_;
     qsemaphore_t task_semaphore_ = nullptr;  // tells us when a task is available
@@ -956,6 +958,11 @@ private:
         bool task_complete = false;
 
         while (iteration < config_.agent.max_iterations && !stop_requested_ && !task_complete && state_.is_running()) {
+            if (stop_requested_) {
+                log(LogLevel::INFO, "Analysis interrupted by stop request");
+                break;
+            }
+
             iteration++;
             saved_state_.iteration = iteration;
             api_client_.set_iteration(iteration);

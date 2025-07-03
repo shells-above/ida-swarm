@@ -10,8 +10,10 @@ namespace llm_re {
 static MainForm* g_main_form = nullptr;
 
 MainForm* get_main_form() {
-    // Always called from main thread in IDA
-    return g_main_form;
+    if (g_main_form && !g_main_form->shutting_down_) {
+        return g_main_form;
+    }
+    return nullptr;
 }
 
 void clear_main_form() {
@@ -529,7 +531,9 @@ void MainForm::set_current_address(ea_t addr) {
 
     if (status_timer_) {
         status_timer_->stop();
-        status_timer_->deleteLater();
+        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
+        delete status_timer_;
+        status_timer_ = nullptr;
     }
 
     status_timer_ = new QTimer(this);
@@ -653,7 +657,9 @@ void MainForm::on_resume_clicked() {
 
     if (status_timer_) {
         status_timer_->stop();
-        status_timer_->deleteLater();
+        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
+        delete status_timer_;
+        status_timer_ = nullptr;
     }
 
     status_timer_ = new QTimer(this);
@@ -812,7 +818,9 @@ void MainForm::on_about_clicked() {
 
     if (status_timer_) {
         status_timer_->stop();
-        status_timer_->deleteLater();
+        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
+        delete status_timer_;
+        status_timer_ = nullptr;
     }
 
     status_timer_ = new QTimer(this);

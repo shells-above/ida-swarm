@@ -532,9 +532,9 @@ void ToolExecutionWidget::on_item_selected() {
     // Get theme info
     MainForm* main_form = get_main_form();
     bool is_dark_theme = false;
-    if (main_form && main_form->get_config()) {
-        is_dark_theme = (main_form->get_config()->ui.theme == 0 ||
-                        main_form->get_config()->ui.theme == 1);
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
     }
 
     // Theme-aware colors
@@ -752,9 +752,9 @@ void SessionTimelineWidget::draw_event(QPainter& painter, const Event& event, in
     // Get theme
     MainForm* main_form = get_main_form();
     bool is_dark_theme = false;
-    if (main_form && main_form->get_config()) {
-        is_dark_theme = (main_form->get_config()->ui.theme == 0 ||
-                        main_form->get_config()->ui.theme == 1);
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
     }
 
     // Select color based on event type
@@ -1929,9 +1929,9 @@ void CallGraphWidget::paintEvent(QPaintEvent* event) {
     // Get theme
     MainForm* main_form = get_main_form();
     bool is_dark_theme = false;
-    if (main_form && main_form->get_config()) {
-        is_dark_theme = (main_form->get_config()->ui.theme == 0 ||
-                        main_form->get_config()->ui.theme == 1);
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
     }
 
     // Background

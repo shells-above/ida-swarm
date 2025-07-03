@@ -51,6 +51,11 @@ public:
     bool can_continue() const { return agent_ && (agent_->is_completed() || agent_->is_idle()); }
     void log(LogLevel level, const std::string& message);
 
+    // State flags - no atomics needed since UI is single-threaded
+    bool shutting_down_ = false;
+    bool is_running_ = false;
+    bool form_closed_ = false;
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -119,11 +124,6 @@ private:
     void export_session(const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
     std::string format_timestamp(const std::chrono::system_clock::time_point& tp);
-
-    // State flags - no atomics needed since UI is single-threaded
-    bool shutting_down_ = false;
-    bool is_running_ = false;
-    bool form_closed_ = false;
 
     // Core components
     std::unique_ptr<REAgent> agent_;
