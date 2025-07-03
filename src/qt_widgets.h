@@ -57,7 +57,7 @@ namespace llm_re {
         struct AgentSettings {
             int max_iterations = 100;
             bool enable_thinking = false;
-            bool auto_enable_interleaved_thinking = false;
+            bool enable_interleaved_thinking = false;
             bool enable_deep_analysis = false;
             bool verbose_logging = false;
         } agent;
@@ -329,7 +329,7 @@ class ConfigWidget : public QWidget {
     QSpinBox* max_iterations_spin;
     QDoubleSpinBox* temperature_spin;
     QCheckBox* enable_thinking_check;
-    QCheckBox* auto_enable_interleaved_thinking_check;
+    QCheckBox* enable_interleaved_thinking_check;
     QCheckBox* enable_deep_analysis_check;
 
     // UI settings

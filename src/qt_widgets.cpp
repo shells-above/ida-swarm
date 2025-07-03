@@ -24,7 +24,7 @@ namespace llm_re {
             // Agent settings
             j["agent"]["max_iterations"] = agent.max_iterations;
             j["agent"]["enable_thinking"] = agent.enable_thinking;
-            j["agent"]["auto_enable_interleaved_thinking"] = agent.auto_enable_interleaved_thinking;
+            j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
             j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
             j["agent"]["verbose_logging"] = agent.verbose_logging;
 
@@ -78,7 +78,7 @@ namespace llm_re {
             if (j.contains("agent")) {
                 agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
                 agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
-                agent.auto_enable_interleaved_thinking = j["agent"].value("auto_enable_interleaved_thinking", agent.auto_enable_interleaved_thinking);
+                agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
                 agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
                 agent.verbose_logging = j["agent"].value("verbose_logging", agent.verbose_logging);
             }
@@ -1354,9 +1354,9 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     enable_thinking_check->setChecked(false);
     model_layout->addRow("", enable_thinking_check);
 
-    auto_enable_interleaved_thinking_check = new QCheckBox("Auto enable interleaved thinking mode");
-    auto_enable_interleaved_thinking_check->setChecked(false);
-    model_layout->addRow("", auto_enable_interleaved_thinking_check);
+    enable_interleaved_thinking_check = new QCheckBox("Enable interleaved thinking mode");
+    enable_interleaved_thinking_check->setChecked(false);
+    model_layout->addRow("", enable_interleaved_thinking_check);
 
     enable_deep_analysis_check = new QCheckBox("Enable deep analysis mode");
     enable_deep_analysis_check->setChecked(false);
@@ -1457,7 +1457,7 @@ void ConfigWidget::load_settings(const Config& config) {
     max_iterations_spin->setValue(config.agent.max_iterations);
     temperature_spin->setValue(config.api.temperature);
     enable_thinking_check->setChecked(config.agent.enable_thinking);
-    auto_enable_interleaved_thinking_check->setChecked(config.agent.auto_enable_interleaved_thinking);
+    enable_interleaved_thinking_check->setChecked(config.agent.enable_interleaved_thinking);
     enable_deep_analysis_check->setChecked(config.agent.enable_deep_analysis);
 
     log_buffer_spin->setValue(config.ui.log_buffer_size);
@@ -1488,7 +1488,7 @@ void ConfigWidget::save_settings(Config& config) {
     config.agent.max_iterations = max_iterations_spin->value();
     config.api.temperature = temperature_spin->value();
     config.agent.enable_thinking = enable_thinking_check->isChecked();
-    config.agent.auto_enable_interleaved_thinking = auto_enable_interleaved_thinking_check->isChecked();
+    config.agent.enable_interleaved_thinking = enable_interleaved_thinking_check->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check->isChecked();
 
     config.ui.log_buffer_size = log_buffer_spin->value();
