@@ -107,6 +107,7 @@
 #include <QHeaderView>
 #include <QTime>
 #include <QTableWidget>
+#include <QApplication>
 
 #define fopen dont_use_fopen
 #define fclose dont_use_fclose

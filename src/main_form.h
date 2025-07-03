@@ -38,8 +38,7 @@ class AgentWorker : public QObject {
     Q_OBJECT
 
 public:
-    AgentWorker(REAgent* agent, const std::string& task)
-        : agent_(agent), task_(task) {}
+    AgentWorker(REAgent* agent, const std::string& task) : agent_(agent), task_(task) {}
 
     void setResumeMode(bool resume) { resume_mode_ = resume; }
     void setContinueMode(bool cont) { continue_mode_ = cont; }
@@ -134,14 +133,25 @@ private:
     void setup_agent();
     void connect_signals();
 
+    // Shutdown methods
+    void prepare_shutdown();
+    void cleanup_agent();
+    void cleanup_worker();
+
     // Helper methods
     void init_file_logging();
+    void close_file_logging();
     void log_to_file(LogLevel level, const std::string& message);
     void log_message_to_file(const std::string& type, const json& content);
     void add_message_to_chat(const messages::Message& msg);
     void export_session(const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
     std::string format_timestamp(const std::chrono::system_clock::time_point& tp);
+
+    // State flags - no atomics needed since UI is single-threaded
+    bool shutting_down_ = false;
+    bool is_running_ = false;
+    bool form_closed_ = false;
 
     // Core components
     std::unique_ptr<REAgent> agent_;
@@ -210,7 +220,6 @@ private:
     ea_t current_address_ = BADADDR;
     std::vector<SessionInfo> sessions_;
     std::chrono::steady_clock::time_point session_start_;
-    bool is_running_ = false;
     int current_iteration_ = 0;
 
     // Actions
@@ -224,8 +233,9 @@ private:
     QAction* toggle_stats_action_;
 };
 
-// Global instance accessor
+// Thread-safe singleton accessor using IDA's synchronization
 MainForm* get_main_form();
+void clear_main_form();
 
 // Utility functions
 inline std::string format_address(ea_t addr) {

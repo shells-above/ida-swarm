@@ -2,13 +2,8 @@
 // Created by user on 6/30/25.
 //
 
-#include <ida.hpp>
-#include <idp.hpp>
-#include <loader.hpp>
-#include <kernwin.hpp>
-#include <map>
-
 #include "main_form.h"
+#include "ida_utils.h"
 
 namespace llm_re {
 
@@ -16,8 +11,10 @@ namespace llm_re {
 class llm_plugin_t : public plugmod_t, public event_listener_t {
     MainForm* main_form = nullptr;
     std::vector<qstring> registered_actions;
-    std::map<qstring, qstring> action_menupaths;  // Store menu paths for detaching
+    std::map<qstring, qstring> action_menupaths;
+    qstring idb_path_;
     bool shutting_down = false;
+    bool form_closed = false;
 
     // Action handler that checks if plugin is still valid
     struct llm_action_handler_t : public action_handler_t {
@@ -25,21 +22,18 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
 
         llm_action_handler_t(llm_plugin_t* p) : plugin(p) {}
 
-        bool is_valid() const {
-            return plugin && !plugin->shutting_down;
-        }
-
         virtual int idaapi activate(action_activation_ctx_t* ctx) override {
-            if (!is_valid()) {
+            if (!plugin || plugin->shutting_down) {
                 return 0;
             }
+            // IDA guarantees this is called from main thread
             return do_activate(ctx);
         }
 
         virtual int do_activate(action_activation_ctx_t* ctx) = 0;
 
         virtual action_state_t idaapi update(action_update_ctx_t* ctx) override {
-            if (!is_valid()) {
+            if (!plugin || plugin->shutting_down) {
                 return AST_DISABLE;
             }
             return AST_ENABLE_ALWAYS;
@@ -79,29 +73,11 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
         }
     };
 
-    struct identify_crypto_ah_t : public llm_action_handler_t {
-        using llm_action_handler_t::llm_action_handler_t;
-        virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->identify_crypto();
-            return 1;
-        }
-    };
-
-    struct explain_code_ah_t : public llm_action_handler_t {
-        using llm_action_handler_t::llm_action_handler_t;
-        virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->explain_code();
-            return 1;
-        }
-    };
-
     // Handler instances
     show_ui_ah_t* show_ui_handler = nullptr;
     analyze_function_ah_t* analyze_function_handler = nullptr;
     analyze_selection_ah_t* analyze_selection_handler = nullptr;
     find_vulnerabilities_ah_t* find_vulnerabilities_handler = nullptr;
-    identify_crypto_ah_t* identify_crypto_handler = nullptr;
-    explain_code_ah_t* explain_code_handler = nullptr;
 
 public:
     llm_plugin_t();
@@ -113,21 +89,60 @@ public:
     // event_listener_t virtual function
     virtual ssize_t idaapi on_event(ssize_t code, va_list va) override;
 
-    void show_main_form();
     void register_actions();
     void unregister_actions();
     void cleanup_form();
+    void prepare_for_shutdown();
 
+    // actions
+    void show_main_form();
     void analyze_function();
     void analyze_selection();
     void find_vulnerabilities();
-    void identify_crypto();
-    void explain_code();
 };
+
+// Simplified plugin instance manager - no mutex needed since IDA guarantees main thread
+class PluginInstanceManager {
+private:
+    static std::map<qstring, llm_plugin_t*> instances_;  // IDB path -> plugin instance
+
+public:
+    static void register_instance(const qstring& idb_path, llm_plugin_t* instance) {
+        instances_[idb_path] = instance;
+    }
+
+    static void unregister_instance(const qstring& idb_path) {
+        instances_.erase(idb_path);
+    }
+
+    static llm_plugin_t* get_instance(const qstring& idb_path) {
+        auto it = instances_.find(idb_path);
+        return (it != instances_.end()) ? it->second : nullptr;
+    }
+
+    static void shutdown_all() {
+        for (auto& [path, instance] : instances_) {
+            if (instance) {
+                instance->prepare_for_shutdown();
+            }
+        }
+        instances_.clear();
+    }
+};
+
+std::map<qstring, llm_plugin_t*> PluginInstanceManager::instances_;
 
 // Implementation
 llm_plugin_t::llm_plugin_t() {
-    msg("LLM RE: Plugin initialized for IDB\n");
+    // Constructor is guaranteed to run in main thread by IDA
+
+    // Get IDB path for instance tracking
+    idb_path_ = get_path(PATH_TYPE_IDB);
+
+    msg("LLM RE: Plugin initialized for IDB: %s\n", idb_path_.c_str());
+
+    // Register this instance
+    PluginInstanceManager::register_instance(idb_path_, this);
 
     // Hook UI events to detect when IDA is closing
     hook_event_listener(HT_UI, this);
@@ -137,17 +152,19 @@ llm_plugin_t::llm_plugin_t() {
     analyze_function_handler = new analyze_function_ah_t(this);
     analyze_selection_handler = new analyze_selection_ah_t(this);
     find_vulnerabilities_handler = new find_vulnerabilities_ah_t(this);
-    identify_crypto_handler = new identify_crypto_ah_t(this);
-    explain_code_handler = new explain_code_ah_t(this);
 
     // Register actions after handlers are created
     register_actions();
 }
 
 llm_plugin_t::~llm_plugin_t() {
-    msg("LLM RE: Plugin cleanup started\n");
+    // Destructor is guaranteed to run in main thread by IDA
+    msg("LLM RE: Plugin cleanup started for %s\n", idb_path_.c_str());
 
-    shutting_down = true;
+    prepare_for_shutdown();
+
+    // Unregister from manager
+    PluginInstanceManager::unregister_instance(idb_path_);
 
     // Unhook events first
     unhook_event_listener(HT_UI, this);
@@ -159,22 +176,31 @@ llm_plugin_t::~llm_plugin_t() {
     unregister_actions();
 
     // Delete handler instances
-    delete show_ui_handler;
-    delete analyze_function_handler;
-    delete analyze_selection_handler;
-    delete find_vulnerabilities_handler;
-    delete identify_crypto_handler;
-    delete explain_code_handler;
+    if (show_ui_handler) {
+        delete show_ui_handler;
+        show_ui_handler = nullptr;
+    }
+    if (analyze_function_handler) {
+        delete analyze_function_handler;
+        analyze_function_handler = nullptr;
+    }
+    if (analyze_selection_handler) {
+        delete analyze_selection_handler;
+        analyze_selection_handler = nullptr;
+    }
+    if (find_vulnerabilities_handler) {
+        delete find_vulnerabilities_handler;
+        find_vulnerabilities_handler = nullptr;
+    }
 
-    // Set pointers to nullptr for safety
-    show_ui_handler = nullptr;
-    analyze_function_handler = nullptr;
-    analyze_selection_handler = nullptr;
-    find_vulnerabilities_handler = nullptr;
-    identify_crypto_handler = nullptr;
-    explain_code_handler = nullptr;
+    msg("LLM RE: Plugin terminated for %s\n", idb_path_.c_str());
+}
 
-    msg("LLM RE: Plugin terminated\n");
+void llm_plugin_t::prepare_for_shutdown() {
+    shutting_down = true;
+
+    // Clean up form if it exists
+    cleanup_form();
 }
 
 ssize_t idaapi llm_plugin_t::on_event(ssize_t code, va_list va) {
@@ -182,66 +208,46 @@ ssize_t idaapi llm_plugin_t::on_event(ssize_t code, va_list va) {
         case ui_database_inited:
             // Database fully loaded
             break;
+
         case ui_ready_to_run:
             // UI is ready
             break;
+
+        case ui_saving:
+            // IDA is saving the database
+            msg("LLM RE: Database saving - preparing cleanup\n");
+            // Don't cleanup yet, just prepare
+            break;
+
+        case ui_saved:
+            // Database has been saved
+            msg("LLM RE: Database saved\n");
+            break;
+
         case ui_database_closed:
-            // Database is being closed
-            cleanup_form();
+            // Database is being closed - this is the main cleanup event
+            msg("LLM RE: Received ui_database_closed event\n");
+            prepare_for_shutdown();
+            break;
+
+        case ui_destroying_plugmod:
+            {
+                // Check if it's our plugin being destroyed
+                const plugmod_t* mod = va_arg(va, const plugmod_t*);
+                if (mod == this) {
+                    msg("LLM RE: Plugin module being destroyed\n");
+                    prepare_for_shutdown();
+                }
+            }
             break;
     }
     return 0;
 }
 
-void llm_plugin_t::cleanup_form() {
-    if (main_form) {
-        // Disconnect any signals first
-        main_form->disconnect();
-
-        // Schedule for deletion using Qt's deleteLater
-        // This is safer than immediate deletion
-        main_form->deleteLater();
-        main_form = nullptr;
-    }
-}
-
-bool llm_plugin_t::run(size_t arg) {
-    if (!shutting_down) {
-        show_main_form();
-    }
-    return true;
-}
-
-void llm_plugin_t::show_main_form() {
-    if (shutting_down) {
-        return;
-    }
-
-    if (!main_form) {
-        // Create form without parent - Qt will handle it properly
-        main_form = new MainForm(nullptr);
-
-        // Set window flags to ensure proper cleanup
-        main_form->setWindowFlags(main_form->windowFlags() | Qt::Window);
-        main_form->setAttribute(Qt::WA_DeleteOnClose, false);  // We'll manage deletion
-
-        ea_t current_ea = get_screen_ea();
-        if (current_ea != BADADDR) {
-            main_form->set_current_address(current_ea);
-        }
-    }
-
-    if (main_form) {
-        main_form->show();
-        main_form->raise();
-        main_form->activateWindow();
-    }
-}
-
 void llm_plugin_t::register_actions() {
     // Generate a unique prefix for this instance
-    char prefix[32];
-    ::qsnprintf(prefix, sizeof(prefix), "llm_re_%p", this);
+    char prefix[64];
+    ::qsnprintf(prefix, sizeof(prefix), "llm_re_%s_%p", qbasename(idb_path_.c_str()), this);
 
     // Define and register actions
     struct {
@@ -251,7 +257,7 @@ void llm_plugin_t::register_actions() {
         const char* shortcut;
         const char* tooltip;
         const char* menupath;
-        bool use_global_shortcut;  // Whether to use global shortcut
+        bool use_global_shortcut;
     } actions[] = {
         {
             "show_ui",
@@ -260,7 +266,7 @@ void llm_plugin_t::register_actions() {
             "Ctrl+Shift+L",
             "Show LLM Reverse Engineering Agent",
             "Edit/LLM RE/Show Agent",
-            true  // Main UI action gets global shortcut
+            true
         },
         {
             "analyze_function",
@@ -269,7 +275,7 @@ void llm_plugin_t::register_actions() {
             "Ctrl+Shift+A",
             "Analyze current function with LLM",
             "Edit/LLM RE/Analyze Function",
-            false  // Local shortcut only
+            false
         },
         {
             "analyze_selection",
@@ -288,29 +294,12 @@ void llm_plugin_t::register_actions() {
             "Search for vulnerabilities with LLM",
             "Edit/LLM RE/Find Vulnerabilities",
             false
-        },
-        {
-            "identify_crypto",
-            "Identify Cryptography",
-            identify_crypto_handler,
-            nullptr,
-            "Identify cryptographic routines with LLM",
-            "Edit/LLM RE/Identify Cryptography",
-            false
-        },
-        {
-            "explain_code",
-            "Explain Code",
-            explain_code_handler,
-            nullptr,
-            "Get LLM explanation of current code",
-            "Edit/LLM RE/Explain Code",
-            false
         }
     };
 
     // Keep track of whether we've registered the main action globally
-    static bool global_actions_registered = false;
+    static std::map<qstring, bool> global_actions_registered;
+    bool& registered_for_idb = global_actions_registered[idb_path_];
 
     // Register each action
     for (const auto& action : actions) {
@@ -329,7 +318,7 @@ void llm_plugin_t::register_actions() {
         desc.flags = ADF_OT_PLUGMOD;
 
         // Only use global shortcuts for the first instance to avoid conflicts
-        if (action.use_global_shortcut && !global_actions_registered) {
+        if (action.use_global_shortcut && !registered_for_idb) {
             desc.shortcut = action.shortcut;
             desc.flags |= ADF_GLOBAL;
         } else if (!action.use_global_shortcut) {
@@ -350,8 +339,8 @@ void llm_plugin_t::register_actions() {
     }
 
     // Mark global actions as registered after first instance
-    if (!global_actions_registered && !registered_actions.empty()) {
-        global_actions_registered = true;
+    if (!registered_for_idb && !registered_actions.empty()) {
+        registered_for_idb = true;
     }
 
     // Add toolbar button for main UI (use the first registered action)
@@ -384,6 +373,65 @@ void llm_plugin_t::unregister_actions() {
 
     registered_actions.clear();
     action_menupaths.clear();
+}
+
+void llm_plugin_t::cleanup_form() {
+    if (main_form && !form_closed) {
+        msg("LLM RE: Cleaning up form\n");
+
+        // Mark as closed to prevent double cleanup
+        form_closed = true;
+
+        // Disconnect all signals first
+        main_form->disconnect();
+
+        // Close the form
+        main_form->close();
+
+        // Delete the form
+        delete main_form;
+        main_form = nullptr;
+    }
+}
+
+bool llm_plugin_t::run(size_t arg) {
+    if (!shutting_down) {
+        show_main_form();
+    }
+    return true;
+}
+
+void llm_plugin_t::show_main_form() {
+    if (shutting_down) {
+        return;
+    }
+
+    if (!main_form || form_closed) {
+        // Create form with proper parent
+        QWidget* parent = QApplication::activeWindow();
+        main_form = new MainForm(parent);
+        form_closed = false;
+
+        // Set window flags to ensure proper cleanup
+        main_form->setWindowFlags(main_form->windowFlags() | Qt::Window);
+
+        // Connect destroyed signal to mark form as closed
+        QObject::connect(main_form, &QObject::destroyed, [this]() {
+            form_closed = true;
+            main_form = nullptr;
+        });
+
+        ea_t current_ea = get_screen_ea();
+        if (current_ea != BADADDR) {
+            main_form->set_current_address(current_ea);
+        }
+    }
+
+    if (main_form) {
+        main_form->show();
+        main_form->raise();
+        main_form->activateWindow();
+    }
 }
 
 void llm_plugin_t::analyze_function() {
@@ -471,60 +519,9 @@ void llm_plugin_t::find_vulnerabilities() {
     main_form->execute_task(task);
 }
 
-void llm_plugin_t::identify_crypto() {
-    if (shutting_down) {
-        return;
-    }
-
-    show_main_form();
-
-    if (!main_form) {
-        return;
-    }
-
-    std::string task =
-        "Identify cryptographic algorithms and routines in this binary. "
-        "Look for:\n"
-        "- Encryption/decryption functions\n"
-        "- Hash functions (MD5, SHA, etc.)\n"
-        "- Key generation or management\n"
-        "- Common crypto constants\n"
-        "- Custom crypto implementations\n"
-        "For each finding, provide the address and identify the algorithm if possible.";
-
-    main_form->execute_task(task);
-}
-
-void llm_plugin_t::explain_code() {
-    if (shutting_down) {
-        return;
-    }
-
-    show_main_form();
-
-    if (!main_form) {
-        return;
-    }
-
-    ea_t ea = get_screen_ea();
-    func_t* func = get_func(ea);
-
-    if (func) {
-        std::string task = "Explain what the code at address " + std::to_string(ea) + " does. " +
-                          "Provide a clear, concise explanation suitable for documentation.";
-        main_form->set_current_address(ea);
-        main_form->execute_task(task);
-    } else {
-        std::string task = "Explain what is at address " + std::to_string(ea) + ". " +
-                          "If it's code, explain what it does. " +
-                          "If it's data, explain its purpose and structure.";
-        main_form->set_current_address(ea);
-        main_form->execute_task(task);
-    }
-}
-
 // Plugin interface functions
 static plugmod_t* idaapi init() {
+    // IDA guarantees this is called from main thread
     if (!is_idaq()) {
         msg("LLM RE: This plugin requires IDA with GUI support\n");
         return nullptr;
@@ -539,7 +536,7 @@ static plugmod_t* idaapi init() {
 // Plugin description - must be in global namespace for IDA to load it
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
-    PLUGIN_MULTI,                              // Use only PLUGIN_MULTI
+    PLUGIN_MULTI | PLUGIN_FIX,                 // PLUGIN_FIX to improve stability
     llm_re::init,
     nullptr,                                   // term must be nullptr for PLUGIN_MULTI
     nullptr,                                   // run must be nullptr for PLUGIN_MULTI

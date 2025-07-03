@@ -6,11 +6,17 @@
 
 namespace llm_re {
 
-// Global instance
+// Global instance management - simplified since IDA ensures main thread
 static MainForm* g_main_form = nullptr;
 
 MainForm* get_main_form() {
+    // Always called from main thread in IDA
     return g_main_form;
+}
+
+void clear_main_form() {
+    // Always called from main thread in IDA
+    g_main_form = nullptr;
 }
 
 // Worker implementation
@@ -66,6 +72,7 @@ void AgentWorker::process() {
 
 // MainForm implementation
 MainForm::MainForm(QWidget* parent) : QMainWindow(parent) {
+    // Set global instance - safe since constructor runs in main thread
     g_main_form = this;
 
     // Load configuration
@@ -97,21 +104,72 @@ MainForm::MainForm(QWidget* parent) : QMainWindow(parent) {
 }
 
 MainForm::~MainForm() {
-    if (worker_thread_ && worker_thread_->isRunning()) {
-        worker_thread_->requestInterruption();  // if a task is actively running, this will handle stopping it
-        worker_thread_->quit();
-        worker_thread_->wait();
-    }
+    // Mark as shutting down
+    shutting_down_ = true;
 
-    // Stop agent internal loop in case the agent was idle
-    if (agent_) {
-        agent_->stop();
-    }
+    // Clear global instance
+    clear_main_form();
+
+    // Cleanup worker and agent
+    cleanup_worker();
+    cleanup_agent();
 
     // Save settings
     save_settings();
 
     // Close log files
+    close_file_logging();
+}
+
+void MainForm::prepare_shutdown() {
+    if (shutting_down_) return;
+
+    shutting_down_ = true;
+
+    // Stop any running operations
+    if (is_running_) {
+        on_stop_clicked();
+    }
+
+    // Cleanup worker
+    cleanup_worker();
+
+    // Cleanup agent
+    cleanup_agent();
+}
+
+void MainForm::cleanup_agent() {
+    if (agent_) {
+        agent_->stop();
+        agent_.reset();
+    }
+}
+
+void MainForm::cleanup_worker() {
+    if (worker_thread_ && worker_thread_->isRunning()) {
+        worker_thread_->requestInterruption();
+        worker_thread_->quit();
+
+        // Wait with timeout
+        if (!worker_thread_->wait(5000)) {
+            // Force terminate if necessary
+            worker_thread_->terminate();
+            worker_thread_->wait();
+        }
+    }
+
+    if (worker_) {
+        worker_->deleteLater();
+        worker_ = nullptr;
+    }
+
+    if (worker_thread_) {
+        worker_thread_->deleteLater();
+        worker_thread_ = nullptr;
+    }
+}
+
+void MainForm::close_file_logging() {
     if (log_file_.is_open()) {
         log_file_ << "=== LLM RE Agent Log Ended ===" << std::endl;
         log_file_.close();
@@ -125,15 +183,14 @@ MainForm::~MainForm() {
         message_log_file_ << footer.dump() << std::endl;
         message_log_file_.close();
     }
-
-    if (g_main_form == this) {
-        g_main_form = nullptr;
-    }
 }
 
 void MainForm::setup_ui() {
     setWindowTitle("LLM Reverse Engineering Agent");
     resize(1200, 800);
+
+    // Ensure window is properly managed
+    setAttribute(Qt::WA_DeleteOnClose, false);  // We'll manage deletion ourselves
 }
 
 void MainForm::setup_menus() {
@@ -419,10 +476,12 @@ void MainForm::setup_central_widget() {
 
 void MainForm::setup_agent() {
     // Create agent
-    agent_ = std::make_unique<REAgent>(*config_);  // isn't actually copying the object, it's giving it a reference to the Config
+    agent_ = std::make_unique<REAgent>(*config_);
 
     // Set callbacks
     agent_->set_log_callback([this](LogLevel level, const std::string& msg) {
+        if (shutting_down_) return;
+
         int level_int = static_cast<int>(level);
         QMetaObject::invokeMethod(this, "on_agent_log",
                                  Qt::QueuedConnection,
@@ -431,6 +490,8 @@ void MainForm::setup_agent() {
     });
 
     agent_->set_message_log_callback([this](const std::string& type, const json& content, int iteration) {
+        if (shutting_down_) return;
+
         current_iteration_ = iteration;
 
         // Convert JSON content to string for simplicity
@@ -439,10 +500,12 @@ void MainForm::setup_agent() {
         QMetaObject::invokeMethod(this, "on_agent_message",
                                  Qt::QueuedConnection,
                                  Q_ARG(QString, QString::fromStdString(type)),
-                                  Q_ARG(QString, QString::fromStdString(content_str)));
+                                 Q_ARG(QString, QString::fromStdString(content_str)));
     });
 
     agent_->set_tool_started_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input) {
+        if (shutting_down_) return;
+
         QMetaObject::invokeMethod(this, "on_agent_tool_started",
                                  Qt::QueuedConnection,
                                  Q_ARG(QString, QString::fromStdString(tool_id)),
@@ -451,6 +514,8 @@ void MainForm::setup_agent() {
     });
 
     agent_->set_tool_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input, const json& result) {
+        if (shutting_down_) return;
+
         QMetaObject::invokeMethod(this, "on_agent_tool_executed",
                                  Qt::QueuedConnection,
                                  Q_ARG(QString, QString::fromStdString(tool_id)),
@@ -460,6 +525,8 @@ void MainForm::setup_agent() {
     });
 
     agent_->set_final_report_callback([this](const std::string& report) {
+        if (shutting_down_) return;
+
         // Add as message to chat
         messages::Message msg = messages::Message::assistant_text(report);
         QMetaObject::invokeMethod(this, [this, msg]() {
@@ -498,7 +565,7 @@ void MainForm::set_current_address(ea_t addr) {
 }
 
 void MainForm::on_execute_clicked() {
-    if (is_running_) return;
+    if (is_running_ || shutting_down_) return;
 
     // Hide continue widget if it's visible
     if (continue_widget_->isVisible()) {
@@ -543,6 +610,8 @@ void MainForm::on_execute_clicked() {
     add_message_to_chat(user_msg);
 
     // Create worker thread
+    cleanup_worker();  // Clean up any previous worker
+
     worker_thread_ = new QThread();
     worker_ = new AgentWorker(agent_.get(), task);
     worker_->moveToThread(worker_thread_);
@@ -559,17 +628,22 @@ void MainForm::on_execute_clicked() {
 }
 
 void MainForm::on_stop_clicked() {
-    if (!is_running_) return;
+    if (!is_running_ || shutting_down_) return;
 
     log(LogLevel::WARNING, "Stopping task...");
-    agent_->stop();
+
+    if (agent_) {
+        agent_->stop();
+    }
 
     if (worker_thread_ && worker_thread_->isRunning()) {
-        worker_thread_->requestInterruption();  // when worker_thread_ sees this, it signals to the agent worker_loop to stop
+        worker_thread_->requestInterruption();
     }
 }
 
 void MainForm::on_resume_clicked() {
+    if (shutting_down_) return;
+
     if (!agent_->is_paused()) {
         QMessageBox::warning(this, "Warning", "No paused task to resume.");
         return;
@@ -582,6 +656,8 @@ void MainForm::on_resume_clicked() {
     log(LogLevel::INFO, "Resuming task...");
 
     // Create worker thread for resume
+    cleanup_worker();
+
     worker_thread_ = new QThread();
     worker_ = new AgentWorker(agent_.get(), "");  // Empty task for resume
     worker_->setResumeMode(true);
@@ -705,6 +781,8 @@ void MainForm::on_about_clicked() {
 }
 
 void MainForm::on_continue_clicked() {
+    if (shutting_down_) return;
+
     std::string additional_instructions = continue_input_->toPlainText().toStdString();
     if (additional_instructions.empty()) {
         QMessageBox::warning(this, "Warning", "Please enter additional instructions to continue.");
@@ -729,6 +807,8 @@ void MainForm::on_continue_clicked() {
     log(LogLevel::INFO, "Continuing with: " + additional_instructions);
 
     // Create worker thread for continue
+    cleanup_worker();
+
     worker_thread_ = new QThread();
     worker_ = new AgentWorker(agent_.get(), additional_instructions);
     worker_->setContinueMode(true);  // Set continue mode
@@ -759,11 +839,15 @@ void MainForm::on_new_task_clicked() {
 }
 
 void MainForm::on_agent_log(int level, const QString& message) {
+    if (shutting_down_) return;
+
     LogLevel log_level = static_cast<LogLevel>(level);
     log(log_level, message.toStdString());
 }
 
 void MainForm::on_agent_message(const QString& type, const QString& content) {
+    if (shutting_down_) return;
+
     // Log the raw message
     try {
         json content_json = json::parse(content.toStdString());
@@ -846,7 +930,7 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
                 int cache_read = usage.value("cache_read_input_tokens", 0);
                 int cache_write = usage.value("cache_creation_input_tokens", 0);
                 int total = input + output + cache_read + cache_write;
-                
+
                 token_label_->setText(QString("Tokens: %1 (%2 in, %3 out, %4 cache read, %5 cache write)").arg(total).arg(input).arg(output).arg(cache_read).arg(cache_write));
             }
         } catch (const std::exception& e) {
@@ -861,18 +945,22 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
 }
 
 void MainForm::on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input) {
+    if (shutting_down_) return;
+
     try {
         json input_json = json::parse(input.toStdString());
-        
+
         // Add tool call to UI with "Running..." status
         tool_execution_->add_tool_call(tool_id.toStdString(), tool_name.toStdString(), input_json);
-        
+
     } catch (const std::exception& e) {
         log(LogLevel::ERROR, "Failed to parse tool start: " + std::string(e.what()));
     }
 }
 
 void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result) {
+    if (shutting_down_) return;
+
     try {
         json result_json = json::parse(result.toStdString());
 
@@ -889,7 +977,9 @@ void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& too
         timeline_->add_event(event);
 
         // Update memory view if needed
-        memory_widget_->update_memory(agent_->get_memory());
+        if (agent_) {
+            memory_widget_->update_memory(agent_->get_memory());
+        }
 
     } catch (const std::exception& e) {
         log(LogLevel::ERROR, "Failed to parse tool execution: " + std::string(e.what()));
@@ -897,6 +987,8 @@ void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& too
 }
 
 void MainForm::on_agent_state_changed(const QString& state) {
+    if (shutting_down_) return;
+
     status_label_->setText(state);
 }
 
@@ -958,7 +1050,7 @@ void MainForm::on_worker_error(const QString& error) {
 }
 
 void MainForm::on_worker_progress(const QString& message) {
-
+    // Update status or progress as needed
 }
 
 void MainForm::on_address_clicked(ea_t addr) {
@@ -998,7 +1090,9 @@ void MainForm::update_statistics() {
     json tool_stats;
     // TODO: Collect tool usage statistics
 
-    stats_dashboard_->update_stats(agent_->get_state_json(), sessions_, tool_stats);
+    if (agent_) {
+        stats_dashboard_->update_stats(agent_->get_state_json(), sessions_, tool_stats);
+    }
 }
 
 void MainForm::update_ui_state() {
@@ -1026,7 +1120,6 @@ void MainForm::update_ui_state() {
         status_label_->setText("Completed - Enter additional instructions or start a new task");
     }
 }
-
 
 void MainForm::on_tab_changed(int index) {
     // Update focus based on tab
@@ -1130,17 +1223,16 @@ void MainForm::save_settings() {
 }
 
 void MainForm::init_file_logging() {
-    qstring filename= get_path(PATH_TYPE_IDB);
+    qstring filename = get_path(PATH_TYPE_IDB);
     const char* basename = qbasename(filename.c_str());
     std::string str(basename);
     size_t lastdot = str.find_last_of('.');
     if (lastdot != std::string::npos) {
         str = str.substr(0, lastdot);
     }
-    const char* result = str.c_str();
 
     std::string base_log_dir = std::string(get_user_idadir()) + "/llm_re_logs";
-    std::string specific_log_dir = base_log_dir + "/" + result;
+    std::string specific_log_dir = base_log_dir + "/" + str;
     qmkdir(base_log_dir.c_str(), 0755);
     qmkdir(specific_log_dir.c_str(), 0755);
 
@@ -1214,6 +1306,8 @@ void MainForm::log_message_to_file(const std::string& type, const json& content)
 }
 
 void MainForm::log(LogLevel level, const std::string& message) {
+    if (shutting_down_) return;
+
     LogEntry entry;
     entry.timestamp = std::chrono::system_clock::now();
     entry.level = level;
@@ -1337,7 +1431,7 @@ void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
         // Build export data
         json export_data;
 
-        if (options.memory) {
+        if (options.memory && agent_) {
             export_data["memory"] = agent_->get_memory()->export_memory_snapshot();
         }
 
@@ -1475,6 +1569,9 @@ void MainForm::closeEvent(QCloseEvent* event) {
 
         on_stop_clicked();
     }
+
+    // Mark as shutting down before accepting
+    prepare_shutdown();
 
     event->accept();
 }
