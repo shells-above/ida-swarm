@@ -734,7 +734,7 @@ private:
             return false;  // Already consolidating
         }
 
-        api::TokenUsage usage = token_tracker_.get_total();
+        api::TokenUsage usage = token_tracker_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         return total_tokens > CONTEXT_LIMIT_TOKENS;
     }
@@ -1035,10 +1035,7 @@ private:
 
     // Update cache statistics
     void update_cache_stats(const api::TokenUsage& usage) {
-        // Track based on actual tokens, not requests
         if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0 || usage.input_tokens > 0) {
-            int total_input = usage.cache_read_tokens + usage.input_tokens;
-
             cache_stats_.total_cache_hits += usage.cache_read_tokens;
             cache_stats_.total_cache_misses += usage.input_tokens;
 
@@ -1048,8 +1045,7 @@ private:
 
             // Estimate savings based on the difference in pricing
             if (usage.cache_read_tokens > 0) {
-                double saved = usage.cache_read_tokens / 1000000.0 *
-                              (get_input_price(usage.model) - get_cache_read_price(usage.model));
+                double saved = usage.cache_read_tokens / 1000000.0 * (get_input_price(usage.model) - get_cache_read_price(usage.model));
                 cache_stats_.total_cache_savings += saved;
             }
         }

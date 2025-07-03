@@ -836,6 +836,10 @@ public:
         return session_total;
     }
 
+    TokenUsage get_last_usage() const {
+        return history.back().second;
+    }
+
     double get_session_duration_minutes() const {
         auto now = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::minutes>(now - session_start);
