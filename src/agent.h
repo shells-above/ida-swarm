@@ -167,6 +167,10 @@ private:
 
     // Token tracking
     api::TokenTracker token_tracker_;
+    std::vector<api::TokenTracker> tracker_sessions_;  // we add to this the previous token_tracker when we hit context limit
+
+    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // Trigger consolidation at 150k
+    static constexpr int CONTEXT_WARNING_TOKENS = 120000; // Warn at 120k
 
     // Cache performance tracking
     struct CacheStats {
@@ -190,6 +194,20 @@ private:
             };
         }
     } cache_stats_;
+
+    // context management
+    struct ContextManagementState {
+        bool consolidation_in_progress = false;
+        int consolidation_count = 0;
+        std::chrono::steady_clock::time_point last_consolidation;
+    } context_state_;
+
+    // Process consolidation response and extract summary
+    struct ConsolidationResult {
+        std::string summary;
+        std::vector<std::string> stored_keys;
+        bool success = false;
+    };
 
     // Thread management
     qthread_t worker_thread_ = nullptr;
@@ -239,8 +257,58 @@ Be systematic and thorough. Build your understanding incrementally.
 
 Remember that you can execute multiple tool calls at once, in fact I encourage it!
 If you realize you need information from multiple tool calls, don't wait to do it in multiple messages.
-Do it all in one! But do NOT go crazy, *only do the tool calls you need*.
-)";
+Do it all in one! But do NOT go crazy, *only do the tool calls you need*.)";
+
+
+    // consolidation prompts
+    static constexpr const char* CONSOLIDATION_PROMPT = R"(CRITICAL: We are approaching the context window limit!.
+
+You must now consolidate ALL important findings into memory using the store_analysis tool (call this in bulk in this response, you will NOT get another chance to).
+This is essential because we will need to clear the conversation history to continue.
+
+Please store the following using store_analysis:
+1. All significant findings about functions, data structures, and behavior
+2. Current understanding of the system architecture
+3. Any patterns, hypotheses, or insights discovered (that have not previously been documented)
+4. Progress on the original task and what remains to be done
+5. Important addresses and their purposes
+6. Any relationships between components
+
+Guidelines for storing:
+- Use descriptive keys that clearly indicate what information is stored
+- Group related findings together
+- Include specific addresses when relevant
+- Be comprehensive - anything not stored will be lost
+
+After storing everything, provide a CONSOLIDATION SUMMARY that includes:
+- List of all keys you created and a one-line description of each
+- Current progress on the original task
+- Key insights discovered so far
+- Next steps needed to complete the analysis
+
+Remember: Only information you store or summarize will be available after consolidation!)";
+
+
+    static constexpr const char* CONSOLIDATION_CONTINUATION_PROMPT = R"(=== CONTEXT CONSOLIDATION COMPLETE ===
+
+We've consolidated the analysis to memory due to context limits. Here's the state:
+
+**Original Task:** {}
+
+**Consolidation Summary:**
+{}
+
+**Stored Analysis Keys:** {}
+
+You can retrieve any stored information using get_analysis with these keys. Continue the analysis from where we left off.
+
+Tips:
+- Use get_analysis to retrieve specific findings as needed
+- Focus on completing the remaining work for the original task
+
+What's your next step to complete the task?)";
+
+
 
 public:
     REAgent(const Config& config)
@@ -394,6 +462,22 @@ public:
             auto elapsed = std::chrono::steady_clock::now() - saved_state_.saved_at;
             j["saved_state_age_seconds"] = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
         }
+
+        j["context_management"] = {
+            {"consolidation_count", context_state_.consolidation_count},
+            {"consolidation_in_progress", context_state_.consolidation_in_progress}
+        };
+
+        if (context_state_.consolidation_count > 0) {
+            auto elapsed = std::chrono::steady_clock::now() - context_state_.last_consolidation;
+            j["context_management"]["minutes_since_last_consolidation"] =
+                std::chrono::duration_cast<std::chrono::minutes>(elapsed).count();
+        }
+
+        // Add estimated tokens for current conversation
+        if (saved_state_.valid) {
+            j["context_management"]["estimated_current_tokens"] = estimate_request_tokens(saved_state_.request);
+        }
         return j;
     }
 
@@ -515,26 +599,15 @@ private:
         conversation_.clear();
         api_client_.set_iteration(0);
 
-        // Dynamic thinking budget when tools are involved
-        int thinking_budget = config_.api.max_thinking_tokens;
-        bool enable_interleaved = config_.agent.enable_thinking &&
-                                 config_.agent.auto_enable_interleaved_thinking &&
-                                 tool_registry_.has_tools();
-        if (enable_interleaved) {
-            // Increase thinking budget for tool-heavy tasks
-            thinking_budget = std::min(thinking_budget * 2, 32768);
-            log(LogLevel::INFO, "Interleaved thinking enabled with budget: " + std::to_string(thinking_budget));
-        }
-
         // Build initial request with cache control on tools and system
         api::ChatRequestBuilder builder;
         builder.with_model(config_.api.model)
                .with_system_prompt(SYSTEM_PROMPT)
                .with_max_tokens(config_.api.max_tokens)
-               .with_max_thinking_tokens(thinking_budget)
+               .with_max_thinking_tokens(config_.api.max_thinking_tokens)
                .with_temperature(config_.api.temperature)
                .enable_thinking(config_.agent.enable_thinking)
-               .enable_interleaved_thinking(enable_interleaved);
+               .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
 
         // Add tools with caching enabled (cache control added automatically in with_tools())
         if (tool_registry_.has_tools()) {
@@ -631,6 +704,152 @@ private:
         return false;
     }
 
+    template<typename Container>
+    std::string join(const Container& container, const std::string& delimiter) {
+        std::ostringstream oss;
+        auto it = container.begin();
+        if (it != container.end()) {
+            oss << *it;
+            ++it;
+        }
+        for (; it != container.end(); ++it) {
+            oss << delimiter << *it;
+        }
+        return oss.str();
+    }
+
+    // Estimate tokens for a request (rough but sufficient for our needs)
+    int estimate_request_tokens(const api::ChatRequest& request) const {
+        // Convert to JSON and estimate
+        // Rough approximation: ~0.75 tokens per character for JSON
+        json request_json = request.to_json();
+        std::string json_str = request_json.dump();
+
+        // Add some buffer for response
+        return static_cast<int>(json_str.length() * 0.75);
+    }
+
+    // Check if we need to consolidate context
+    bool should_consolidate_context(const api::ChatRequest& request) {
+        if (context_state_.consolidation_in_progress) {
+            return false;  // Already consolidating
+        }
+
+        api::TokenUsage usage = token_tracker_.get_total();
+        int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
+        return total_tokens > CONTEXT_LIMIT_TOKENS;
+    }
+
+    // Trigger context consolidation
+    void trigger_context_consolidation() {
+        log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+
+        context_state_.consolidation_in_progress = true;
+        context_state_.consolidation_count++;
+        context_state_.last_consolidation = std::chrono::steady_clock::now();
+
+        // Add consolidation message
+        messages::Message consolidation_msg = messages::Message::user_text(CONSOLIDATION_PROMPT);
+        saved_state_.request.messages.push_back(consolidation_msg);
+        conversation_.add_message(consolidation_msg);
+
+        // Mark that we're in consolidation mode
+        saved_state_.valid = true;
+    }
+
+    ConsolidationResult process_consolidation_response(const messages::Message& response_msg, const std::vector<messages::Message>& tool_results) {
+        ConsolidationResult result;
+
+        // Extract stored keys from tool calls
+        std::vector<const messages::ToolUseContent*> tool_uses = messages::ContentExtractor::extract_tool_uses(response_msg);
+        for (const messages::ToolUseContent *tool_use: tool_uses) {
+            if (tool_use->name == "store_analysis" && tool_use->input.contains("key")) {
+                result.stored_keys.push_back(tool_use->input["key"]);
+            }
+        }
+
+        // Extract summary text
+        std::optional<std::string> text_content = messages::ContentExtractor::extract_text(response_msg);
+        if (text_content) {
+            result.summary = *text_content;
+            result.success = true;
+        } else {
+            log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
+
+            // Fallback summary in case LLM didn't make one (which would be bad)
+            result.summary = std::format("Consolidated {} findings to memory. Keys: {}",
+                result.stored_keys.size(),
+                join(result.stored_keys, ", "));
+            result.success = true;
+        }
+
+        return result;
+    }
+
+    // Rebuild conversation after consolidation
+    void rebuild_after_consolidation(const ConsolidationResult& consolidation) {
+        log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
+
+        // Save current task and token stats
+        std::string original_task = state_.get_task();
+        api::TokenUsage total_usage_before = token_tracker_.get_total();
+
+        // store old tracker session
+        tracker_sessions_.emplace_back(std::move(token_tracker_));
+
+        // Clear conversation
+        conversation_.clear();
+
+        // Reset token tracker
+        reset_token_usage();
+
+        // Build new request with consolidated context
+        api::ChatRequestBuilder builder;
+        builder.with_model(config_.api.model)
+               .with_system_prompt(SYSTEM_PROMPT)
+               .with_max_tokens(config_.api.max_tokens)
+               .with_max_thinking_tokens(config_.api.max_thinking_tokens)
+               .with_temperature(config_.api.temperature)
+               .enable_thinking(config_.agent.enable_thinking)
+               .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
+
+        // Add tools
+        if (tool_registry_.has_tools()) {
+            builder.with_tools(tool_registry_);
+        }
+
+        // Create continuation message
+        std::string continuation_prompt = std::format(
+            CONSOLIDATION_CONTINUATION_PROMPT,
+            original_task,
+            consolidation.summary,
+            consolidation.stored_keys.empty() ? "(none)" : join(consolidation.stored_keys, ", ")
+        );
+
+        builder.add_message(messages::Message::user_text(continuation_prompt));
+
+        // Reset saved state with new request
+        saved_state_.request = builder.build();
+        saved_state_.iteration = 0;  // Reset iteration count
+        saved_state_.valid = true;
+        saved_state_.saved_at = std::chrono::steady_clock::now();
+
+        // Add initial message to conversation
+        conversation_.add_message(saved_state_.request.messages[0]);
+
+        // Log consolidation stats
+        log(LogLevel::INFO, std::format(
+            "Context consolidated. Stored {} keys. Token usage before: {} in, {} out. Cost so far: ${:.4f}",
+            consolidation.stored_keys.size(),
+            total_usage_before.input_tokens,
+            total_usage_before.output_tokens,
+            total_usage_before.estimated_cost()
+        ));
+
+        // Mark consolidation complete
+        context_state_.consolidation_in_progress = false;
+    }
+
     void apply_incremental_caching() {
         if (saved_state_.request.messages.size() < 2) {
             return;
@@ -724,6 +943,12 @@ private:
             // Create request for this iteration
             api::ChatRequest current_request = saved_state_.request;
 
+            // Check if we need to consolidate context BEFORE sending
+            if (should_consolidate_context(current_request) && !context_state_.consolidation_in_progress) {
+                trigger_context_consolidation();
+                continue;  // Loop will create consolidation request next iteration
+            }
+
             // Send request
             api::ChatResponse response = api_client_.send_request(current_request);
 
@@ -748,7 +973,7 @@ private:
 
             validate_thinking_preservation(response);
 
-            // Track token usage with enhanced cache monitoring
+            // Track token + cache usage
             token_tracker_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
             update_cache_stats(response.usage);
@@ -761,7 +986,17 @@ private:
             // Process tool calls
             std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
-            // When adding tool results, combine them but don't add cache control here
+            // Check if this was a consolidation response
+            if (context_state_.consolidation_in_progress) {
+                ConsolidationResult consolidation = process_consolidation_response(response.message, tool_results);
+                if (consolidation.success) {
+                    rebuild_after_consolidation(consolidation);
+                    iteration = 0;  // incremented on loop start
+                    continue;
+                }
+            }
+
+            // When adding tool results, combine them
             if (!tool_results.empty()) {
                 messages::Message combined_results = messages::Message(messages::Role::User);
 
@@ -780,7 +1015,7 @@ private:
 
             // Handle end turn without tools
             if (response.stop_reason == api::StopReason::EndTurn && !response.has_tool_calls() && !task_complete) {
-                if (iteration > 1) {
+                if (iteration > 1 && !context_state_.consolidation_in_progress) {
                     // Add a user message to continue
                     messages::Message continue_msg = messages::Message::user_text(
                         "Please continue your analysis and use tools to gather more information or submit your final report."
@@ -788,15 +1023,6 @@ private:
                     saved_state_.request.messages.push_back(continue_msg);
                     conversation_.add_message(continue_msg);
                 }
-            }
-
-            // Check conversation length and provide cache efficiency info
-            if (conversation_.message_count() > 200) {
-                log(LogLevel::WARNING,
-                    std::format("Conversation getting long ({} messages). Cache hit rate: {:.1f}%",
-                        conversation_.message_count(),
-                        cache_stats_.get_hit_rate() * 100));
-                log(LogLevel::INFO, "Consider starting a new analysis for better performance");
             }
         }
 
@@ -948,8 +1174,7 @@ private:
 
         // Ensure the message being saved includes thinking blocks
         std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
-        std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.
-                get_redacted_thinking_blocks();
+        std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
         if (thinking_blocks.empty() && redacted_blocks.empty()) {
             log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
