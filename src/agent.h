@@ -285,6 +285,7 @@ After storing everything, provide a CONSOLIDATION SUMMARY that includes:
 - Key insights discovered so far
 - Next steps needed to complete the analysis
 
+Remember: After storing all of your information using tool calls, provide a CONSOLIDATION SUMMARY as a text response! This is important.
 Remember: Only information you store or summarize will be available after consolidation!)";
 
 
