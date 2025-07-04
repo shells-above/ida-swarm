@@ -33,7 +33,7 @@ private:
 
 public:
     AgentState() {
-        mutex_ = qmutex_create();  // Initialize in constructor
+        mutex_ = qmutex_create();
     }
 
     ~AgentState() {
@@ -41,6 +41,10 @@ public:
             qmutex_free(mutex_);
         }
     }
+
+    // Delete copy operations
+    AgentState(const AgentState&) = delete;
+    AgentState& operator=(const AgentState&) = delete;
 
     Status get_status() const {
         qmutex_locker_t lock(mutex_);
@@ -394,10 +398,12 @@ public:
     void set_task(const std::string& task) {
         {
             qmutex_locker_t lock(queue_mutex_);
+
             // Clear any pending tasks
             while (!task_queue_.empty()) {
                 task_queue_.pop();
             }
+
             task_queue_.push(AgentTask::new_task(task));
         }
 

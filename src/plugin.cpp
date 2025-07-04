@@ -536,7 +536,7 @@ static plugmod_t* idaapi init() {
 // Plugin description - must be in global namespace for IDA to load it
 plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
-    PLUGIN_MULTI | PLUGIN_FIX,                 // PLUGIN_FIX to improve stability
+    PLUGIN_MULTI | PLUGIN_FIX,
     llm_re::init,
     nullptr,                                   // term must be nullptr for PLUGIN_MULTI
     nullptr,                                   // run must be nullptr for PLUGIN_MULTI
