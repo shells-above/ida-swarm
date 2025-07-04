@@ -16,6 +16,16 @@
 
 namespace llm_re {
 
+// Unified message types for agent callbacks
+enum class AgentMessageType {
+    Log,                    // {level: int, message: string}
+    ApiMessage,            // {type: string, content: json, iteration: int}
+    StateChanged,          // {status: int}
+    ToolStarted,           // {tool_id: string, tool_name: string, input: json}
+    ToolExecuted,          // {tool_id: string, tool_name: string, input: json, result: json}
+    FinalReport,           // {report: string}
+};
+
 // Agent state management
 class AgentState {
 public:
@@ -249,13 +259,8 @@ private:
         std::chrono::steady_clock::time_point saved_at;
     } saved_state_;
 
-    // Callbacks
-    std::function<void(LogLevel, const std::string&)> log_callback_;
-    std::function<void(const std::string&, const json&, int)> message_log_callback_;
-    std::function<void(const std::string&)> final_report_callback_;
-    std::function<void(const std::string&, const std::string&, const json&)> tool_started_callback_;
-    std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
-    std::function<void(AgentState::Status)> state_change_callback_;
+    // Single unified callback
+    std::function<void(AgentMessageType, const json&)> message_callback_;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
@@ -335,8 +340,6 @@ Tips:
 
 What's your next step to complete the task?)";
 
-
-
 public:
     REAgent(const Config& config)
         : config_(config),
@@ -353,7 +356,10 @@ public:
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
-            log(level, msg);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(level)},
+                {"message", msg}
+            });
         });
     }
 
@@ -420,7 +426,10 @@ public:
 
     void resume() {
         if (!state_.is_paused() || !saved_state_.valid) {
-            log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "Cannot resume - agent is not paused or no saved state"}
+            });
             return;
         }
 
@@ -435,7 +444,10 @@ public:
 
     void continue_with_task(const std::string& additional_task) {
         if (!state_.is_completed() && !state_.is_idle()) {
-            log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "Cannot continue - agent must be completed or idle"}
+            });
             return;
         }
 
@@ -451,30 +463,18 @@ public:
     std::string get_last_error() const { return last_error_; }
     void clear_last_error() { last_error_.clear(); }
 
-    // Callbacks
-    void set_log_callback(std::function<void(LogLevel, const std::string&)> callback) {
-        log_callback_ = callback;
-    }
+    // Single callback setter
+    void set_message_callback(std::function<void(AgentMessageType, const json&)> callback) {
+        message_callback_ = callback;
 
-    void set_message_log_callback(std::function<void(const std::string&, const json&, int)> callback) {
-        message_log_callback_ = callback;
-        api_client_.set_message_logger(callback);
-    }
-
-    void set_final_report_callback(std::function<void(const std::string&)> callback) {
-        final_report_callback_ = callback;
-    }
-
-    void set_tool_started_callback(std::function<void(const std::string&, const std::string&, const json&)> callback) {
-        tool_started_callback_ = callback;
-    }
-
-    void set_tool_callback(std::function<void(const std::string&, const std::string&, const json&, const json&)> callback) {
-        tool_callback_ = callback;
-    }
-
-    void set_state_change_callback(std::function<void(AgentState::Status)> callback) {
-        state_change_callback_ = callback;
+        // Also set the API client's message logger
+        api_client_.set_message_logger([this](const std::string& type, const json& content, int iteration) {
+            send_message(AgentMessageType::ApiMessage, {
+                {"type", type},
+                {"content", content},
+                {"iteration", iteration}
+            });
+        });
     }
 
     // State queries
@@ -553,9 +553,15 @@ public:
         if (file.is_open()) {
             file << memory_->export_memory_snapshot().dump(2);
             file.close();
-            log(LogLevel::INFO, "Memory saved to " + filename);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "Memory saved to " + filename}
+            });
         } else {
-            log(LogLevel::ERROR, "Failed to save memory to " + filename);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::ERROR)},
+                {"message", "Failed to save memory to " + filename}
+            });
         }
     }
 
@@ -566,9 +572,15 @@ public:
             file >> snapshot;
             memory_->import_memory_snapshot(snapshot);
             file.close();
-            log(LogLevel::INFO, "Memory loaded from " + filename);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "Memory loaded from " + filename}
+            });
         } else {
-            log(LogLevel::ERROR, "Failed to load memory from " + filename);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::ERROR)},
+                {"message", "Failed to load memory from " + filename}
+            });
         }
     }
 
@@ -582,11 +594,24 @@ public:
     }
 
 private:
+    // Helper to send messages through callback
+    void send_message(AgentMessageType type, const json& data) {
+        if (message_callback_) {
+            message_callback_(type, data);
+        }
+    }
+
+    void send_log(LogLevel level, const std::string& msg) {
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(level)},
+            {"message", msg}
+        });
+    }
+
     // Worker thread main loop
     void worker_loop() {
         while (!stop_requested_) {
             AgentTask task;
-
             // Get next task
             {
                 qmutex_locker_t lock(queue_mutex_);
@@ -599,8 +624,6 @@ private:
                 task = task_queue_.front();
                 task_queue_.pop();
             }
-
-            log(LogLevel::INFO, "worker got task");
 
             // Process task
             try {
@@ -618,7 +641,7 @@ private:
                         break;
                 }
             } catch (const std::exception& e) {
-                log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
+                send_log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
                 change_state(AgentState::Status::Idle);
             }
         }
@@ -672,12 +695,12 @@ private:
     // Process resume
     void process_resume() {
         if (!saved_state_.valid) {
-            log(LogLevel::ERROR, "No valid saved state to resume from");
+            send_log(LogLevel::ERROR, "No valid saved state to resume from");
             change_state(AgentState::Status::Idle);
             return;
         }
 
-        log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(saved_state_.iteration));
+        send_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(saved_state_.iteration));
 
         // Continue from saved state
         run_analysis_loop();
@@ -685,10 +708,10 @@ private:
 
     // Process continue
     void process_continue(const std::string& additional) {
-        log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
+        send_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
 
         if (!saved_state_.valid) {
-            log(LogLevel::WARNING, "No saved state found while continuing");
+            send_log(LogLevel::WARNING, "No saved state found while continuing");
             change_state(AgentState::Status::Idle);
             return;
         }
@@ -700,7 +723,10 @@ private:
         // Update thinking settings if needed
         if (should_use_interleaved && !saved_state_.request.enable_interleaved_thinking) {
             saved_state_.request.enable_interleaved_thinking = true;
-            log(LogLevel::INFO, "Enabling interleaved thinking for continuation");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "Enabling interleaved thinking for continuation"}
+            });
         }
 
         // Add user message to saved request
@@ -708,7 +734,10 @@ private:
 
         // Check for cache invalidation scenario
         if (saved_state_.request.enable_thinking && has_non_tool_result_content(continue_msg)) {
-            log(LogLevel::WARNING, "Non-tool-result user message will invalidate thinking block cache.");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "Non-tool-result user message will invalidate thinking block cache."}
+            });
         }
 
         saved_state_.request.messages.push_back(continue_msg);
@@ -780,7 +809,10 @@ private:
 
     // Trigger context consolidation
     void trigger_context_consolidation() {
-        log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::WARNING)},
+            {"message", "Context limit reached. Initiating memory consolidation..."}
+        });
 
         context_state_.consolidation_in_progress = true;
         context_state_.consolidation_count++;
@@ -812,7 +844,10 @@ private:
             result.summary = *text_content;
             result.success = true;
         } else {
-            log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "After attempting consolidation, the LLM did not provide a summary"}
+            });
 
             // Fallback summary in case LLM didn't make one (which would be bad)
             result.summary = std::format("Consolidated {} findings to memory. Keys: {}",
@@ -826,7 +861,10 @@ private:
 
     // Rebuild conversation after consolidation
     void rebuild_after_consolidation(const ConsolidationResult& consolidation) {
-        log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", "Rebuilding conversation with consolidated memory..."}
+        });
 
         // Save current task and token stats
         std::string original_task = state_.get_task();
@@ -876,13 +914,16 @@ private:
         conversation_.add_message(saved_state_.request.messages[0]);
 
         // Log consolidation stats
-        log(LogLevel::INFO, std::format(
-            "Context consolidated. Stored {} keys. Token usage before: {} in, {} out. Cost so far: ${:.4f}",
-            consolidation.stored_keys.size(),
-            total_usage_before.input_tokens,
-            total_usage_before.output_tokens,
-            total_usage_before.estimated_cost()
-        ));
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", std::format(
+                "Context consolidated. Stored {} keys. Token usage before: {} in, {} out. Cost so far: ${:.4f}",
+                consolidation.stored_keys.size(),
+                total_usage_before.input_tokens,
+                total_usage_before.output_tokens,
+                total_usage_before.estimated_cost()
+            )}
+        });
 
         // Mark consolidation complete
         context_state_.consolidation_in_progress = false;
@@ -968,7 +1009,10 @@ private:
 
         while (iteration < config_.agent.max_iterations && !stop_requested_ && !task_complete && state_.is_running()) {
             if (stop_requested_) {
-                log(LogLevel::INFO, "Analysis interrupted by stop request");
+                send_message(AgentMessageType::Log, {
+                    {"level", static_cast<int>(LogLevel::INFO)},
+                    {"message", "Analysis interrupted by stop request"}
+                });
                 break;
             }
 
@@ -976,7 +1020,10 @@ private:
             saved_state_.iteration = iteration;
             api_client_.set_iteration(iteration);
 
-            log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "Iteration " + std::to_string(iteration)}
+            });
 
             // Apply caching for continuation
             if (iteration > 1) {
@@ -1005,12 +1052,18 @@ private:
                 std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
                 std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
-                log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks",
-                    thinking_blocks.size(), redacted_blocks.size()));
+                send_message(AgentMessageType::Log, {
+                    {"level", static_cast<int>(LogLevel::INFO)},
+                    {"message", std::format("Response contains {} thinking blocks and {} redacted blocks",
+                        thinking_blocks.size(), redacted_blocks.size())}
+                });
 
                 // Log thinking summary if available
                 if (!thinking_blocks.empty()) {
-                    log(LogLevel::DEBUG, "Thinking: " + thinking_blocks[0]->thinking);
+                    send_message(AgentMessageType::Log, {
+                        {"level", static_cast<int>(LogLevel::DEBUG)},
+                        {"message", "Thinking: " + thinking_blocks[0]->thinking}
+                    });
                 }
             }
 
@@ -1070,7 +1123,10 @@ private:
         }
 
         if (iteration >= config_.agent.max_iterations && !task_complete) {
-            log(LogLevel::WARNING, "Reached maximum iterations without completing task");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "Reached maximum iterations without completing task"}
+            });
             change_state(AgentState::Status::Completed);
         } else if (task_complete) {
             change_state(AgentState::Status::Completed);
@@ -1122,36 +1178,45 @@ private:
         std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
 
         for (const messages::ToolUseContent* tool_use: tool_calls) {
-            log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump())}
+            });
 
             // Track tool call
             conversation_.track_tool_call(tool_use->id, tool_use->name, iteration);
 
-            // Call tool started callback
-            if (tool_started_callback_) {
-                tool_started_callback_(tool_use->id, tool_use->name, tool_use->input);
-            }
+            // Send tool started message
+            send_message(AgentMessageType::ToolStarted, {
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input}
+            });
 
             // Execute tool
             messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
             results.push_back(result_msg);
 
-            // Call the tool callback
-            if (tool_callback_) {
-                // Extract result content from the message
-                json result_json;
-                for (const std::unique_ptr<messages::Content>& content: result_msg.contents()) {
-                    if (auto tool_result = dynamic_cast<const messages::ToolResultContent*>(content.get())) {
-                        try {
-                            result_json = json::parse(tool_result->content);
-                        } catch (...) {
-                            result_json = {{"content", tool_result->content}};
-                        }
-                        break;
+            // Extract result content
+            json result_json;
+            for (const std::unique_ptr<messages::Content>& content: result_msg.contents()) {
+                if (auto tool_result = dynamic_cast<const messages::ToolResultContent*>(content.get())) {
+                    try {
+                        result_json = json::parse(tool_result->content);
+                    } catch (...) {
+                        result_json = {{"content", tool_result->content}};
                     }
+                    break;
                 }
-                tool_callback_(tool_use->id, tool_use->name, tool_use->input, result_json);
             }
+
+            // Send tool executed message
+            send_message(AgentMessageType::ToolExecuted, {
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input},
+                {"result", result_json}
+            });
 
             // Special handling for final report
             if (tool_use->name == "submit_final_report") {
@@ -1178,7 +1243,10 @@ private:
     // Handle API errors
     void handle_api_error(const api::ChatResponse& response) {
         if (!response.error) {
-            log(LogLevel::ERROR, "Unknown API error");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::ERROR)},
+                {"message", "Unknown API error"}
+            });
             change_state(AgentState::Status::Idle);
             last_error_ = "Unknown API error";
             return;
@@ -1189,17 +1257,29 @@ private:
         // Check for thinking-specific errors
         if (error_msg.find("thinking") != std::string::npos ||
             error_msg.find("budget_tokens") != std::string::npos) {
-            log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
-            log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
-            }
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::ERROR)},
+                {"message", "Thinking-related error: " + error_msg}
+            });
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "Consider adjusting thinking budget or disabling thinking"}
+            });
+        }
 
         if (api::AnthropicClient::is_recoverable_error(response)) {
-            log(LogLevel::INFO, "You can resume the analysis");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::INFO)},
+                {"message", "You can resume the analysis"}
+            });
             change_state(AgentState::Status::Paused);
             saved_state_.valid = true;
             last_error_ = "API Error (recoverable): " + error_msg;
         } else {
-            log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::ERROR)},
+                {"message", "Unrecoverable API error: " + error_msg}
+            });
             change_state(AgentState::Status::Idle);
             saved_state_.valid = false;
             last_error_ = "API Error: " + error_msg;
@@ -1216,60 +1296,55 @@ private:
         std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
         if (thinking_blocks.empty() && redacted_blocks.empty()) {
-            log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::WARNING)},
+                {"message", "Tool calls present but no thinking blocks found - this might indicate an issue"}
+            });
         } else {
-            log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
-                thinking_blocks.size() + redacted_blocks.size()));
+            send_message(AgentMessageType::Log, {
+                {"level", static_cast<int>(LogLevel::DEBUG)},
+                {"message", std::format("Preserving {} thinking blocks with tool calls",
+                    thinking_blocks.size() + redacted_blocks.size())}
+            });
         }
     }
 
     // Handle final report
     void handle_final_report(const std::string& report) {
-        log(LogLevel::INFO, "=== FINAL REPORT ===");
-        log(LogLevel::INFO, report);
-        log(LogLevel::INFO, "===================");
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", "=== FINAL REPORT ==="}
+        });
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", report}
+        });
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", "==================="}
+        });
 
-        if (final_report_callback_) {
-            final_report_callback_(report);
-        }
+        send_message(AgentMessageType::FinalReport, {
+            {"report", report}
+        });
 
-        log(LogLevel::INFO, "Task completed. You can continue with additional instructions");
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", "Task completed. You can continue with additional instructions"}
+        });
     }
 
     // changes and notifies ui of agent state
     void change_state(AgentState::Status new_status) {
         state_.set_status(new_status);
 
-        if (state_change_callback_) {
-            log(LogLevel::INFO, "State changed to: " + std::to_string(static_cast<int>(new_status)));
-            state_change_callback_(new_status);
-        }
-    }
-
-    void log(LogLevel level, const std::string& message) {
-        if (log_callback_) {
-            log_callback_(level, message);
-        }
+        send_message(AgentMessageType::StateChanged, {
+            {"status", static_cast<int>(new_status)}
+        });
     }
 
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
         api::TokenUsage total = token_tracker_.get_total();
-
-        // // Debug logging for cache token tracking
-        // if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
-        //     log(LogLevel::DEBUG, std::format("Cache tokens detected - Read: {}, Write: {}, Model: {}",
-        //         usage.cache_read_tokens, usage.cache_creation_tokens, api::model_to_string(usage.model)));
-        // }
-        //
-        // // Debug cost calculation
-        // log(LogLevel::DEBUG, std::format("Cost breakdown - Input: ${:.4f}, Output: ${:.4f}, Cache Read: ${:.4f}, Cache Write: ${:.4f}, Total Model: {}",
-        //     usage.input_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.0 : 0.0),
-        //     usage.output_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 15.0 : 0.0),
-        //     usage.cache_read_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 0.30 : 0.0),
-        //     usage.cache_creation_tokens / 1000000.0 * (usage.model == api::Model::Sonnet4 ? 3.75 : 0.0),
-        //     api::model_to_string(total.model)));
-        // log(LogLevel::DEBUG, std::format("Total cost: ${:.4f} (Input: {}, Output: {}, Cache Read: {}, Cache Write: {})",
-        //     total.estimated_cost(), total.input_tokens, total.output_tokens, total.cache_read_tokens, total.cache_creation_tokens));
 
         std::stringstream ss;
         ss << "[Iteration " << iteration << "] ";
@@ -1289,7 +1364,10 @@ private:
                << cache_stats_.total_cache_savings << " saved";
         }
 
-        log(LogLevel::INFO, ss.str());
+        send_message(AgentMessageType::Log, {
+            {"level", static_cast<int>(LogLevel::INFO)},
+            {"message", ss.str()}
+        });
     }
 
 public:

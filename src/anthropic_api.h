@@ -837,7 +837,11 @@ public:
     }
 
     TokenUsage get_last_usage() const {
-        return history.back().second;
+        if (!history.empty()) {
+            return history.back().second;
+        } else {
+            return TokenUsage();
+        }
     }
 
     double get_session_duration_minutes() const {

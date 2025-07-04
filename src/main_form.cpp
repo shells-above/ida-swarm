@@ -113,7 +113,7 @@ void MainForm::setup_ui() {
     resize(1200, 800);
 
     // Ensure window is properly managed
-    setAttribute(Qt::WA_DeleteOnClose, false);  // We'll manage deletion ourselves
+    // setAttribute(Qt::WA_DeleteOnClose, false);  // We'll manage deletion ourselves
 }
 
 void MainForm::setup_menus() {
@@ -401,68 +401,20 @@ void MainForm::setup_agent() {
     // Create agent
     agent_ = std::make_unique<REAgent>(*config_);
 
-    // Set callbacks
-    agent_->set_log_callback([this](LogLevel level, const std::string& msg) {
+    // Set single callback
+    agent_->set_message_callback([this](AgentMessageType type, const json& data) {
         if (shutting_down_) return;
 
-        int level_int = static_cast<int>(level);
-        QMetaObject::invokeMethod(this, "on_agent_log",
-                                 Qt::QueuedConnection,
-                                 Q_ARG(int, level_int),
-                                 Q_ARG(QString, QString::fromStdString(msg)));
-    });
+        // Convert JSON to QString for Qt's signal/slot system
+        QString data_str = QString::fromStdString(data.dump());
 
-    agent_->set_message_log_callback([this](const std::string& type, const json& content, int iteration) {
-        if (shutting_down_) return;
-
-        current_iteration_ = iteration;
-
-        // Convert JSON content to string for simplicity
-        std::string content_str = content.dump(2);
-
+        // Use Qt's thread-safe invocation
         QMetaObject::invokeMethod(this, "on_agent_message",
                                  Qt::QueuedConnection,
-                                 Q_ARG(QString, QString::fromStdString(type)),
-                                 Q_ARG(QString, QString::fromStdString(content_str)));
+                                 Q_ARG(int, static_cast<int>(type)),
+                                 Q_ARG(QString, data_str));
     });
 
-    agent_->set_state_change_callback([this](AgentState::Status status) {
-        // Use Qt's thread-safe invocation since this comes from worker thread
-        QMetaObject::invokeMethod(this, [this, status]() {
-            handle_agent_state_change(status);
-        }, Qt::QueuedConnection);
-    });
-
-    agent_->set_tool_started_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input) {
-        if (shutting_down_) return;
-
-        QMetaObject::invokeMethod(this, "on_agent_tool_started",
-                                 Qt::QueuedConnection,
-                                 Q_ARG(QString, QString::fromStdString(tool_id)),
-                                 Q_ARG(QString, QString::fromStdString(tool_name)),
-                                 Q_ARG(QString, QString::fromStdString(input.dump())));
-    });
-
-    agent_->set_tool_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input, const json& result) {
-        if (shutting_down_) return;
-
-        QMetaObject::invokeMethod(this, "on_agent_tool_executed",
-                                 Qt::QueuedConnection,
-                                 Q_ARG(QString, QString::fromStdString(tool_id)),
-                                 Q_ARG(QString, QString::fromStdString(tool_name)),
-                                 Q_ARG(QString, QString::fromStdString(input.dump())),
-                                 Q_ARG(QString, QString::fromStdString(result.dump())));
-    });
-
-    agent_->set_final_report_callback([this](const std::string& report) {
-        if (shutting_down_) return;
-
-        // Add as message to chat
-        messages::Message msg = messages::Message::assistant_text(report);
-        QMetaObject::invokeMethod(this, [this, msg]() {
-            add_message_to_chat(msg);
-        }, Qt::QueuedConnection);
-    });
 
     agent_->start();
 }
@@ -710,57 +662,89 @@ void MainForm::on_new_task_clicked() {
     log(LogLevel::INFO, "Ready for new task");
 }
 
-void MainForm::on_agent_log(int level, const QString& message) {
+void MainForm::on_agent_message(int message_type, const QString& data_str) {
     if (shutting_down_) return;
 
-    LogLevel log_level = static_cast<LogLevel>(level);
-    log(log_level, message.toStdString());
+    // Parse the JSON string back
+    json data;
+    try {
+        data = json::parse(data_str.toStdString());
+    } catch (const std::exception& e) {
+        log(LogLevel::ERROR, "Failed to parse agent message: " + std::string(e.what()));
+        return;
+    }
+
+    AgentMessageType type = static_cast<AgentMessageType>(message_type);
+
+    switch (type) {
+        case AgentMessageType::Log:
+            handle_log_message(data);
+            break;
+        case AgentMessageType::ApiMessage:
+            handle_api_message(data);
+            break;
+        case AgentMessageType::StateChanged:
+            handle_state_changed(data);
+            break;
+        case AgentMessageType::ToolStarted:
+            handle_tool_started(data);
+            break;
+        case AgentMessageType::ToolExecuted:
+            handle_tool_executed(data);
+            break;
+        case AgentMessageType::FinalReport:
+            handle_final_report(data);
+            break;
+    }
 }
 
-void MainForm::on_agent_message(const QString& type, const QString& content) {
-    if (shutting_down_) return;
+void MainForm::handle_log_message(const json& data) {
+    LogLevel level = static_cast<LogLevel>(data["level"].get<int>());
+    std::string message = data["message"];
+    log(level, message);
+}
+
+void MainForm::handle_api_message(const json& data) {
+    std::string type = data["type"];
+    json content = data["content"];
+    int iteration = data["iteration"];
+
+    current_iteration_ = iteration;
 
     // Log the raw message
-    try {
-        json content_json = json::parse(content.toStdString());
-        log_message_to_file(type.toStdString(), content_json);
+    log_message_to_file(type, content);
 
-        // Check for error responses
-        if (type == "RESPONSE" && content_json.contains("type") &&
-            content_json["type"] == "error") {
-            // Log the error details
-            if (content_json.contains("error")) {
-                json error = content_json["error"];
-                std::string error_msg = error.value("message", "Unknown error");
-                std::string error_type = error.value("type", "unknown");
-                int http_code = content_json.value("_http_code", 0);
+    // Check for error responses
+    if (type == "RESPONSE" && content.contains("type") &&
+        content["type"] == "error") {
+        // Log the error details
+        if (content.contains("error")) {
+            json error = content["error"];
+            std::string error_msg = error.value("message", "Unknown error");
+            std::string error_type = error.value("type", "unknown");
+            int http_code = content.value("_http_code", 0);
 
-                log(LogLevel::ERROR, std::format("API Error (HTTP {}): {} - {}",
-                    http_code, error_type, error_msg));
-            }
+            log(LogLevel::ERROR, std::format("API Error (HTTP {}): {} - {}",
+                http_code, error_type, error_msg));
         }
-    } catch (...) {
-        log_message_to_file(type.toStdString(), content.toStdString());
     }
 
     // Add timeline event
     ui::SessionTimelineWidget::Event event;
     event.timestamp = std::chrono::steady_clock::now();
     event.type = "message";
-    event.description = type.toStdString() + ": " + truncate_string(content.toStdString(), 50);
+    event.description = type + ": " + truncate_string(content.dump(), 50);
     timeline_->add_event(event);
 
     // Update UI based on message type
     if (type == "RESPONSE") {
         try {
-            json msg_json = json::parse(content.toStdString());
-
             // Convert API response to Message and add to chat
-            if (msg_json.contains("content")) {
+            if (content.contains("content")) {
                 // Parse the message content
                 std::vector<std::unique_ptr<messages::Content>> contents;
 
-                for (const auto& content_item : msg_json["content"]) {
+                for (const auto& content_item : content["content"]) {
                     if (content_item.contains("type")) {
                         std::string content_type = content_item["type"];
 
@@ -789,26 +773,26 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
             }
 
             // Handle stop reason
-            if (msg_json.contains("stop_reason")) {
-                std::string stop_reason = msg_json["stop_reason"];
-                on_agent_state_changed(QString::fromStdString(stop_reason));
+            if (content.contains("stop_reason")) {
+                std::string stop_reason = content["stop_reason"];
+                status_label_->setText(QString::fromStdString(stop_reason));
             }
 
             // Handle usage stats
-            if (msg_json.contains("usage")) {
-                json usage = msg_json["usage"];
+            if (content.contains("usage")) {
+                json usage = content["usage"];
                 int input = usage.value("input_tokens", 0);
                 int output = usage.value("output_tokens", 0);
                 int cache_read = usage.value("cache_read_input_tokens", 0);
                 int cache_write = usage.value("cache_creation_input_tokens", 0);
                 int total = input + output + cache_read + cache_write;
 
-                token_label_->setText(QString("Tokens: %1 (%2 in, %3 out, %4 cache read, %5 cache write)").arg(total).arg(input).arg(output).arg(cache_read).arg(cache_write));
+                token_label_->setText(QString("Tokens: %1 (%2 in, %3 out, %4 cache read, %5 cache write)")
+                    .arg(total).arg(input).arg(output).arg(cache_read).arg(cache_write));
             }
         } catch (const std::exception& e) {
             log(LogLevel::ERROR, "Failed to parse message: " + std::string(e.what()));
-            // Add more detailed error info for debugging
-            log(LogLevel::DEBUG, "Content was: " + content.toStdString());
+            log(LogLevel::DEBUG, "Content was: " + content.dump());
         }
     }
 
@@ -816,8 +800,8 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
     iteration_label_->setText(QString("Iteration: %1").arg(current_iteration_));
 }
 
-void MainForm::handle_agent_state_change(AgentState::Status status) {
-    if (shutting_down_) return;
+void MainForm::handle_state_changed(const json& data) {
+    AgentState::Status status = static_cast<AgentState::Status>(data["status"].get<int>());
 
     switch (status) {
         case AgentState::Status::Completed: {
@@ -830,7 +814,8 @@ void MainForm::handle_agent_state_change(AgentState::Status status) {
             session.token_usage = agent_->get_token_usage();
             session.message_count = message_list_->count();
             session.success = true;
-            session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - session_start_).count();
+            session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - session_start_).count();
 
             // Update timeline
             timeline_->set_session_info(session.task, session.token_usage);
@@ -900,6 +885,7 @@ void MainForm::handle_agent_state_change(AgentState::Status status) {
             }
             break;
         }
+
         case AgentState::Status::Running: {
             // Already handled by UI
             break;
@@ -907,52 +893,45 @@ void MainForm::handle_agent_state_change(AgentState::Status status) {
     }
 }
 
-void MainForm::on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input) {
-    if (shutting_down_) return;
+void MainForm::handle_tool_started(const json& data) {
+    std::string tool_id = data["tool_id"];
+    std::string tool_name = data["tool_name"];
+    json input = data["input"];
 
-    try {
-        json input_json = json::parse(input.toStdString());
+    // Add tool call to UI with "Running..." status
+    tool_execution_->add_tool_call(tool_id, tool_name, input);
+}
 
-        // Add tool call to UI with "Running..." status
-        tool_execution_->add_tool_call(tool_id.toStdString(), tool_name.toStdString(), input_json);
+void MainForm::handle_tool_executed(const json& data) {
+    std::string tool_id = data["tool_id"];
+    std::string tool_name = data["tool_name"];
+    json input = data["input"];
+    json result = data["result"];
 
-    } catch (const std::exception& e) {
-        log(LogLevel::ERROR, "Failed to parse tool start: " + std::string(e.what()));
+    // Update the existing tool call with the result
+    tool_execution_->update_tool_result(tool_id, result);
+
+    // Add timeline event
+    ui::SessionTimelineWidget::Event event;
+    event.timestamp = std::chrono::steady_clock::now();
+    event.type = "tool";
+    event.description = "Executed: " + tool_name;
+    event.metadata["tool"] = tool_name;
+    event.metadata["success"] = result.value("success", false);
+    timeline_->add_event(event);
+
+    // Update memory view if needed
+    if (agent_) {
+        memory_widget_->update_memory(agent_->get_memory());
     }
 }
 
-void MainForm::on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result) {
-    if (shutting_down_) return;
+void MainForm::handle_final_report(const json& data) {
+    std::string report = data["report"];
 
-    try {
-        json result_json = json::parse(result.toStdString());
-
-        // Update the existing tool call with the result
-        tool_execution_->update_tool_result(tool_id.toStdString(), result_json);
-
-        // Add timeline event
-        ui::SessionTimelineWidget::Event event;
-        event.timestamp = std::chrono::steady_clock::now();
-        event.type = "tool";
-        event.description = "Executed: " + tool_name.toStdString();
-        event.metadata["tool"] = tool_name.toStdString();
-        event.metadata["success"] = result_json.value("success", false);
-        timeline_->add_event(event);
-
-        // Update memory view if needed
-        if (agent_) {
-            memory_widget_->update_memory(agent_->get_memory());
-        }
-
-    } catch (const std::exception& e) {
-        log(LogLevel::ERROR, "Failed to parse tool execution: " + std::string(e.what()));
-    }
-}
-
-void MainForm::on_agent_state_changed(const QString& state) {
-    if (shutting_down_) return;
-
-    status_label_->setText(state);
+    // Add as message to chat
+    messages::Message msg = messages::Message::assistant_text(report);
+    add_message_to_chat(msg);
 }
 
 void MainForm::on_address_clicked(ea_t addr) {

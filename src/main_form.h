@@ -74,13 +74,8 @@ private slots:
     void on_continue_clicked();
     void on_new_task_clicked();
 
-    // Agent callbacks
-    void on_agent_log(int level, const QString& message);
-    void on_agent_message(const QString& type, const QString& content);
-    void handle_agent_state_change(AgentState::Status status);
-    void on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input);
-    void on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result);
-    void on_agent_state_changed(const QString& state);
+    // Single agent message handler
+    void on_agent_message(int message_type, const QString& data_str);
 
     // UI updates
     void on_address_clicked(ea_t addr);
@@ -122,6 +117,14 @@ private:
     void export_session(const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
     std::string format_timestamp(const std::chrono::system_clock::time_point& tp);
+
+    // Agent message handlers
+    void handle_log_message(const json& data);
+    void handle_api_message(const json& data);
+    void handle_state_changed(const json& data);
+    void handle_tool_started(const json& data);
+    void handle_tool_executed(const json& data);
+    void handle_final_report(const json& data);
 
     // Core components
     std::unique_ptr<REAgent> agent_;

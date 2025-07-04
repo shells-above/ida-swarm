@@ -401,19 +401,20 @@ bool llm_plugin_t::run(size_t arg) {
     return true;
 }
 
-void llm_plugin_t::show_main_form() {
+    void llm_plugin_t::show_main_form() {
     if (shutting_down) {
         return;
     }
 
     if (!main_form || form_closed) {
-        // Create form with proper parent
-        QWidget* parent = QApplication::activeWindow();
-        main_form = new MainForm(parent);
+        // Create form with proper parent - use nullptr for independent window
+        main_form = new MainForm(nullptr);
         form_closed = false;
 
-        // Set window flags to ensure proper cleanup
-        main_form->setWindowFlags(main_form->windowFlags() | Qt::Window);
+        Qt::WindowFlags flags = Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
+                                Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint;
+
+        main_form->setWindowFlags(flags);
 
         // Connect destroyed signal to mark form as closed
         QObject::connect(main_form, &QObject::destroyed, [this]() {
