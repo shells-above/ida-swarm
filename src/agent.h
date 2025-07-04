@@ -326,7 +326,7 @@ We've consolidated the analysis to memory due to context limits. Here's the stat
 You can retrieve any stored information using get_analysis with these keys. Continue the analysis from where we left off.
 
 Tips:
-- Use get_analysis to retrieve specific findings as needed
+- Use get_analysis to retrieve specific findings as needed (or get all available analyses)
 - Focus on completing the remaining work for the original task
 
 What's your next step to complete the task?)";
