@@ -1612,17 +1612,58 @@ void TaskTemplateWidget::load_templates() {
     templates.push_back(func_template);
 
     // Vulnerability search
-    TaskTemplate vuln_template;
-    vuln_template.name = "Find Vulnerabilities";
-    vuln_template.description = "Search for common vulnerabilities";
-    vuln_template.task = "Search for potential security vulnerabilities in the current binary. "
-                        "Focus on:\n"
-                        "- Buffer overflows\n"
-                        "- Format string bugs\n"
-                        "- Integer overflows\n"
-                        "- Use after free\n"
-                        "- Race conditions";
-    templates.push_back(vuln_template);
+    TaskTemplate vuln_template_phase1;
+    vuln_template_phase1.name = "Finding Vulnerabilities - Phase 1";
+    vuln_template_phase1.description = "Hunt for promising vulnerabilities";
+    vuln_template_phase1.task = R"(Think like a security researcher analyzing this binary for vulnerabilities.
+
+Start by identifying what an attacker can control - any input vectors, files they could modify, network data they could send, IPC they could influence. Work backwards from "what can I control?" to "what code processes my input?"
+
+As you explore, look for:
+- Code that handles attacker-controlled data carelessly
+- Assumptions the developers made that you could violate
+- Complex parsing or state machines you could confuse
+- Anywhere trust boundaries are crossed
+
+When you spot something promising, use store_analysis to note:
+- What you control and how
+- What vulnerable code it reaches
+- Why you think it's exploitable
+
+Don't get bogged down cataloging everything - follow your instincts about what's most likely to be exploitable. Think adversarially: "How would I break this?"
+
+When you've identified the best candidates, use submit_final_report to summarize your findings and recommend which vulnerability we should pursue first.)";
+    templates.push_back(vuln_template_phase1);
+
+    TaskTemplate vuln_template_phase2;
+    vuln_template_phase2.name = "Finding Vulnerabilities - Phase 2";
+    vuln_template_phase2.description = "Deep dive and prove exploitability";
+    vuln_template_phase2.task = R"(Good find! Now let's prove this is exploitable.
+
+Trace through exactly how we can reach this vulnerable code with controlled input. What constraints do we need to satisfy? What does the memory layout look like? What primitives does this give us?
+
+Work through the technical details - buffer sizes, integer ranges, what we can overwrite. If you hit a roadblock that makes exploitation infeasible, say so and we can pivot to another vulnerability.
+
+Build the exploit narrative: how do we trigger this and what can we achieve?)";
+    templates.push_back(vuln_template_phase2);
+
+    TaskTemplate vuln_template_phase3;
+    vuln_template_phase3.name = "Finding Vulnerabilities - Phase 3";
+    vuln_template_phase3.description = "Build proof-of-concept exploit";
+    vuln_template_phase3.task = R"(Let's build a working exploit for this vulnerability.
+
+Create proof-of-concept code or inputs that demonstrate the issue. Consider:
+- What's the minimal trigger?
+- How do we bypass any mitigations?
+- What's our exploitation strategy? (ROP chain? Shellcode? Logic bug abuse?)
+
+Document the exploit with comments in IDA at key locations. Provide either:
+- Actual exploit code/script
+- Detailed steps to trigger manually
+- Specific malformed inputs needed
+
+Make it concrete - this should be something we could actually run to demonstrate impact.)";
+    templates.push_back(vuln_template_phase3);
 
     // Crypto identification
     TaskTemplate crypto_template;

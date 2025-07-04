@@ -77,12 +77,10 @@ private slots:
     // Agent callbacks
     void on_agent_log(int level, const QString& message);
     void on_agent_message(const QString& type, const QString& content);
+    void handle_agent_state_change(AgentState::Status status);
     void on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input);
     void on_agent_tool_executed(const QString& tool_id, const QString& tool_name, const QString& input, const QString& result);
     void on_agent_state_changed(const QString& state);
-    void on_task_completed();
-    void on_task_paused();
-    void on_task_stopped();
 
     // UI updates
     void on_address_clicked(ea_t addr);
@@ -191,7 +189,6 @@ private:
     std::vector<SessionInfo> sessions_;
     std::chrono::steady_clock::time_point session_start_;
     int current_iteration_ = 0;
-    QTimer* status_timer_ = nullptr;
 
     // Actions
     QAction* clear_action_;

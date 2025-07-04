@@ -251,6 +251,7 @@ private:
     std::function<void(const std::string&)> final_report_callback_;
     std::function<void(const std::string&, const std::string&, const json&)> tool_started_callback_;
     std::function<void(const std::string&, const std::string&, const json&, const json&)> tool_callback_;
+    std::function<void(AgentState::Status)> state_change_callback_;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT = R"(You are an advanced reverse engineering agent working inside IDA Pro. Your goal is to analyze binaries and answer specific questions about their functionality.
@@ -271,10 +272,6 @@ Guidelines:
 6. Save confident information in the IDA database through function name setting and adding comments
 7. When you have gathered enough information, submit your final report
 8. Do NOT use decimal to represent your function / data addresses, STICK TO HEXADECIMAL!
-
-When finding security vulnerabilities, the most important part is figuring out what the user could control, and what code that implicates.
-Once you find something promising, and you TRULY believe it is a promising angle, you may start spending more compute on the problem to make sure your reasoning is 100% sound (for example spend more time thinking, etc.)
-
 
 When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
 Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.
@@ -409,7 +406,7 @@ public:
 
         // Update state
         state_.set_task(task);
-        state_.set_status(AgentState::Status::Running);
+        change_state(AgentState::Status::Running);
 
         // Signal worker
         qsem_post(task_semaphore_);
@@ -426,7 +423,7 @@ public:
             task_queue_.push(AgentTask::resume());
         }
 
-        state_.set_status(AgentState::Status::Running);
+        change_state(AgentState::Status::Running);
         qsem_post(task_semaphore_);
     }
 
@@ -441,7 +438,7 @@ public:
             task_queue_.push(AgentTask::continue_with(additional_task));
         }
 
-        state_.set_status(AgentState::Status::Running);
+        change_state(AgentState::Status::Running);
         qsem_post(task_semaphore_);
     }
 
@@ -468,6 +465,10 @@ public:
 
     void set_tool_callback(std::function<void(const std::string&, const std::string&, const json&, const json&)> callback) {
         tool_callback_ = callback;
+    }
+
+    void set_state_change_callback(std::function<void(AgentState::Status)> callback) {
+        state_change_callback_ = callback;
     }
 
     // State queries
@@ -593,6 +594,8 @@ private:
                 task_queue_.pop();
             }
 
+            log(LogLevel::INFO, "worker got task");
+
             // Process task
             try {
                 switch (task.type) {
@@ -610,7 +613,7 @@ private:
                 }
             } catch (const std::exception& e) {
                 log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
-                state_.set_status(AgentState::Status::Idle);
+                change_state(AgentState::Status::Idle);
             }
         }
     }
@@ -664,7 +667,7 @@ private:
     void process_resume() {
         if (!saved_state_.valid) {
             log(LogLevel::ERROR, "No valid saved state to resume from");
-            state_.set_status(AgentState::Status::Idle);
+            change_state(AgentState::Status::Idle);
             return;
         }
 
@@ -680,7 +683,7 @@ private:
 
         if (!saved_state_.valid) {
             log(LogLevel::WARNING, "No saved state found while continuing");
-            state_.set_status(AgentState::Status::Idle);
+            change_state(AgentState::Status::Idle);
             return;
         }
 
@@ -1062,9 +1065,9 @@ private:
 
         if (iteration >= config_.agent.max_iterations && !task_complete) {
             log(LogLevel::WARNING, "Reached maximum iterations without completing task");
-            state_.set_status(AgentState::Status::Completed);
+            change_state(AgentState::Status::Completed);
         } else if (task_complete) {
-            state_.set_status(AgentState::Status::Completed);
+            change_state(AgentState::Status::Completed);
         }
     }
 
@@ -1170,7 +1173,7 @@ private:
     void handle_api_error(const api::ChatResponse& response) {
         if (!response.error) {
             log(LogLevel::ERROR, "Unknown API error");
-            state_.set_status(AgentState::Status::Idle);
+            change_state(AgentState::Status::Idle);
             last_error_ = "Unknown API error";
             return;
         }
@@ -1186,12 +1189,12 @@ private:
 
         if (api::AnthropicClient::is_recoverable_error(response)) {
             log(LogLevel::INFO, "You can resume the analysis");
-            state_.set_status(AgentState::Status::Paused);
+            change_state(AgentState::Status::Paused);
             saved_state_.valid = true;
             last_error_ = "API Error (recoverable): " + error_msg;
         } else {
             log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
-            state_.set_status(AgentState::Status::Idle);
+            change_state(AgentState::Status::Idle);
             saved_state_.valid = false;
             last_error_ = "API Error: " + error_msg;
         }
@@ -1227,7 +1230,16 @@ private:
         log(LogLevel::INFO, "Task completed. You can continue with additional instructions");
     }
 
-    // Logging helpers
+    // changes and notifies ui of agent state
+    void change_state(AgentState::Status new_status) {
+        state_.set_status(new_status);
+
+        if (state_change_callback_) {
+            log(LogLevel::INFO, "State changed to: " + std::to_string(static_cast<int>(new_status)));
+            state_change_callback_(new_status);
+        }
+    }
+
     void log(LogLevel level, const std::string& message) {
         if (log_callback_) {
             log_callback_(level, message);

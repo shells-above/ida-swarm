@@ -426,6 +426,13 @@ void MainForm::setup_agent() {
                                  Q_ARG(QString, QString::fromStdString(content_str)));
     });
 
+    agent_->set_state_change_callback([this](AgentState::Status status) {
+        // Use Qt's thread-safe invocation since this comes from worker thread
+        QMetaObject::invokeMethod(this, [this, status]() {
+            handle_agent_state_change(status);
+        }, Qt::QueuedConnection);
+    });
+
     agent_->set_tool_started_callback([this](const std::string& tool_id, const std::string& tool_name, const json& input) {
         if (shutting_down_) return;
 
@@ -487,7 +494,7 @@ void MainForm::set_current_address(ea_t addr) {
     memory_widget_->set_current_focus(addr);
 }
 
-    void MainForm::on_execute_clicked() {
+void MainForm::on_execute_clicked() {
     if (is_running_ || shutting_down_) return;
 
     std::string task = task_input_->toPlainText().toStdString();
@@ -526,109 +533,8 @@ void MainForm::set_current_address(ea_t addr) {
     messages::Message user_msg = messages::Message::user_text(task);
     add_message_to_chat(user_msg);
 
-    // Just set the task - agent's own worker thread will handle it
+    // Just set the task - agent will notify us when done
     agent_->set_task(task);
-
-    if (status_timer_) {
-        status_timer_->stop();
-        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
-        delete status_timer_;
-        status_timer_ = nullptr;
-    }
-
-    status_timer_ = new QTimer(this);
-    connect(status_timer_, &QTimer::timeout, [this]() {
-        if (!agent_->is_running()) {
-            status_timer_->stop();
-            status_timer_->deleteLater();
-            status_timer_ = nullptr;  // Clear the pointer
-
-            if (agent_->is_completed()) {
-                on_task_completed();
-            } else if (agent_->is_paused()) {
-                on_task_paused();
-            } else {
-                on_task_stopped();
-            }
-        }
-    });
-    status_timer_->start(100);
-}
-
-void MainForm::on_task_completed() {
-    is_running_ = false;
-    update_ui_state();
-
-    // Complete session
-    SessionInfo& session = sessions_.back();
-    session.end_time = std::chrono::system_clock::now();
-    session.token_usage = agent_->get_token_usage();
-    session.message_count = message_list_->count();
-    session.success = true;
-    session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - session_start_).count();
-
-    // Update timeline
-    timeline_->set_session_info(session.task, session.token_usage);
-
-    // Update statistics
-    update_statistics();
-
-    log(LogLevel::INFO, "Task completed successfully");
-
-    // Show continue option
-    task_input_->setVisible(false);
-    continue_widget_->setVisible(true);
-    continue_input_->setFocus();
-}
-
-void MainForm::on_task_paused() {
-    is_running_ = false;
-    update_ui_state();
-
-    std::string error_msg = agent_->get_last_error();
-    if (error_msg.empty()) {
-        error_msg = "Task paused due to error";
-    }
-
-    log(LogLevel::ERROR, "Task paused: " + error_msg);
-
-    QMessageBox::information(this, "Task Paused",
-        "The task has been paused due to a recoverable error.\n\n"
-        "You can click 'Resume' to continue when the API is available again.");
-}
-
-void MainForm::on_task_stopped() {
-    is_running_ = false;
-    update_ui_state();
-
-    // Check why it stopped
-    if (agent_ && !agent_->is_completed() && !agent_->is_paused()) {
-        // It stopped due to an error
-        std::string error_msg = agent_->get_last_error();
-
-        if (!error_msg.empty()) {
-            // Complete session with error
-            if (!sessions_.empty()) {
-                SessionInfo& session = sessions_.back();
-                session.end_time = std::chrono::system_clock::now();
-                session.success = false;
-                session.error_message = error_msg;
-            }
-
-            log(LogLevel::ERROR, "Task failed: " + error_msg);
-
-            // Show error dialog unless it was cancelled
-            if (error_msg.find("cancelled") == std::string::npos) {
-                QMessageBox::critical(this, "Error",
-                    QString("Task failed: %1").arg(QString::fromStdString(error_msg)));
-            }
-        } else {
-            log(LogLevel::WARNING, "Task stopped");
-        }
-    } else {
-        log(LogLevel::WARNING, "Task stopped");
-    }
 }
 
 void MainForm::on_stop_clicked() {
@@ -653,32 +559,7 @@ void MainForm::on_resume_clicked() {
     update_ui_state();
 
     log(LogLevel::INFO, "Resuming task...");
-    agent_->resume();
-
-    if (status_timer_) {
-        status_timer_->stop();
-        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
-        delete status_timer_;
-        status_timer_ = nullptr;
-    }
-
-    status_timer_ = new QTimer(this);
-    connect(status_timer_, &QTimer::timeout, [this]() {
-        if (!agent_->is_running()) {
-            status_timer_->stop();
-            status_timer_->deleteLater();
-            status_timer_ = nullptr;  // Clear the pointer
-
-            if (agent_->is_completed()) {
-                on_task_completed();
-            } else if (agent_->is_paused()) {
-                on_task_paused();
-            } else {
-                on_task_stopped();
-            }
-        }
-    });
-    status_timer_->start(100);
+    agent_->resume();  // agent will notify when done
 }
 
 void MainForm::on_clear_clicked() {
@@ -787,7 +668,7 @@ void MainForm::on_about_clicked() {
         "<p>Copyright © 2025</p>");
 }
 
-    void MainForm::on_continue_clicked() {
+void MainForm::on_continue_clicked() {
     if (shutting_down_) return;
 
     std::string additional_instructions = continue_input_->toPlainText().toStdString();
@@ -813,33 +694,7 @@ void MainForm::on_about_clicked() {
 
     log(LogLevel::INFO, "Continuing with: " + additional_instructions);
 
-    // Just continue with the task - no worker thread needed
-    agent_->continue_with_task(additional_instructions);
-
-    if (status_timer_) {
-        status_timer_->stop();
-        disconnect(status_timer_, nullptr, nullptr, nullptr);  // Disconnect all
-        delete status_timer_;
-        status_timer_ = nullptr;
-    }
-
-    status_timer_ = new QTimer(this);
-    connect(status_timer_, &QTimer::timeout, [this]() {
-        if (!agent_->is_running()) {
-            status_timer_->stop();
-            status_timer_->deleteLater();
-            status_timer_ = nullptr;  // Clear the pointer
-
-            if (agent_->is_completed()) {
-                on_task_completed();
-            } else if (agent_->is_paused()) {
-                on_task_paused();
-            } else {
-                on_task_stopped();
-            }
-        }
-    });
-    status_timer_->start(100);
+    agent_->continue_with_task(additional_instructions);  // agent will notify when done
 }
 
 void MainForm::on_new_task_clicked() {
@@ -959,6 +814,97 @@ void MainForm::on_agent_message(const QString& type, const QString& content) {
 
     // Update iteration
     iteration_label_->setText(QString("Iteration: %1").arg(current_iteration_));
+}
+
+void MainForm::handle_agent_state_change(AgentState::Status status) {
+    if (shutting_down_) return;
+
+    switch (status) {
+        case AgentState::Status::Completed: {
+            is_running_ = false;
+            update_ui_state();
+
+            // Complete session
+            SessionInfo& session = sessions_.back();
+            session.end_time = std::chrono::system_clock::now();
+            session.token_usage = agent_->get_token_usage();
+            session.message_count = message_list_->count();
+            session.success = true;
+            session.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - session_start_).count();
+
+            // Update timeline
+            timeline_->set_session_info(session.task, session.token_usage);
+
+            // Update statistics
+            update_statistics();
+
+            log(LogLevel::INFO, "Task completed successfully");
+
+            // Show continue option
+            task_input_->setVisible(false);
+            continue_widget_->setVisible(true);
+            continue_input_->setFocus();
+            break;
+        }
+
+        case AgentState::Status::Paused: {
+            is_running_ = false;
+            update_ui_state();
+
+            std::string error_msg = agent_->get_last_error();
+            if (error_msg.empty()) {
+                error_msg = "Task paused due to error";
+            }
+
+            log(LogLevel::ERROR, "Task paused: " + error_msg);
+
+            QMessageBox::information(this, "Task Paused",
+                "The task has been paused due to a recoverable error.\n\n"
+                "You can click 'Resume' to continue when the API is available again.");
+            break;
+        }
+
+        case AgentState::Status::Idle: {
+            // Check if this is due to an error
+            if (is_running_) {
+                is_running_ = false;
+                update_ui_state();
+
+                // Check why it stopped
+                if (agent_ && !agent_->is_completed() && !agent_->is_paused()) {
+                    // It stopped due to an error
+                    std::string error_msg = agent_->get_last_error();
+
+                    if (!error_msg.empty()) {
+                        // Complete session with error
+                        if (!sessions_.empty()) {
+                            SessionInfo& session = sessions_.back();
+                            session.end_time = std::chrono::system_clock::now();
+                            session.success = false;
+                            session.error_message = error_msg;
+                        }
+
+                        log(LogLevel::ERROR, "Task failed: " + error_msg);
+
+                        // Show error dialog unless it was cancelled
+                        if (error_msg.find("cancelled") == std::string::npos) {
+                            QMessageBox::critical(this, "Error",
+                                QString("Task failed: %1").arg(QString::fromStdString(error_msg)));
+                        }
+                    } else {
+                        log(LogLevel::WARNING, "Task stopped");
+                    }
+                } else {
+                    log(LogLevel::WARNING, "Task stopped");
+                }
+            }
+            break;
+        }
+        case AgentState::Status::Running: {
+            // Already handled by UI
+            break;
+        }
+    }
 }
 
 void MainForm::on_agent_tool_started(const QString& tool_id, const QString& tool_name, const QString& input) {
