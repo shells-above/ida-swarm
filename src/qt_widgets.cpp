@@ -1617,7 +1617,7 @@ void TaskTemplateWidget::load_templates() {
     vuln_template_phase1.description = "Hunt for promising vulnerabilities";
     vuln_template_phase1.task = R"(Think like a security researcher analyzing this binary for vulnerabilities.
 
-Start by identifying what an attacker can control - any input vectors, files they could modify, network data they could send, IPC they could influence. Work backwards from "what can I control?" to "what code processes my input?"
+Start by identifying what an attacker can control - any input vectors, files they could modify, network data they could send, IPC they could influence. Start by identifying what an attacker can control, then trace forward to see what code processes that input.
 
 As you explore, look for:
 - Code that handles attacker-controlled data carelessly
