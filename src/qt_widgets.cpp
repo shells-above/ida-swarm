@@ -1856,6 +1856,12 @@ void TaskTemplateWidget::on_use_template() {
     int index = template_list->currentRow();
     if (index >= 0 && index < templates.size()) {
         emit template_selected(templates[index]);
+
+        // Close the parent dialog if it exists
+        QDialog* parent_dialog = qobject_cast<QDialog*>(window());
+        if (parent_dialog) {
+            parent_dialog->accept();
+        }
     }
 }
 
