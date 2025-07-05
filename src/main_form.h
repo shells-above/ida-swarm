@@ -91,6 +91,7 @@ private slots:
     // Settings
     void on_settings_changed();
     void load_settings();
+    void save_settings(ui::ConfigWidget& config_widget);
     void save_settings();
 
 private:
@@ -174,12 +175,6 @@ private:
     QDockWidget* memory_dock_;
     QDockWidget* tools_dock_;
     QDockWidget* stats_dock_;
-
-    // Dialogs
-    ui::SearchDialog* search_dialog_ = nullptr;
-    ui::ExportDialog* export_dialog_ = nullptr;
-    ui::ConfigWidget* config_widget_ = nullptr;
-    ui::TaskTemplateWidget* template_widget_ = nullptr;
 
     // Status bar components
     QLabel* status_label_;

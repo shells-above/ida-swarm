@@ -531,59 +531,63 @@ void MainForm::on_clear_clicked() {
 }
 
 void MainForm::on_export_clicked() {
-    if (!export_dialog_) {
-        export_dialog_ = new ui::ExportDialog(this);
+    // Create fresh dialog each time (MODAL - blocks interaction)
+    ui::ExportDialog* export_dialog = new ui::ExportDialog(this);
+
+    if (export_dialog->exec() == QDialog::Accepted) {
+        export_session(export_dialog->get_options());
     }
 
-    if (export_dialog_->exec() == QDialog::Accepted) {
-        export_session(export_dialog_->get_options());
-    }
+    delete export_dialog;  // Clean up after modal dialog
 }
 
-void MainForm::on_settings_clicked() {
-    if (!config_widget_) {
-        config_widget_ = new ui::ConfigWidget();
-        connect(config_widget_, &ui::ConfigWidget::settings_changed,
-                this, &MainForm::on_settings_changed);
-    }
+    void MainForm::on_settings_clicked() {
+    // Create fresh ConfigWidget each time (safer approach)
+    ui::ConfigWidget* config_widget = new ui::ConfigWidget();
+    connect(config_widget, &ui::ConfigWidget::settings_changed,
+            this, &MainForm::on_settings_changed);
 
-    config_widget_->load_settings(*config_);
+    config_widget->load_settings(*config_);
 
-    QDialog dialog(this);
-    dialog.setWindowTitle("Settings");
-    dialog.setModal(true);
-    dialog.resize(600, 500);
+    // Create modal dialog on heap
+    QDialog* dialog = new QDialog(this);
+    dialog->setWindowTitle("Settings");
+    dialog->setModal(true);
+    dialog->resize(600, 500);
 
-    QVBoxLayout* layout = new QVBoxLayout(&dialog);
-    layout->addWidget(config_widget_);
+    QVBoxLayout* layout = new QVBoxLayout(dialog);
+    layout->addWidget(config_widget);
 
-    QDialogButtonBox* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, [this, config_widget, dialog]() {
+        // Save settings before closing
+        save_settings(*config_widget);
+        dialog->accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
     layout->addWidget(buttons);
 
-    if (dialog.exec() == QDialog::Accepted) {
-        on_settings_changed();
-    }
+    dialog->exec();  // Modal - blocks until user clicks OK or Cancel
+    delete dialog;   // Clean up after modal exec()
 }
 
 void MainForm::on_templates_clicked() {
-    if (!template_widget_) {
-        template_widget_ = new ui::TaskTemplateWidget();
-        connect(template_widget_, &ui::TaskTemplateWidget::template_selected,
-                this, &MainForm::on_template_selected);
-    }
+    // Create dialog on heap for modal execution
+    QDialog* dialog = new QDialog(this);
+    dialog->setWindowTitle("Task Templates");
+    dialog->setModal(true);
+    dialog->resize(700, 500);
 
-    QDialog dialog(this);
-    dialog.setWindowTitle("Task Templates");
-    dialog.setModal(true);
-    dialog.resize(700, 500);
+    // Create a new template widget each time (safest approach)
+    ui::TaskTemplateWidget* template_widget = new ui::TaskTemplateWidget();
+    connect(template_widget, &ui::TaskTemplateWidget::template_selected,
+            this, &MainForm::on_template_selected);
 
-    QVBoxLayout* layout = new QVBoxLayout(&dialog);
-    layout->addWidget(template_widget_);
+    QVBoxLayout* layout = new QVBoxLayout(dialog);
+    layout->addWidget(template_widget);
 
-    dialog.exec();
+    dialog->exec();  // Modal dialog - blocks until closed
+    delete dialog;   // Clean up after modal exec()
 }
 
 void MainForm::on_open_log_dir() {
@@ -600,15 +604,16 @@ void MainForm::on_open_log_dir() {
 }
 
 void MainForm::on_search_clicked() {
-    if (!search_dialog_) {
-        search_dialog_ = new ui::SearchDialog(this);
-        connect(search_dialog_, &ui::SearchDialog::result_selected,
-                this, &MainForm::on_search_result_selected);
-    }
+    // Create fresh dialog each time (NON-MODAL - doesn't block)
+    ui::SearchDialog* search_dialog = new ui::SearchDialog(this);
+    search_dialog->setAttribute(Qt::WA_DeleteOnClose);  // Auto-delete when closed
+
+    connect(search_dialog, &ui::SearchDialog::result_selected,
+            this, &MainForm::on_search_result_selected);
 
     // TODO: Update search data
-    search_dialog_->show();
-    search_dialog_->raise();
+    search_dialog->show();  // Non-modal - user can interact with main window
+    search_dialog->raise();
 }
 
 void MainForm::on_about_clicked() {
@@ -1062,7 +1067,6 @@ void MainForm::on_log_level_changed(int index) {
 }
 
 void MainForm::on_settings_changed() {
-    config_widget_->save_settings(*config_);
     save_settings();
 
     // Re-initialize agent with new settings
@@ -1086,6 +1090,11 @@ void MainForm::load_settings() {
     std::string config_path = settings.value("config_path", default_config).toString().toStdString();
 
     config_->load_from_file(config_path);
+}
+
+void MainForm::save_settings(ui::ConfigWidget& config_widget) {
+    config_widget.save_settings(*config_);
+    on_settings_changed();
 }
 
 void MainForm::save_settings() {

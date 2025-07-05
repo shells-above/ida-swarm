@@ -1615,54 +1615,143 @@ void TaskTemplateWidget::load_templates() {
     TaskTemplate vuln_template_phase1;
     vuln_template_phase1.name = "Finding Vulnerabilities - Phase 1";
     vuln_template_phase1.description = "Hunt for promising vulnerabilities";
-    vuln_template_phase1.task = R"(Think like a security researcher analyzing this binary for vulnerabilities.
+    vuln_template_phase1.task = R"(Think like a security researcher analyzing this binary for vulnerabilities, but maintain scientific rigor.
 
-Start by identifying what an attacker can control - any input vectors, files they could modify, network data they could send, IPC they could influence. Start by identifying what an attacker can control, then trace forward to see what code processes that input.
+**Step 1: Attack Surface Mapping**
+- Identify what an attacker can control (input vectors, files, network data, IPC)
+- Document EXACTLY how an attacker would provide this input
+- Verify these inputs are actually reachable in practice
 
-As you explore, look for:
-- Code that handles attacker-controlled data carelessly
-- Assumptions the developers made that you could violate
-- Complex parsing or state machines you could confuse
-- Anywhere trust boundaries are crossed
+**Step 2: Initial Analysis**
+Look for potentially vulnerable patterns:
+- Memory safety issues (buffer overflows, use-after-free, double-free)
+- Integer arithmetic issues (overflow, underflow, signedness)
+- Race conditions and TOCTOU bugs
+- Logic flaws and assumption violations
+- Type confusion and casting issues
+- Injection vulnerabilities (command, SQL, format string)
+- Improper input validation
 
-When you spot something promising, use store_analysis to note:
-- What you control and how
-- What vulnerable code it reaches
-- Why you think it's exploitable
+**Step 3: Hypothesis Formation**
+For each potential issue:
+1. Form a NULL HYPOTHESIS: "This code is secure because..."
+2. Identify what evidence would DISPROVE the null hypothesis
+3. Document your assumptions vs. verified facts
 
-Don't get bogged down cataloging everything - follow your instincts about what's most likely to be exploitable. Think adversarially: "How would I break this?"
+**Step 4: Initial Verification**
+Before claiming ANY vulnerability:
+- Trace the COMPLETE path from input to potentially vulnerable code
+- Identify existing safety mechanisms (bounds checks, validations, locks)
+- Document the specific conditions required to reach the vulnerable code
+- Verify your understanding of the code logic is correct
 
-When you've identified the best candidates, use submit_final_report to summarize your findings and recommend which vulnerability we should pursue first.)";
+**Step 5: Evidence Collection**
+Use store_analysis to document:
+- The specific input you control and how
+- The exact potentially vulnerable code location
+- CONCRETE EVIDENCE of the issue (not just suspicion)
+- Any safety checks that might prevent exploitation
+- Why you believe the null hypothesis is false
+
+Only proceed to submit_final_report if you have CONCRETE EVIDENCE of a vulnerability, not just complex code that "looks suspicious.")";
     templates.push_back(vuln_template_phase1);
 
     TaskTemplate vuln_template_phase2;
     vuln_template_phase2.name = "Finding Vulnerabilities - Phase 2";
     vuln_template_phase2.description = "Deep dive and prove exploitability";
-    vuln_template_phase2.task = R"(Good find! Now let's prove this is exploitable.
+    vuln_template_phase2.task = R"(You've identified a potential vulnerability. Now PROVE it exists and is exploitable.
 
-Trace through exactly how we can reach this vulnerable code with controlled input. What constraints do we need to satisfy? What does the memory layout look like? What primitives does this give us?
+**Step 1: Vulnerability Proof**
+Provide concrete evidence appropriate to the vulnerability type:
+- For memory corruption: Show what gets corrupted and how
+- For race conditions: Demonstrate the race window and impact
+- For logic bugs: Show the violated assumption and consequence
+- For injection: Show unsanitized input reaching a dangerous sink
+- For integer issues: Show the calculation and overflow/underflow
 
-Work through the technical details - buffer sizes, integer ranges, what we can overwrite. If you hit a roadblock that makes exploitation infeasible, say so and we can pivot to another vulnerability.
+**Step 2: Trigger Requirements**
+Document EXACTLY how to trigger the issue:
+- Specific input values or sequences
+- Timing requirements (for races)
+- State requirements (what must be true before trigger)
+- Environmental requirements (permissions, config, etc.)
 
-Build the exploit narrative: how do we trigger this and what can we achieve?)";
+**Step 3: Constraint Analysis**
+Document ALL constraints:
+- Input format and size requirements
+- Authentication/permission requirements
+- Timing windows and reliability
+- Platform or version dependencies
+- Required preconditions or program state
+
+**Step 4: Safety Mechanism Analysis**
+Identify anything that prevents exploitation:
+- Input validation or sanitization
+- Bounds checking or size limits
+- Synchronization mechanisms (for races)
+- Compiler protections (stack canaries, FORTIFY_SOURCE)
+- OS protections (ASLR, DEP, sandboxing)
+
+**Step 5: Exploitability Assessment**
+Determine what primitives this gives an attacker:
+- Information disclosure (what can be leaked?)
+- Memory corruption (arbitrary write? limited write?)
+- Code execution potential
+- Privilege escalation possibility
+- Denial of service only
+
+If you cannot provide concrete evidence and a reliable trigger, state "This vulnerability is UNPROVEN" and either:
+1. Return to Phase 1 for more analysis
+2. Pivot to a different potential vulnerability)";
     templates.push_back(vuln_template_phase2);
 
     TaskTemplate vuln_template_phase3;
     vuln_template_phase3.name = "Finding Vulnerabilities - Phase 3";
     vuln_template_phase3.description = "Build proof-of-concept exploit";
-    vuln_template_phase3.task = R"(Let's build a working exploit for this vulnerability.
+    vuln_template_phase3.task = R"(You've PROVEN a vulnerability exists. Now create a proof of concept.
 
-Create proof-of-concept code or inputs that demonstrate the issue. Consider:
-- What's the minimal trigger?
-- How do we bypass any mitigations?
-- What's our exploitation strategy? (ROP chain? Shellcode? Logic bug abuse?)
+**Prerequisites (must be completed):**
+- [ ] Concrete evidence the vulnerability exists
+- [ ] Reliable trigger conditions documented
+- [ ] Understanding of the impact/primitives gained
+- [ ] Identification of any reliability issues
 
-Document the exploit with comments in IDA at key locations. Provide either:
-- Actual exploit code/script
-- Detailed steps to trigger manually
-- Specific malformed inputs needed
+**Step 1: Minimal Trigger**
+Create the simplest input that demonstrates the issue:
+- Remove all unnecessary complexity
+- Document why each part of the input is necessary
+- Explain what happens at each step
 
-Make it concrete - this should be something we could actually run to demonstrate impact.)";
+**Step 2: Exploitation Strategy**
+Choose and document your approach based on the vulnerability type:
+- Memory corruption: What do you overwrite and why?
+- Race condition: How do you win the race reliably?
+- Logic bug: What assumption do you violate?
+- Injection: What payload do you inject?
+- Info leak: What sensitive data can you extract?
+
+**Step 3: Proof of Concept Code**
+Provide working code with:
+- Setup phase (preparing environment/state)
+- Trigger phase (exploiting the vulnerability)
+- Verification phase (proving it worked)
+- Clear comments explaining each step
+
+**Step 4: Verification Instructions**
+Document how to verify the PoC:
+- How to compile/run it
+- What output indicates success
+- What debugging would show
+- Expected behavior (crash, leak, execution, etc.)
+
+**Step 5: Limitations and Reliability**
+Be honest about:
+- Success rate and reliability
+- Platform/version dependencies
+- Conditions where this fails
+- Distance from full weaponization
+
+Remember: A PoC must demonstrate actual unintended behavior. Simply calling an API with unusual inputs is not a vulnerability unless it causes security-relevant misbehavior.)";
     templates.push_back(vuln_template_phase3);
 
     // Crypto identification
