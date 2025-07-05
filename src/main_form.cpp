@@ -580,8 +580,13 @@ void MainForm::on_templates_clicked() {
 
     // Create a new template widget each time (safest approach)
     ui::TaskTemplateWidget* template_widget = new ui::TaskTemplateWidget();
+
+    // Connect and close dialog when template is selected
     connect(template_widget, &ui::TaskTemplateWidget::template_selected,
-            this, &MainForm::on_template_selected);
+            [this, dialog](const ui::TaskTemplateWidget::TaskTemplate& tmpl) {
+                on_template_selected(tmpl);
+                dialog->accept();  // Close the dialog
+            });
 
     QVBoxLayout* layout = new QVBoxLayout(dialog);
     layout->addWidget(template_widget);
@@ -832,6 +837,7 @@ void MainForm::handle_state_changed(const json& data) {
 
             // Show continue option
             task_input_->setVisible(false);
+            task_input_->clear();
             continue_widget_->setVisible(true);
             continue_input_->setFocus();
             break;
@@ -969,9 +975,17 @@ void MainForm::on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& 
         }
     }
 
-    task_input_->setText(QString::fromStdString(task));
+    // Make sure we're showing the correct widget
+    if (continue_widget_->isVisible()) {
+        // If in continue mode, put it in continue_input
+        continue_input_->setText(QString::fromStdString(task));
+        continue_input_->setFocus();
+    } else {
+        // Otherwise put it in task_input
+        task_input_->setText(QString::fromStdString(task));
+        task_input_->setFocus();
+    }
 }
-
 void MainForm::update_statistics() {
     json tool_stats;
     // TODO: Collect tool usage statistics
