@@ -423,7 +423,7 @@ public:
     }
 
     std::string description() const override {
-        return "Retrieve stored analysis by key, address, type, or search pattern. Call with arguments to get all analysis entries.";
+        return "Retrieve stored analysis by key, address, type, or search pattern. Call with arguments to get all analysis entries (keys + values).";
     }
 
     json parameters_schema() const override {

@@ -869,10 +869,12 @@ private:
 
         // Log consolidation stats
         send_log(LogLevel::INFO, std::format(
-            "Context consolidated. Stored {} keys. Token usage before: {} in, {} out. Cost so far: ${:.4f}",
+            "Context consolidated. Stored {} keys. Token usage before: {} in, {} out, {} cache read, {} cache write. Cost so far: ${:.4f}",
             consolidation.stored_keys.size(),
             total_usage_before.input_tokens,
             total_usage_before.output_tokens,
+            total_usage_before.cache_read_tokens,
+            total_usage_before.cache_creation_tokens,
             total_usage_before.estimated_cost()
         ));
 
