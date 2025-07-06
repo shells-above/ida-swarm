@@ -695,16 +695,6 @@ private:
             return;
         }
 
-        // Check if we should re-enable or adjust thinking for continuation
-        bool had_thinking = saved_state_.request.enable_thinking;
-        bool should_use_interleaved = had_thinking && tool_registry_.has_tools();
-
-        // Update thinking settings if needed
-        if (should_use_interleaved && !saved_state_.request.enable_interleaved_thinking) {
-            saved_state_.request.enable_interleaved_thinking = true;
-            send_log(LogLevel::INFO, "Enabling interleaved thinking for continuation");
-        }
-
         // Add user message to saved request
         messages::Message continue_msg = messages::Message::user_text(additional);
 
