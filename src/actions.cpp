@@ -570,7 +570,6 @@ json ActionExecutor::set_comment(ea_t address, const std::string& comment) {
 }
 
 // Binary info actions
-// Binary info actions
 json ActionExecutor::get_imports(int max_results) {
     json result;
     try {
@@ -644,6 +643,186 @@ json ActionExecutor::get_entry_points(int max_results) {
         if (truncated) {
             result["truncated"] = true;
             result["truncated_at"] = max_results;
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Decompilation-related actions
+json ActionExecutor::get_function_prototype(ea_t address) {
+    json result;
+    try {
+        auto prototype_info = IDAUtils::get_function_prototype(address);
+
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+        result["prototype"] = prototype_info.full_prototype;
+        result["return_type"] = prototype_info.return_type;
+        result["calling_convention"] = prototype_info.calling_convention;
+        result["name"] = prototype_info.function_name;
+
+        json params_json = json::array();
+        for (const auto& param : prototype_info.parameters) {
+            json param_obj;
+            param_obj["index"] = param.index;
+            param_obj["type"] = param.type;
+            param_obj["name"] = param.name;
+            params_json.push_back(param_obj);
+        }
+        result["parameters"] = params_json;
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::set_function_prototype(ea_t address, const std::string& prototype) {
+    json result;
+    try {
+        bool success = IDAUtils::set_function_prototype(address, prototype);
+        result["success"] = success;
+        if (!success) {
+            result["error"] = "Failed to set function prototype. Check syntax.";
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::set_function_parameter_name(ea_t address, int param_index, const std::string& name) {
+    json result;
+    try {
+        bool success = IDAUtils::set_function_parameter_name(address, param_index, name);
+        result["success"] = success;
+        if (!success) {
+            result["error"] = "Failed to set parameter name. Check index.";
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_function_locals(ea_t address) {
+    json result;
+    try {
+        auto locals_info = IDAUtils::get_function_locals(address);
+
+        result["success"] = true;
+        result["address"] = HexAddress(address);
+
+        json locals_json = json::array();
+        for (const auto& local : locals_info.locals) {
+            json local_obj;
+            local_obj["name"] = local.name;
+            local_obj["type"] = local.type;
+            local_obj["location"] = local.location;
+            if (local.location == "stack") {
+                local_obj["offset"] = local.stack_offset;
+            } else if (local.location == "register") {
+                local_obj["register"] = local.reg_name;
+            }
+            locals_json.push_back(local_obj);
+        }
+        result["locals"] = locals_json;
+
+        json args_json = json::array();
+        for (const auto& arg : locals_info.arguments) {
+            json arg_obj;
+            arg_obj["name"] = arg.name;
+            arg_obj["type"] = arg.type;
+            arg_obj["index"] = arg.index;
+            args_json.push_back(arg_obj);
+        }
+        result["arguments"] = args_json;
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::set_local_variable(ea_t address, const std::string& current_name,
+                                       const std::string& new_name, const std::string& new_type) {
+    json result;
+    try {
+        bool success = IDAUtils::set_local_variable(address, current_name, new_name, new_type);
+        result["success"] = success;
+        if (!success) {
+            result["error"] = "Failed to update local variable. Check that variable exists.";
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+// Local types actions
+json ActionExecutor::search_local_types(const std::string& pattern, const std::string& type_kind, int max_results) {
+    json result;
+    try {
+        auto types = IDAUtils::search_local_types(pattern, type_kind, max_results);
+
+        result["success"] = true;
+        json types_json = json::array();
+        for (const auto& type_info : types) {
+            json type_obj;
+            type_obj["name"] = type_info.name;
+            type_obj["kind"] = type_info.kind;
+            type_obj["size"] = type_info.size;
+            types_json.push_back(type_obj);
+        }
+        result["types"] = types_json;
+        result["count"] = types_json.size();
+
+        if (types.size() == max_results) {
+            result["truncated"] = true;
+            result["truncated_at"] = max_results;
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::get_local_type(const std::string& type_name) {
+    json result;
+    try {
+        auto type_def = IDAUtils::get_local_type(type_name);
+
+        result["success"] = true;
+        result["name"] = type_def.name;
+        result["definition"] = type_def.definition;
+        result["kind"] = type_def.kind;
+        result["size"] = type_def.size;
+
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = e.what();
+    }
+    return result;
+}
+
+json ActionExecutor::set_local_type(const std::string& definition, bool replace_existing) {
+    json result;
+    try {
+        auto set_result = IDAUtils::set_local_type(definition, replace_existing);
+
+        result["success"] = set_result.success;
+        result["type_name"] = set_result.type_name;
+        if (!set_result.success) {
+            result["error"] = set_result.error_message;
         }
     } catch (const std::exception& e) {
         result["success"] = false;

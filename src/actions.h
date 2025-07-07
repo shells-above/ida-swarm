@@ -43,6 +43,18 @@ public:
     json get_imports(int max_results);
     json get_entry_points(int max_results);
 
+    // Decompilation-related actions
+    json get_function_prototype(ea_t address);
+    json set_function_prototype(ea_t address, const std::string& prototype);
+    json set_function_parameter_name(ea_t address, int param_index, const std::string& name);
+    json get_function_locals(ea_t address);
+    json set_local_variable(ea_t address, const std::string& current_name, const std::string& new_name, const std::string& new_type);
+
+    // local type actions
+    json search_local_types(const std::string& pattern, const std::string& type_kind, int max_results);
+    json get_local_type(const std::string& type_name);
+    json set_local_type(const std::string& definition, bool replace_existing);
+
     // Consolidated knowledge management
     json store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses);
     json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern);
