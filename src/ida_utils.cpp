@@ -948,4 +948,582 @@ std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_entry_poin
     });
 }
 
+// Decompilation-related
+FunctionPrototypeInfo IDAUtils::get_function_prototype(ea_t address) {
+    return execute_sync_wrapper([address]() {
+        if (!IDAValidators::is_valid_function(address)) {
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
+        }
+
+        FunctionPrototypeInfo info;
+
+        // Get function type info
+        tinfo_t func_type;
+        if (!get_tinfo(&func_type, address)) {
+            // Try to guess from function
+            func_t *func = get_func(address);
+            if (!func || !guess_tinfo(&func_type, address)) {
+                throw std::runtime_error("Cannot get function type information");
+            }
+        }
+
+        // Get function name
+        qstring name;
+        get_func_name(&name, address);
+        info.function_name = name.c_str();
+
+        // Get the full prototype string
+        qstring prototype;
+        func_type.print(&prototype, info.function_name.c_str());
+        info.full_prototype = prototype.c_str();
+
+        // Parse function details
+        func_type_data_t ftd;
+        if (func_type.get_func_details(&ftd)) {
+            // Get return type
+            qstring ret_type;
+            ftd.rettype.print(&ret_type);
+            info.return_type = ret_type.c_str();
+
+            // Get calling convention
+            cm_t cc = ftd.get_cc();
+            switch (cc) {
+                case CM_CC_CDECL: info.calling_convention = "__cdecl"; break;
+                case CM_CC_STDCALL: info.calling_convention = "__stdcall"; break;
+                case CM_CC_PASCAL: info.calling_convention = "__pascal"; break;
+                case CM_CC_FASTCALL: info.calling_convention = "__fastcall"; break;
+                case CM_CC_THISCALL: info.calling_convention = "__thiscall"; break;
+                case CM_CC_SPECIAL: info.calling_convention = "__usercall"; break;
+                default: info.calling_convention = ""; break;
+            }
+
+            // Get parameters
+            for (int i = 0; i < ftd.size(); i++) {
+                FunctionParameter param;
+                param.index = i;
+
+                // Get parameter type
+                qstring param_type;
+                ftd[i].type.print(&param_type);
+                param.type = param_type.c_str();
+
+                // Get parameter name
+                param.name = ftd[i].name.c_str();
+                if (param.name.empty()) {
+                    param.name = "arg" + std::to_string(i);
+                }
+
+                info.parameters.push_back(param);
+            }
+        }
+
+        return info;
+    });
+}
+
+bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype) {
+    return execute_sync_wrapper([address, &prototype]() {
+        if (!IDAValidators::is_valid_function(address)) {
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
+        }
+
+        // Get current function type to check parameter count
+        tinfo_t current_type;
+        func_type_data_t current_ftd;
+        bool has_current_type = false;
+        size_t current_param_count = 0;
+
+        if (get_tinfo(&current_type, address)) {
+            if (current_type.get_func_details(&current_ftd)) {
+                has_current_type = true;
+                current_param_count = current_ftd.size();
+            }
+        }
+
+        // Parse the new prototype
+        tinfo_t new_type;
+        qstring proto_str = prototype.c_str();
+        const char *ptr = proto_str.c_str();
+        qstring func_name;
+
+        if (!parse_decl(&new_type, &func_name, nullptr, ptr, PT_SIL)) {
+            throw std::invalid_argument("Failed to parse function prototype");
+        }
+
+        // Verify it's a function type
+        if (!new_type.is_func()) {
+            throw std::invalid_argument("Parsed type is not a function");
+        }
+
+        // Get details of the new type
+        func_type_data_t new_ftd;
+        if (!new_type.get_func_details(&new_ftd)) {
+            throw std::runtime_error("Failed to get function details from parsed prototype");
+        }
+
+        // Check parameter count matches if we have current type info
+        if (has_current_type && new_ftd.size() != current_param_count) {
+            throw std::invalid_argument(
+                "Parameter count mismatch: current function has " +
+                std::to_string(current_param_count) + " parameters, new prototype has " +
+                std::to_string(new_ftd.size())
+            );
+        }
+
+        // Extract parameter names from the prototype string
+        // This is a bit tricky - we need to parse the prototype more carefully
+        std::vector<std::string> param_names;
+
+        // Find the opening parenthesis
+        size_t paren_start = prototype.find('(');
+        size_t paren_end = prototype.rfind(')');
+        if (paren_start != std::string::npos && paren_end != std::string::npos && paren_start < paren_end) {
+            std::string params_str = prototype.substr(paren_start + 1, paren_end - paren_start - 1);
+
+            // Simple parameter parser - this could be more robust
+            size_t pos = 0;
+            int paren_depth = 0;
+            size_t param_start = 0;
+
+            for (size_t i = 0; i <= params_str.length(); i++) {
+                char c = (i < params_str.length()) ? params_str[i] : ',';
+
+                if (c == '(') paren_depth++;
+                else if (c == ')') paren_depth--;
+
+                if ((c == ',' || i == params_str.length()) && paren_depth == 0) {
+                    if (i > param_start) {
+                        std::string param = params_str.substr(param_start, i - param_start);
+
+                        // Extract parameter name from the parameter declaration
+                        // Look for the last identifier in the parameter
+                        std::string param_name;
+                        size_t last_space = param.rfind(' ');
+                        size_t last_star = param.rfind('*');
+                        size_t last_amp = param.rfind('&');
+
+                        size_t name_start = 0;
+                        if (last_space != std::string::npos) name_start = last_space + 1;
+                        if (last_star != std::string::npos && last_star > name_start) name_start = last_star + 1;
+                        if (last_amp != std::string::npos && last_amp > name_start) name_start = last_amp + 1;
+
+                        // Skip whitespace
+                        while (name_start < param.length() && std::isspace(param[name_start])) name_start++;
+
+                        if (name_start < param.length()) {
+                            param_name = param.substr(name_start);
+                            // Remove any trailing whitespace or special chars
+                            size_t name_end = param_name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
+                            if (name_end != std::string::npos) {
+                                param_name = param_name.substr(0, name_end);
+                            }
+                        }
+
+                        param_names.push_back(param_name);
+                    }
+                    param_start = i + 1;
+                }
+            }
+        }
+
+        // Apply parameter names to the func_type_data_t
+        for (size_t i = 0; i < new_ftd.size() && i < param_names.size(); i++) {
+            if (!param_names[i].empty()) {
+                new_ftd[i].name = param_names[i].c_str();
+            }
+        }
+
+        // Recreate the type with the updated parameter names
+        tinfo_t final_type;
+        if (!final_type.create_func(new_ftd)) {
+            throw std::runtime_error("Failed to create function type with parameter names");
+        }
+
+        // Apply the new type
+        if (!apply_tinfo(address, final_type, TINFO_DEFINITE)) {
+            return false;
+        }
+
+        // If function name was provided in prototype and different, update it
+        if (!func_name.empty()) {
+            qstring current_name;
+            get_func_name(&current_name, address);
+            if (current_name != func_name) {
+                set_name(address, func_name.c_str());
+            }
+        }
+
+        return true;
+    }, MFF_WRITE);
+}
+
+bool IDAUtils::set_function_parameter_name(ea_t address, int param_index, const std::string& name) {
+    return execute_sync_wrapper([address, param_index, &name]() {
+        if (!IDAValidators::is_valid_function(address)) {
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
+        }
+
+        // Get current function type
+        tinfo_t func_type;
+        if (!get_tinfo(&func_type, address)) {
+            func_t *func = get_func(address);
+            if (!func || !guess_tinfo(&func_type, address)) {
+                throw std::runtime_error("Cannot get function type information");
+            }
+        }
+
+        // Get function details
+        func_type_data_t ftd;
+        if (!func_type.get_func_details(&ftd)) {
+            throw std::runtime_error("Cannot get function details");
+        }
+
+        // Check parameter index
+        if (param_index < 0 || param_index >= ftd.size()) {
+            throw std::invalid_argument("Invalid parameter index");
+        }
+
+        // Update parameter name
+        ftd[param_index].name = name.c_str();
+
+        // Create new function type with updated parameter
+        tinfo_t new_type;
+        if (!new_type.create_func(ftd)) {
+            return false;
+        }
+
+        // Apply the updated type
+        return apply_tinfo(address, new_type, TINFO_DEFINITE);
+    }, MFF_WRITE);
+}
+
+FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
+    return execute_sync_wrapper([address]() {
+        if (!IDAValidators::is_valid_function(address)) {
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
+        }
+
+        FunctionLocalsInfo result;
+
+        // Initialize Hex-Rays if needed
+        if (!init_hexrays_plugin()) {
+            throw std::runtime_error("Hex-Rays decompiler not available");
+        }
+
+        func_t *func = get_func(address);
+        if (!func) {
+            throw std::runtime_error("Cannot get function");
+        }
+
+        // Decompile to get local variables
+        hexrays_failure_t hf;
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        if (!cfunc) {
+            throw std::runtime_error("Failed to decompile function");
+        }
+
+        // Get local variables
+        const lvars_t *lvars = cfunc->get_lvars();
+        if (lvars) {
+            for (size_t i = 0; i < lvars->size(); i++) {
+                const lvar_t &lvar = (*lvars)[i];
+
+                // Skip fake variables
+                if (lvar.is_fake_var()) continue;
+
+                LocalVariableInfo var_info;
+                var_info.name = lvar.name.c_str();
+
+                // Get type
+                qstring type_str;
+                lvar.type().print(&type_str);
+                var_info.type = type_str.c_str();
+
+                // Determine location
+                if (lvar.is_stk_var()) {
+                    var_info.location = "stack";
+                    var_info.stack_offset = lvar.get_stkoff();
+                } else if (lvar.is_reg_var()) {
+                    var_info.location = "register";
+                    qstring reg_name;
+                    get_mreg_name(&reg_name, lvar.get_reg1(), lvar.type().get_size());
+                    var_info.reg_name = reg_name.c_str();
+                } else {
+                    var_info.location = "other";
+                }
+
+                // Check if it's an argument
+                bool is_arg = lvar.is_arg_var();
+                if (is_arg) {
+                    FunctionArgument arg;
+                    arg.name = var_info.name;
+                    arg.type = var_info.type;
+
+                    // For arguments, we need to determine the index from the function type
+                    // Get function type to match argument
+                    tinfo_t func_type;
+                    if (get_tinfo(&func_type, address)) {
+                        func_type_data_t ftd;
+                        if (func_type.get_func_details(&ftd)) {
+                            // Find matching argument by name or location
+                            for (int j = 0; j < ftd.size(); j++) {
+                                if (ftd[j].name == lvar.name ||
+                                    (ftd[j].argloc.is_reg() && lvar.is_reg_var() &&
+                                     ftd[j].argloc.reg1() == lvar.get_reg1())) {
+                                    arg.index = j;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    result.arguments.push_back(arg);
+                } else {
+                    result.locals.push_back(var_info);
+                }
+            }
+        }
+
+        // Sort arguments by index
+        std::sort(result.arguments.begin(), result.arguments.end(),
+                  [](const FunctionArgument& a, const FunctionArgument& b) {
+                      return a.index < b.index;
+                  });
+
+        return result;
+    });
+}
+bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name, const std::string& new_name, const std::string& new_type) {
+    return execute_sync_wrapper([address, &current_name, &new_name, &new_type]() {
+        if (!IDAValidators::is_valid_function(address)) {
+            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
+        }
+
+        // Initialize Hex-Rays if needed
+        if (!init_hexrays_plugin()) {
+            throw std::runtime_error("Hex-Rays decompiler not available");
+        }
+
+        func_t *func = get_func(address);
+        if (!func) {
+            throw std::runtime_error("Cannot get function");
+        }
+
+        // First, find the variable using locate_lvar
+        lvar_locator_t ll;
+        if (!locate_lvar(&ll, func->start_ea, current_name.c_str())) {
+            throw std::invalid_argument("Variable not found: " + current_name);
+        }
+
+        // Prepare the saved info
+        lvar_saved_info_t info;
+        info.ll = ll;
+
+        uint mli_flags = 0;
+        bool need_update = false;
+
+        // Update name if provided
+        if (!new_name.empty() && new_name != current_name) {
+            info.name = new_name.c_str();
+            mli_flags |= MLI_NAME;
+            need_update = true;
+        }
+
+        // Update type if provided
+        if (!new_type.empty()) {
+            // Parse the type
+            tinfo_t new_tif;
+            qstring type_str = new_type.c_str();
+            const char *ptr = type_str.c_str();
+            if (!parse_decl(&new_tif, nullptr, nullptr, ptr, PT_TYP | PT_SIL)) {
+                throw std::invalid_argument("Failed to parse type: " + new_type);
+            }
+
+            info.type = new_tif;
+            mli_flags |= MLI_TYPE;
+            need_update = true;
+        }
+
+        if (!need_update) {
+            return false;
+        }
+
+        // Apply the changes
+        return modify_user_lvar_info(func->start_ea, mli_flags, info);
+    }, MFF_WRITE);
+}
+
+std::vector<LocalTypeInfo> IDAUtils::search_local_types(const std::string& pattern, const std::string& type_kind, int max_results) {
+    return execute_sync_wrapper([&pattern, &type_kind, max_results]() {
+        std::vector<LocalTypeInfo> result;
+
+        // Convert pattern to lowercase for case-insensitive search
+        std::string lower_pattern = pattern;
+        std::transform(lower_pattern.begin(), lower_pattern.end(), lower_pattern.begin(), ::tolower);
+
+        // Get local type library
+        til_t *til = get_idati();
+        if (!til) {
+            throw std::runtime_error("Cannot access local type library");
+        }
+
+        int count = 0;
+        uint32 limit = get_ordinal_limit(til);  // Changed from get_ordinal_qty
+        if (limit == 0 || limit == uint32(-1)) {
+            return result; // No ordinals
+        }
+
+        for (uint32 ordinal = 1; ordinal < limit && count < max_results; ordinal++) {
+            const char *name = get_numbered_type_name(til, ordinal);
+            if (!name || name[0] == '\0') continue;  // Skip unnamed types
+
+            std::string type_name = name;
+
+            // Pattern matching
+            if (!pattern.empty()) {
+                std::string lower_name = type_name;
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                if (lower_name.find(lower_pattern) == std::string::npos) continue;
+            }
+
+            // Get type info
+            tinfo_t tif;
+            if (!tif.get_numbered_type(til, ordinal)) continue;
+
+            // Determine type kind
+            std::string kind;
+            if (tif.is_struct()) kind = "struct";
+            else if (tif.is_union()) kind = "union";
+            else if (tif.is_enum()) kind = "enum";
+            else if (tif.is_typedef()) kind = "typedef";
+            else continue; // Skip other types
+
+            // Filter by kind if specified
+            if (type_kind != "any" && type_kind != kind) continue;
+
+            LocalTypeInfo info;
+            info.name = type_name;
+            info.kind = kind;
+            info.size = tif.get_size();
+
+            result.push_back(info);
+            count++;
+        }
+
+        return result;
+    });
+}
+
+LocalTypeDefinition IDAUtils::get_local_type(const std::string& type_name) {
+    return execute_sync_wrapper([&type_name]() {
+        LocalTypeDefinition result;
+
+        til_t *til = get_idati();
+        if (!til) {
+            throw std::runtime_error("Cannot access local type library");
+        }
+
+        // Find the type by name
+        int32 ordinal = get_type_ordinal(til, type_name.c_str());
+        if (ordinal <= 0) {
+            throw std::invalid_argument("Type not found: " + type_name);
+        }
+
+        // Get type info
+        tinfo_t tif;
+        if (!tif.get_numbered_type(til, ordinal)) {
+            throw std::runtime_error("Cannot get type information");
+        }
+
+        result.name = type_name;
+        result.size = tif.get_size();
+
+        // Determine kind
+        if (tif.is_struct()) result.kind = "struct";
+        else if (tif.is_union()) result.kind = "union";
+        else if (tif.is_enum()) result.kind = "enum";
+        else if (tif.is_typedef()) result.kind = "typedef";
+        else result.kind = "unknown";
+
+        // Get the C definition using tinfo_t's print method
+        qstring def;
+        if (!tif.print(&def, type_name.c_str(), PRTYPE_DEF | PRTYPE_MULTI)) {
+            // If that fails, try a simpler format
+            if (!tif.print(&def)) {
+                throw std::runtime_error("Cannot format type definition");
+            }
+        }
+
+        result.definition = def.c_str();
+
+        return result;
+    });
+}
+SetLocalTypeResult IDAUtils::set_local_type(const std::string& definition, bool replace_existing) {
+    return execute_sync_wrapper([&definition, replace_existing]() {
+        SetLocalTypeResult result;
+
+        til_t *til = get_idati();
+        if (!til) {
+            result.success = false;
+            result.error_message = "Cannot access local type library";
+            return result;
+        }
+
+        // Parse the type definition
+        qstring def_str = definition.c_str();
+        const char *ptr = def_str.c_str();
+
+        // Try to parse multiple declarations (in case of dependencies)
+        while (*ptr && qisspace(*ptr)) ptr++;
+
+        while (*ptr) {
+            tinfo_t tif;
+            qstring name;
+
+            // Parse one declaration
+            if (!parse_decl(&tif, &name, til, ptr, PT_TYP | PT_SIL)) {
+                result.success = false;
+                result.error_message = "Failed to parse type definition";
+                return result;
+            }
+
+            if (name.empty()) {
+                result.success = false;
+                result.error_message = "Type definition must include a name";
+                return result;
+            }
+
+            // Check if type already exists
+            int32 existing_ord = get_type_ordinal(til, name.c_str());
+            if (existing_ord > 0 && !replace_existing) {
+                result.success = false;
+                result.error_message = "Type already exists: " + std::string(name.c_str());
+                return result;
+            }
+
+            // Set the type using tinfo_t methods
+            int ntf_flags = NTF_TYPE;
+            if (replace_existing) ntf_flags |= NTF_REPLACE;
+
+            uint32 ordinal = existing_ord > 0 ? existing_ord : 0;
+            tinfo_code_t code = tif.set_numbered_type(til, ordinal, ntf_flags, name.c_str());
+
+            if (code != TERR_OK) {
+                result.success = false;
+                result.error_message = std::string("Failed to add type: ") + tinfo_errstr(code);
+                return result;
+            }
+
+            result.type_name = name.c_str();
+
+            // Skip whitespace and semicolons
+            while (*ptr && (qisspace(*ptr) || *ptr == ';')) ptr++;
+        }
+
+        result.success = true;
+        return result;
+    }, MFF_WRITE);
+}
+
 } // namespace llm_re

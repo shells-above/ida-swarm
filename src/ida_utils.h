@@ -33,6 +33,61 @@ struct DataInfo {
     int xrefs_truncated_at = 0;    // The limit at which truncation occurred
 };
 
+// Function prototype information
+struct FunctionParameter {
+    int index;
+    std::string type;
+    std::string name;
+};
+
+struct FunctionPrototypeInfo {
+    std::string full_prototype;
+    std::string return_type;
+    std::string calling_convention;
+    std::string function_name;
+    std::vector<FunctionParameter> parameters;
+};
+
+// Local type information
+struct LocalTypeInfo {
+    std::string name;
+    std::string kind;  // "struct", "union", "enum", "typedef"
+    size_t size;
+};
+
+struct LocalTypeDefinition {
+    std::string name;
+    std::string definition;
+    std::string kind;
+    size_t size;
+};
+
+struct SetLocalTypeResult {
+    bool success;
+    std::string type_name;
+    std::string error_message;
+};
+
+// Local variable information
+struct LocalVariableInfo {
+    std::string name;
+    std::string type;
+    std::string location;  // "stack", "register"
+    int stack_offset;      // if on stack
+    std::string reg_name;  // if in register
+};
+
+struct FunctionArgument {
+    std::string name;
+    std::string type;
+    int index;
+};
+
+struct FunctionLocalsInfo {
+    std::vector<LocalVariableInfo> locals;
+    std::vector<FunctionArgument> arguments;
+};
+
 // Utility class that bridges our actions to IDA API calls
 // All methods here will be called from worker thread and use execute_sync
 class IDAUtils {
@@ -158,6 +213,18 @@ public:
     // Binary info operations (kept as is)
     static std::map<std::string, std::vector<std::string>> get_imports();
     static std::vector<std::tuple<ea_t, std::string, std::string>> get_entry_points();
+
+    // Decompilation-related functions
+    static FunctionPrototypeInfo get_function_prototype(ea_t address);
+    static bool set_function_prototype(ea_t address, const std::string& prototype);
+    static bool set_function_parameter_name(ea_t address, int param_index, const std::string& name);
+    static FunctionLocalsInfo get_function_locals(ea_t address);
+    static bool set_local_variable(ea_t address, const std::string& current_name, const std::string& new_name, const std::string& new_type);
+
+    // Local types
+    static std::vector<LocalTypeInfo> search_local_types(const std::string& pattern, const std::string& type_kind, int max_results);
+    static LocalTypeDefinition get_local_type(const std::string& type_name);
+    static SetLocalTypeResult set_local_type(const std::string& definition, bool replace_existing);
 };
 
 } // namespace llm_re
