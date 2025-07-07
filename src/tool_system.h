@@ -644,7 +644,7 @@ public:
     }
 };
 
-// Get entry points tool (kept as is)
+// Get entry points tool
 class GetEntryPointsTool : public Tool {
 public:
     using Tool::Tool;
@@ -671,6 +671,254 @@ public:
         }
     }
 };
+
+// Function prototype tools
+class GetFunctionPrototypeTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_function_prototype";
+    }
+
+    std::string description() const override {
+        return "Get the function prototype including return type, name, and parameters. Shows the current decompiled signature.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The function address")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            return ToolResult::success(executor->get_function_prototype(address));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class SetFunctionPrototypeTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "set_function_prototype";
+    }
+
+    std::string description() const override {
+        return "Set the function prototype including return type, calling convention, parameter types (make sure the before + after parameter type sizes match!) AND names. "
+               "The number of parameters MUST match the current function signature. "
+               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)').";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The function address")
+            .add_string("prototype", "Full C-style prototype with meaningful parameter names")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            std::string prototype = input.at("prototype");
+            return ToolResult::success(executor->set_function_prototype(address, prototype));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class SetFunctionParameterNameTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "set_function_parameter_name";
+    }
+
+    std::string description() const override {
+        return "Set the name of a function parameter by its index. Useful for making decompiled code more readable.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The function address")
+            .add_integer("param_index", "Parameter index (0-based)")
+            .add_string("name", "New parameter name")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            int param_index = input.at("param_index");
+            std::string name = input.at("name");
+            return ToolResult::success(executor->set_function_parameter_name(address, param_index, name));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Local type tools
+class SearchLocalTypesTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "search_local_types";
+    }
+
+    std::string description() const override {
+        return "Search for local types (structs, unions, enums) by name pattern. Returns type names and basic info.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all types", false)
+            .add_string("type_kind", "Filter by kind: struct, union, enum, typedef, any (defaults to any)", false)
+            .add_integer("max_results", "Maximum results (defaults to 50)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string pattern = input.value("pattern", "");
+            std::string type_kind = input.value("type_kind", "any");
+            int max_results = input.value("max_results", 50);
+            return ToolResult::success(executor->search_local_types(pattern, type_kind, max_results));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class GetLocalTypeTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_local_type";
+    }
+
+    std::string description() const override {
+        return "Get the full C definition of a local type by name. Shows the complete struct/union/enum declaration.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("type_name", "Name of the type to retrieve")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string type_name = input.at("type_name");
+            return ToolResult::success(executor->get_local_type(type_name));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class SetLocalTypeTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "set_local_type";
+    }
+
+    std::string description() const override {
+        return "Create or update a local type using C struct/union/enum syntax. Automatically parses dependencies.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_string("definition", "C-style type definition (e.g., 'struct Point { int x; int y; };')")
+            .add_boolean("replace_existing", "Replace if type already exists (defaults to true)", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            std::string definition = input.at("definition");
+            bool replace_existing = input.value("replace_existing", true);
+            return ToolResult::success(executor->set_local_type(definition, replace_existing));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+// Local variable tools
+class GetFunctionLocalsTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "get_function_locals";
+    }
+
+    std::string description() const override {
+        return "Get all local variables and arguments in a function's decompiled view. Shows stack variables, registers, and their types.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The function address")
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            return ToolResult::success(executor->get_function_locals(address));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
+class SetLocalVariableTool : public Tool {
+public:
+    using Tool::Tool;
+
+    std::string name() const override {
+        return "set_local_variable";
+    }
+
+    std::string description() const override {
+        return "Rename a local variable or change its type in the decompiled output. Makes code more readable.";
+    }
+
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "The function address")
+            .add_string("current_name", "Current variable name (e.g., 'v1', 'a2')")
+            .add_string("new_name", "New variable name", false)
+            .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT')", false)
+            .build();
+    }
+
+    ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            std::string current_name = input.at("current_name");
+            std::string new_name = input.value("new_name", "");
+            std::string new_type = input.value("new_type", "");
+            return ToolResult::success(executor->set_local_variable(address, current_name, new_name, new_type));
+        } catch (const std::exception& e) {
+            return ToolResult::failure(e.what());
+        }
+    }
+};
+
 
 // Mark for analysis tool
 class MarkForAnalysisTool : public Tool {
@@ -771,7 +1019,7 @@ public:
     }
 };
 
-// Deep analysis collection tools (kept as is)
+// Deep analysis collection tools
 class StartDeepAnalysisCollectionTool : public Tool {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
@@ -1065,6 +1313,18 @@ public:
         // Binary info tools
         register_tool_type<GetImportsTool>(memory, executor);
         register_tool_type<GetEntryPointsTool>(memory, executor);
+
+        // Updating decompilation tools
+        register_tool_type<GetFunctionPrototypeTool>(memory, executor);
+        register_tool_type<SetFunctionPrototypeTool>(memory, executor);
+        register_tool_type<SetFunctionParameterNameTool>(memory, executor);
+        register_tool_type<GetFunctionLocalsTool>(memory, executor);
+        register_tool_type<SetLocalVariableTool>(memory, executor);
+
+        // Local type tools
+        register_tool_type<SearchLocalTypesTool>(memory, executor);
+        register_tool_type<GetLocalTypeTool>(memory, executor);
+        register_tool_type<SetLocalTypeTool>(memory, executor);
 
         // Special tools
         register_tool_type<SubmitFinalReportTool>(memory, executor);
