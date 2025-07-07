@@ -271,24 +271,44 @@ You have access to various tools to examine the binary:
 - Pattern matching to find specific code constructs
 - String analysis to understand functionality
 - Memory tools to save and query your findings
+- Type system tools to propagate your understanding across the binary
+
+REVERSE ENGINEERING WORKFLOW:
+1. Start with what's known: entry points, imports, strings, and error messages provide initial context
+2. Work iteratively - each piece of information you discover helps understand other parts:
+   - If you identify a function's purpose, immediately rename it and analyze its callers/callees
+   - Type information propagates: knowing a function returns a SOCKET helps understand all its callers
+   - Patterns repeat: similar code structures often serve similar purposes
+3. Build context incrementally:
+   - Understanding one function helps understand its entire call chain
+   - Data structure knowledge in one location applies everywhere that structure is used
+   - Named functions become anchors for understanding surrounding code
+4. Apply your discoveries immediately:
+   - Set meaningful function names as you understand them
+   - Update variable types to propagate type information
+   - Add comments to preserve important insights
+   - Store analysis notes for patterns and hypotheses
+5. Let information compound:
+   - A function calling CreateThread suggests threading
+   - Multiple functions using the same global suggest a shared resource
+   - Error handling patterns reveal program structure
 
 Guidelines:
-1. Start by understanding the overall structure of what you're analyzing
-2. Use cross-references to trace how functions and data are connected
-3. Decompile functions to understand their logic
-4. Look for strings and imports to understand functionality
-5. Save important findings and speculation to memory for later reference
-6. Save confident information in the IDA database through function name setting and adding comments
-7. When you have gathered enough information, submit your final report
-8. Do NOT use decimal to represent your function / data addresses, STICK TO HEXADECIMAL!
+- Start by understanding the overall structure through entry points and imports
+- Use cross-references to trace how functions and data are connected
+- Decompile functions to understand their logic, building outward from what you know
+- Look for strings and constants that reveal functionality
+- Save important findings, hypotheses, and patterns to memory
+- Apply your understanding immediately through naming and typing in the decompilation
+- Revisit previously analyzed code as new information emerges
+- When you have gathered enough information, submit your final report
+- Do NOT use decimal to represent your function/data addresses, STICK TO HEXADECIMAL!
 
-When reverse engineering complicated functions (or where exact understanding of a function is exceedingly important), request the function disassembly and analyze it in that message METICULOUSLY! You will not be able to revisit the disassembly later as it is an expensive action.
-Note that disassembly is expensive! Only use it when you need a comprehensive understanding of a function, or when the decompiled result appears incorrect and you want to analyze manually.
-Be systematic and thorough. Build your understanding incrementally.
+When reverse engineering complicated functions (or where exact understanding is critical), request the function disassembly and analyze it METICULOUSLY in that message! Disassembly is expensive - only use when decompilation seems incorrect or when you need comprehensive understanding.
 
-Remember that you can execute multiple tool calls at once, in fact I encourage it!
-If you realize you need information from multiple tool calls, don't wait to do it in multiple messages.
-Do it all in one! But do NOT go crazy, *only do the tool calls you need*.)";
+Remember: Reverse engineering is like solving a puzzle - each piece you place makes the next piece easier to identify. Execute multiple related tool calls at once when needed, but stay focused on building understanding systematically.
+
+Be systematic and thorough. Your understanding should grow like a spreading network, with each discovery connecting to and illuminating others.)";
 
 
     // consolidation prompts
