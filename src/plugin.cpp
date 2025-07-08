@@ -65,10 +65,10 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
         }
     };
 
-    struct find_vulnerabilities_ah_t : public llm_action_handler_t {
+    struct comprehensive_re_ah_t : public llm_action_handler_t {
         using llm_action_handler_t::llm_action_handler_t;
         virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->find_vulnerabilities();
+            plugin->comprehensive_reverse_engineering();
             return 1;
         }
     };
@@ -77,7 +77,7 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
     show_ui_ah_t* show_ui_handler = nullptr;
     analyze_function_ah_t* analyze_function_handler = nullptr;
     analyze_selection_ah_t* analyze_selection_handler = nullptr;
-    find_vulnerabilities_ah_t* find_vulnerabilities_handler = nullptr;
+    comprehensive_re_ah_t* comprehensive_re_handler = nullptr;
 
 public:
     llm_plugin_t();
@@ -98,7 +98,7 @@ public:
     void show_main_form();
     void analyze_function();
     void analyze_selection();
-    void find_vulnerabilities();
+    void comprehensive_reverse_engineering();
 };
 
 // Simplified plugin instance manager - no mutex needed since IDA guarantees main thread
@@ -151,7 +151,7 @@ llm_plugin_t::llm_plugin_t() {
     show_ui_handler = new show_ui_ah_t(this);
     analyze_function_handler = new analyze_function_ah_t(this);
     analyze_selection_handler = new analyze_selection_ah_t(this);
-    find_vulnerabilities_handler = new find_vulnerabilities_ah_t(this);
+    comprehensive_re_handler = new comprehensive_re_ah_t(this);
 
     // Register actions after handlers are created
     register_actions();
@@ -188,9 +188,9 @@ llm_plugin_t::~llm_plugin_t() {
         delete analyze_selection_handler;
         analyze_selection_handler = nullptr;
     }
-    if (find_vulnerabilities_handler) {
-        delete find_vulnerabilities_handler;
-        find_vulnerabilities_handler = nullptr;
+    if (comprehensive_re_handler) {
+        delete comprehensive_re_handler;
+        comprehensive_re_handler = nullptr;
     }
 
     msg("LLM RE: Plugin terminated for %s\n", idb_path_.c_str());
@@ -286,15 +286,15 @@ void llm_plugin_t::register_actions() {
             "Edit/LLM RE/Analyze Selection",
             false
         },
-        {
-            "find_vulnerabilities",
-            "Find Vulnerabilities",
-            find_vulnerabilities_handler,
-            nullptr,
-            "Search for vulnerabilities with LLM",
-            "Edit/LLM RE/Find Vulnerabilities",
-            false
-        }
+    {
+        "comprehensive_re",
+        "Comprehensive Reverse Engineering",
+        comprehensive_re_handler,
+        "Ctrl+Shift+R",
+        "Perform systematic reverse engineering with full annotation",
+        "Edit/LLM RE/Comprehensive Analysis",
+        false
+    }
     };
 
     // Keep track of whether we've registered the main action globally
@@ -495,7 +495,7 @@ void llm_plugin_t::analyze_selection() {
     }
 }
 
-void llm_plugin_t::find_vulnerabilities() {
+void llm_plugin_t::comprehensive_reverse_engineering() {
     if (shutting_down) {
         return;
     }
@@ -506,16 +506,66 @@ void llm_plugin_t::find_vulnerabilities() {
         return;
     }
 
-    std::string task =
-        "Search for potential security vulnerabilities in the current binary. "
-        "Focus on:\n"
-        "- Buffer overflows\n"
-        "- Format string bugs\n"
-        "- Integer overflows\n"
-        "- Use after free\n"
-        "- Race conditions\n"
-        "- Insecure API usage\n"
-        "Provide specific addresses and explanations for any findings.";
+    ea_t ea = get_screen_ea();
+    func_t* func = get_func(ea);
+
+    std::string starting_point = "";
+    if (func) {
+        qstring func_name;
+        get_func_name(&func_name, func->start_ea);
+
+        // Format address as hex
+        char addr_str[32];
+        ::qsnprintf(addr_str, sizeof(addr_str), "0x%llx", func->start_ea);
+
+        starting_point = "Starting from function '" + std::string(func_name.c_str()) +
+                        "' at address " + addr_str + ", ";
+    }
+
+    std::string task = R"(Perform comprehensive reverse engineering of this binary. )" + starting_point + R"(systematically work through the code to build a complete understanding.
+
+COMPREHENSIVE ANALYSIS APPROACH:
+
+1. **Strategic Navigation**:
+   - Follow the call graph intelligently, not blindly
+   - Prioritize functions that will unlock understanding of others
+   - Skip trivial wrappers and focus on core logic
+   - Return to previously seen functions as your understanding improves
+
+2. **Type Information is Key**:
+   - Correct struct sizes and pointer types dramatically improve decompilation
+   - Even without perfect names, getting the shape right matters
+   - A function returning SOCKET tells you about ALL its callers
+   - Propagate type discoveries across the entire binary
+
+3. **Apply Understanding Progressively**:
+   - Set meaningful function names as soon as you understand them
+   - Update parameter types AND names (e.g., 'SOCKET clientSocket' not 'int a1')
+   - Rename local variables to reflect their purpose
+   - Add comments for non-obvious logic or important discoveries
+   - Create new structs/types when you identify data structures (Make sure to check previous types to see if you can find one we have already defined)
+
+4. **Depth of Analysis Guidelines**:
+   - Simple utility functions: Just name them accurately and move on
+   - Core business logic: Deep analysis with full naming/typing/commenting
+   - Complex algorithms: Request disassembly, analyze meticulously
+   - Data processing functions: Focus on understanding the data structures
+
+5. **Building Understanding**:
+   - Each function you understand makes others clearer
+   - Revisit earlier functions with new knowledge
+   - Pattern recognition: Similar code often has similar purposes
+   - Let type information cascade through the call chains
+
+REMEMBER: This is detective work. Every clue matters:
+- A mutex suggests threading
+- Error strings reveal functionality
+- Calling conventions hint at external interfaces
+- Global variables often represent state or configuration
+
+Work systematically but intelligently. Not every function needs deep analysis, but every function should contribute to your overall understanding. The goal is a binary where the decompilation reads like source code - with meaningful names, correct types, and helpful comments.
+
+Focus on building a coherent narrative of what this program does and how it works.)";
 
     main_form->execute_task(task);
 }
