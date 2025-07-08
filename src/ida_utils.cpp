@@ -1217,7 +1217,7 @@ FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
 
         // Decompile to get local variables
         hexrays_failure_t hf;
-        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
         if (!cfunc) {
             throw std::runtime_error("Failed to decompile function");
         }
