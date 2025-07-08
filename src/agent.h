@@ -295,6 +295,19 @@ NATURAL WORKFLOW:
 - Revisiting is powerful - armed with new knowledge, old code reveals new secrets
 - Let patterns emerge - similar code structures often deserve similar treatment
 
+TYPE SYSTEM AWARENESS:
+Before defining new structures, explore what's already been discovered:
+- Previous sessions may have already identified and named structures
+- Use search_local_types to check for existing definitions that might match
+- A struct with SOCKET at offset 0 and buffer at offset 8 might already exist as "NetworkContext"
+- Building on existing types is better than recreating them
+
+This isn't just about avoiding duplicates - it's archaeological:
+- Existing type names reveal previous understanding
+- Field names in structures tell you what was already figured out
+- Sometimes you'll find a partial struct you can expand
+- Other times you'll discover the perfect type already exists
+
 REMEMBER: Every time you truly understand something, ask yourself:
 "How can I make this understanding permanent and useful?"
 
