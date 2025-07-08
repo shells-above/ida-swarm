@@ -2234,9 +2234,8 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     QHBoxLayout* insight_filter_layout = new QHBoxLayout();
     insight_filter_layout->addWidget(new QLabel("Type:"));
     insight_filter_ = new QComboBox();
-    insight_filter_->addItems({"All", "Pattern", "Hypothesis", "Question", "Finding"});
-    connect(insight_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MemoryDockWidget::refresh_views);
+    insight_filter_->addItems({"All", "Pattern", "Hypothesis", "Question", "Finding", "Note", "Analysis"});
+    connect(insight_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MemoryDockWidget::refresh_views);
     insight_filter_layout->addWidget(insight_filter_);
     insight_filter_layout->addStretch();
     insights_layout->addLayout(insight_filter_layout);
@@ -2584,20 +2583,16 @@ void MemoryDockWidget::refresh_views() {
     if (type_filter == "all") type_filter = "";
 
     // Get analyses of the selected type
-    auto analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "");
+    std::vector<AnalysisEntry> analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "");
 
     for (const auto& entry : analyses) {
-        // Only show entries that are insights (not regular analysis)
-        if (entry.type == "finding" || entry.type == "hypothesis" ||
-            entry.type == "question" || entry.type == "pattern") {
-            QListWidgetItem* item = new QListWidgetItem(insights_list_);
-            QString text = QString::fromStdString(entry.content);
-            if (!entry.related_addresses.empty()) {
-                text += QString(" [%1 functions]").arg(entry.related_addresses.size());
-            }
-            item->setText(text);
-            item->setData(Qt::UserRole, QVariant::fromValue(entry.related_addresses));
+        QListWidgetItem* item = new QListWidgetItem(insights_list_);
+        QString text = QString::fromStdString(entry.content);
+        if (!entry.related_addresses.empty()) {
+            text += QString(" [%1 functions]").arg(entry.related_addresses.size());
         }
+        item->setText(text);
+        item->setData(Qt::UserRole, QVariant::fromValue(entry.related_addresses));
     }
 
     // Update deep analysis list using the new unified system
