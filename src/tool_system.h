@@ -343,7 +343,10 @@ public:
     }
 
     std::string description() const override {
-        return "Analyze a function with optional disassembly and decompilation. Includes cross-references, strings, data refs, and code. Use this for deep function understanding.";
+        return "Deep dive into a function with optional disassembly and decompilation (Includes cross-references, strings, data refs as well). "
+               "This is your primary tool for understanding code. As you analyze, consider: "
+               "What would make this function clear to another reverse engineer? "
+               "What names, types, and comments would tell its story?";
     }
 
     json parameters_schema() const override {
@@ -379,7 +382,10 @@ public:
     }
 
     std::string description() const override {
-        return "Store analysis findings, notes, or insights. Can be associated with addresses or kept as global notes.";
+        return "Your detective's notebook for the investigation. Store hypotheses, patterns, questions, "
+               "observations that might make sense later, TODOs, and connections you're still exploring. "
+               "This is your thinking space - for permanent findings, use IDA's annotation tools "
+               "(set_name for functions/data, set_comment for logic/discoveries, set_local_type for structures).";
     }
 
     json parameters_schema() const override {
@@ -423,7 +429,10 @@ public:
     }
 
     std::string description() const override {
-        return "Retrieve stored analysis by key, address, type, or search pattern. Call with arguments to get all analysis entries (keys + values).";
+        return "Retrieve your investigation notes - hypotheses, patterns, questions, and connections "
+               "you've stored while building understanding. These notes complement the permanent "
+               "annotations you've made in IDA's database. Use this to revisit earlier thoughts "
+               "that might make more sense with new context.";
     }
 
     json parameters_schema() const override {
@@ -561,7 +570,10 @@ public:
     }
 
     std::string description() const override {
-        return "Set a custom name for a function or data at the given address. Works for both code and data locations.";
+        return "Give a function or data a meaningful name in the IDA database. This transforms the entire "
+               "codebase - every reference will now use this name. Even preliminary names like "
+               "'NetworkHandler_401000' are valuable. As understanding improves, update names to be more specific. "
+               "Good names are the foundation of readable reverse engineering.";
     }
 
     json parameters_schema() const override {
@@ -593,7 +605,10 @@ public:
     }
 
     std::string description() const override {
-        return "Set or clear a comment at the given address. Empty comment clears existing. Adds to both disassembly and decompilation views.";
+        return "Add permanent explanatory comments visible in both disassembly and decompilation. "
+               "Use for non-obvious logic, important discoveries, protocol details, or algorithm explanations. "
+               "Comments are breadcrumbs for your future self and other reverse engineers. "
+               "They make complex code understandable.";
     }
 
     json parameters_schema() const override {
@@ -710,8 +725,10 @@ public:
     }
 
     std::string description() const override {
-        return "Set the function prototype including return type, calling convention, parameter types (make sure the before + after parameter type sizes match!) AND names. "
-               "The number of parameters MUST match the current function signature. "
+        return "Transform cryptic function signatures into meaningful ones. Beyond just types, "
+               "parameter NAMES matter - 'ProcessPacket(SOCKET clientSocket, PacketHeader* header)' "
+               "tells a story that 'sub_401000(int a1, void* a2)' never could. "
+               "Good prototypes propagate understanding to every caller. "
                "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)').";
     }
 
@@ -835,7 +852,10 @@ public:
     }
 
     std::string description() const override {
-        return "Create or update a local type using C struct/union/enum syntax. Automatically parses dependencies.";
+        return "Add permanent explanatory comments visible in both disassembly and decompilation. "
+               "Use for non-obvious logic, important discoveries, protocol details, or algorithm explanations. "
+               "Comments are breadcrumbs for your future self and other reverse engineers. "
+               "They make complex code understandable.";
     }
 
     json parameters_schema() const override {
@@ -894,7 +914,10 @@ public:
     }
 
     std::string description() const override {
-        return "Rename a local variable or change its type in the decompiled output. Makes code more readable.";
+        return "Make decompiled code readable by giving variables meaningful names and correct types. "
+               "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
+               "Well-named variables make function logic self-documenting. "
+               "This is how you make decompilation read like source code.";
     }
 
     json parameters_schema() const override {

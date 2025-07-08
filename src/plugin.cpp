@@ -557,6 +557,24 @@ COMPREHENSIVE ANALYSIS APPROACH:
    - Pattern recognition: Similar code often has similar purposes
    - Let type information cascade through the call chains
 
+WHY IDA ANNOTATIONS MATTER:
+- A well-named function transforms the entire codebase
+- One correct type definition can clarify dozens of functions
+- Comments are breadcrumbs for your future self
+- The goal: make the binary tell its own story
+
+The most satisfying reverse engineering is when you return to a function
+and it reads like source code - because you've built up the context around it.
+
+Your analysis memory (store_analysis) is your detective's notebook for:
+- "Why does this function check this global three times?"
+- "Pattern: All functions using this structure seem to be network-related"
+- "TODO: Return here after understanding the crypto functions"
+- "Hypothesis: This might be a custom protocol implementation"
+
+But remember: every time you truly understand something, make it permanent
+in the IDA database so the binary tells its own story.
+
 REMEMBER: This is detective work. Every clue matters:
 - A mutex suggests threading
 - Error strings reveal functionality
