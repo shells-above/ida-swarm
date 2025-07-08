@@ -1320,9 +1320,19 @@ void MainForm::add_message_to_chat(const messages::Message& msg) {
 }
 
 void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
-    QString filename = QFileDialog::getSaveFileName(this,
-        "Export Session", config_->export_settings.path.c_str(),
-        "Markdown (*.md);;HTML (*.html);;JSON (*.json)");
+    QString filter;
+    QString extension;
+    
+    // Set file filter based on selected format
+    if (options.format == ui::ExportDialog::Markdown) {
+        filter = "Markdown (*.md)";
+        extension = ".md";
+    } else {
+        filter = "JSON (*.json)";
+        extension = ".json";
+    }
+
+    QString filename = QFileDialog::getSaveFileName(this, "Export Session", config_->export_settings.path.c_str(), filter);
 
     if (filename.isEmpty()) return;
 
@@ -1334,6 +1344,22 @@ void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
 
         // Build export data
         json export_data;
+
+        // Add messages if requested
+        if (options.messages && agent_) {
+            export_data["messages"] = json::array();
+            std::vector<messages::Message> messages = agent_->get_conversation().get_messages();
+            for (const messages::Message& msg: messages) {
+                json msg_json;
+                msg_json["role"] = messages::role_to_string(msg.role());
+                msg_json["content"] = json::array();
+                
+                for (const std::unique_ptr<messages::Content>& content: msg.contents()) {
+                    msg_json["content"].push_back(content->to_json());
+                }
+                export_data["messages"].push_back(msg_json);
+            }
+        }
 
         if (options.memory && agent_) {
             export_data["memory"] = agent_->get_memory()->export_memory_snapshot();
@@ -1361,13 +1387,72 @@ void MainForm::export_session(const ui::ExportDialog::ExportOptions& options) {
         }
 
         // Write based on format
-        file << export_data.dump(2);
+        if (options.format == ui::ExportDialog::Markdown) {
+            write_markdown_export(file, export_data, options);
+        } else {
+            file << export_data.dump(2);
+        }
 
         log(LogLevel::INFO, "Session exported to: " + filename.toStdString());
 
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Export Error",
             QString("Failed to export: %1").arg(e.what()));
+    }
+}
+
+void MainForm::write_markdown_export(std::ofstream& file, const json& export_data, const ui::ExportDialog::ExportOptions& options) {
+    file << "# Session Export\n\n";
+    file << "Generated: " << format_timestamp(std::chrono::system_clock::now()) << "\n\n";
+
+    // Export messages
+    if (options.messages && export_data.contains("messages")) {
+        file << "## Conversation\n\n";
+        for (const auto& msg : export_data["messages"]) {
+            std::string role = msg["role"];
+            std::string timestamp = msg["timestamp"];
+            
+            file << "### " << role << " (" << timestamp << ")\n\n";
+            
+            for (const auto& content : msg["content"]) {
+                if (content["type"] == "text") {
+                    file << content["text"] << "\n\n";
+                } else if (content["type"] == "tool_use") {
+                    file << "**Tool Use:** " << content["name"] << "\n";
+                    file << "```json\n" << content["input"].dump(2) << "\n```\n\n";
+                } else if (content["type"] == "tool_result") {
+                    file << "**Tool Result:**\n";
+                    file << "```\n" << content["content"] << "\n```\n\n";
+                } else if (content["type"] == "thinking") {
+                    file << "**Thinking:**\n";
+                    file << content["content"] << "\n\n";
+                }
+            }
+        }
+    }
+
+    // Export memory
+    if (options.memory && export_data.contains("memory")) {
+        file << "## Memory Snapshot\n\n";
+        file << "```json\n" << export_data["memory"].dump(2) << "\n```\n\n";
+    }
+
+    // Export statistics
+    if (options.statistics && export_data.contains("statistics")) {
+        file << "## Statistics\n\n";
+        const auto& stats = export_data["statistics"];
+        file << "- **Task:** " << stats["task"] << "\n";
+        file << "- **Duration:** " << stats["duration_ms"] << " ms\n";
+        file << "- **Tool Calls:** " << stats["tool_calls"] << "\n";
+        file << "- **Success:** " << (stats["success"] ? "Yes" : "No") << "\n\n";
+    }
+
+    // Export logs
+    if (options.logs && export_data.contains("logs")) {
+        file << "## Logs\n\n";
+        for (const auto& entry : export_data["logs"]) {
+            file << "**" << entry["timestamp"] << "** [" << entry["level"] << "] " << entry["message"] << "\n";
+        }
     }
 }
 

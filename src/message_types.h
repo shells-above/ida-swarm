@@ -267,7 +267,7 @@ enum class Role {
     System
 };
 
-inline std::string role_to_string(Role role) {
+inline std::string role_to_string(const Role role) {
     switch (role) {
         case Role::User: return "user";
         case Role::Assistant: return "assistant";
@@ -315,7 +315,7 @@ public:
 
     Message& operator=(Message&&) = default;
 
-    Role role() const { return role_; }
+    const Role role() const { return role_; }
     const std::vector<std::unique_ptr<Content>>& contents() const { return contents_; }
     std::vector<std::unique_ptr<Content>>& mutable_contents() { return contents_; }
 

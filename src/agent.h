@@ -554,6 +554,11 @@ public:
         return stats;
     }
 
+    // Conversation access
+    const ConversationState& get_conversation() const {
+        return conversation_;
+    }
+
     // Memory management
     std::shared_ptr<BinaryMemory> get_memory() {
         return memory_;

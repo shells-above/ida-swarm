@@ -73,10 +73,6 @@ namespace llm_re {
 
         struct ExportSettings {
             std::string path = ".";
-            bool auto_export = false;
-            int format = 0;  // 0=markdown, 1=html, 2=json
-            bool include_memory = true;
-            bool include_logs = true;
         } export_settings;
 
         bool debug_mode = false;
@@ -265,9 +261,7 @@ class ExportDialog : public QDialog {
 public:
     enum ExportFormat {
         Markdown,
-        HTML,
-        JSON,
-        PDF
+        JSON
     };
 
     struct ExportOptions {
@@ -340,8 +334,6 @@ class ConfigWidget : public QWidget {
 
     // Export settings
     QLineEdit* export_path_edit;
-    QCheckBox* auto_export_check;
-    QComboBox* export_format_combo;
 
     // Advanced settings
     QCheckBox* debug_mode_check;

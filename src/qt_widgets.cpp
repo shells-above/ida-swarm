@@ -38,10 +38,6 @@ namespace llm_re {
 
             // Export settings
             j["export"]["path"] = export_settings.path;
-            j["export"]["auto_export"] = export_settings.auto_export;
-            j["export"]["format"] = export_settings.format;
-            j["export"]["include_memory"] = export_settings.include_memory;
-            j["export"]["include_logs"] = export_settings.include_logs;
 
             j["debug_mode"] = debug_mode;
 
@@ -96,10 +92,6 @@ namespace llm_re {
             // Export settings
             if (j.contains("export")) {
                 export_settings.path = j["export"].value("path", export_settings.path);
-                export_settings.auto_export = j["export"].value("auto_export", export_settings.auto_export);
-                export_settings.format = j["export"].value("format", export_settings.format);
-                export_settings.include_memory = j["export"].value("include_memory", export_settings.include_memory);
-                export_settings.include_logs = j["export"].value("include_logs", export_settings.include_logs);
             }
 
             debug_mode = j.value("debug_mode", debug_mode);
@@ -1236,9 +1228,8 @@ ExportDialog::ExportDialog(QWidget* parent) : QDialog(parent) {
     format_layout->addWidget(new QLabel("Format:"));
 
     format_combo = new QComboBox();
-    format_combo->addItems({"Markdown", "HTML", "JSON", "PDF"});
-    connect(format_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ExportDialog::on_format_changed);
+    format_combo->addItems({"Markdown", "JSON"});
+    connect(format_combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ExportDialog::on_format_changed);
     format_layout->addWidget(format_combo);
 
     format_layout->addStretch();
@@ -1289,7 +1280,7 @@ void ExportDialog::on_browse_template() {
 
 void ExportDialog::on_format_changed(int index) {
     // Enable/disable template option based on format
-    bool enable_template = (index == Markdown || index == HTML);
+    bool enable_template = (index == Markdown);
     template_edit->setEnabled(enable_template);
     browse_template->setEnabled(enable_template);
 }
@@ -1402,12 +1393,6 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
 
     export_layout->addRow("Export Path:", path_layout);
 
-    auto_export_check = new QCheckBox("Auto-export sessions");
-    export_layout->addRow("", auto_export_check);
-
-    export_format_combo = new QComboBox();
-    export_format_combo->addItems({"Markdown", "HTML", "JSON"});
-    export_layout->addRow("Default Format:", export_format_combo);
 
     tabs->addTab(export_tab, "Export");
 
@@ -1466,8 +1451,6 @@ void ConfigWidget::load_settings(const Config& config) {
     font_size_spin->setValue(config.ui.font_size);
 
     export_path_edit->setText(QString::fromStdString(config.export_settings.path));
-    auto_export_check->setChecked(config.export_settings.auto_export);
-    export_format_combo->setCurrentIndex(config.export_settings.format);
 
     debug_mode_check->setChecked(config.debug_mode);
 }
@@ -1497,8 +1480,6 @@ void ConfigWidget::save_settings(Config& config) {
     config.ui.font_size = font_size_spin->value();
 
     config.export_settings.path = export_path_edit->text().toStdString();
-    config.export_settings.auto_export = auto_export_check->isChecked();
-    config.export_settings.format = export_format_combo->currentIndex();
 
     config.debug_mode = debug_mode_check->isChecked();
 }

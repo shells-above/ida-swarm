@@ -116,6 +116,7 @@ private:
     void log_message_to_file(const std::string& type, const json& content);
     void add_message_to_chat(const messages::Message& msg);
     void export_session(const ui::ExportDialog::ExportOptions& options);
+    void write_markdown_export(std::ofstream& file, const json& export_data, const ui::ExportDialog::ExportOptions& options);
     void apply_theme(int theme_index);
     std::string format_timestamp(const std::chrono::system_clock::time_point& tp);
 
