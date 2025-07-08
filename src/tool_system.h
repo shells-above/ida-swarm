@@ -175,7 +175,7 @@ public:
     }
 
     std::string description() const override {
-        return "Search for global variables/data by name pattern. Returns address, name, value preview, and type. Excludes auto-generated names by default.";
+        return "Search for global variables/data by name pattern. Does NOT return defined structures / types. Returns address, name, value preview, and their type name. Excludes auto-generated names by default.";
     }
 
     json parameters_schema() const override {
