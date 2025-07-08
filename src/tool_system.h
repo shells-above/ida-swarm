@@ -792,7 +792,10 @@ public:
     }
 
     std::string description() const override {
-        return "Search for local types (structs, unions, enums) by name pattern. Returns type names and basic info.";
+        return "Discover existing type definitions in the database. Essential before creating new types - "
+               "previous analysis may have already identified structures you're seeing. "
+               "Search by pattern to find candidates that match your current understanding. "
+               "Building on existing types preserves and extends previous work.";
     }
 
     json parameters_schema() const override {
@@ -852,9 +855,10 @@ public:
     }
 
     std::string description() const override {
-        return "Define structures, unions, or enums that make decompilation readable across the entire binary. "
-               "One well-defined struct can clarify dozens of functions. This is one of the most powerful "
-               "tools for improving decompilation quality. Even partial structures help - you can always refine them later.";
+        return "Create or update type definitions. Before creating new types, always search_local_types "
+               "to check if a matching structure already exists - previous sessions may have identified it. "
+               "If you find a partial match, consider updating it rather than creating a duplicate. "
+               "One well-defined struct can clarify dozens of functions.";
     }
 
     json parameters_schema() const override {
