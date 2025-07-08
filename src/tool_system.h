@@ -852,10 +852,9 @@ public:
     }
 
     std::string description() const override {
-        return "Add permanent explanatory comments visible in both disassembly and decompilation. "
-               "Use for non-obvious logic, important discoveries, protocol details, or algorithm explanations. "
-               "Comments are breadcrumbs for your future self and other reverse engineers. "
-               "They make complex code understandable.";
+        return "Define structures, unions, or enums that make decompilation readable across the entire binary. "
+               "One well-defined struct can clarify dozens of functions. This is one of the most powerful "
+               "tools for improving decompilation quality. Even partial structures help - you can always refine them later.";
     }
 
     json parameters_schema() const override {
