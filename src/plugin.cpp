@@ -524,66 +524,28 @@ void llm_plugin_t::comprehensive_reverse_engineering() {
 
     std::string task = R"(Perform comprehensive reverse engineering of this binary. )" + starting_point + R"(systematically work through the code to build a complete understanding.
 
-COMPREHENSIVE ANALYSIS APPROACH:
+STRATEGIC APPROACH:
 
-1. **Strategic Navigation**:
+1. **Navigation Strategy**:
    - Follow the call graph intelligently, not blindly
    - Prioritize functions that will unlock understanding of others
    - Skip trivial wrappers and focus on core logic
    - Return to previously seen functions as your understanding improves
 
-2. **Type Information is Key**:
-   - Correct struct sizes and pointer types dramatically improve decompilation
-   - Even without perfect names, getting the shape right matters
-   - A function returning SOCKET tells you about ALL its callers
-   - Propagate type discoveries across the entire binary
-
-3. **Apply Understanding Progressively**:
-   - Set meaningful function names as soon as you understand them
-   - Update parameter types AND names (e.g., 'SOCKET clientSocket' not 'int a1')
-   - Rename local variables to reflect their purpose
-   - Add comments for non-obvious logic or important discoveries
-   - Create new structs/types when you identify data structures (Make sure to check previous types to see if you can find one we have already defined)
-
-4. **Depth of Analysis Guidelines**:
+2. **Analysis Depth Guidelines**:
    - Simple utility functions: Just name them accurately and move on
    - Core business logic: Deep analysis with full naming/typing/commenting
    - Complex algorithms: Request disassembly, analyze meticulously
    - Data processing functions: Focus on understanding the data structures
 
-5. **Building Understanding**:
-   - Each function you understand makes others clearer
-   - Revisit earlier functions with new knowledge
-   - Pattern recognition: Similar code often has similar purposes
-   - Let type information cascade through the call chains
+3. **Detective Work - Concrete Clues**:
+   - A mutex suggests threading
+   - Error strings reveal functionality
+   - Calling conventions hint at external interfaces
+   - Global variables often represent state or configuration
+   - Check for existing types before creating new ones
 
-WHY IDA ANNOTATIONS MATTER:
-- A well-named function transforms the entire codebase
-- One correct type definition can clarify dozens of functions
-- Comments are breadcrumbs for your future self
-- The goal: make the binary tell its own story
-
-The most satisfying reverse engineering is when you return to a function
-and it reads like source code - because you've built up the context around it.
-
-Your analysis memory (store_analysis) is your detective's notebook for:
-- "Why does this function check this global three times?"
-- "Pattern: All functions using this structure seem to be network-related"
-- "TODO: Return here after understanding the crypto functions"
-- "Hypothesis: This might be a custom protocol implementation"
-
-But remember: every time you truly understand something, make it permanent
-in the IDA database so the binary tells its own story.
-
-REMEMBER: This is detective work. Every clue matters:
-- A mutex suggests threading
-- Error strings reveal functionality
-- Calling conventions hint at external interfaces
-- Global variables often represent state or configuration
-
-Work systematically but intelligently. Not every function needs deep analysis, but every function should contribute to your overall understanding. The goal is a binary where the decompilation reads like source code - with meaningful names, correct types, and helpful comments.
-
-Focus on building a coherent narrative of what this program does and how it works.)";
+Work systematically but intelligently. Not every function needs deep analysis, but every function should contribute to your overall understanding. Focus on building a coherent narrative of what this program does and how it works.)";
 
     main_form->execute_task(task);
 }
