@@ -265,7 +265,7 @@ private:
     // System prompt
     // note that if you start getting errors about Qt MOC making a llm_re::llm_re:: namespace it probably
     // is due to the length of a prompt like this being too long
-    // its a *bug in the Qts MOC parser* which is causing this. not sure if anyone else has found this
+    // it's a *bug in the Qts MOC parser* which is causing this. not sure if anyone else has found this
     // look at commits ebf3d1f40580b53bf3b11ca856d56b5bd5a3c649 -> f0ce5eafb5a7b3d9c5630c67b13aef0b2e052aaa
     // build in        ^ works, while                              ^ fails
     // i did have a mistake in the top, i duplicated the constexpr const char* stuff inside the string, but that didn't
