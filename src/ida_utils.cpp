@@ -1225,46 +1225,6 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
     }, MFF_WRITE);
 }
 
-bool IDAUtils::set_function_parameter_name(ea_t address, int param_index, const std::string& name) {
-    return execute_sync_wrapper([address, param_index, &name]() {
-        if (!IDAValidators::is_valid_function(address)) {
-            throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
-        }
-
-        // Get current function type
-        tinfo_t func_type;
-        if (!get_tinfo(&func_type, address)) {
-            func_t *func = get_func(address);
-            if (!func || !guess_tinfo(&func_type, address)) {
-                throw std::runtime_error("Cannot get function type information");
-            }
-        }
-
-        // Get function details
-        func_type_data_t ftd;
-        if (!func_type.get_func_details(&ftd)) {
-            throw std::runtime_error("Cannot get function details");
-        }
-
-        // Check parameter index
-        if (param_index < 0 || param_index >= ftd.size()) {
-            throw std::invalid_argument("Invalid parameter index");
-        }
-
-        // Update parameter name
-        ftd[param_index].name = name.c_str();
-
-        // Create new function type with updated parameter
-        tinfo_t new_type;
-        if (!new_type.create_func(ftd)) {
-            return false;
-        }
-
-        // Apply the updated type
-        return apply_tinfo(address, new_type, TINFO_DEFINITE);
-    }, MFF_WRITE);
-}
-
 FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
     return execute_sync_wrapper([address]() {
         if (!IDAValidators::is_valid_function(address)) {
@@ -1362,8 +1322,9 @@ FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
     });
 }
 
-bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name, const std::string& new_name, const std::string& new_type) {
-    return execute_sync_wrapper([address, &current_name, &new_name, &new_type]() {
+bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
+                           const std::string& new_name, const std::string& new_type) {
+    return execute_sync_wrapper([address, &variable_name, &new_name, &new_type]() {
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
@@ -1378,13 +1339,7 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
             throw std::runtime_error("Cannot get function");
         }
 
-        // First, find the variable using locate_lvar
-        lvar_locator_t ll;
-        if (!locate_lvar(&ll, func->start_ea, current_name.c_str())) {
-            throw std::invalid_argument("Variable not found: " + current_name);
-        }
-
-        // Get the current variable's type info for size checking
+        // Decompile to get variables
         hexrays_failure_t hf;
         cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
         if (!cfunc) {
@@ -1396,17 +1351,119 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
             throw std::runtime_error("Cannot get local variables");
         }
 
-        // Find the specific lvar
+        // First, check if this is a function argument by checking function type
+        tinfo_t func_type;
+        func_type_data_t ftd;
+        bool is_argument = false;
+        int arg_index = -1;
+
+        if (get_tinfo(&func_type, address) && func_type.get_func_details(&ftd)) {
+            // Check if variable_name matches any argument
+            for (int i = 0; i < ftd.size(); i++) {
+                if (ftd[i].name == variable_name.c_str() ||
+                    ("arg" + std::to_string(i)) == variable_name ||
+                    ("a" + std::to_string(i + 1)) == variable_name) {  // Check common patterns like a1, a2
+                    is_argument = true;
+                    arg_index = i;
+                    break;
+                }
+            }
+        }
+
+        // If it's an argument, handle it differently
+        if (is_argument && arg_index >= 0) {
+            bool need_update = false;
+
+            // Check type size if changing type
+            if (!new_type.empty()) {
+                // Parse the new type
+                tinfo_t new_tif;
+                qstring type_str = new_type.c_str();
+
+                // Check if FORCE_SIZE_MISMATCH is present
+                bool force_mismatch = (type_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
+
+                // Remove FORCE_SIZE_MISMATCH from the type string before parsing
+                if (force_mismatch) {
+                    qstring clean_type = type_str;
+                    size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
+                    if (force_pos != qstring::npos) {
+                        clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+                        while (!clean_type.empty() && qisspace(clean_type.last())) {
+                            clean_type.remove_last();
+                        }
+                        type_str = clean_type;
+                    }
+                }
+
+                const char *ptr = type_str.c_str();
+                if (!parse_decl(&new_tif, nullptr, nullptr, ptr, PT_TYP | PT_SIL)) {
+                    throw std::invalid_argument("Failed to parse type: " + new_type);
+                }
+
+                // Check size mismatch
+                size_t current_size = ftd[arg_index].type.get_size();
+                size_t new_size = new_tif.get_size();
+
+                if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
+                    if (!force_mismatch) {
+                        qstring current_type_str;
+                        ftd[arg_index].type.print(&current_type_str);
+
+                        std::string error_msg = "TYPE SIZE MISMATCH WARNING: Argument '" + variable_name +
+                            "' has type '" + std::string(current_type_str.c_str()) +
+                            "' (size " + std::to_string(current_size) +
+                            ") but you're trying to set type '" + std::string(type_str.c_str()) +
+                            "' (size " + std::to_string(new_size) +
+                            ").\n\nChanging to a type with different size may break decompilation!\n\n" +
+                            "To proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the type string.";
+
+                        throw std::runtime_error(error_msg);
+                    }
+                }
+
+                ftd[arg_index].type = new_tif;
+                need_update = true;
+            }
+
+            // Update name if provided
+            if (!new_name.empty() && new_name != variable_name) {
+                ftd[arg_index].name = new_name.c_str();
+                need_update = true;
+            }
+
+            if (need_update) {
+                // Create new function type with updated parameter
+                tinfo_t new_func_type;
+                if (!new_func_type.create_func(ftd)) {
+                    return false;
+                }
+
+                // Apply the updated type
+                return apply_tinfo(address, new_func_type, TINFO_DEFINITE);
+            }
+
+            return false;
+        }
+
+        // Not an argument, so it's a local variable
+        // Find the variable using locate_lvar
+        lvar_locator_t ll;
+        if (!locate_lvar(&ll, func->start_ea, variable_name.c_str())) {
+            throw std::invalid_argument("Variable not found: " + variable_name);
+        }
+
+        // Find the specific lvar for size checking
         const lvar_t *current_lvar = nullptr;
         for (size_t i = 0; i < lvars->size(); i++) {
-            if ((*lvars)[i].name == current_name) {
+            if ((*lvars)[i].name == variable_name) {
                 current_lvar = &(*lvars)[i];
                 break;
             }
         }
 
         if (!current_lvar) {
-            throw std::invalid_argument("Variable not found in decompiled function: " + current_name);
+            throw std::invalid_argument("Variable not found in decompiled function: " + variable_name);
         }
 
         // Prepare the saved info
@@ -1415,10 +1472,9 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
 
         uint mli_flags = 0;
         bool need_update = false;
-        bool size_mismatch_detected = false;
 
         // Update name if provided
-        if (!new_name.empty() && new_name != current_name) {
+        if (!new_name.empty() && new_name != variable_name) {
             info.name = new_name.c_str();
             mli_flags |= MLI_NAME;
             need_update = true;
@@ -1439,7 +1495,6 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
                 size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
                 if (force_pos != qstring::npos) {
                     clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
-                    // Trim any trailing whitespace
                     while (!clean_type.empty() && qisspace(clean_type.last())) {
                         clean_type.remove_last();
                     }
@@ -1457,13 +1512,11 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
             size_t new_size = new_tif.get_size();
 
             if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
-                size_mismatch_detected = true;
-
                 if (!force_mismatch) {
                     qstring current_type_str;
                     current_lvar->type().print(&current_type_str);
 
-                    std::string error_msg = "TYPE SIZE MISMATCH WARNING: Variable '" + current_name +
+                    std::string error_msg = "TYPE SIZE MISMATCH WARNING: Variable '" + variable_name +
                         "' has type '" + std::string(current_type_str.c_str()) +
                         "' (size " + std::to_string(current_size) +
                         ") but you're trying to set type '" + std::string(type_str.c_str()) +
