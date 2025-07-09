@@ -271,7 +271,7 @@ std::string DeepAnalysisManager::build_context(
 
     // Group by type for better organization
     std::map<std::string, std::vector<AnalysisEntry>> by_type;
-    for (const auto& entry : all_analyses) {
+    for (const AnalysisEntry& entry: all_analyses) {
         // Skip deep analysis results to avoid recursion
         if (entry.type != "deep_analysis" && entry.type != "deep_analysis_metadata") {
             by_type[entry.type].push_back(entry);
@@ -281,7 +281,7 @@ std::string DeepAnalysisManager::build_context(
     // Output grouped analyses
     for (const auto& [type, entries] : by_type) {
         context << "\n--- " << type << " entries ---\n";
-        for (const auto& entry : entries) {
+        for (const AnalysisEntry& entry: entries) {
             context << "[" << entry.key << "]";
             if (entry.address) {
                 context << " (address: 0x" << std::hex << *entry.address << ")";
@@ -290,20 +290,7 @@ std::string DeepAnalysisManager::build_context(
         }
     }
 
-    // Add all analyzed functions summary
-    auto analyzed_functions = memory_->get_analyzed_functions();
-    if (!analyzed_functions.empty()) {
-        context << "\n=== ANALYZED FUNCTIONS ===\n";
-        for (const auto& [addr, name, level] : analyzed_functions) {
-            context << std::hex << "0x" << addr << " " << name << " (level: " << static_cast<int>(level) << "):\n";
-            std::string analysis = memory_->get_function_analysis(addr);
-            if (!analysis.empty()) {
-                context << analysis << "\n\n";
-            }
-        }
-    }
-
-    // Add full analysis for all related functions using the new API
+    // Add full analysis for all related functions
     if (!collection.related_functions.empty()) {
         context << "\n=== FUNCTION DECOMPILATIONS AND ANALYSIS ===\n";
 
@@ -373,29 +360,6 @@ std::string DeepAnalysisManager::build_context(
             }
 
             context << "\n";
-        }
-    }
-
-    // Add any insights/findings/hypotheses
-    std::vector<AnalysisEntry> insights = memory_->get_analysis("", std::nullopt, "finding", "");
-    std::vector<AnalysisEntry> hypotheses = memory_->get_analysis("", std::nullopt, "hypothesis", "");
-    std::vector<AnalysisEntry> questions = memory_->get_analysis("", std::nullopt, "question", "");
-
-    if (!insights.empty() || !hypotheses.empty() || !questions.empty()) {
-        context << "\n=== INSIGHTS, HYPOTHESES, AND QUESTIONS ===\n";
-
-        for (const auto& entries : {insights, hypotheses, questions}) {
-            for (const auto& entry : entries) {
-                context << "[" << entry.type << "] " << entry.content << "\n";
-                if (!entry.related_addresses.empty()) {
-                    context << "Related addresses: ";
-                    for (ea_t addr : entry.related_addresses) {
-                        context << std::hex << "0x" << addr << " ";
-                    }
-                    context << "\n";
-                }
-                context << "\n";
-            }
         }
     }
 
