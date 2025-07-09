@@ -405,6 +405,7 @@ public:
 
     ~REAgent() {
         stop();
+        cleanup_thread();
         if (task_semaphore_) {
             qsem_free(task_semaphore_);
         }
@@ -434,10 +435,15 @@ public:
             qsem_post(task_semaphore_);
         }
 
-        // Wait for thread to finish, might be waiting on API response
-        qthread_join(worker_thread_);
-        qthread_free(worker_thread_);
-        worker_thread_ = nullptr;
+        // Don't block UI thread - worker will report completion via logs/state changes
+    }
+
+    void cleanup_thread() {
+        if (worker_thread_) {
+            qthread_join(worker_thread_);
+            qthread_free(worker_thread_);
+            worker_thread_ = nullptr;
+        }
     }
 
     // Task management
