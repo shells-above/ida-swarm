@@ -201,9 +201,7 @@ ssize_t idaapi llm_plugin_t::on_event(ssize_t code, va_list va) {
             break;
 
         case ui_database_closed:
-            // Database is being closed - this is the main cleanup event
             msg("LLM RE: Received ui_database_closed event\n");
-            prepare_for_shutdown();
             break;
 
         case ui_destroying_plugmod:
