@@ -217,7 +217,7 @@ public:
     // Decompilation-related functions
     static FunctionPrototypeInfo get_function_prototype(ea_t address);
     static bool set_function_prototype(ea_t address, const std::string& prototype);
-    static FunctionLocalsInfo get_function_locals(ea_t address);
+    static FunctionLocalsInfo get_variables(ea_t address);
     static bool set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type);
 
     // Local types

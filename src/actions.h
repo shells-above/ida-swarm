@@ -46,7 +46,7 @@ public:
     // Decompilation-related actions
     json get_function_prototype(ea_t address);
     json set_function_prototype(ea_t address, const std::string& prototype);
-    json get_function_locals(ea_t address);
+    json get_variables(ea_t address);
     json set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type);
 
     // local type actions

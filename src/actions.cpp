@@ -711,7 +711,7 @@ json ActionExecutor::set_function_prototype(ea_t address, const std::string& pro
     return result;
 }
 
-json ActionExecutor::get_function_locals(ea_t address) {
+json ActionExecutor::get_variables(ea_t address) {
     json result;
     try {
         auto locals_info = IDAUtils::get_function_locals(address);

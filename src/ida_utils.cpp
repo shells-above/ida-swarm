@@ -1225,7 +1225,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
     }, MFF_WRITE);
 }
 
-FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
+FunctionLocalsInfo IDAUtils::get_variables(ea_t address) {
     return execute_sync_wrapper([address]() {
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));

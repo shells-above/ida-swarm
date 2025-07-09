@@ -725,10 +725,9 @@ public:
     }
 
     std::string description() const override {
-        return "Transform cryptic function signatures into meaningful ones. Beyond just types, "
-               "parameter NAMES matter - 'ProcessPacket(SOCKET clientSocket, PacketHeader* header)' "
-               "tells a story that 'sub_401000(int a1, void* a2)' never could. "
-               "Good prototypes propagate understanding to every caller. "
+        return "Set the complete function signature including return type, calling convention, and parameters. "
+               "Use this when you need to change the overall function type or multiple parameters at once. "
+               "For individual parameter/variable updates, use set_variable instead. "
                "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)'). "
                "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
     }
@@ -736,7 +735,7 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The function address")
-            .add_string("prototype", "Full C-style prototype with meaningful parameter names")
+            .add_string("prototype", "Full C-style prototype")
             .build();
     }
 
@@ -849,16 +848,18 @@ public:
 };
 
 // Local variable tools
-class GetFunctionLocalsTool : public Tool {
+class GetVariablesTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "get_function_locals";
+        return "get_variables";
     }
 
     std::string description() const override {
-        return "Get all local variables and arguments in a function's decompiled view. Shows stack variables, registers, and their types.";
+        return "Get all variables in a function - both arguments and locals. "
+               "Shows their current names, types, and locations (stack offset or register). "
+               "Use this to see what variables need better names or correct types.";
     }
 
     json parameters_schema() const override {
@@ -870,7 +871,7 @@ public:
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_locals(address));
+            return ToolResult::success(executor->get_variables(address));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1313,7 +1314,7 @@ public:
         // Updating decompilation tools
         register_tool_type<GetFunctionPrototypeTool>(memory, executor);
         register_tool_type<SetFunctionPrototypeTool>(memory, executor);
-        register_tool_type<GetFunctionLocalsTool>(memory, executor);
+        register_tool_type<GetVariablesTool>(memory, executor);
         register_tool_type<SetVariableTool>(memory, executor);
 
         // Local type tools
