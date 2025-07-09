@@ -681,13 +681,28 @@ json ActionExecutor::get_function_prototype(ea_t address) {
     return result;
 }
 
-json ActionExecutor::set_function_prototype(ea_t address, const std::string& prototype) {
+    json ActionExecutor::set_function_prototype(ea_t address, const std::string& prototype) {
     json result;
     try {
         bool success = IDAUtils::set_function_prototype(address, prototype);
         result["success"] = success;
         if (!success) {
             result["error"] = "Failed to set function prototype. Check syntax.";
+        }
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+
+        // Check if this is a size mismatch warning
+        if (error_msg.find("TYPE SIZE MISMATCH WARNING") != std::string::npos) {
+            result["success"] = false;
+            result["error"] = error_msg;
+            result["size_mismatch"] = true;
+            result["requires_confirmation"] = true;
+            result["hint"] = "If you are 100% certain this type change is correct despite the size mismatch, "
+                            "append 'FORCE_SIZE_MISMATCH' to the prototype string to proceed.";
+        } else {
+            result["success"] = false;
+            result["error"] = error_msg;
         }
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -751,14 +766,29 @@ json ActionExecutor::get_function_locals(ea_t address) {
     return result;
 }
 
-json ActionExecutor::set_local_variable(ea_t address, const std::string& current_name,
-                                       const std::string& new_name, const std::string& new_type) {
+    json ActionExecutor::set_local_variable(ea_t address, const std::string& current_name,
+                                           const std::string& new_name, const std::string& new_type) {
     json result;
     try {
         bool success = IDAUtils::set_local_variable(address, current_name, new_name, new_type);
         result["success"] = success;
         if (!success) {
             result["error"] = "Failed to update local variable. Check that variable exists.";
+        }
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+
+        // Check if this is a size mismatch warning
+        if (error_msg.find("TYPE SIZE MISMATCH WARNING") != std::string::npos) {
+            result["success"] = false;
+            result["error"] = error_msg;
+            result["size_mismatch"] = true;
+            result["requires_confirmation"] = true;
+            result["hint"] = "If you are 100% certain this type change is correct despite the size mismatch, "
+                            "append 'FORCE_SIZE_MISMATCH' to the new_type string to proceed.";
+        } else {
+            result["success"] = false;
+            result["error"] = error_msg;
         }
     } catch (const std::exception& e) {
         result["success"] = false;

@@ -729,7 +729,8 @@ public:
                "parameter NAMES matter - 'ProcessPacket(SOCKET clientSocket, PacketHeader* header)' "
                "tells a story that 'sub_401000(int a1, void* a2)' never could. "
                "Good prototypes propagate understanding to every caller. "
-               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)').";
+               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)'). "
+               "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
     }
 
     json parameters_schema() const override {
@@ -920,7 +921,8 @@ public:
         return "Make decompiled code readable by giving variables meaningful names and correct types. "
                "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
                "Well-named variables make function logic self-documenting. "
-               "This is how you make decompilation read like source code.";
+               "This is how you make decompilation read like source code. "
+               "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
     }
 
     json parameters_schema() const override {

@@ -1027,7 +1027,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
-        // Get current function type to check parameter count
+        // Get current function type to check parameter count and sizes
         tinfo_t current_type;
         func_type_data_t current_ftd;
         bool has_current_type = false;
@@ -1070,8 +1070,77 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             );
         }
 
+        // Check for type size mismatches in parameters
+        if (has_current_type) {
+            std::vector<std::string> size_warnings;
+
+            for (size_t i = 0; i < current_ftd.size() && i < new_ftd.size(); i++) {
+                size_t current_size = current_ftd[i].type.get_size();
+                size_t new_size = new_ftd[i].type.get_size();
+
+                if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
+                    qstring current_type_str;
+                    qstring new_type_str;
+                    current_ftd[i].type.print(&current_type_str);
+                    new_ftd[i].type.print(&new_type_str);
+
+                    std::string warning = "Parameter " + std::to_string(i) +
+                        ": size mismatch - current type '" + current_type_str.c_str() +
+                        "' (size " + std::to_string(current_size) +
+                        ") vs new type '" + new_type_str.c_str() +
+                        "' (size " + std::to_string(new_size) + ")";
+                    size_warnings.push_back(warning);
+                }
+            }
+
+            // Check return type size
+            size_t current_ret_size = current_ftd.rettype.get_size();
+            size_t new_ret_size = new_ftd.rettype.get_size();
+
+            if (current_ret_size != new_ret_size && current_ret_size != BADSIZE && new_ret_size != BADSIZE) {
+                qstring current_ret_str;
+                qstring new_ret_str;
+                current_ftd.rettype.print(&current_ret_str);
+                new_ftd.rettype.print(&new_ret_str);
+
+                std::string warning = "Return type: size mismatch - current type '" + current_ret_str.c_str() +
+                    "' (size " + std::to_string(current_ret_size) +
+                    ") vs new type '" + new_ret_str.c_str() +
+                    "' (size " + std::to_string(new_ret_size) + ")";
+                size_warnings.push_back(warning);
+            }
+
+            if (!size_warnings.empty()) {
+                std::string error_msg = "TYPE SIZE MISMATCH WARNING: Changing types with different sizes may break decompilation!\n\n";
+                for (const auto& warning : size_warnings) {
+                    error_msg += "- " + warning + "\n";
+                }
+                error_msg += "\nTo proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the prototype string.";
+
+                // Check if user wants to force the change
+                if (prototype.find("FORCE_SIZE_MISMATCH") == std::string::npos) {
+                    throw std::runtime_error(error_msg);
+                }
+
+                // Remove the FORCE_SIZE_MISMATCH flag before parsing again
+                std::string clean_prototype = prototype;
+                size_t force_pos = clean_prototype.find("FORCE_SIZE_MISMATCH");
+                if (force_pos != std::string::npos) {
+                    clean_prototype.erase(force_pos);
+                    // Re-parse without the flag
+                    proto_str = clean_prototype.c_str();
+                    ptr = proto_str.c_str();
+                    if (!parse_decl(&new_type, &func_name, nullptr, ptr, PT_SIL)) {
+                        throw std::invalid_argument("Failed to parse function prototype after removing FORCE flag");
+                    }
+                    if (!new_type.get_func_details(&new_ftd)) {
+                        throw std::runtime_error("Failed to get function details after removing FORCE flag");
+                    }
+                }
+            }
+        }
+
         // Extract parameter names from the prototype string
-        // This is a bit tricky - we need to parse the prototype more carefully
         std::vector<std::string> param_names;
 
         // Find the opening parenthesis
@@ -1080,7 +1149,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
         if (paren_start != std::string::npos && paren_end != std::string::npos && paren_start < paren_end) {
             std::string params_str = prototype.substr(paren_start + 1, paren_end - paren_start - 1);
 
-            // Simple parameter parser - this could be more robust
+            // Simple parameter parser
             size_t pos = 0;
             int paren_depth = 0;
             size_t param_start = 0;
@@ -1096,7 +1165,6 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
                         std::string param = params_str.substr(param_start, i - param_start);
 
                         // Extract parameter name from the parameter declaration
-                        // Look for the last identifier in the parameter
                         std::string param_name;
                         size_t last_space = param.rfind(' ');
                         size_t last_star = param.rfind('*');
@@ -1293,6 +1361,7 @@ FunctionLocalsInfo IDAUtils::get_function_locals(ea_t address) {
         return result;
     });
 }
+
 bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name, const std::string& new_name, const std::string& new_type) {
     return execute_sync_wrapper([address, &current_name, &new_name, &new_type]() {
         if (!IDAValidators::is_valid_function(address)) {
@@ -1315,12 +1384,38 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
             throw std::invalid_argument("Variable not found: " + current_name);
         }
 
+        // Get the current variable's type info for size checking
+        hexrays_failure_t hf;
+        cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
+        if (!cfunc) {
+            throw std::runtime_error("Failed to decompile function");
+        }
+
+        const lvars_t *lvars = cfunc->get_lvars();
+        if (!lvars) {
+            throw std::runtime_error("Cannot get local variables");
+        }
+
+        // Find the specific lvar
+        const lvar_t *current_lvar = nullptr;
+        for (size_t i = 0; i < lvars->size(); i++) {
+            if ((*lvars)[i].name == current_name) {
+                current_lvar = &(*lvars)[i];
+                break;
+            }
+        }
+
+        if (!current_lvar) {
+            throw std::invalid_argument("Variable not found in decompiled function: " + current_name);
+        }
+
         // Prepare the saved info
         lvar_saved_info_t info;
         info.ll = ll;
 
         uint mli_flags = 0;
         bool need_update = false;
+        bool size_mismatch_detected = false;
 
         // Update name if provided
         if (!new_name.empty() && new_name != current_name) {
@@ -1331,12 +1426,53 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
 
         // Update type if provided
         if (!new_type.empty()) {
-            // Parse the type
+            // Parse the new type
             tinfo_t new_tif;
             qstring type_str = new_type.c_str();
+
+            // Check if FORCE_SIZE_MISMATCH is present
+            bool force_mismatch = (type_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
+
+            // Remove FORCE_SIZE_MISMATCH from the type string before parsing
+            if (force_mismatch) {
+                qstring clean_type = type_str;
+                size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
+                if (force_pos != qstring::npos) {
+                    clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+                    // Trim any trailing whitespace
+                    while (!clean_type.empty() && qisspace(clean_type.last())) {
+                        clean_type.remove_last();
+                    }
+                    type_str = clean_type;
+                }
+            }
+
             const char *ptr = type_str.c_str();
             if (!parse_decl(&new_tif, nullptr, nullptr, ptr, PT_TYP | PT_SIL)) {
                 throw std::invalid_argument("Failed to parse type: " + new_type);
+            }
+
+            // Check size mismatch
+            size_t current_size = current_lvar->type().get_size();
+            size_t new_size = new_tif.get_size();
+
+            if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
+                size_mismatch_detected = true;
+
+                if (!force_mismatch) {
+                    qstring current_type_str;
+                    current_lvar->type().print(&current_type_str);
+
+                    std::string error_msg = "TYPE SIZE MISMATCH WARNING: Variable '" + current_name +
+                        "' has type '" + current_type_str.c_str() +
+                        "' (size " + std::to_string(current_size) +
+                        ") but you're trying to set type '" + type_str.c_str() +
+                        "' (size " + std::to_string(new_size) +
+                        ").\n\nChanging to a type with different size may break decompilation!\n\n" +
+                        "To proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the type string.";
+
+                    throw std::runtime_error(error_msg);
+                }
             }
 
             info.type = new_tif;
