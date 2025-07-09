@@ -182,7 +182,6 @@ private:
     QProgressBar* status_progress_;
 
     // State
-    ea_t current_address_ = BADADDR;
     std::vector<SessionInfo> sessions_;
     std::chrono::steady_clock::time_point session_start_;
     int current_iteration_ = 0;

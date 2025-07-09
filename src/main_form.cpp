@@ -930,23 +930,23 @@ void MainForm::on_search_result_selected(const ui::SearchDialog::SearchResult& r
 void MainForm::on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& tmpl) {
     std::string task = tmpl.task;
 
-    // Replace variables
-    for (const auto& [key, value] : tmpl.variables) {
-        std::string placeholder = "{" + key + "}";
-        std::string actual_value;
-
-        if (value == "current_ea") {
-            actual_value = format_address(current_address_);
-        } else {
-            actual_value = value;
-        }
-
-        size_t pos = 0;
-        while ((pos = task.find(placeholder, pos)) != std::string::npos) {
-            task.replace(pos, placeholder.length(), actual_value);
-            pos += actual_value.length();
-        }
-    }
+    // todo Replace variables
+    // for (const auto& [key, value] : tmpl.variables) {
+    //     std::string placeholder = "{" + key + "}";
+    //     std::string actual_value;
+    //
+    //     if (value == "current_ea") {
+    //         actual_value = format_address(current_addr);
+    //     } else {
+    //         actual_value = value;
+    //     }
+    //
+    //     size_t pos = 0;
+    //     while ((pos = task.find(placeholder, pos)) != std::string::npos) {
+    //         task.replace(pos, placeholder.length(), actual_value);
+    //         pos += actual_value.length();
+    //     }
+    // }
 
     // Make sure we're showing the correct widget
     if (continue_widget_->isVisible()) {
