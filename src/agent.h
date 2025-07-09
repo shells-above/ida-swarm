@@ -331,6 +331,9 @@ Only stop when:
 - Function parameters and variables use descriptive names
 - The decompiled code tells a clear story
 
+Note that you can submit multiple tool calls in one response! In fact it is encouraged, but don't go crazy with it.
+Only submit the tool calls that you need or feel will be beneficial in that moment. You shouldn't do needless tool calls if you don't feel they will be useful.
+
 Remember: Types are your force multiplier. A function with proper typed parameters is 10x more readable. Define structures early, refine them often, and watch as IDA transforms the entire codebase through type propagation.)";
 
 
