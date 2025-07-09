@@ -418,7 +418,7 @@ json ActionExecutor::analyze_function(ea_t address, bool include_disasm, bool in
     json result;
     try {
         // Get basic info first
-        auto info = IDAUtils::get_function_info(address);
+        FunctionInfo info = IDAUtils::get_function_info(address);
         result["success"] = true;
         result["address"] = HexAddress(address);
         result["name"] = info.name;
@@ -427,8 +427,8 @@ json ActionExecutor::analyze_function(ea_t address, bool include_disasm, bool in
         result["size"] = info.size;
 
         // Get cross-references
-        auto xrefs_to = IDAUtils::get_xrefs_to_with_names(address, max_xrefs);
-        auto xrefs_from = IDAUtils::get_xrefs_from_with_names(address, max_xrefs);
+        std::vector<std::pair<ea_t, std::string>> xrefs_to = IDAUtils::get_xrefs_to_with_names(address, max_xrefs);
+        std::vector<std::pair<ea_t, std::string>> xrefs_from = IDAUtils::get_xrefs_from_with_names(address, max_xrefs);
 
         json xrefs_to_json = json::array();
         for (const auto& xref : xrefs_to) {
@@ -466,13 +466,6 @@ json ActionExecutor::analyze_function(ea_t address, bool include_disasm, bool in
         if (include_disasm) {
             result["disassembly"] = IDAUtils::get_function_disassembly(address);
         }
-
-        // Update memory
-        std::set<ea_t> callers, callees;
-        for (const auto& xref : xrefs_to) callers.insert(xref.first);
-        for (const auto& xref : xrefs_from) callees.insert(xref.first);
-        memory->update_function_relationships(address, callers, callees);
-        memory->update_function_refs(address, string_refs, data_refs);
 
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -515,12 +508,6 @@ json ActionExecutor::get_xrefs(ea_t address, int max_results) {
             result["truncated_at"] = max_results;
         }
 
-        // Update memory
-        std::set<ea_t> callers, callees;
-        for (const auto& xref : xrefs_to) callers.insert(xref.first);
-        for (const auto& xref : xrefs_from) callees.insert(xref.first);
-        memory->update_function_relationships(address, callers, callees);
-
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
@@ -551,11 +538,11 @@ json ActionExecutor::set_comment(ea_t address, const std::string& comment) {
         if (comment.empty()) {
             // Clear comment
             success = IDAUtils::clear_disassembly_comment(address) &&
-                     IDAUtils::clear_pseudocode_comments(address);
+                      IDAUtils::clear_pseudocode_comments(address);
         } else {
             // Set comment
             success = IDAUtils::add_disassembly_comment(address, comment) &&
-                     IDAUtils::add_pseudocode_comment(address, comment);
+                      IDAUtils::add_pseudocode_comment(address, comment);
         }
         result["success"] = success;
         if (!success) {
@@ -845,9 +832,7 @@ json ActionExecutor::set_local_type(const std::string& definition, bool replace_
 }
 
 // Consolidated knowledge management
-json ActionExecutor::store_analysis(const std::string& key, const std::string& content,
-                                   std::optional<ea_t> address, const std::string& type,
-                                   const std::vector<ea_t>& related_addresses) {
+json ActionExecutor::store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses) {
     json result;
     try {
         memory->store_analysis(key, content, address, type, related_addresses);
@@ -864,8 +849,7 @@ json ActionExecutor::store_analysis(const std::string& key, const std::string& c
     return result;
 }
 
-json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> address,
-                                 const std::string& type, const std::string& pattern) {
+json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern) {
     json result;
     try {
         auto analyses = memory->get_analysis(key, address, type, pattern);
@@ -892,188 +876,6 @@ json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> ad
 
         result["analyses"] = analyses_json;
         result["count"] = analyses_json.size();
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-// Batch operations
-json ActionExecutor::analyze_functions(const std::vector<ea_t>& addresses, int level) {
-    json result;
-    try {
-        result["success"] = true;
-
-        json functions_json = json::array();
-
-        for (ea_t address : addresses) {
-            json func_result;
-            func_result["address"] = HexAddress(address);
-
-            try {
-                // Get basic info
-                auto info = IDAUtils::get_function_info(address);
-                func_result["name"] = info.name;
-                func_result["size"] = info.size;
-
-                if (level >= 1) {
-                    // Include decompilation
-                    func_result["decompilation"] = IDAUtils::get_function_decompilation(address);
-
-                    // Include string refs
-                    auto string_refs = IDAUtils::get_function_string_refs(address, 10);
-                    func_result["string_refs"] = string_refs;
-                }
-
-                if (level >= 2) {
-                    // Include disassembly
-                    func_result["disassembly"] = IDAUtils::get_function_disassembly(address);
-
-                    // Include cross-references
-                    auto xrefs_to = IDAUtils::get_xrefs_to_with_names(address, 10);
-                    auto xrefs_from = IDAUtils::get_xrefs_from_with_names(address, 10);
-
-                    json xrefs_to_json = json::array();
-                    for (const auto& xref : xrefs_to) {
-                        json xref_obj;
-                        xref_obj["address"] = HexAddress(xref.first);
-                        xref_obj["name"] = xref.second;
-                        xrefs_to_json.push_back(xref_obj);
-                    }
-                    func_result["xrefs_to"] = xrefs_to_json;
-
-                    json xrefs_from_json = json::array();
-                    for (const auto& xref : xrefs_from) {
-                        json xref_obj;
-                        xref_obj["address"] = HexAddress(xref.first);
-                        xref_obj["name"] = xref.second;
-                        xrefs_from_json.push_back(xref_obj);
-                    }
-                    func_result["xrefs_from"] = xrefs_from_json;
-                }
-
-                func_result["success"] = true;
-
-            } catch (const std::exception& e) {
-                func_result["success"] = false;
-                func_result["error"] = e.what();
-            }
-
-            functions_json.push_back(func_result);
-        }
-
-        result["functions"] = functions_json;
-        result["count"] = functions_json.size();
-
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-// Context and workflow
-json ActionExecutor::get_analysis_context(std::optional<ea_t> address, int radius) {
-    json result;
-    try {
-        // Use current focus if no address provided
-        ea_t context_addr = address.value_or(memory->get_current_focus());
-
-        result["success"] = true;
-        result["center_address"] = HexAddress(context_addr);
-
-        // Get memory context
-        MemoryContext context = memory->get_memory_context(context_addr, radius);
-
-        // Add nearby functions
-        json nearby = json::array();
-        for (const FunctionMemory& func : context.nearby_functions) {
-            json func_obj;
-            func_obj["address"] = HexAddress(func.address);
-            func_obj["name"] = func.name;
-            func_obj["distance_from_center"] = func.distance_from_anchor;
-            func_obj["analysis_level"] = static_cast<int>(func.current_level);
-            nearby.push_back(func_obj);
-        }
-        result["nearby_functions"] = nearby;
-
-        // Add context functions
-        json context_funcs = json::array();
-        for (const FunctionMemory& func : context.context_functions) {
-            json func_obj;
-            func_obj["address"] = HexAddress(func.address);
-            func_obj["name"] = func.name;
-            func_obj["distance_from_center"] = func.distance_from_anchor;
-            func_obj["analysis_level"] = static_cast<int>(func.current_level);
-            context_funcs.push_back(func_obj);
-        }
-        result["context_functions"] = context_funcs;
-
-        // Add exploration frontier
-        auto frontier = memory->get_exploration_frontier();
-        json frontier_json = json::array();
-        for (const auto& item : frontier) {
-            json item_obj;
-            item_obj["address"] = HexAddress(std::get<0>(item));
-            item_obj["name"] = std::get<1>(item);
-            item_obj["reason"] = std::get<2>(item);
-            frontier_json.push_back(item_obj);
-        }
-        result["exploration_frontier"] = frontier_json;
-
-        // Add analysis queue
-        auto queue = memory->get_analysis_queue();
-        json queue_json = json::array();
-        for (const auto& item : queue) {
-            json item_obj;
-            item_obj["address"] = HexAddress(std::get<0>(item));
-            item_obj["reason"] = std::get<1>(item);
-            item_obj["priority"] = std::get<2>(item);
-
-            // Get function name
-            std::string name = IDAUtils::get_function_name(std::get<0>(item));
-            item_obj["name"] = name;
-
-            queue_json.push_back(item_obj);
-        }
-        result["analysis_queue"] = queue_json;
-
-        // Add LLM memory summary
-        result["memory_summary"] = context.llm_memory;
-
-        // Add stats
-        auto analyzed = memory->get_analyzed_functions();
-        result["total_analyzed_functions"] = analyzed.size();
-
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::mark_for_analysis(ea_t address, const std::string& reason, int priority) {
-    json result;
-    try {
-        memory->mark_for_analysis(address, reason, priority);
-        result["success"] = true;
-        result["address"] = HexAddress(address);
-        result["reason"] = reason;
-        result["priority"] = priority;
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::set_current_focus(ea_t address) {
-    json result;
-    try {
-        memory->set_current_focus(address);
-        result["success"] = true;
-        result["address"] = HexAddress(address);
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

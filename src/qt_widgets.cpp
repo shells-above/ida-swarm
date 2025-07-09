@@ -1868,373 +1868,20 @@ void TaskTemplateWidget::on_delete_template() {
     }
 }
 
-
-CallGraphWidget::CallGraphWidget(QWidget* parent) : QWidget(parent) {
-    setMouseTracking(true);
-    setMinimumSize(400, 400);
-
-    // Set up for smooth rendering
-    setAttribute(Qt::WA_NoSystemBackground);
-}
-
-void CallGraphWidget::update_graph(std::shared_ptr<BinaryMemory> memory) {
-    memory_ = memory;
-    nodes_.clear();
-    edges_.clear();
-
-    if (!memory_) return;
-
-    // Get all analyzed functions
-    auto functions = memory_->get_analyzed_functions();
-    json snapshot = memory_->export_memory_snapshot();
-
-    // Create a map for quick lookup
-    std::map<ea_t, int> addr_to_node_index;
-
-    // Create nodes
-    for (const auto& [addr, name, level] : functions) {
-        Node node;
-        node.address = addr;
-        node.name = QString::fromStdString(name.empty() ? format_address(addr) : name);
-        node.level = static_cast<int>(level);
-        node.is_anchor = memory_->is_anchor_point(addr);
-        node.is_focus = (addr == memory_->get_current_focus());
-        node.position = QPointF(0, 0);
-
-        addr_to_node_index[addr] = nodes_.size();
-        nodes_.push_back(node);
-    }
-
-    // Create edges from the snapshot data
-    for (const auto& func : snapshot["functions"]) {
-        // Parse the from address
-        ea_t from_addr = 0;
-        std::string from_str = func["address"].get<std::string>();
-        if (from_str.find("0x") == 0) {
-            from_addr = std::stoull(from_str.substr(2), nullptr, 16);
-        } else {
-            from_addr = std::stoull(from_str, nullptr, 16);
-        }
-
-        // Only process if this node exists
-        if (addr_to_node_index.find(from_addr) == addr_to_node_index.end()) {
-            continue;
-        }
-
-        // Add edges for callees
-        if (func.contains("callees") && func["callees"].is_array()) {
-            for (const auto& callee_json : func["callees"]) {
-                std::string callee_str = callee_json.get<std::string>();
-                ea_t to_addr = 0;
-                if (callee_str.find("0x") == 0) {
-                    to_addr = std::stoull(callee_str.substr(2), nullptr, 16);
-                } else {
-                    to_addr = std::stoull(callee_str, nullptr, 16);
-                }
-
-                // Only add edge if target node exists
-                if (addr_to_node_index.find(to_addr) != addr_to_node_index.end()) {
-                    edges_.push_back({from_addr, to_addr});
-                }
-            }
-        }
-    }
-
-    // If we have nodes but no edges, create a simple layout
-    if (!nodes_.empty() && edges_.empty()) {
-        // Just arrange nodes in a grid
-        int cols = std::ceil(std::sqrt(nodes_.size()));
-        for (size_t i = 0; i < nodes_.size(); i++) {
-            int row = i / cols;
-            int col = i % cols;
-            nodes_[i].position = QPointF(col * 100 - cols * 50, row * 100);
-        }
-    } else {
-        // Use force-directed layout
-        layout_graph();
-    }
-
-    update();
-}
-
-void CallGraphWidget::layout_graph() {
-    if (nodes_.empty()) return;
-
-    // Simple force-directed layout
-    const int iterations = 100;
-    const double k = 50.0;  // Ideal edge length
-    const double c_rep = 10000.0;  // Repulsion constant
-    const double c_spring = 0.1;  // Spring constant
-
-    // Initialize positions randomly
-    for (auto& node : nodes_) {
-        node.position = QPointF(
-            (rand() % 1000) - 500,
-            (rand() % 1000) - 500
-        );
-    }
-
-    // Force-directed iterations
-    for (int iter = 0; iter < iterations; iter++) {
-        std::vector<QPointF> forces(nodes_.size(), QPointF(0, 0));
-
-        // Repulsive forces between all nodes
-        for (size_t i = 0; i < nodes_.size(); i++) {
-            for (size_t j = i + 1; j < nodes_.size(); j++) {
-                QPointF delta = nodes_[i].position - nodes_[j].position;
-                double dist = std::max(1.0f, QVector2D(delta).length());
-                QPointF force = (c_rep / (dist * dist)) * delta / dist;
-
-                forces[i] += force;
-                forces[j] -= force;
-            }
-        }
-
-        // Spring forces for edges
-        for (const auto& edge : edges_) {
-            // Find node indices
-            int from_idx = -1, to_idx = -1;
-            for (size_t i = 0; i < nodes_.size(); i++) {
-                if (nodes_[i].address == edge.from) from_idx = i;
-                if (nodes_[i].address == edge.to) to_idx = i;
-            }
-
-            if (from_idx >= 0 && to_idx >= 0) {
-                QPointF delta = nodes_[to_idx].position - nodes_[from_idx].position;
-                double dist = QVector2D(delta).length();
-                double force_mag = c_spring * (dist - k);
-                QPointF force = force_mag * delta / std::max(1.0, dist);
-
-                forces[from_idx] += force;
-                forces[to_idx] -= force;
-            }
-        }
-
-        // Apply forces with damping
-        double damping = 0.85;
-        for (size_t i = 0; i < nodes_.size(); i++) {
-            nodes_[i].position += forces[i] * damping;
-        }
-    }
-
-    // Center the graph
-    QPointF center(0, 0);
-    for (const auto& node : nodes_) {
-        center += node.position;
-    }
-    center /= nodes_.size();
-
-    for (auto& node : nodes_) {
-        node.position -= center;
-    }
-}
-
-void CallGraphWidget::center_on_function(ea_t address) {
-    for (const auto& node : nodes_) {
-        if (node.address == address) {
-            offset_ = -node.position;
-            update();
-            break;
-        }
-    }
-}
-
-void CallGraphWidget::paintEvent(QPaintEvent* event) {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-
-    // Get theme
-    MainForm* main_form = get_main_form();
-    bool is_dark_theme = false;
-    if (main_form) {
-        const Config* config = main_form->get_config();
-        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
-    }
-
-    // Background
-    painter.fillRect(rect(), is_dark_theme ? QColor(40, 40, 40) : QColor(250, 250, 250));
-
-    // Set up transformation
-    painter.translate(width() / 2 + offset_.x(), height() / 2 + offset_.y());
-    painter.scale(zoom_, zoom_);
-
-    // Draw edges
-    painter.setPen(QPen(is_dark_theme ? QColor(100, 100, 100) : QColor(200, 200, 200), 1));
-    for (const auto& edge : edges_) {
-        QPointF from_pos, to_pos;
-
-        // Find positions
-        for (const auto& node : nodes_) {
-            if (node.address == edge.from) from_pos = node.position;
-            if (node.address == edge.to) to_pos = node.position;
-        }
-
-        // Draw arrow
-        painter.drawLine(from_pos, to_pos);
-
-        // Arrowhead
-        QLineF line(from_pos, to_pos);
-        double angle = std::atan2(line.dy(), line.dx());
-        QPointF arrow_p1 = to_pos - QPointF(cos(angle - M_PI/6) * 10, sin(angle - M_PI/6) * 10);
-        QPointF arrow_p2 = to_pos - QPointF(cos(angle + M_PI/6) * 10, sin(angle + M_PI/6) * 10);
-        painter.drawLine(to_pos, arrow_p1);
-        painter.drawLine(to_pos, arrow_p2);
-    }
-
-    // Draw nodes
-    QFont font = painter.font();
-    font.setPointSize(9);
-    painter.setFont(font);
-
-    for (const auto& node : nodes_) {
-        // Node color based on analysis level
-        QColor node_color;
-        switch (node.level) {
-            case 1: node_color = QColor(180, 180, 180); break;  // Summary
-            case 2: node_color = QColor(150, 200, 255); break;  // Contextual
-            case 3: node_color = QColor(100, 255, 100); break;  // Analytical
-            case 4: node_color = QColor(255, 200, 100); break;  // Comprehensive
-            default: node_color = QColor(200, 200, 200);
-        }
-
-        // Special highlighting
-        if (node.is_focus) {
-            painter.setPen(QPen(Qt::red, 3));
-        } else if (node.is_anchor) {
-            painter.setPen(QPen(QColor(255, 200, 0), 3));
-        } else {
-            painter.setPen(QPen(is_dark_theme ? Qt::white : Qt::black, 1));
-        }
-
-        // Draw node circle
-        painter.setBrush(node_color);
-        painter.drawEllipse(node.position, 20, 20);
-
-        // Draw label
-        painter.setPen(is_dark_theme ? Qt::white : Qt::black);
-        QRectF text_rect(node.position.x() - 50, node.position.y() + 25, 100, 20);
-        painter.drawText(text_rect, Qt::AlignCenter, node.name);
-    }
-}
-
-void CallGraphWidget::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        // Transform mouse position to graph coordinates
-        QPointF graph_pos = (event->pos() - QPointF(width()/2, height()/2) - offset_) / zoom_;
-
-        Node* clicked_node = node_at_point(graph_pos);
-        if (clicked_node) {
-            emit node_clicked(clicked_node->address);
-        }
-    }
-}
-
-void CallGraphWidget::wheelEvent(QWheelEvent* event) {
-    // Zoom with mouse wheel
-    double zoom_factor = 1.15;
-    if (event->angleDelta().y() > 0) {
-        zoom_ *= zoom_factor;
-    } else {
-        zoom_ /= zoom_factor;
-    }
-
-    // Limit zoom
-    zoom_ = std::max(0.1, std::min(5.0, zoom_));
-    update();
-}
-
-CallGraphWidget::Node* CallGraphWidget::node_at_point(const QPointF& point) {
-    const double node_radius = 20.0;
-
-    for (auto& node : nodes_) {
-        QPointF delta = point - node.position;
-        if (QVector2D(delta).length() <= node_radius) {
-            return &node;
-        }
-    }
-
-    return nullptr;
-}
-
-// Helper function to parse hex addresses
-ea_t CallGraphWidget::parse_hex_address(const std::string& hex_str) {
-    // Remove "0x" prefix if present
-    std::string clean_str = hex_str;
-    if (clean_str.find("0x") == 0) {
-        clean_str = clean_str.substr(2);
-    }
-
-    return std::stoull(clean_str, nullptr, 16);
-}
-
-
 MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     QVBoxLayout* layout = new QVBoxLayout(this);
 
     tabs_ = new QTabWidget();
     layout->addWidget(tabs_);
 
-    // Tab 1: Function Overview
-    QWidget* overview_tab = new QWidget();
-    QVBoxLayout* overview_layout = new QVBoxLayout(overview_tab);
-
-    // Filter controls
-    QHBoxLayout* filter_layout = new QHBoxLayout();
-    filter_layout->addWidget(new QLabel("Filter:"));
-
-    function_filter_ = new QLineEdit();
-    function_filter_->setPlaceholderText("Search functions...");
-    connect(function_filter_, &QLineEdit::textChanged, this, &MemoryDockWidget::on_filter_changed);
-    filter_layout->addWidget(function_filter_);
-
-    level_filter_ = new QComboBox();
-    level_filter_->addItems({"All Levels", "Summary", "Contextual", "Analytical", "Comprehensive"});
-    connect(level_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MemoryDockWidget::on_filter_changed);
-    filter_layout->addWidget(level_filter_);
-
-    overview_layout->addLayout(filter_layout);
-
-    // Create splitter for tree and analysis
-    QSplitter* overview_splitter = new QSplitter(Qt::Vertical);
-
-    // Function tree
-    function_tree_ = new QTreeWidget();
-    function_tree_->setHeaderLabels({"Function", "Level", "Callers", "Callees", "Strings", "Status"});
-    function_tree_->setAlternatingRowColors(true);
-    function_tree_->setSortingEnabled(true);
-    connect(function_tree_, &QTreeWidget::itemSelectionChanged,
-            this, &MemoryDockWidget::on_function_selected);
-    connect(function_tree_, &QTreeWidget::itemDoubleClicked,
-            [this](QTreeWidgetItem* item) {
-                ea_t addr = item->data(0, Qt::UserRole).toULongLong();
-                emit address_clicked(addr);
-            });
-    overview_splitter->addWidget(function_tree_);
-
-    // Add analysis viewer
-    function_analysis_viewer_ = new QTextEdit();
-    function_analysis_viewer_->setReadOnly(true);
-    function_analysis_viewer_->setMaximumHeight(200);
-    overview_splitter->addWidget(function_analysis_viewer_);
-
-    overview_layout->addWidget(overview_splitter);
-    tabs_->addTab(overview_tab, "Functions");
-
-    // Tab 2: Call Graph
-    call_graph_ = new CallGraphWidget();
-    connect(call_graph_, &CallGraphWidget::node_clicked,
-            this, &MemoryDockWidget::function_selected);
-    tabs_->addTab(call_graph_, "Call Graph");
-
-    // Tab 3: Insights & Notes
+    // Tab 1: Insights & Notes
     QWidget* insights_tab = new QWidget();
     QVBoxLayout* insights_layout = new QVBoxLayout(insights_tab);
 
     QHBoxLayout* insight_filter_layout = new QHBoxLayout();
     insight_filter_layout->addWidget(new QLabel("Type:"));
     insight_filter_ = new QComboBox();
-    insight_filter_->addItems({"All", "Pattern", "Hypothesis", "Question", "Finding", "Note", "Analysis"});
+    insight_filter_->addItems({"All",  "Hypothesis", "Question", "Finding", "Note", "Analysis"});
     connect(insight_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MemoryDockWidget::refresh_views);
     insight_filter_layout->addWidget(insight_filter_);
     insight_filter_layout->addStretch();
@@ -2243,8 +1890,7 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     QSplitter* insights_splitter = new QSplitter(Qt::Vertical);
 
     insights_list_ = new QListWidget();
-    connect(insights_list_, &QListWidget::currentRowChanged,
-            this, &MemoryDockWidget::on_insight_selected);
+    connect(insights_list_, &QListWidget::currentRowChanged, this, &MemoryDockWidget::on_insight_selected);
     insights_splitter->addWidget(insights_list_);
 
     notes_viewer_ = new QTextEdit();
@@ -2254,25 +1900,7 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     insights_layout->addWidget(insights_splitter);
     tabs_->addTab(insights_tab, "Insights");
 
-    // Tab 4: Analysis Queue
-    QWidget* queue_tab = new QWidget();
-    QVBoxLayout* queue_layout = new QVBoxLayout(queue_tab);
-
-    queue_table_ = new QTableWidget();
-    queue_table_->setColumnCount(4);
-    queue_table_->setHorizontalHeaderLabels({"Address", "Function", "Reason", "Priority"});
-    queue_table_->horizontalHeader()->setStretchLastSection(true);
-    queue_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    queue_layout->addWidget(queue_table_);
-
-    analyze_next_button_ = new QPushButton("Analyze Next");
-    connect(analyze_next_button_, &QPushButton::clicked,
-            this, &MemoryDockWidget::on_analyze_next);
-    queue_layout->addWidget(analyze_next_button_);
-
-    tabs_->addTab(queue_tab, "Queue");
-
-    // Tab 5: Deep Analysis
+    // Tab 2: Deep Analysis
     QWidget* deep_analysis_tab = new QWidget();
     QVBoxLayout* deep_analysis_layout = new QVBoxLayout(deep_analysis_tab);
 
@@ -2299,7 +1927,7 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     deep_analysis_layout->addWidget(deep_analysis_splitter);
     tabs_->addTab(deep_analysis_tab, "Deep Analysis");
 
-    // Tab 6: Memory Stats
+    // Tab 3: Memory Stats
     stats_browser_ = new QTextBrowser();
     tabs_->addTab(stats_browser_, "Statistics");
 }
@@ -2309,71 +1937,9 @@ void MemoryDockWidget::update_memory(std::shared_ptr<BinaryMemory> memory) {
     refresh_views();
 }
 
-
-void MemoryDockWidget::on_function_selected() {
-    auto items = function_tree_->selectedItems();
-    if (items.isEmpty()) {
-        function_analysis_viewer_->clear();
-        return;
-    }
-
-    QTreeWidgetItem* item = items.first();
-    ea_t addr = item->data(0, Qt::UserRole).toULongLong();
-
-    // Get the stored analysis
-    QString analysis = item->data(0, Qt::UserRole + 1).toString();
-    function_analysis_viewer_->setPlainText(analysis);
-
-    // Update other views
-    call_graph_->center_on_function(addr);
-
-    // Show in notes viewer if on insights tab
-    if (tabs_->currentIndex() == 2 && memory_) {
-        notes_viewer_->setPlainText(analysis);
-    }
-
-    emit function_selected(addr);
-}
-
 void MemoryDockWidget::on_filter_changed() {
     // Just refresh the views with the new filter
     refresh_views();
-}
-
-    void MemoryDockWidget::on_analyze_next() {
-    if (!memory_) return;
-
-    // Check if we can continue (need access to agent state)
-    MainForm* main_form = get_main_form();
-    if (!main_form) return;
-
-    // Check if task is completed
-    if (!main_form->can_continue()) {
-        main_form->log(LogLevel::WARNING, "Cannot analyze next item - current task is not completed yet");
-        return;
-    }
-
-    auto queue = memory_->get_analysis_queue();
-    if (queue.empty()) {
-        main_form->log(LogLevel::INFO, "No functions in the analysis queue");
-        return;
-    }
-
-    // Get the highest priority item
-    auto [addr, reason, priority] = queue[0];
-
-    // Create a continue instruction
-    QString continue_instruction = QString(
-        "Continue the analysis by examining the function at address 0x%1. "
-        "This function was marked for analysis because: %2. "
-        "Build on your previous findings and update your understanding."
-    ).arg(addr, 0, 16).arg(QString::fromStdString(reason));
-
-    main_form->log(LogLevel::INFO,
-        std::format("Analyzing next in queue: 0x{:x} (priority: {})", addr, priority));
-
-    // Request continuation with this instruction
-    emit continue_requested(continue_instruction);
 }
 
 void MemoryDockWidget::on_insight_selected() {
@@ -2407,19 +1973,6 @@ void MemoryDockWidget::on_insight_selected() {
     }
 
     notes_viewer_->setPlainText(display_text);
-
-    // If only one related address, select it in the function tree
-    if (addresses.size() == 1) {
-        // Find and select the item in the function tree
-        for (int i = 0; i < function_tree_->topLevelItemCount(); i++) {
-            QTreeWidgetItem* tree_item = function_tree_->topLevelItem(i);
-            ea_t item_addr = tree_item->data(0, Qt::UserRole).toULongLong();
-            if (item_addr == addresses[0]) {
-                function_tree_->setCurrentItem(tree_item);
-                break;
-            }
-        }
-    }
 }
 
 void MemoryDockWidget::on_deep_analysis_selected() {
@@ -2471,113 +2024,9 @@ void MemoryDockWidget::on_deep_analysis_selected() {
 void MemoryDockWidget::refresh_views() {
     if (!memory_) return;
 
-    // Update function tree
-    function_tree_->clear();
-
-    auto functions = memory_->get_analyzed_functions();
     json snapshot = memory_->export_memory_snapshot();
 
-    for (const auto& [addr, name, level] : functions) {
-        // Get detailed info
-        auto analysis = memory_->get_function_analysis(addr, level);
-
-        // Get relationships from memory snapshot - FIX THE COMPARISON
-        int caller_count = 0;
-        int callee_count = 0;
-        int string_count = 0;
-
-        // Find this function in the snapshot
-        for (const auto& func : snapshot["functions"]) {
-            // Compare addresses properly
-            ea_t func_addr = 0;
-            std::string addr_str = func["address"].get<std::string>();
-            if (addr_str.find("0x") == 0) {
-                func_addr = std::stoull(addr_str.substr(2), nullptr, 16);
-            } else {
-                func_addr = std::stoull(addr_str, nullptr, 16);
-            }
-
-            if (func_addr == addr) {
-                if (func.contains("callers")) {
-                    caller_count = func["callers"].size();
-                }
-                if (func.contains("callees")) {
-                    callee_count = func["callees"].size();
-                }
-                if (func.contains("string_refs")) {
-                    string_count = func["string_refs"].size();
-                }
-                break;
-            }
-        }
-
-        // Apply filters
-        QString filter_text = function_filter_->text();
-        if (!filter_text.isEmpty() &&
-            !QString::fromStdString(name).contains(filter_text, Qt::CaseInsensitive) &&
-            !QString::fromStdString(analysis).contains(filter_text, Qt::CaseInsensitive)) {
-            continue;
-        }
-
-        int level_filter_idx = level_filter_->currentIndex();
-        if (level_filter_idx > 0 && static_cast<int>(level) != level_filter_idx) {
-            continue;
-        }
-
-        // Create tree item
-        QTreeWidgetItem* item = new QTreeWidgetItem(function_tree_);
-        item->setText(0, QString("0x%1 %2").arg(addr, 0, 16).arg(QString::fromStdString(name)));
-        item->setData(0, Qt::UserRole, QVariant::fromValue(addr));
-
-        // Store the full analysis in user data for display when selected
-        item->setData(0, Qt::UserRole + 1, QString::fromStdString(analysis));
-
-        // Show analysis level with color coding
-        QString level_str;
-        QColor level_color;
-        switch (level) {
-            case DetailLevel::SUMMARY:
-                level_str = "Summary";
-                level_color = QColor(200, 200, 200);
-                break;
-            case DetailLevel::CONTEXTUAL:
-                level_str = "Contextual";
-                level_color = QColor(150, 200, 255);
-                break;
-            case DetailLevel::ANALYTICAL:
-                level_str = "Analytical";
-                level_color = QColor(100, 255, 100);
-                break;
-            case DetailLevel::COMPREHENSIVE:
-                level_str = "Comprehensive";
-                level_color = QColor(255, 200, 100);
-                break;
-        }
-        item->setText(1, level_str);
-        item->setBackground(1, level_color);
-
-        item->setText(2, QString::number(caller_count));
-        item->setText(3, QString::number(callee_count));
-        item->setText(4, QString::number(string_count));
-
-        // Status indicators
-        QString status;
-        if (memory_->is_anchor_point(addr)) {
-            status = "⚓ Anchor";
-            item->setForeground(0, QColor(255, 200, 0));
-        }
-        if (addr == memory_->get_current_focus()) {
-            status += " 🎯 Focus";
-            item->setBackground(0, QColor(50, 50, 150));
-            item->setForeground(0, Qt::white);
-        }
-        item->setText(5, status);
-    }
-
-    // Update call graph
-    call_graph_->update_graph(memory_);
-
-    // Update insights using the new unified system
+    // Update insights
     insights_list_->clear();
     QString type_filter = insight_filter_->currentText().toLower();
     if (type_filter == "all") type_filter = "";
@@ -2585,7 +2034,7 @@ void MemoryDockWidget::refresh_views() {
     // Get analyses of the selected type
     std::vector<AnalysisEntry> analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "");
 
-    for (const auto& entry : analyses) {
+    for (const AnalysisEntry& entry: analyses) {
         QListWidgetItem* item = new QListWidgetItem(insights_list_);
         QString text = QString::fromStdString(entry.content);
         if (!entry.related_addresses.empty()) {
@@ -2595,15 +2044,14 @@ void MemoryDockWidget::refresh_views() {
         item->setData(Qt::UserRole, QVariant::fromValue(entry.related_addresses));
     }
 
-    // Update deep analysis list using the new unified system
+    // Update deep analysis list
     deep_analysis_list_->clear();
 
     // Get all deep analysis entries
-    auto deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
+    std::vector<AnalysisEntry> deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
 
     // Sort by timestamp (most recent first)
-    std::sort(deep_analyses.begin(), deep_analyses.end(),
-              [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
+    std::sort(deep_analyses.begin(), deep_analyses.end(), [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
 
     // Populate the list
     for (const auto& entry : deep_analyses) {
@@ -2627,42 +2075,8 @@ void MemoryDockWidget::refresh_views() {
         }
     }
 
-    // Update queue
-    queue_table_->setRowCount(0);
-    auto queue = memory_->get_analysis_queue();
-    for (const auto& [addr, reason, priority] : queue) {
-        int row = queue_table_->rowCount();
-        queue_table_->insertRow(row);
-
-        qstring func_name;
-        get_func_name(&func_name, addr);
-
-        queue_table_->setItem(row, 0, new QTableWidgetItem(QString("0x%1").arg(addr, 0, 16)));
-        queue_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(func_name.c_str())));
-        queue_table_->setItem(row, 2, new QTableWidgetItem(QString::fromStdString(reason)));
-
-        QTableWidgetItem* priority_item = new QTableWidgetItem(QString::number(priority));
-        priority_item->setTextAlignment(Qt::AlignCenter);
-        if (priority >= 8) {
-            priority_item->setBackground(QColor(255, 200, 200));
-        } else if (priority >= 5) {
-            priority_item->setBackground(QColor(255, 255, 200));
-        }
-        queue_table_->setItem(row, 3, priority_item);
-    }
-
     // Update statistics
     update_statistics();
-}
-
-void MemoryDockWidget::set_current_focus(ea_t address) {
-    if (memory_) {
-        memory_->set_current_focus(address);
-        refresh_views();
-
-        // Also center the call graph on this address
-        call_graph_->center_on_function(address);
-    }
 }
 
 void MemoryDockWidget::update_statistics() {
@@ -2672,47 +2086,6 @@ void MemoryDockWidget::update_statistics() {
 
     QString html = "<html><body style='font-family: Arial; padding: 10px;'>";
     html += "<h3>Memory Statistics</h3>";
-
-    // Function statistics
-    int total_functions = snapshot["functions"].size();
-    std::map<int, int> level_counts;
-    int anchor_count = 0;
-    int total_callers = 0;
-    int total_callees = 0;
-    int total_strings = 0;
-
-    for (const auto& func : snapshot["functions"]) {
-        int level = func["current_level"];
-        level_counts[level]++;
-
-        if (func.contains("distance_from_anchor") && func["distance_from_anchor"] == -1) {
-            anchor_count++;
-        }
-
-        total_callers += func["callers"].size();
-        total_callees += func["callees"].size();
-        total_strings += func["string_refs"].size();
-    }
-
-    html += QString("<p><b>Total Functions Analyzed:</b> %1</p>").arg(total_functions);
-    html += QString("<p><b>Anchor Points:</b> %1</p>").arg(anchor_count);
-
-    html += "<h4>Analysis Levels:</h4><ul>";
-    for (const auto& [level, count] : level_counts) {
-        QString level_name;
-        switch (level) {
-            case 1: level_name = "Summary"; break;
-            case 2: level_name = "Contextual"; break;
-            case 3: level_name = "Analytical"; break;
-            case 4: level_name = "Comprehensive"; break;
-        }
-        html += QString("<li>%1: %2</li>").arg(level_name).arg(count);
-    }
-    html += "</ul>";
-
-    html += QString("<p><b>Total Call Relationships:</b> %1 callers, %2 callees</p>")
-        .arg(total_callers).arg(total_callees);
-    html += QString("<p><b>Total String References:</b> %1</p>").arg(total_strings);
 
     // Insights statistics
     int insight_count = snapshot["insights"].size();
@@ -2726,10 +2099,6 @@ void MemoryDockWidget::update_statistics() {
         html += QString("<li>%1: %2</li>").arg(QString::fromStdString(type)).arg(count);
     }
     html += "</ul>";
-
-    // Global notes
-    int notes_count = snapshot["global_notes"].size();
-    html += QString("<p><b>Global Notes:</b> %1</p>").arg(notes_count);
 
     html += "</body></html>";
     stats_browser_->setHtml(html);

@@ -391,51 +391,6 @@ private:
     std::vector<TaskTemplate> templates;
 };
 
-
-class CallGraphWidget : public QWidget {
-    Q_OBJECT
-
-public:
-    CallGraphWidget(QWidget* parent = nullptr);
-
-    void update_graph(std::shared_ptr<BinaryMemory> memory);
-    void center_on_function(ea_t address);
-
-    signals:
-        void node_clicked(ea_t address);
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void wheelEvent(QWheelEvent* event) override;
-
-private:
-    struct Node {
-        ea_t address;
-        QString name;
-        QPointF position;
-        int level;  // analysis level
-        bool is_anchor;
-        bool is_focus;
-    };
-
-    struct Edge {
-        ea_t from;
-        ea_t to;
-    };
-
-    std::vector<Node> nodes_;
-    std::vector<Edge> edges_;
-    std::shared_ptr<BinaryMemory> memory_;
-
-    QPointF offset_;
-    double zoom_ = 1.0;
-
-    void layout_graph();
-    Node* node_at_point(const QPointF& point);
-    ea_t parse_hex_address(const std::string& hex_str);
-};
-
 class MemoryDockWidget : public QWidget {
     Q_OBJECT
 
@@ -443,7 +398,6 @@ public:
     MemoryDockWidget(QWidget* parent = nullptr);
 
     void update_memory(std::shared_ptr<BinaryMemory> memory);
-    void set_current_focus(ea_t address);
     void update_statistics();
 
     signals:
@@ -453,38 +407,23 @@ public:
 private:
     QTabWidget* tabs_;
 
-    // Tab 1: Function Overview
-    QTreeWidget* function_tree_;
-    QLineEdit* function_filter_;
-    QComboBox* level_filter_;
-    QTextEdit* function_analysis_viewer_;
-
-    // Tab 2: Call Graph
-    CallGraphWidget* call_graph_;
-
-    // Tab 3: Insights & Notes
+    // Tab 1: Insights & Notes
     QListWidget* insights_list_;
     QTextEdit* notes_viewer_;
     QComboBox* insight_filter_;
 
-    // Tab 4: Analysis Queue
-    QTableWidget* queue_table_;
-    QPushButton* analyze_next_button_;
-
-    // Tab 5: Deep Analysis
+    // Tab 2: Deep Analysis
     QListWidget* deep_analysis_list_;
     QTextEdit* deep_analysis_viewer_;
     QLabel* analysis_meta_label_;
 
-    // Tab 6: Memory Stats
+    // Tab 3: Memory Stats
     QTextBrowser* stats_browser_;
 
     std::shared_ptr<BinaryMemory> memory_;
 
 private slots:
-    void on_function_selected();
     void on_filter_changed();
-    void on_analyze_next();
     void on_insight_selected();
     void on_deep_analysis_selected();
     void refresh_views();

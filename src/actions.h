@@ -26,16 +26,16 @@ public:
     json search_globals(const std::string& pattern, int max_results);
     json search_strings(const std::string& pattern, int min_length, int max_results);
 
-    // Unified info actions
+    // Info actions
     json get_function_info(ea_t address);
     json get_data_info(ea_t address, int max_xrefs = 20);
     json dump_data(ea_t address, size_t size, int bytes_per_line = 16);
     json analyze_function(ea_t address, bool include_disasm, bool include_decomp, int max_xrefs);
 
-    // Simplified cross-reference action
+    // xrefs
     json get_xrefs(ea_t address, int max_results);
 
-    // Unified name/comment actions
+    // name/comment actions
     json set_name(ea_t address, const std::string& name);
     json set_comment(ea_t address, const std::string& comment);
 
@@ -57,14 +57,6 @@ public:
     // Consolidated knowledge management
     json store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses);
     json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern);
-
-    // Batch operations
-    json analyze_functions(const std::vector<ea_t>& addresses, int level);
-
-    // Context and workflow
-    json get_analysis_context(std::optional<ea_t> address, int radius);
-    json mark_for_analysis(ea_t address, const std::string& reason, int priority);
-    json set_current_focus(ea_t address);
 
 private:
     std::shared_ptr<BinaryMemory> memory;

@@ -392,8 +392,8 @@ public:
         return ParameterBuilder()
             .add_string("key", "Unique key for this analysis")
             .add_string("content", "The analysis content")
+            .add_string("type", "Type of analysis: note, finding, hypothesis, question, analysis (analysis is for analyzing a specific function)")
             .add_integer("address", "Associated address (optional)", false)
-            .add_string("type", "Type of analysis: note, finding, hypothesis, question, analysis (defaults to note)", false)
             .add_array("related_addresses", "integer", "Additional related addresses", false)
             .build();
     }
@@ -402,11 +402,13 @@ public:
         try {
             std::string key = input.at("key");
             std::string content = input.at("content");
+            std::string type = input.at("type");
+
             std::optional<ea_t> address;
             if (input.contains("address")) {
                 address = ActionExecutor::parse_single_address_value(input.at("address"));
             }
-            std::string type = input.value("type", "note");
+
             std::vector<ea_t> related_addresses;
             if (input.contains("related_addresses")) {
                 related_addresses = ActionExecutor::parse_list_address_param(input, "related_addresses");
@@ -455,73 +457,6 @@ public:
             std::string pattern = input.value("pattern", "");
 
             return ToolResult::success(executor->get_analysis(key, address, type, pattern));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Batch analyze functions tool
-class AnalyzeFunctionsTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "analyze_functions";
-    }
-
-    std::string description() const override {
-        return "Analyze multiple functions as a batch. Efficient for analyzing related function groups. Returns analysis for each function.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_array("addresses", "integer", "List of function addresses to analyze")
-            .add_integer("level", "Analysis detail level (0=basic info, 1=with decompilation + string refs, 2=full with disasm + xrefs. Defaults to 1)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::vector<ea_t> addresses = ActionExecutor::parse_list_address_param(input, "addresses");
-            int level = input.value("level", 1);
-
-            return ToolResult::success(executor->analyze_functions(addresses, level));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Get analysis context tool (replaces multiple context tools)
-class GetAnalysisContextTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "get_analysis_context";
-    }
-
-    std::string description() const override {
-        return "Get comprehensive analysis context including nearby functions, analysis queue, exploration frontier, and relationships. Centers around current focus or specified address.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "Center context around this address (uses current focus if not specified)", false)
-            .add_integer("radius", "How many functions away to include (defaults to 2)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::optional<ea_t> address;
-            if (input.contains("address")) {
-                address = ActionExecutor::parse_single_address_value(input.at("address"));
-            }
-            int radius = input.value("radius", 2);
-
-            return ToolResult::success(executor->get_analysis_context(address, radius));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -916,70 +851,6 @@ public:
     }
 };
 
-
-// Mark for analysis tool
-class MarkForAnalysisTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "mark_for_analysis";
-    }
-
-    std::string description() const override {
-        return "Mark a function for future analysis with a reason and priority. Helps you organize your analysis workflow.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to mark for analysis")
-            .add_string("reason", "The reason for analysis")
-            .add_integer("priority", "Priority level (1-10, defaults to 5)", false)
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            std::string reason = input.at("reason");
-            int priority = input.value("priority", 5);
-
-            return ToolResult::success(executor->mark_for_analysis(address, reason, priority));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Set focus tool
-class SetCurrentFocusTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_current_focus";
-    }
-
-    std::string description() const override {
-        return "Set the current analysis focus to the given address. Centers memory context around this location.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The address to focus on")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->set_current_focus(address));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
 // Final report submission tool
 class SubmitFinalReportTool : public Tool {
 public:
@@ -1029,7 +900,7 @@ public:
 
     std::string description() const override {
         return "EXPENSIVE OPERATION - Start collecting information for an extremely complex reverse engineering task that requires deep expert analysis. "
-               "Use this ONLY when you encounter a system so complex that normal analysis tools are insufficient. "
+               "Use this ONLY when you encounter a system so complex that normal analysis tools are insufficient. (you should have attempted the problem before, and only use this if you can't figure it out)"
                "The flow for performing deep analysis is recognizing a complex task that warrants this process and calling start_deep_analysis_collection. "
                "Then explore the binary further looking for more information and provide it using the add_to_deep_analysis call. "
                "Once you have collected enough information, call request_deep_analysis. "
@@ -1302,12 +1173,6 @@ public:
         // Analysis tools
         register_tool_type<StoreAnalysisTool>(memory, executor);
         register_tool_type<GetAnalysisTool>(memory, executor);
-        register_tool_type<AnalyzeFunctionsTool>(memory, executor);
-        register_tool_type<GetAnalysisContextTool>(memory, executor);
-
-        // Workflow tools
-        register_tool_type<MarkForAnalysisTool>(memory, executor);
-        register_tool_type<SetCurrentFocusTool>(memory, executor);
 
         // Binary info tools
         register_tool_type<GetImportsTool>(memory, executor);
