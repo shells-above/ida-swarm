@@ -1027,6 +1027,12 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
+        // Get the IDB's type library for proper type resolution
+        til_t *idati = get_idati();
+        if (!idati) {
+            throw std::runtime_error("Failed to get IDA type library");
+        }
+
         // Get current function type to check parameter count and sizes
         tinfo_t current_type;
         func_type_data_t current_ftd;
@@ -1046,8 +1052,13 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
         const char *ptr = proto_str.c_str();
         qstring func_name;
 
-        if (!parse_decl(&new_type, &func_name, nullptr, ptr, PT_SIL)) {
-            throw std::invalid_argument("Failed to parse function prototype");
+        // Use the proper til and add PT_TYP for better type parsing
+        if (!parse_decl(&new_type, &func_name, idati, ptr, PT_SIL)) {
+            // If parsing fails, try with more permissive flags
+            ptr = proto_str.c_str(); // Reset pointer
+            if (!parse_decl(&new_type, &func_name, idati, ptr, 0)) {
+                throw std::invalid_argument("Failed to parse function prototype: " + prototype);
+            }
         }
 
         // Verify it's a function type
@@ -1127,10 +1138,14 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
                 size_t force_pos = clean_prototype.find("FORCE_SIZE_MISMATCH");
                 if (force_pos != std::string::npos) {
                     clean_prototype.erase(force_pos);
+                    // Trim trailing whitespace
+                    while (!clean_prototype.empty() && std::isspace(clean_prototype.back())) {
+                        clean_prototype.pop_back();
+                    }
                     // Re-parse without the flag
                     proto_str = clean_prototype.c_str();
                     ptr = proto_str.c_str();
-                    if (!parse_decl(&new_type, &func_name, nullptr, ptr, PT_SIL)) {
+                    if (!parse_decl(&new_type, &func_name, idati, ptr, PT_SIL)) {
                         throw std::invalid_argument("Failed to parse function prototype after removing FORCE flag");
                     }
                     if (!new_type.get_func_details(&new_ftd)) {
@@ -1329,6 +1344,12 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
+        // Get the IDB's type library for proper type resolution
+        til_t *idati = get_idati();
+        if (!idati) {
+            throw std::runtime_error("Failed to get IDA type library");
+        }
+
         // Initialize Hex-Rays if needed
         if (!init_hexrays_plugin()) {
             throw std::runtime_error("Hex-Rays decompiler not available");
@@ -1390,6 +1411,7 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
                     size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
                     if (force_pos != qstring::npos) {
                         clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+                        // Trim trailing whitespace
                         while (!clean_type.empty() && qisspace(clean_type.last())) {
                             clean_type.remove_last();
                         }
@@ -1398,8 +1420,20 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
                 }
 
                 const char *ptr = type_str.c_str();
-                if (!parse_decl(&new_tif, nullptr, nullptr, ptr, PT_TYP | PT_SIL)) {
-                    throw std::invalid_argument("Failed to parse type: " + new_type);
+
+                // Parse with proper til and flags
+                if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
+                    // Try without PT_SIL for more detailed error
+                    ptr = type_str.c_str(); // Reset pointer
+                    if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
+                        // Try one more time with just basic flags
+                        ptr = type_str.c_str(); // Reset pointer
+                        if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
+                            // If all parsing attempts fail, provide helpful error
+                            throw std::invalid_argument("Failed to parse type '" + std::string(type_str.c_str()) +
+                                "'. Make sure the type is valid and any custom types are defined in the IDB.");
+                        }
+                    }
                 }
 
                 // Check size mismatch
@@ -1496,6 +1530,7 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
                 size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
                 if (force_pos != qstring::npos) {
                     clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+                    // Trim trailing whitespace
                     while (!clean_type.empty() && qisspace(clean_type.last())) {
                         clean_type.remove_last();
                     }
@@ -1504,8 +1539,20 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
             }
 
             const char *ptr = type_str.c_str();
-            if (!parse_decl(&new_tif, nullptr, nullptr, ptr, PT_TYP | PT_SIL)) {
-                throw std::invalid_argument("Failed to parse type: " + new_type);
+
+            // Parse with proper til and flags
+            if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
+                // Try without PT_SIL for more detailed error
+                ptr = type_str.c_str(); // Reset pointer
+                if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
+                    // Try one more time with just basic flags
+                    ptr = type_str.c_str(); // Reset pointer
+                    if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
+                        // If all parsing attempts fail, provide helpful error
+                        throw std::invalid_argument("Failed to parse type '" + std::string(type_str.c_str()) +
+                            "'. Make sure the type is valid and any custom types are defined in the IDB.");
+                    }
+                }
             }
 
             // Check size mismatch
