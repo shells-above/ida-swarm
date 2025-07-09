@@ -86,6 +86,8 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <QTextBlock>
+#include <QDateEdit>
+#include <QGraphicsView>
 #include <QTextCursor>
 #include <QSyntaxHighlighter>
 #include <QRegularExpression>
@@ -106,8 +108,10 @@
 #include <QDateTime>
 #include <QHeaderView>
 #include <QTime>
+#include <QGraphicsTextItem>
 #include <QTableWidget>
 #include <QApplication>
+#include <QClipboard>
 
 #define fopen dont_use_fopen
 #define fclose dont_use_fclose
