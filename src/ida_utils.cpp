@@ -1360,7 +1360,8 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
         if (get_tinfo(&func_type, address) && func_type.get_func_details(&ftd)) {
             // Check if variable_name matches any argument
             for (int i = 0; i < ftd.size(); i++) {
-                if (ftd[i].name == variable_name.c_str() ||
+                std::string arg_name = ftd[i].name.c_str();
+                if (arg_name == variable_name ||
                     ("arg" + std::to_string(i)) == variable_name ||
                     ("a" + std::to_string(i + 1)) == variable_name) {  // Check common patterns like a1, a2
                     is_argument = true;
@@ -1456,7 +1457,7 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
         // Find the specific lvar for size checking
         const lvar_t *current_lvar = nullptr;
         for (size_t i = 0; i < lvars->size(); i++) {
-            if ((*lvars)[i].name == variable_name) {
+            if ((*lvars)[i].name == variable_name.c_str()) {
                 current_lvar = &(*lvars)[i];
                 break;
             }
