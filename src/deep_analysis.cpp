@@ -106,7 +106,7 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
         .add_message(messages::Message::user_text(user_prompt))
         .with_max_tokens(32768)
         .with_max_thinking_tokens(16384)
-        .with_temperature(0.0)
+        .with_temperature(1.0)
         .enable_thinking(true)
         .enable_interleaved_thinking(false)
         .build();
