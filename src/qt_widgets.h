@@ -399,11 +399,6 @@ public:
 
     void update_memory(std::shared_ptr<BinaryMemory> memory);
     void update_statistics();
-
-    signals:
-        void address_clicked(ea_t address);
-        void function_selected(ea_t address);
-        void continue_requested(const QString& instruction);
 private:
     QTabWidget* tabs_;
 

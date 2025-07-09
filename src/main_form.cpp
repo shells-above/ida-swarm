@@ -209,22 +209,6 @@ void MainForm::setup_docks() {
     memory_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
     memory_widget_ = new ui::MemoryDockWidget();
-    connect(memory_widget_, &ui::MemoryDockWidget::address_clicked,
-            this, &MainForm::on_address_clicked);
-    connect(memory_widget_, &ui::MemoryDockWidget::continue_requested,
-            [this](const QString& instruction) {
-                // Use the continue functionality
-                if (!agent_->is_completed() && !agent_->is_idle()) {
-                    QMessageBox::warning(this, "Cannot Continue",
-                        "Please wait for the current analysis to complete.");
-                    return;
-                }
-
-                // Set the continue input and trigger continue
-                continue_input_->setText(instruction);
-                on_continue_clicked();
-            });
-
     memory_dock_->setWidget(memory_widget_);
     addDockWidget(Qt::RightDockWidgetArea, memory_dock_);
     connect(toggle_memory_action_, &QAction::triggered, [this]() {
@@ -438,12 +422,6 @@ void MainForm::show_and_raise() {
 void MainForm::execute_task(const std::string& task) {
     task_input_->setText(QString::fromStdString(task));
     on_execute_clicked();
-}
-
-void MainForm::set_current_address(ea_t addr) {
-    current_address_ = addr;
-    status_label_->setText(QString("Current: 0x%1").arg(addr, 0, 16));
-    memory_widget_->set_current_focus(addr);
 }
 
 void MainForm::on_execute_clicked() {
@@ -943,11 +921,6 @@ void MainForm::handle_final_report(const json& data) {
     // Add as message to chat
     messages::Message msg = messages::Message::assistant_text(report);
     add_message_to_chat(msg);
-}
-
-void MainForm::on_address_clicked(ea_t addr) {
-    jumpto(addr);
-    set_current_address(addr);
 }
 
 void MainForm::on_search_result_selected(const ui::SearchDialog::SearchResult& result) {

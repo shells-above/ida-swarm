@@ -427,11 +427,6 @@ bool llm_plugin_t::run(size_t arg) {
             form_closed = true;
             main_form = nullptr;
         });
-
-        ea_t current_ea = get_screen_ea();
-        if (current_ea != BADADDR) {
-            main_form->set_current_address(current_ea);
-        }
     }
 
     if (main_form) {
@@ -472,7 +467,6 @@ void llm_plugin_t::analyze_function() {
                       "4. Key algorithms or logic\n"
                       "5. Potential issues or vulnerabilities";
 
-    main_form->set_current_address(func->start_ea);
     main_form->execute_task(task);
 }
 
@@ -494,7 +488,6 @@ void llm_plugin_t::analyze_selection() {
                           " to " + std::to_string(end_ea) + ". " +
                           "Explain what this code does and identify any interesting patterns or issues.";
 
-        main_form->set_current_address(start_ea);
         main_form->execute_task(task);
     } else {
         warning("No selection found");

@@ -44,7 +44,6 @@ public:
     // Public interface for IDA plugin
     void show_and_raise();
     void execute_task(const std::string& task);
-    void set_current_address(ea_t addr);
 
     // helpers for qt_widgets, not great
     const Config* get_config() const { return config_.get(); }
@@ -78,7 +77,6 @@ private slots:
     void on_agent_message(int message_type, const QString& data_str);
 
     // UI updates
-    void on_address_clicked(ea_t addr);
     void on_search_result_selected(const ui::SearchDialog::SearchResult& result);
     void on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& tmpl);
     void update_statistics();
