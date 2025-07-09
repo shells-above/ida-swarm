@@ -398,31 +398,82 @@ public:
     MemoryDockWidget(QWidget* parent = nullptr);
 
     void update_memory(std::shared_ptr<BinaryMemory> memory);
-    void update_statistics();
+    void set_current_address(ea_t address);  // Highlight analyses for current location
+
+signals:
+    void address_selected(ea_t address);  // When user clicks on an address in analysis
+
 private:
     QTabWidget* tabs_;
 
-    // Tab 1: Insights & Notes
-    QListWidget* insights_list_;
-    QTextEdit* notes_viewer_;
-    QComboBox* insight_filter_;
+    // Tab 1: Timeline View - See analyses in chronological order
+    QTreeWidget* timeline_tree_;
+    QTextEdit* timeline_viewer_;
+    QComboBox* timeline_filter_;
+    QDateEdit* date_from_;
+    QDateEdit* date_to_;
 
-    // Tab 2: Deep Analysis
-    QListWidget* deep_analysis_list_;
-    QTextEdit* deep_analysis_viewer_;
-    QLabel* analysis_meta_label_;
+    // Tab 2: Function View - See all analyses grouped by function
+    QTreeWidget* function_tree_;
+    QTextEdit* function_viewer_;
+    QLineEdit* function_search_;
+    QPushButton* expand_all_;
+    QPushButton* collapse_all_;
 
-    // Tab 3: Memory Stats
+    // Tab 3: Analysis Browser - Enhanced search and filter
+    QLineEdit* search_edit_;
+    QComboBox* type_filter_;
+    QComboBox* sort_by_;
+    QListWidget* analysis_list_;
+    QTextEdit* analysis_viewer_;
+    QLabel* analysis_info_label_;
+
+    // Tab 4: Relationships - See connections between analyses
+    QGraphicsView* relationship_view_;
+    QComboBox* relationship_type_;
+
+    // Tab 5: Statistics - Useful metrics
     QTextBrowser* stats_browser_;
+    QPushButton* refresh_stats_;
+
+    // Context menu actions
+    QAction* copy_action_;
+    QAction* export_action_;
+    QAction* goto_address_action_;
 
     std::shared_ptr<BinaryMemory> memory_;
+    ea_t current_address_ = BADADDR;
+
+    // Helper methods
+    QString format_analysis_preview(const AnalysisEntry& entry, int max_length = 100);
+    QString format_timestamp(std::time_t timestamp);
+    QString get_function_name(ea_t address);
+    QIcon get_type_icon(const std::string& type);
+    QColor get_type_color(const std::string& type);
+
+    void populate_timeline_view();
+    void populate_function_view();
+    void populate_analysis_browser();
+    void update_statistics();
+    void build_relationship_graph();
+
+    void apply_theme();
 
 private slots:
-    void on_filter_changed();
-    void on_insight_selected();
-    void on_deep_analysis_selected();
+    void on_timeline_filter_changed();
+    void on_timeline_item_selected();
+    void on_function_search_changed();
+    void on_function_item_selected();
+    void on_analysis_search_changed();
+    void on_analysis_item_selected();
+    void on_sort_changed();
+    void on_context_menu(const QPoint& pos);
+    void on_copy_analysis();
+    void on_export_analysis();
+    void on_goto_address();
     void refresh_views();
 };
+
 
 
 } // namespace llm_re::ui

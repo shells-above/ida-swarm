@@ -1874,62 +1874,584 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     tabs_ = new QTabWidget();
     layout->addWidget(tabs_);
 
-    // Tab 1: Insights & Notes
-    QWidget* insights_tab = new QWidget();
-    QVBoxLayout* insights_layout = new QVBoxLayout(insights_tab);
+    // Create context menu actions
+    copy_action_ = new QAction("Copy", this);
+    copy_action_->setShortcut(QKeySequence::Copy);
+    connect(copy_action_, &QAction::triggered, this, &MemoryDockWidget::on_copy_analysis);
 
-    QHBoxLayout* insight_filter_layout = new QHBoxLayout();
-    insight_filter_layout->addWidget(new QLabel("Type:"));
-    insight_filter_ = new QComboBox();
-    insight_filter_->addItems({"All",  "Hypothesis", "Question", "Finding", "Note", "Analysis"});
-    connect(insight_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MemoryDockWidget::refresh_views);
-    insight_filter_layout->addWidget(insight_filter_);
-    insight_filter_layout->addStretch();
-    insights_layout->addLayout(insight_filter_layout);
+    export_action_ = new QAction("Export...", this);
+    connect(export_action_, &QAction::triggered, this, &MemoryDockWidget::on_export_analysis);
 
-    QSplitter* insights_splitter = new QSplitter(Qt::Vertical);
+    goto_address_action_ = new QAction("Go to Address", this);
+    goto_address_action_->setShortcut(Qt::Key_G);
+    connect(goto_address_action_, &QAction::triggered, this, &MemoryDockWidget::on_goto_address);
 
-    insights_list_ = new QListWidget();
-    connect(insights_list_, &QListWidget::currentRowChanged, this, &MemoryDockWidget::on_insight_selected);
-    insights_splitter->addWidget(insights_list_);
+    // Tab 1: Timeline View
+    QWidget* timeline_tab = new QWidget();
+    QVBoxLayout* timeline_layout = new QVBoxLayout(timeline_tab);
 
-    notes_viewer_ = new QTextEdit();
-    notes_viewer_->setReadOnly(true);
-    insights_splitter->addWidget(notes_viewer_);
+    // Timeline filters
+    QHBoxLayout* timeline_filter_layout = new QHBoxLayout();
+    timeline_filter_layout->addWidget(new QLabel("Type:"));
+    timeline_filter_ = new QComboBox();
+    timeline_filter_->addItems({"All", "Note", "Finding", "Hypothesis", "Question", "Analysis", "Deep Analysis"});
+    connect(timeline_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MemoryDockWidget::on_timeline_filter_changed);
+    timeline_filter_layout->addWidget(timeline_filter_);
 
-    insights_layout->addWidget(insights_splitter);
-    tabs_->addTab(insights_tab, "Insights");
+    timeline_filter_layout->addWidget(new QLabel("From:"));
+    date_from_ = new QDateEdit(QDate::currentDate().addDays(-7));
+    date_from_->setCalendarPopup(true);
+    connect(date_from_, &QDateEdit::dateChanged, this, &MemoryDockWidget::on_timeline_filter_changed);
+    timeline_filter_layout->addWidget(date_from_);
 
-    // Tab 2: Deep Analysis
-    QWidget* deep_analysis_tab = new QWidget();
-    QVBoxLayout* deep_analysis_layout = new QVBoxLayout(deep_analysis_tab);
+    timeline_filter_layout->addWidget(new QLabel("To:"));
+    date_to_ = new QDateEdit(QDate::currentDate());
+    date_to_->setCalendarPopup(true);
+    connect(date_to_, &QDateEdit::dateChanged, this, &MemoryDockWidget::on_timeline_filter_changed);
+    timeline_filter_layout->addWidget(date_to_);
 
-    // Header with metadata
-    analysis_meta_label_ = new QLabel("Deep Analysis Results");
-    analysis_meta_label_->setStyleSheet("font-weight: bold; padding: 5px;");
-    deep_analysis_layout->addWidget(analysis_meta_label_);
+    timeline_filter_layout->addStretch();
+    timeline_layout->addLayout(timeline_filter_layout);
 
-    // Splitter for list and viewer
-    QSplitter* deep_analysis_splitter = new QSplitter(Qt::Vertical);
+    // Timeline tree
+    QSplitter* timeline_splitter = new QSplitter(Qt::Vertical);
 
-    // List of analyses
-    deep_analysis_list_ = new QListWidget();
-    deep_analysis_list_->setMaximumHeight(150);
-    connect(deep_analysis_list_, &QListWidget::currentRowChanged, this, &MemoryDockWidget::on_deep_analysis_selected);
-    deep_analysis_splitter->addWidget(deep_analysis_list_);
+    timeline_tree_ = new QTreeWidget();
+    timeline_tree_->setHeaderLabels({"Time", "Type", "Preview", "Function"});
+    timeline_tree_->setSortingEnabled(true);
+    timeline_tree_->setAlternatingRowColors(true);
+    timeline_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(timeline_tree_, &QTreeWidget::customContextMenuRequested,
+            this, &MemoryDockWidget::on_context_menu);
+    connect(timeline_tree_, &QTreeWidget::currentItemChanged,
+            this, &MemoryDockWidget::on_timeline_item_selected);
+    timeline_splitter->addWidget(timeline_tree_);
 
-    // Analysis viewer
-    deep_analysis_viewer_ = new QTextEdit();
-    deep_analysis_viewer_->setReadOnly(true);
-    deep_analysis_viewer_->setFont(QFont("Consolas", 9));
-    deep_analysis_splitter->addWidget(deep_analysis_viewer_);
+    timeline_viewer_ = new QTextEdit();
+    timeline_viewer_->setReadOnly(true);
+    timeline_splitter->addWidget(timeline_viewer_);
 
-    deep_analysis_layout->addWidget(deep_analysis_splitter);
-    tabs_->addTab(deep_analysis_tab, "Deep Analysis");
+    timeline_layout->addWidget(timeline_splitter);
+    tabs_->addTab(timeline_tab, "Timeline");
 
-    // Tab 3: Memory Stats
+    // Tab 2: Function View
+    QWidget* function_tab = new QWidget();
+    QVBoxLayout* function_layout = new QVBoxLayout(function_tab);
+
+    // Function search
+    QHBoxLayout* function_search_layout = new QHBoxLayout();
+    function_search_ = new QLineEdit();
+    function_search_->setPlaceholderText("Search functions...");
+    connect(function_search_, &QLineEdit::textChanged,
+            this, &MemoryDockWidget::on_function_search_changed);
+    function_search_layout->addWidget(function_search_);
+
+    expand_all_ = new QPushButton("Expand All");
+    connect(expand_all_, &QPushButton::clicked, [this]() { function_tree_->expandAll(); });
+    function_search_layout->addWidget(expand_all_);
+
+    collapse_all_ = new QPushButton("Collapse All");
+    connect(collapse_all_, &QPushButton::clicked, [this]() { function_tree_->collapseAll(); });
+    function_search_layout->addWidget(collapse_all_);
+
+    function_layout->addLayout(function_search_layout);
+
+    // Function tree
+    QSplitter* function_splitter = new QSplitter(Qt::Vertical);
+
+    function_tree_ = new QTreeWidget();
+    function_tree_->setHeaderLabels({"Function", "Count", "Latest"});
+    function_tree_->setSortingEnabled(true);
+    function_tree_->setAlternatingRowColors(true);
+    function_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(function_tree_, &QTreeWidget::customContextMenuRequested,
+            this, &MemoryDockWidget::on_context_menu);
+    connect(function_tree_, &QTreeWidget::currentItemChanged,
+            this, &MemoryDockWidget::on_function_item_selected);
+    function_splitter->addWidget(function_tree_);
+
+    function_viewer_ = new QTextEdit();
+    function_viewer_->setReadOnly(true);
+    function_splitter->addWidget(function_viewer_);
+
+    function_layout->addWidget(function_splitter);
+    tabs_->addTab(function_tab, "By Function");
+
+    // Tab 3: Analysis Browser
+    QWidget* browser_tab = new QWidget();
+    QVBoxLayout* browser_layout = new QVBoxLayout(browser_tab);
+
+    // Search and filters
+    QHBoxLayout* browser_filter_layout = new QHBoxLayout();
+
+    search_edit_ = new QLineEdit();
+    search_edit_->setPlaceholderText("Search analyses...");
+    connect(search_edit_, &QLineEdit::textChanged,
+            this, &MemoryDockWidget::on_analysis_search_changed);
+    browser_filter_layout->addWidget(search_edit_);
+
+    type_filter_ = new QComboBox();
+    type_filter_->addItems({"All Types", "Note", "Finding", "Hypothesis", "Question", "Analysis", "Deep Analysis"});
+    connect(type_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MemoryDockWidget::on_analysis_search_changed);
+    browser_filter_layout->addWidget(type_filter_);
+
+    sort_by_ = new QComboBox();
+    sort_by_->addItems({"Newest First", "Oldest First", "Type", "Address"});
+    connect(sort_by_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MemoryDockWidget::on_sort_changed);
+    browser_filter_layout->addWidget(sort_by_);
+
+    browser_layout->addLayout(browser_filter_layout);
+
+    // Analysis info label
+    analysis_info_label_ = new QLabel("0 analyses");
+    analysis_info_label_->setStyleSheet("padding: 5px; background-color: #f0f0f0;");
+    browser_layout->addWidget(analysis_info_label_);
+
+    // Analysis list and viewer
+    QSplitter* browser_splitter = new QSplitter(Qt::Vertical);
+
+    analysis_list_ = new QListWidget();
+    analysis_list_->setAlternatingRowColors(true);
+    analysis_list_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(analysis_list_, &QListWidget::customContextMenuRequested,
+            this, &MemoryDockWidget::on_context_menu);
+    connect(analysis_list_, &QListWidget::currentRowChanged,
+            this, &MemoryDockWidget::on_analysis_item_selected);
+    browser_splitter->addWidget(analysis_list_);
+
+    analysis_viewer_ = new QTextEdit();
+    analysis_viewer_->setReadOnly(true);
+    browser_splitter->addWidget(analysis_viewer_);
+
+    browser_layout->addWidget(browser_splitter);
+    tabs_->addTab(browser_tab, "Browse");
+
+    // Tab 4: Relationships (simplified for now)
+    QWidget* relationship_tab = new QWidget();
+    QVBoxLayout* relationship_layout = new QVBoxLayout(relationship_tab);
+
+    relationship_type_ = new QComboBox();
+    relationship_type_->addItems({"All Relationships", "Same Function", "Related Functions", "Same Type"});
+    relationship_layout->addWidget(relationship_type_);
+
+    relationship_view_ = new QGraphicsView();
+    relationship_layout->addWidget(relationship_view_);
+
+    tabs_->addTab(relationship_tab, "Relationships");
+
+    // Tab 5: Statistics
+    QWidget* stats_tab = new QWidget();
+    QVBoxLayout* stats_layout = new QVBoxLayout(stats_tab);
+
+    refresh_stats_ = new QPushButton("Refresh Statistics");
+    connect(refresh_stats_, &QPushButton::clicked, this, &MemoryDockWidget::update_statistics);
+    stats_layout->addWidget(refresh_stats_);
+
     stats_browser_ = new QTextBrowser();
-    tabs_->addTab(stats_browser_, "Statistics");
+    stats_layout->addWidget(stats_browser_);
+
+    tabs_->addTab(stats_tab, "Statistics");
+
+    // Apply theme
+    apply_theme();
+}
+
+QString MemoryDockWidget::format_analysis_preview(const AnalysisEntry& entry, int max_length) {
+    QString content = QString::fromStdString(entry.content);
+    // Remove newlines and extra spaces for preview
+    content = content.simplified();
+
+    if (content.length() > max_length) {
+        content = content.left(max_length) + "...";
+    }
+
+    return content;
+}
+
+QString MemoryDockWidget::format_timestamp(std::time_t timestamp) {
+    QDateTime dt = QDateTime::fromSecsSinceEpoch(timestamp);
+    QDateTime now = QDateTime::currentDateTime();
+
+    qint64 secs = dt.secsTo(now);
+
+    if (secs < 60) return "Just now";
+    if (secs < 3600) return QString("%1m ago").arg(secs / 60);
+    if (secs < 86400) return QString("%1h ago").arg(secs / 3600);
+    if (secs < 604800) return QString("%1d ago").arg(secs / 86400);
+
+    return dt.toString("MMM d, yyyy");
+}
+
+QString MemoryDockWidget::get_function_name(ea_t address) {
+    if (address == BADADDR) return "Global";
+
+    qstring func_name;
+    if (get_func_name(&func_name, address) > 0) {
+        return QString::fromStdString(func_name.c_str());
+    }
+
+    return QString("sub_%1").arg(address, 0, 16);
+}
+
+QIcon MemoryDockWidget::get_type_icon(const std::string& type) {
+    // You could create actual icons, but for now use colored circles
+    QPixmap pixmap(16, 16);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(get_type_color(type));
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(2, 2, 12, 12);
+
+    return QIcon(pixmap);
+}
+
+QColor MemoryDockWidget::get_type_color(const std::string& type) {
+    if (type == "finding") return QColor(255, 100, 100);    // Red
+    if (type == "hypothesis") return QColor(255, 200, 100); // Orange
+    if (type == "question") return QColor(100, 150, 255);   // Blue
+    if (type == "note") return QColor(150, 150, 150);       // Gray
+    if (type == "analysis") return QColor(100, 255, 100);   // Green
+    if (type.find("deep_analysis") != std::string::npos) return QColor(200, 100, 255); // Purple
+    return QColor(100, 100, 100);  // Default gray
+}
+
+void MemoryDockWidget::populate_timeline_view() {
+    timeline_tree_->clear();
+    if (!memory_) return;
+
+    std::string type_filter = timeline_filter_->currentText().toLower().toStdString();
+    if (type_filter == "all") type_filter = "";
+
+    auto analyses = memory_->get_analysis("", std::nullopt, type_filter, "");
+
+    // Filter by date
+    QDateTime from = QDateTime(date_from_->date()).toUTC();
+    QDateTime to = QDateTime(date_to_->date().addDays(1)).toUTC();
+
+    for (const auto& entry : analyses) {
+        QDateTime entry_time = QDateTime::fromSecsSinceEpoch(entry.timestamp);
+        if (entry_time < from || entry_time > to) continue;
+
+        QTreeWidgetItem* item = new QTreeWidgetItem(timeline_tree_);
+        item->setText(0, format_timestamp(entry.timestamp));
+        item->setText(1, QString::fromStdString(entry.type));
+        item->setText(2, format_analysis_preview(entry));
+
+        if (entry.address) {
+            item->setText(3, get_function_name(*entry.address));
+        } else if (!entry.related_addresses.empty()) {
+            item->setText(3, QString("%1 functions").arg(entry.related_addresses.size()));
+        }
+
+        item->setIcon(1, get_type_icon(entry.type));
+        item->setData(0, Qt::UserRole, QString::fromStdString(entry.key));
+
+        // Highlight if it's for current address
+        if (current_address_ != BADADDR) {
+            if ((entry.address && *entry.address == current_address_) ||
+                std::find(entry.related_addresses.begin(), entry.related_addresses.end(),
+                         current_address_) != entry.related_addresses.end()) {
+                item->setBackground(0, QColor(255, 255, 200));
+            }
+        }
+    }
+
+    timeline_tree_->sortByColumn(0, Qt::DescendingOrder);
+}
+
+void MemoryDockWidget::populate_function_view() {
+    function_tree_->clear();
+    if (!memory_) return;
+
+    // Group analyses by function
+    std::map<ea_t, std::vector<AnalysisEntry>> by_function;
+    auto all_analyses = memory_->get_analysis();
+
+    for (const auto& entry : all_analyses) {
+        if (entry.address) {
+            by_function[*entry.address].push_back(entry);
+        }
+        for (ea_t addr : entry.related_addresses) {
+            by_function[addr].push_back(entry);
+        }
+    }
+
+    // Also add a "Global" category for analyses without addresses
+    std::vector<AnalysisEntry> global_analyses;
+    for (const auto& entry : all_analyses) {
+        if (!entry.address && entry.related_addresses.empty()) {
+            global_analyses.push_back(entry);
+        }
+    }
+
+    // Create tree items
+    QString search_text = function_search_->text().toLower();
+
+    // Add global analyses if any
+    if (!global_analyses.empty()) {
+        QTreeWidgetItem* global_item = new QTreeWidgetItem(function_tree_);
+        global_item->setText(0, "Global Analyses");
+        global_item->setText(1, QString::number(global_analyses.size()));
+        global_item->setIcon(0, get_type_icon(""));
+
+        for (const auto& entry : global_analyses) {
+            QTreeWidgetItem* child = new QTreeWidgetItem(global_item);
+            child->setText(0, format_analysis_preview(entry, 80));
+            child->setText(1, QString::fromStdString(entry.type));
+            child->setText(2, format_timestamp(entry.timestamp));
+            child->setIcon(1, get_type_icon(entry.type));
+            child->setData(0, Qt::UserRole, QString::fromStdString(entry.key));
+        }
+    }
+
+    // Add function-specific analyses
+    for (const auto& [addr, entries] : by_function) {
+        QString func_name = get_function_name(addr);
+
+        if (!search_text.isEmpty() && !func_name.toLower().contains(search_text)) {
+            continue;
+        }
+
+        QTreeWidgetItem* func_item = new QTreeWidgetItem(function_tree_);
+        func_item->setText(0, func_name);
+        func_item->setText(1, QString::number(entries.size()));
+
+        // Find latest entry
+        auto latest = std::max_element(entries.begin(), entries.end(),
+            [](const auto& a, const auto& b) { return a.timestamp < b.timestamp; });
+        func_item->setText(2, format_timestamp(latest->timestamp));
+
+        // Add children for each analysis
+        std::map<std::string, int> type_counts;
+        for (const auto& entry : entries) {
+            type_counts[entry.type]++;
+
+            QTreeWidgetItem* child = new QTreeWidgetItem(func_item);
+            child->setText(0, format_analysis_preview(entry, 80));
+            child->setText(1, QString::fromStdString(entry.type));
+            child->setText(2, format_timestamp(entry.timestamp));
+            child->setIcon(1, get_type_icon(entry.type));
+            child->setData(0, Qt::UserRole, QString::fromStdString(entry.key));
+        }
+
+        // Update function item tooltip with type breakdown
+        QString tooltip = QString("Address: 0x%1\n").arg(addr, 0, 16);
+        for (const auto& [type, count] : type_counts) {
+            tooltip += QString("%1: %2\n").arg(QString::fromStdString(type)).arg(count);
+        }
+        func_item->setToolTip(0, tooltip);
+
+        // Highlight current function
+        if (addr == current_address_) {
+            func_item->setBackground(0, QColor(200, 255, 200));
+        }
+    }
+
+    function_tree_->sortByColumn(1, Qt::DescendingOrder);
+}
+
+void MemoryDockWidget::populate_analysis_browser() {
+    analysis_list_->clear();
+    if (!memory_) return;
+
+    std::string search_pattern = search_edit_->text().toStdString();
+    std::string type_filter = "";
+
+    if (type_filter_->currentIndex() > 0) {
+        type_filter = type_filter_->currentText().toLower().toStdString();
+    }
+
+    auto analyses = memory_->get_analysis("", std::nullopt, type_filter, search_pattern);
+
+    // Sort based on selection
+    switch (sort_by_->currentIndex()) {
+        case 0: // Newest first
+            std::sort(analyses.begin(), analyses.end(),
+                [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
+            break;
+        case 1: // Oldest first
+            std::sort(analyses.begin(), analyses.end(),
+                [](const auto& a, const auto& b) { return a.timestamp < b.timestamp; });
+            break;
+        case 2: // Type
+            std::sort(analyses.begin(), analyses.end(),
+                [](const auto& a, const auto& b) { return a.type < b.type; });
+            break;
+        case 3: // Address
+            std::sort(analyses.begin(), analyses.end(),
+                [](const auto& a, const auto& b) {
+                    ea_t addr_a = a.address ? *a.address : BADADDR;
+                    ea_t addr_b = b.address ? *b.address : BADADDR;
+                    return addr_a < addr_b;
+                });
+            break;
+    }
+
+    // Populate list
+    for (const auto& entry : analyses) {
+        QListWidgetItem* item = new QListWidgetItem(analysis_list_);
+
+        // Format display text
+        QString display = QString("[%1] ").arg(QString::fromStdString(entry.type).toUpper());
+        display += format_analysis_preview(entry, 150);
+
+        item->setText(display);
+        item->setIcon(get_type_icon(entry.type));
+        item->setData(Qt::UserRole, QString::fromStdString(entry.key));
+
+        // Add tooltip with more info
+        QString tooltip = QString("Key: %1\n").arg(QString::fromStdString(entry.key));
+        tooltip += QString("Time: %1\n").arg(QDateTime::fromSecsSinceEpoch(entry.timestamp).toString());
+        if (entry.address) {
+            tooltip += QString("Address: 0x%1 (%2)").arg(*entry.address, 0, 16)
+                      .arg(get_function_name(*entry.address));
+        }
+        item->setToolTip(tooltip);
+    }
+
+    // Update info label
+    analysis_info_label_->setText(QString("%1 analyses found").arg(analyses.size()));
+}
+
+void MemoryDockWidget::update_statistics() {
+    if (!memory_) return;
+
+    auto all_analyses = memory_->get_analysis();
+
+    // Calculate statistics
+    std::map<std::string, int> type_counts;
+    std::map<ea_t, int> function_counts;
+    int total_count = all_analyses.size();
+    std::time_t oldest = std::time(nullptr);
+    std::time_t newest = 0;
+
+    for (const auto& entry : all_analyses) {
+        type_counts[entry.type]++;
+
+        if (entry.address) {
+            function_counts[*entry.address]++;
+        }
+        for (ea_t addr : entry.related_addresses) {
+            function_counts[addr]++;
+        }
+
+        oldest = std::min(oldest, entry.timestamp);
+        newest = std::max(newest, entry.timestamp);
+    }
+
+    // Find most analyzed functions
+    std::vector<std::pair<ea_t, int>> top_functions;
+    for (const auto& [addr, count] : function_counts) {
+        top_functions.push_back({addr, count});
+    }
+    std::sort(top_functions.begin(), top_functions.end(),
+        [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    // Generate HTML
+    QString html = R"(
+        <html>
+        <head>
+        <style>
+            body { font-family: Arial, sans-serif; padding: 10px; }
+            h3 { color: #2c3e50; }
+            .stat-box { background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 5px; }
+            .stat-label { font-weight: bold; color: #7f8c8d; }
+            .stat-value { font-size: 1.2em; color: #2c3e50; }
+            table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+            th { background: #ecf0f1; padding: 5px; text-align: left; }
+            td { padding: 5px; border-bottom: 1px solid #ecf0f1; }
+            .type-note { color: #95a5a6; }
+            .type-finding { color: #e74c3c; }
+            .type-hypothesis { color: #f39c12; }
+            .type-question { color: #3498db; }
+            .type-analysis { color: #27ae60; }
+            .type-deep_analysis { color: #9b59b6; }
+        </style>
+        </head>
+        <body>
+    )";
+
+    html += "<h3>Memory Statistics</h3>";
+
+    // Overview
+    html += "<div class='stat-box'>";
+    html += QString("<span class='stat-label'>Total Analyses:</span> <span class='stat-value'>%1</span><br>").arg(total_count);
+    html += QString("<span class='stat-label'>Date Range:</span> %1 to %2<br>")
+            .arg(QDateTime::fromSecsSinceEpoch(oldest).toString("MMM d, yyyy"))
+            .arg(QDateTime::fromSecsSinceEpoch(newest).toString("MMM d, yyyy"));
+    html += QString("<span class='stat-label'>Functions Analyzed:</span> %1").arg(function_counts.size());
+    html += "</div>";
+
+    // Analysis types
+    html += "<h4>Analysis Types</h4>";
+    html += "<table>";
+    html += "<tr><th>Type</th><th>Count</th><th>Percentage</th></tr>";
+
+    for (const auto& [type, count] : type_counts) {
+        double percentage = (count * 100.0) / total_count;
+        html += QString("<tr><td class='type-%1'>%2</td><td>%3</td><td>%4%</td></tr>")
+                .arg(QString::fromStdString(type))
+                .arg(QString::fromStdString(type).toUpper())
+                .arg(count)
+                .arg(percentage, 0, 'f', 1);
+    }
+    html += "</table>";
+
+    // Top analyzed functions
+    html += "<h4>Most Analyzed Functions</h4>";
+    html += "<table>";
+    html += "<tr><th>Function</th><th>Analyses</th></tr>";
+
+    int shown = 0;
+    for (const auto& [addr, count] : top_functions) {
+        if (shown++ >= 10) break;
+
+        QString func_name = get_function_name(addr);
+        html += QString("<tr><td>%1</td><td>%2</td></tr>")
+                .arg(func_name)
+                .arg(count);
+    }
+    html += "</table>";
+
+    html += "</body></html>";
+
+    stats_browser_->setHtml(html);
+}
+
+void MemoryDockWidget::refresh_views() {
+    // Refresh the current tab
+    int current_tab = tabs_->currentIndex();
+
+    switch (current_tab) {
+        case 0: populate_timeline_view(); break;
+        case 1: populate_function_view(); break;
+        case 2: populate_analysis_browser(); break;
+        case 3: build_relationship_graph(); break;
+        case 4: update_statistics(); break;
+    }
+}
+
+void MemoryDockWidget::apply_theme() {
+    // Get theme info from main form
+    MainForm* main_form = get_main_form();
+    bool is_dark_theme = false;
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
+    }
+
+    if (is_dark_theme) {
+        // Dark theme adjustments
+        analysis_info_label_->setStyleSheet("padding: 5px; background-color: #3c3c3c; color: #ffffff;");
+    } else {
+        // Light theme
+        analysis_info_label_->setStyleSheet("padding: 5px; background-color: #f0f0f0; color: #000000;");
+    }
 }
 
 void MemoryDockWidget::update_memory(std::shared_ptr<BinaryMemory> memory) {
@@ -1937,171 +2459,404 @@ void MemoryDockWidget::update_memory(std::shared_ptr<BinaryMemory> memory) {
     refresh_views();
 }
 
-void MemoryDockWidget::on_filter_changed() {
-    // Just refresh the views with the new filter
+void MemoryDockWidget::set_current_address(ea_t address) {
+    current_address_ = address;
     refresh_views();
 }
 
-void MemoryDockWidget::on_insight_selected() {
-    auto items = insights_list_->selectedItems();
-    if (items.isEmpty()) return;
+void MemoryDockWidget::build_relationship_graph() {
+    // Create a simple graph showing relationships between analyses
+    QGraphicsScene* scene = new QGraphicsScene();
+    relationship_view_->setScene(scene);
 
-    QListWidgetItem* item = items.first();
+    if (!memory_) return;
 
-    // Get the insight text
-    QString insight_text = item->text();
+    auto all_analyses = memory_->get_analysis();
 
-    // Get related addresses
-    QVariant data = item->data(Qt::UserRole);
-    std::vector<ea_t> addresses;
-    if (data.canConvert<std::vector<ea_t>>()) {
-        addresses = data.value<std::vector<ea_t>>();
+    // Group by relationship type based on combo selection
+    std::map<std::string, std::vector<AnalysisEntry>> groups;
+
+    switch (relationship_type_->currentIndex()) {
+        case 0: // All relationships
+            for (const auto& entry : all_analyses) {
+                groups[entry.type].push_back(entry);
+            }
+            break;
+
+        case 1: // Same function
+            {
+                std::map<ea_t, std::vector<AnalysisEntry>> by_func;
+                for (const auto& entry : all_analyses) {
+                    if (entry.address) {
+                        by_func[*entry.address].push_back(entry);
+                    }
+                }
+                for (const auto& [addr, entries] : by_func) {
+                    if (entries.size() > 1) {
+                        groups[get_function_name(addr).toStdString()] = entries;
+                    }
+                }
+            }
+            break;
+
+        case 2: // Related functions
+            for (const auto& entry : all_analyses) {
+                if (entry.related_addresses.size() > 1) {
+                    groups["Multi-function"].push_back(entry);
+                }
+            }
+            break;
+
+        case 3: // Same type
+            for (const auto& entry : all_analyses) {
+                groups[entry.type].push_back(entry);
+            }
+            break;
     }
 
-    // Display in notes viewer
-    QString display_text = "Insight: " + insight_text + "\n\n";
+    // Create visual representation
+    int y_offset = 0;
+    for (const auto& [group_name, entries] : groups) {
+        // Group header
+        QGraphicsTextItem* header = scene->addText(QString::fromStdString(group_name));
+        header->setPos(10, y_offset);
+        QFont header_font = header->font();
+        header_font.setBold(true);
+        header->setFont(header_font);
 
-    if (!addresses.empty()) {
-        display_text += "Related functions:\n";
-        for (ea_t addr : addresses) {
-            qstring func_name;
-            get_func_name(&func_name, addr);
-            display_text += QString("  - 0x%1 %2\n")
-                .arg(addr, 0, 16)
-                .arg(QString::fromStdString(func_name.c_str()));
+        y_offset += 30;
+
+        // Draw entries in this group
+        int x_offset = 30;
+        for (size_t i = 0; i < entries.size() && i < 10; ++i) {
+            const auto& entry = entries[i];
+
+            // Create box for entry
+            QGraphicsRectItem* box = scene->addRect(x_offset, y_offset, 150, 60);
+            box->setBrush(QBrush(get_type_color(entry.type).lighter(150)));
+            box->setPen(QPen(get_type_color(entry.type)));
+
+            // Add text
+            QGraphicsTextItem* text = scene->addText(format_analysis_preview(entry, 50));
+            text->setPos(x_offset + 5, y_offset + 5);
+            text->setTextWidth(140);
+
+            // Draw connections if same function
+            if (relationship_type_->currentIndex() == 1 && i > 0) {
+                QGraphicsLineItem* line = scene->addLine(
+                    x_offset - 10, y_offset + 30,
+                    x_offset, y_offset + 30
+                );
+                line->setPen(QPen(Qt::gray, 1, Qt::DashLine));
+            }
+
+            x_offset += 170;
+            if (x_offset > 800) {
+                x_offset = 30;
+                y_offset += 80;
+            }
         }
+
+        y_offset += 100;
     }
 
-    notes_viewer_->setPlainText(display_text);
+    relationship_view_->fitInView(scene->itemsBoundingRect(), Qt::KeepAspectRatio);
 }
 
-void MemoryDockWidget::on_deep_analysis_selected() {
-    QList<QListWidgetItem*> items = deep_analysis_list_->selectedItems();
-    if (items.isEmpty()) {
-        deep_analysis_viewer_->clear();
-        analysis_meta_label_->setText("Deep Analysis Results");
+void MemoryDockWidget::on_timeline_filter_changed() {
+    populate_timeline_view();
+}
+
+void MemoryDockWidget::on_timeline_item_selected() {
+    QList<QTreeWidgetItem*> selected = timeline_tree_->selectedItems();
+    if (selected.isEmpty()) {
+        timeline_viewer_->clear();
         return;
     }
 
-    QListWidgetItem* item = items.first();
-    
-    // Get the analysis key stored in the item
-    QString analysis_key = item->data(Qt::UserRole).toString();
-    
-    if (!memory_) return;
-    
-    // Get the analysis content using the new unified system
-    auto analysis_entries = memory_->get_analysis("deep_analysis_" + analysis_key.toStdString());
-    auto meta_entries = memory_->get_analysis("deep_analysis_meta_" + analysis_key.toStdString());
+    QTreeWidgetItem* item = selected.first();
+    QString key = item->data(0, Qt::UserRole).toString();
 
-    if (!analysis_entries.empty()) {
-        // Display the analysis
-        deep_analysis_viewer_->setPlainText(QString::fromStdString(analysis_entries[0].content));
-    } else {
-        deep_analysis_viewer_->setPlainText("Analysis content not found");
-    }
+    if (!memory_ || key.isEmpty()) return;
 
-    // Update metadata label
-    if (!meta_entries.empty()) {
-        try {
-            json metadata = json::parse(meta_entries[0].content);
-            QString meta_text = QString("Topic: %1 | Task: %2")
-                .arg(QString::fromStdString(metadata["topic"].get<std::string>()))
-                .arg(QString::fromStdString(metadata["task"].get<std::string>()));
-            
-            if (metadata.contains("cost_estimate")) {
-                meta_text += QString(" | Cost: $%1").arg(metadata["cost_estimate"].get<double>(), 0, 'f', 4);
-            }
-            
-            analysis_meta_label_->setText(meta_text);
-        } catch (...) {
-            analysis_meta_label_->setText("Deep Analysis Results");
-        }
-    }
-}
+    std::vector<AnalysisEntry> analyses = memory_->get_analysis(key.toStdString());
+    if (analyses.empty()) return;
 
+    const auto& entry = analyses[0];
 
-void MemoryDockWidget::refresh_views() {
-    if (!memory_) return;
-
-    json snapshot = memory_->export_memory_snapshot();
-
-    // Update insights
-    insights_list_->clear();
-    QString type_filter = insight_filter_->currentText().toLower();
-    if (type_filter == "all") type_filter = "";
-
-    // Get analyses of the selected type
-    std::vector<AnalysisEntry> analyses = memory_->get_analysis("", std::nullopt, type_filter.toStdString(), "");
-
-    for (const AnalysisEntry& entry: analyses) {
-        QListWidgetItem* item = new QListWidgetItem(insights_list_);
-        QString text = QString::fromStdString(entry.content);
-        if (!entry.related_addresses.empty()) {
-            text += QString(" [%1 functions]").arg(entry.related_addresses.size());
-        }
-        item->setText(text);
-        item->setData(Qt::UserRole, QVariant::fromValue(entry.related_addresses));
-    }
-
-    // Update deep analysis list
-    deep_analysis_list_->clear();
-
-    // Get all deep analysis entries
-    std::vector<AnalysisEntry> deep_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
-
-    // Sort by timestamp (most recent first)
-    std::sort(deep_analyses.begin(), deep_analyses.end(), [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
-
-    // Populate the list
-    for (const auto& entry : deep_analyses) {
-        // Extract key from "deep_analysis_meta_" prefix
-        std::string key = entry.key;
-        if (key.find("deep_analysis_meta_") == 0) {
-            key = key.substr(19);
-        }
-
-        try {
-            json metadata = json::parse(entry.content);
-            std::string description = metadata["topic"].get<std::string>() + " - " +
-                                    metadata["task"].get<std::string>();
-
-            QListWidgetItem* item = new QListWidgetItem(deep_analysis_list_);
-            item->setText(QString::fromStdString(description));
-            item->setData(Qt::UserRole, QString::fromStdString(key));
-            item->setToolTip(QString("Key: %1").arg(QString::fromStdString(key)));
-        } catch (...) {
-            // Skip malformed entries
-        }
-    }
-
-    // Update statistics
-    update_statistics();
-}
-
-void MemoryDockWidget::update_statistics() {
-    if (!memory_) return;
-
-    json snapshot = memory_->export_memory_snapshot();
-
+    // Format detailed view
     QString html = "<html><body style='font-family: Arial; padding: 10px;'>";
-    html += "<h3>Memory Statistics</h3>";
 
-    // Insights statistics
-    int insight_count = snapshot["insights"].size();
-    std::map<std::string, int> insight_types;
-    for (const auto& insight : snapshot["insights"]) {
-        insight_types[insight["type"]]++;
+    // Header
+    html += QString("<h3>%1</h3>").arg(QString::fromStdString(entry.type).toUpper());
+
+    // Metadata
+    html += "<div style='background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px;'>";
+    html += QString("<b>Key:</b> %1<br>").arg(QString::fromStdString(entry.key));
+    html += QString("<b>Timestamp:</b> %1<br>").arg(
+        QDateTime::fromSecsSinceEpoch(entry.timestamp).toString("yyyy-MM-dd hh:mm:ss"));
+
+    if (entry.address) {
+        html += QString("<b>Address:</b> 0x%1 (%2)<br>")
+                .arg(*entry.address, 0, 16)
+                .arg(get_function_name(*entry.address));
     }
 
-    html += QString("<h4>Insights (%1 total):</h4><ul>").arg(insight_count);
-    for (const auto& [type, count] : insight_types) {
-        html += QString("<li>%1: %2</li>").arg(QString::fromStdString(type)).arg(count);
+    if (!entry.related_addresses.empty()) {
+        html += "<b>Related Functions:</b><ul>";
+        for (ea_t addr : entry.related_addresses) {
+            html += QString("<li>0x%1 - %2</li>")
+                    .arg(addr, 0, 16)
+                    .arg(get_function_name(addr));
+        }
+        html += "</ul>";
     }
-    html += "</ul>";
+    html += "</div>";
+
+    // Content
+    html += "<div style='margin-top: 20px;'>";
+    html += "<h4>Content:</h4>";
+    html += "<pre style='background: #f8f8f8; padding: 10px; border-radius: 5px; white-space: pre-wrap;'>";
+    html += QString::fromStdString(entry.content).toHtmlEscaped();
+    html += "</pre>";
+    html += "</div>";
 
     html += "</body></html>";
-    stats_browser_->setHtml(html);
+
+    timeline_viewer_->setHtml(html);
+}
+
+void MemoryDockWidget::on_function_search_changed() {
+    populate_function_view();
+}
+
+void MemoryDockWidget::on_function_item_selected() {
+    QList<QTreeWidgetItem*> selected = function_tree_->selectedItems();
+    if (selected.isEmpty()) {
+        function_viewer_->clear();
+        return;
+    }
+
+    QTreeWidgetItem* item = selected.first();
+
+    // Check if it's a child item (specific analysis)
+    if (item->parent()) {
+        QString key = item->data(0, Qt::UserRole).toString();
+        if (!memory_ || key.isEmpty()) return;
+
+        auto analyses = memory_->get_analysis(key.toStdString());
+        if (!analyses.empty()) {
+            const auto& entry = analyses[0];
+
+            QString content = QString::fromStdString(entry.content);
+            function_viewer_->setPlainText(content);
+        }
+    } else {
+        // It's a function item - show summary
+        QString html = "<html><body style='font-family: Arial; padding: 10px;'>";
+        html += QString("<h3>%1</h3>").arg(item->text(0));
+        html += QString("<p>Total analyses: %1</p>").arg(item->text(1));
+        html += QString("<p>Latest: %1</p>").arg(item->text(2));
+
+        // Show breakdown by type
+        std::map<std::string, int> type_counts;
+        for (int i = 0; i < item->childCount(); ++i) {
+            QTreeWidgetItem* child = item->child(i);
+            std::string type = child->text(1).toStdString();
+            type_counts[type]++;
+        }
+
+        html += "<h4>Analysis Types:</h4><ul>";
+        for (const auto& [type, count] : type_counts) {
+            html += QString("<li>%1: %2</li>")
+                    .arg(QString::fromStdString(type))
+                    .arg(count);
+        }
+        html += "</ul>";
+
+        html += "</body></html>";
+        function_viewer_->setHtml(html);
+    }
+}
+
+void MemoryDockWidget::on_analysis_search_changed() {
+    populate_analysis_browser();
+}
+
+void MemoryDockWidget::on_analysis_item_selected() {
+    QList<QListWidgetItem*> selected = analysis_list_->selectedItems();
+    if (selected.isEmpty()) {
+        analysis_viewer_->clear();
+        return;
+    }
+
+    QListWidgetItem* item = selected.first();
+    QString key = item->data(Qt::UserRole).toString();
+
+    if (!memory_ || key.isEmpty()) return;
+
+    auto analyses = memory_->get_analysis(key.toStdString());
+    if (analyses.empty()) return;
+
+    const auto& entry = analyses[0];
+
+    // Format for viewer with syntax highlighting if applicable
+    QString content = QString::fromStdString(entry.content);
+
+    // Check if it looks like code or structured data
+    if (entry.type == "analysis" || content.contains("```") ||
+        content.contains("function") || content.contains("0x")) {
+
+        // Apply basic formatting
+        content.replace(QRegExp("(0x[0-9a-fA-F]+)"), "<span style='color: #0066cc;'>\\1</span>");
+        content.replace(QRegExp("\\b(function|if|else|for|while|return)\\b"),
+                       "<span style='color: #ff6600; font-weight: bold;'>\\1</span>");
+
+        QString html = "<html><body style='font-family: Consolas, monospace; padding: 10px;'>";
+        html += "<pre style='white-space: pre-wrap;'>" + content + "</pre>";
+        html += "</body></html>";
+
+        analysis_viewer_->setHtml(html);
+    } else {
+        analysis_viewer_->setPlainText(content);
+    }
+}
+
+void MemoryDockWidget::on_sort_changed() {
+    populate_analysis_browser();
+}
+
+void MemoryDockWidget::on_context_menu(const QPoint& pos) {
+    QMenu menu(this);
+
+    // Determine which widget triggered the menu
+    QWidget* sender_widget = qobject_cast<QWidget*>(sender());
+
+    // Get selected item data
+    QString selected_key;
+    ea_t selected_address = BADADDR;
+
+    if (sender_widget == timeline_tree_) {
+        QTreeWidgetItem* item = timeline_tree_->itemAt(pos);
+        if (item) {
+            selected_key = item->data(0, Qt::UserRole).toString();
+        }
+    } else if (sender_widget == function_tree_) {
+        QTreeWidgetItem* item = function_tree_->itemAt(pos);
+        if (item && item->parent()) {  // Only for analysis items, not function headers
+            selected_key = item->data(0, Qt::UserRole).toString();
+        }
+    } else if (sender_widget == analysis_list_) {
+        QListWidgetItem* item = analysis_list_->itemAt(pos);
+        if (item) {
+            selected_key = item->data(Qt::UserRole).toString();
+        }
+    }
+
+    if (!selected_key.isEmpty() && memory_) {
+        auto analyses = memory_->get_analysis(selected_key.toStdString());
+        if (!analyses.empty() && analyses[0].address) {
+            selected_address = *analyses[0].address;
+        }
+    }
+
+    // Add actions
+    menu.addAction(copy_action_);
+    menu.addAction(export_action_);
+    menu.addSeparator();
+
+    if (selected_address != BADADDR) {
+        menu.addAction(goto_address_action_);
+        menu.addSeparator();
+    }
+
+    // Store selected data for action handlers
+    copy_action_->setData(selected_key);
+    export_action_->setData(selected_key);
+    goto_address_action_->setData(QVariant::fromValue(selected_address));
+
+    menu.exec(sender_widget->mapToGlobal(pos));
+}
+
+void MemoryDockWidget::on_copy_analysis() {
+    QString key = copy_action_->data().toString();
+    if (key.isEmpty() || !memory_) return;
+
+    auto analyses = memory_->get_analysis(key.toStdString());
+    if (analyses.empty()) return;
+
+    const auto& entry = analyses[0];
+
+    // Format for clipboard
+    QString text = QString("=== %1 ===\n").arg(QString::fromStdString(entry.type).toUpper());
+    text += QString("Key: %1\n").arg(QString::fromStdString(entry.key));
+    text += QString("Time: %1\n").arg(
+        QDateTime::fromSecsSinceEpoch(entry.timestamp).toString("yyyy-MM-dd hh:mm:ss"));
+
+    if (entry.address) {
+        text += QString("Address: 0x%1\n").arg(*entry.address, 0, 16);
+    }
+
+    text += "\n" + QString::fromStdString(entry.content);
+
+    QApplication::clipboard()->setText(text);
+
+    // Show brief notification (would need to implement or use status bar)
+    msg("Analysis copied to clipboard\n");
+}
+
+void MemoryDockWidget::on_export_analysis() {
+    QString key = export_action_->data().toString();
+    if (key.isEmpty() || !memory_) return;
+
+    // Show file dialog
+    QString filename = QFileDialog::getSaveFileName(this,
+        "Export Analysis", "", "Markdown Files (*.md);;Text Files (*.txt);;All Files (*)");
+
+    if (filename.isEmpty()) return;
+
+    auto analyses = memory_->get_analysis(key.toStdString());
+    if (analyses.empty()) return;
+
+    const auto& entry = analyses[0];
+
+    // Write to file
+    QFile file(filename);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream stream(&file);
+
+        // Write markdown format
+        stream << "# " << QString::fromStdString(entry.type).toUpper() << "\n\n";
+        stream << "**Key:** " << QString::fromStdString(entry.key) << "\n";
+        stream << "**Date:** " << QDateTime::fromSecsSinceEpoch(entry.timestamp).toString() << "\n";
+
+        if (entry.address) {
+            stream << "**Address:** 0x" << QString::number(*entry.address, 16) << "\n";
+            stream << "**Function:** " << get_function_name(*entry.address) << "\n";
+        }
+
+        if (!entry.related_addresses.empty()) {
+            stream << "\n## Related Functions\n";
+            for (ea_t addr : entry.related_addresses) {
+                stream << "- 0x" << QString::number(addr, 16) << " - "
+                       << get_function_name(addr) << "\n";
+            }
+        }
+
+        stream << "\n## Content\n\n";
+        stream << QString::fromStdString(entry.content);
+
+        file.close();
+        msg("Exported analysis to %s\n", filename.toStdString().c_str());
+    }
+}
+
+void MemoryDockWidget::on_goto_address() {
+    ea_t address = goto_address_action_->data().value<ea_t>();
+    if (address != BADADDR) {
+        jumpto(address);
+        emit address_selected(address);
+    }
 }
 
 } // namespace llm_re::ui
