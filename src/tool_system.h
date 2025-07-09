@@ -1075,7 +1075,9 @@ public:
 
     std::string description() const override {
         return "Add observations, findings, or function addresses to the current deep analysis collection. "
-               "Call this as you discover relevant information about the complex system you're analyzing.";
+               "Call this as you discover relevant information about the complex system you're analyzing. "
+               "It is ABSOLUTELY CRITICAL to add relevant functions using the function_address parameter. "  // LLM doesn't like adding to this param, but it references the functions inside whatever text it provides here
+               "Opus 4 will only receive function information for functions that you explicitly provide in this parameter. ";
     }
 
     json parameters_schema() const override {
