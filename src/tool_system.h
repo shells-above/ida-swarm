@@ -147,7 +147,7 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all functions", false)
-            .add_boolean("named_only", "Only return user-named functions (exclude auto-generated names)", false)
+            .add_boolean("named_only", "Only return user-named functions (exclude auto-generated names. defaults to true)", false)
             .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
             .build();
     }
@@ -758,10 +758,9 @@ public:
     }
 
     std::string description() const override {
-        return "Create or update type definitions. Before creating new types, always search_local_types "
-               "to check if a matching structure already exists - previous sessions may have identified it. "
-               "If you find a partial match, consider updating it rather than creating a duplicate. "
-               "One well-defined struct can clarify dozens of functions.";
+        return "Define structures that unlock understanding across the entire binary. "
+                  "One good struct definition can transform dozens of functions from cryptic to clear. "
+                  "Always search existing types first - build on previous work.";
     }
 
     json parameters_schema() const override {
@@ -861,7 +860,8 @@ public:
     }
 
     std::string description() const override {
-        return "Submit your final analysis report when you have gathered enough information to answer the user's task. This completes the analysis.";
+        return "Submit your final report on this binary once you have FULLY completed your comprehensive reverse engineering. DO NOT CALL THIS EARLY. "
+                  "Note this will end your analysis, so ONLY use this once you have FULLY reversed EVERYTHING to the specs provided by the system AND the user.";
     }
 
     json parameters_schema() const override {
