@@ -681,7 +681,7 @@ json ActionExecutor::get_function_prototype(ea_t address) {
     return result;
 }
 
-    json ActionExecutor::set_function_prototype(ea_t address, const std::string& prototype) {
+json ActionExecutor::set_function_prototype(ea_t address, const std::string& prototype) {
     json result;
     try {
         bool success = IDAUtils::set_function_prototype(address, prototype);
@@ -703,21 +703,6 @@ json ActionExecutor::get_function_prototype(ea_t address) {
         } else {
             result["success"] = false;
             result["error"] = error_msg;
-        }
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::set_function_parameter_name(ea_t address, int param_index, const std::string& name) {
-    json result;
-    try {
-        bool success = IDAUtils::set_function_parameter_name(address, param_index, name);
-        result["success"] = success;
-        if (!success) {
-            result["error"] = "Failed to set parameter name. Check index.";
         }
     } catch (const std::exception& e) {
         result["success"] = false;
@@ -766,14 +751,13 @@ json ActionExecutor::get_function_locals(ea_t address) {
     return result;
 }
 
-    json ActionExecutor::set_local_variable(ea_t address, const std::string& current_name,
-                                           const std::string& new_name, const std::string& new_type) {
+json ActionExecutor::set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type) {
     json result;
     try {
-        bool success = IDAUtils::set_local_variable(address, current_name, new_name, new_type);
+        bool success = IDAUtils::set_variable(address, variable_name, new_name, new_type);
         result["success"] = success;
         if (!success) {
-            result["error"] = "Failed to update local variable. Check that variable exists.";
+            result["error"] = "Failed to update variable. Check that variable exists.";
         }
     } catch (const std::runtime_error& e) {
         std::string error_msg = e.what();
