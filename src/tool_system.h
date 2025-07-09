@@ -751,38 +751,6 @@ public:
     }
 };
 
-class SetFunctionParameterNameTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "set_function_parameter_name";
-    }
-
-    std::string description() const override {
-        return "Set the name of a function parameter by its index. Useful for making decompiled code more readable.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_integer("address", "The function address")
-            .add_integer("param_index", "Parameter index (0-based)")
-            .add_string("name", "New parameter name")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            int param_index = input.at("param_index");
-            std::string name = input.at("name");
-            return ToolResult::success(executor->set_function_parameter_name(address, param_index, name));
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
-
 // Local type tools
 class SearchLocalTypesTool : public Tool {
 public:
@@ -909,26 +877,26 @@ public:
     }
 };
 
-class SetLocalVariableTool : public Tool {
+class SetVariableTool : public Tool {
 public:
     using Tool::Tool;
 
     std::string name() const override {
-        return "set_local_variable";
+        return "set_variable";
     }
 
     std::string description() const override {
-        return "Make decompiled code readable by giving variables meaningful names and correct types. "
+        return "Update any variable in a function - arguments or locals. Give them meaningful names and/or correct types. "
                "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
+               "Works for both function arguments (a1, a2, etc.) and local variables (v1, v2, etc.). "
                "Well-named variables make function logic self-documenting. "
-               "This is how you make decompilation read like source code. "
                "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The function address")
-            .add_string("current_name", "Current variable name (e.g., 'v1', 'a2')")
+            .add_string("variable_name", "Current variable name (e.g., 'v1', 'a2', or existing name)")
             .add_string("new_name", "New variable name", false)
             .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT')", false)
             .build();
@@ -937,10 +905,10 @@ public:
     ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            std::string current_name = input.at("current_name");
+            std::string variable_name = input.at("variable_name");
             std::string new_name = input.value("new_name", "");
             std::string new_type = input.value("new_type", "");
-            return ToolResult::success(executor->set_local_variable(address, current_name, new_name, new_type));
+            return ToolResult::success(executor->set_variable(address, variable_name, new_name, new_type));
         } catch (const std::exception& e) {
             return ToolResult::failure(e.what());
         }
@@ -1345,9 +1313,8 @@ public:
         // Updating decompilation tools
         register_tool_type<GetFunctionPrototypeTool>(memory, executor);
         register_tool_type<SetFunctionPrototypeTool>(memory, executor);
-        register_tool_type<SetFunctionParameterNameTool>(memory, executor);
         register_tool_type<GetFunctionLocalsTool>(memory, executor);
-        register_tool_type<SetLocalVariableTool>(memory, executor);
+        register_tool_type<SetVariableTool>(memory, executor);
 
         // Local type tools
         register_tool_type<SearchLocalTypesTool>(memory, executor);
