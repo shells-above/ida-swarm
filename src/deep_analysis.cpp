@@ -5,8 +5,6 @@
 #include "deep_analysis.h"
 #include "actions.h"
 
-#include <utility>
-
 namespace llm_re {
 
 void DeepAnalysisManager::start_collection(const std::string& topic, const std::string& description) {
