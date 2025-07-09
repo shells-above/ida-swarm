@@ -49,22 +49,6 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
         }
     };
 
-    struct analyze_function_ah_t : public llm_action_handler_t {
-        using llm_action_handler_t::llm_action_handler_t;
-        virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->analyze_function();
-            return 1;
-        }
-    };
-
-    struct analyze_selection_ah_t : public llm_action_handler_t {
-        using llm_action_handler_t::llm_action_handler_t;
-        virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->analyze_selection();
-            return 1;
-        }
-    };
-
     struct comprehensive_re_ah_t : public llm_action_handler_t {
         using llm_action_handler_t::llm_action_handler_t;
         virtual int do_activate(action_activation_ctx_t* ctx) override {
@@ -75,8 +59,6 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
 
     // Handler instances
     show_ui_ah_t* show_ui_handler = nullptr;
-    analyze_function_ah_t* analyze_function_handler = nullptr;
-    analyze_selection_ah_t* analyze_selection_handler = nullptr;
     comprehensive_re_ah_t* comprehensive_re_handler = nullptr;
 
 public:
@@ -96,8 +78,6 @@ public:
 
     // actions
     void show_main_form();
-    void analyze_function();
-    void analyze_selection();
     void comprehensive_reverse_engineering();
 };
 
@@ -152,8 +132,6 @@ llm_plugin_t::llm_plugin_t() {
 
     // Create handler instances
     show_ui_handler = new show_ui_ah_t(this);
-    analyze_function_handler = new analyze_function_ah_t(this);
-    analyze_selection_handler = new analyze_selection_ah_t(this);
     comprehensive_re_handler = new comprehensive_re_ah_t(this);
 
     // Register actions after handlers are created
@@ -182,14 +160,6 @@ llm_plugin_t::~llm_plugin_t() {
     if (show_ui_handler) {
         delete show_ui_handler;
         show_ui_handler = nullptr;
-    }
-    if (analyze_function_handler) {
-        delete analyze_function_handler;
-        analyze_function_handler = nullptr;
-    }
-    if (analyze_selection_handler) {
-        delete analyze_selection_handler;
-        analyze_selection_handler = nullptr;
     }
     if (comprehensive_re_handler) {
         delete comprehensive_re_handler;
@@ -274,24 +244,6 @@ void llm_plugin_t::register_actions() {
             "Edit/LLM RE/Show Agent",
             true
         },
-        {
-            "analyze_function",
-            "Analyze with LLM",
-            analyze_function_handler,
-            "Ctrl+Shift+A",
-            "Analyze current function with LLM",
-            "Edit/LLM RE/Analyze Function",
-            false
-        },
-        {
-            "analyze_selection",
-            "Analyze Selection with LLM",
-            analyze_selection_handler,
-            nullptr,
-            "Analyze selected code with LLM",
-            "Edit/LLM RE/Analyze Selection",
-            false
-        },
     {
         "comprehensive_re",
         "Comprehensive Reverse Engineering",
@@ -300,7 +252,7 @@ void llm_plugin_t::register_actions() {
         "Perform systematic reverse engineering with full annotation",
         "Edit/LLM RE/Comprehensive Analysis",
         false
-    }
+        }
     };
 
     // Keep track of whether we've registered the main action globally
@@ -436,64 +388,6 @@ bool llm_plugin_t::run(size_t arg) {
     }
 }
 
-void llm_plugin_t::analyze_function() {
-    if (shutting_down) {
-        return;
-    }
-
-    show_main_form();
-
-    if (!main_form) {
-        return;
-    }
-
-    ea_t ea = get_screen_ea();
-    func_t* func = get_func(ea);
-
-    if (!func) {
-        warning("No function at current address");
-        return;
-    }
-
-    qstring func_name;
-    get_func_name(&func_name, func->start_ea);
-
-    std::string task = "Analyze the function '" + std::string(func_name.c_str()) +
-                      "' at address " + std::to_string(func->start_ea) + ". " +
-                      "Provide:\n"
-                      "1. Function purpose and behavior\n"
-                      "2. Parameter analysis\n"
-                      "3. Return value analysis\n"
-                      "4. Key algorithms or logic\n"
-                      "5. Potential issues or vulnerabilities";
-
-    main_form->execute_task(task);
-}
-
-void llm_plugin_t::analyze_selection() {
-    if (shutting_down) {
-        return;
-    }
-
-    show_main_form();
-
-    if (!main_form) {
-        return;
-    }
-
-    ea_t start_ea = BADADDR, end_ea = BADADDR;
-
-    if (read_range_selection(nullptr, &start_ea, &end_ea)) {
-        std::string task = "Analyze the code from " + std::to_string(start_ea) +
-                          " to " + std::to_string(end_ea) + ". " +
-                          "Explain what this code does and identify any interesting patterns or issues.";
-
-        main_form->execute_task(task);
-    } else {
-        warning("No selection found");
-    }
-}
-
 void llm_plugin_t::comprehensive_reverse_engineering() {
     if (shutting_down) {
         return;
@@ -521,30 +415,13 @@ void llm_plugin_t::comprehensive_reverse_engineering() {
                         "' at address " + addr_str + ", ";
     }
 
-    std::string task = R"(Perform comprehensive reverse engineering of this binary. )" + starting_point + R"(systematically work through the code to build a complete understanding.
+    std::string task = starting_point + R"(
 
-STRATEGIC APPROACH:
+Begin complete reverse engineering of this binary. Transform it into readable source code through systematic analysis and aggressive typing.
 
-1. **Navigation Strategy**:
-   - Follow the call graph intelligently, not blindly
-   - Prioritize functions that will unlock understanding of others
-   - Skip trivial wrappers and focus on core logic
-   - Return to previously seen functions as your understanding improves
+Remember: Define structures immediately when you see patterns (with gaps if needed), update function prototypes to propagate types, and iterate until 95%+ of the code has meaningful names and proper types.
 
-2. **Analysis Depth Guidelines**:
-   - Simple utility functions: Just name them accurately and move on
-   - Core business logic: Deep analysis with full naming/typing/commenting
-   - Complex algorithms: Request disassembly, analyze meticulously
-   - Data processing functions: Focus on understanding the data structures
-
-3. **Detective Work - Concrete Clues**:
-   - A mutex suggests threading
-   - Error strings reveal functionality
-   - Calling conventions hint at external interfaces
-   - Global variables often represent state or configuration
-   - Check for existing types before creating new ones
-
-Work systematically but intelligently. Not every function needs deep analysis, but every function should contribute to your overall understanding. Focus on building a coherent narrative of what this program does and how it works.)";
+This will take hundreds of iterations. Begin your first pass now.)";
 
     main_form->execute_task(task);
 }
