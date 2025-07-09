@@ -136,6 +136,9 @@ std::map<qstring, llm_plugin_t*> PluginInstanceManager::instances_;
 llm_plugin_t::llm_plugin_t() {
     // Constructor is guaranteed to run in main thread by IDA
 
+    // Initialize CURL globally for the plugin
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
     // Get IDB path for instance tracking
     idb_path_ = get_path(PATH_TYPE_IDB);
 
@@ -192,6 +195,9 @@ llm_plugin_t::~llm_plugin_t() {
         delete comprehensive_re_handler;
         comprehensive_re_handler = nullptr;
     }
+
+    // Cleanup CURL globally
+    curl_global_cleanup();
 
     msg("LLM RE: Plugin terminated for %s\n", idb_path_.c_str());
 }

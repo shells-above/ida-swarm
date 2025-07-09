@@ -656,11 +656,9 @@ class AnthropicClient {
 public:
     explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
         : api_key(key), api_url(base_url) {
-        curl_global_init(CURL_GLOBAL_DEFAULT);
     }
 
     ~AnthropicClient() {
-        curl_global_cleanup();
     }
 
     void set_message_logger(std::function<void(const std::string&, const json&, int)> logger) {
