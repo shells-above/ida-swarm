@@ -663,14 +663,14 @@ public:
         return "Set the complete function signature including return type, calling convention, and parameters. "
                "Use this when you need to change the overall function type or multiple parameters at once. "
                "For individual parameter/variable updates, use set_variable instead. "
-               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)'). "
+               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *, int)'). "
                "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
     }
 
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The function address")
-            .add_string("prototype", "Full C-style prototype")
+            .add_string("prototype", "Full C-style prototype. Note DO NOT PROVIDE ARGUMENT NAMES, only their types! This may seem strange, but it is important!")
             .build();
     }
 
