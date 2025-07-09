@@ -14,6 +14,53 @@ std::string format_address_hex(ea_t address) {
     return ss.str();
 }
 
+bool ensure_standard_types(til_t *til) {
+    if (!til) return false;
+
+    // Get the bitness of the current database
+    bool is_64bit = inf_is_64bit();
+
+    // List of type libraries to try importing based on the compiler/platform
+    struct til_info {
+        const char* name;
+        const char* desc;
+        bool for_64bit;
+    };
+
+    static const til_info type_libraries[] = {
+        // Microsoft types
+        {"ntddk", "Windows NT DDK", false},
+        {"ntddk64", "Windows NT DDK x64", true},
+
+        // GNU/Linux types
+        {"gnulnx_x86", "GNU/Linux x86", false},
+        {"gnulnx_x64", "GNU/Linux x64", true},
+
+        // macOS types
+        {"macosx", "macOS", false},
+        {"macosx64", "macOS x64", true},
+
+        {nullptr, nullptr, false}
+    };
+
+    // Try to import appropriate type libraries
+    bool any_loaded = false;
+    for (const til_info* ti = type_libraries; ti->name; ti++) {
+        // Skip libraries that don't match our bitness
+        if (ti->for_64bit != is_64bit) {
+            continue;
+        }
+
+        // Try to add this type library
+        int added_til = add_til(ti->name, ADDTIL_SILENT);
+        if (added_til) {
+            any_loaded = true;
+        }
+    }
+
+    return any_loaded;
+}
+
 ea_t IDAUtils::get_name_address(const std::string& name) {
     return execute_sync_wrapper([&name]() {
         return get_name_ea(BADADDR, name.c_str());
@@ -1033,6 +1080,9 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::runtime_error("Failed to get IDA type library");
         }
 
+        // Ensure standard types are available
+        ensure_standard_types(idati);
+
         // Get current function type to check parameter count and sizes
         tinfo_t current_type;
         func_type_data_t current_ftd;
@@ -1049,6 +1099,19 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
         // Parse the new prototype
         tinfo_t new_type;
         qstring proto_str = prototype.c_str();
+
+        // Check for FORCE_SIZE_MISMATCH flag
+        bool force_mismatch = (proto_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
+        if (force_mismatch) {
+            // Remove the flag before parsing
+            size_t force_pos = proto_str.find("FORCE_SIZE_MISMATCH");
+            proto_str.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+            // Trim trailing whitespace
+            while (!proto_str.empty() && qisspace(proto_str.last())) {
+                proto_str.remove_last();
+            }
+        }
+
         const char *ptr = proto_str.c_str();
         qstring func_name;
 
@@ -1082,7 +1145,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
         }
 
         // Check for type size mismatches in parameters
-        if (has_current_type) {
+        if (has_current_type && !force_mismatch) {
             std::vector<std::string> size_warnings;
 
             for (size_t i = 0; i < current_ftd.size() && i < new_ftd.size(); i++) {
@@ -1127,35 +1190,11 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
                     error_msg += "- " + warning + "\n";
                 }
                 error_msg += "\nTo proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the prototype string.";
-
-                // Check if user wants to force the change
-                if (prototype.find("FORCE_SIZE_MISMATCH") == std::string::npos) {
-                    throw std::runtime_error(error_msg);
-                }
-
-                // Remove the FORCE_SIZE_MISMATCH flag before parsing again
-                std::string clean_prototype = prototype;
-                size_t force_pos = clean_prototype.find("FORCE_SIZE_MISMATCH");
-                if (force_pos != std::string::npos) {
-                    clean_prototype.erase(force_pos);
-                    // Trim trailing whitespace
-                    while (!clean_prototype.empty() && std::isspace(clean_prototype.back())) {
-                        clean_prototype.pop_back();
-                    }
-                    // Re-parse without the flag
-                    proto_str = clean_prototype.c_str();
-                    ptr = proto_str.c_str();
-                    if (!parse_decl(&new_type, &func_name, idati, ptr, PT_SIL)) {
-                        throw std::invalid_argument("Failed to parse function prototype after removing FORCE flag");
-                    }
-                    if (!new_type.get_func_details(&new_ftd)) {
-                        throw std::runtime_error("Failed to get function details after removing FORCE flag");
-                    }
-                }
+                throw std::runtime_error(error_msg);
             }
         }
 
-        // Extract parameter names from the prototype string
+        // Extract parameter names from the prototype string (if any)
         std::vector<std::string> param_names;
 
         // Find the opening parenthesis
@@ -1179,26 +1218,47 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
                     if (i > param_start) {
                         std::string param = params_str.substr(param_start, i - param_start);
 
-                        // Extract parameter name from the parameter declaration
+                        // Trim leading/trailing whitespace
+                        size_t first = param.find_first_not_of(" \t\n\r");
+                        size_t last = param.find_last_not_of(" \t\n\r");
+                        if (first != std::string::npos) {
+                            param = param.substr(first, last - first + 1);
+                        }
+
+                        // Try to extract parameter name
                         std::string param_name;
-                        size_t last_space = param.rfind(' ');
-                        size_t last_star = param.rfind('*');
-                        size_t last_amp = param.rfind('&');
 
-                        size_t name_start = 0;
-                        if (last_space != std::string::npos) name_start = last_space + 1;
-                        if (last_star != std::string::npos && last_star > name_start) name_start = last_star + 1;
-                        if (last_amp != std::string::npos && last_amp > name_start) name_start = last_amp + 1;
+                        // Skip if this looks like just a type (no spaces after removing ptr/ref)
+                        std::string test_param = param;
+                        // Remove pointer and reference symbols from the end
+                        while (!test_param.empty() && (test_param.back() == '*' || test_param.back() == '&')) {
+                            test_param.pop_back();
+                        }
+                        // Trim again
+                        size_t test_last = test_param.find_last_not_of(" \t");
+                        if (test_last != std::string::npos) {
+                            test_param = test_param.substr(0, test_last + 1);
+                        }
 
-                        // Skip whitespace
-                        while (name_start < param.length() && std::isspace(param[name_start])) name_start++;
+                        // Check if there's a space (indicating type + name)
+                        size_t last_space = test_param.rfind(' ');
+                        if (last_space != std::string::npos) {
+                            // Extract what comes after the last space as potential name
+                            std::string potential_name = test_param.substr(last_space + 1);
 
-                        if (name_start < param.length()) {
-                            param_name = param.substr(name_start);
-                            // Remove any trailing whitespace or special chars
-                            size_t name_end = param_name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
-                            if (name_end != std::string::npos) {
-                                param_name = param_name.substr(0, name_end);
+                            // Validate it's a valid identifier
+                            if (!potential_name.empty() &&
+                                (std::isalpha(potential_name[0]) || potential_name[0] == '_')) {
+                                bool valid = true;
+                                for (char ch : potential_name) {
+                                    if (!std::isalnum(ch) && ch != '_') {
+                                        valid = false;
+                                        break;
+                                    }
+                                }
+                                if (valid) {
+                                    param_name = potential_name;
+                                }
                             }
                         }
 
@@ -1209,7 +1269,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             }
         }
 
-        // Apply parameter names to the func_type_data_t
+        // Apply parameter names to the func_type_data_t (if we found any)
         for (size_t i = 0; i < new_ftd.size() && i < param_names.size(); i++) {
             if (!param_names[i].empty()) {
                 new_ftd[i].name = param_names[i].c_str();
@@ -1337,8 +1397,7 @@ FunctionLocalsInfo IDAUtils::get_variables(ea_t address) {
     });
 }
 
-bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
-                           const std::string& new_name, const std::string& new_type) {
+bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type) {
     return execute_sync_wrapper([address, &variable_name, &new_name, &new_type]() {
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
@@ -1349,6 +1408,9 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
         if (!idati) {
             throw std::runtime_error("Failed to get IDA type library");
         }
+
+        // Ensure standard types are available
+        ensure_standard_types(idati);
 
         // Initialize Hex-Rays if needed
         if (!init_hexrays_plugin()) {
@@ -1421,17 +1483,33 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
 
                 const char *ptr = type_str.c_str();
 
-                // Parse with proper til and flags
+                // Try to parse the type - if it fails, it might be because the type isn't defined
                 if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
-                    // Try without PT_SIL for more detailed error
-                    ptr = type_str.c_str(); // Reset pointer
-                    if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
-                        // Try one more time with just basic flags
+                    // Check if this is a known type that needs to be imported
+                    tinfo_t named_type;
+                    if (named_type.get_named_type(idati, type_str.c_str())) {
+                        new_tif = named_type;
+                    } else {
+                        // Try parsing with different flags
                         ptr = type_str.c_str(); // Reset pointer
-                        if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
-                            // If all parsing attempts fail, provide helpful error
-                            throw std::invalid_argument("Failed to parse type '" + std::string(type_str.c_str()) +
-                                "'. Make sure the type is valid and any custom types are defined in the IDB.");
+                        if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
+                            // Try one more time with just basic flags
+                            ptr = type_str.c_str(); // Reset pointer
+                            if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
+                                // If all parsing attempts fail, provide helpful error
+                                std::string error_msg = "Failed to parse type '" + std::string(type_str.c_str()) + "'.\n\n";
+
+                                // Check if it looks like a Windows type
+                                if (strstr(type_str.c_str(), "__int") || strstr(type_str.c_str(), "DWORD") ||
+                                    strstr(type_str.c_str(), "WORD") || strstr(type_str.c_str(), "BYTE")) {
+                                    error_msg += "This appears to be a Windows type. Try importing the mssdk type library:\n";
+                                    error_msg += "  View -> Open subviews -> Type libraries (Shift+F11)\n";
+                                    error_msg += "  Then load 'mssdk' or 'mssdk64' (for 64-bit)\n\n";
+                                }
+
+                                error_msg += "Make sure the type is valid and any custom types are defined in the IDB.";
+                                throw std::invalid_argument(error_msg);
+                            }
                         }
                     }
                 }
@@ -1540,17 +1618,33 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name,
 
             const char *ptr = type_str.c_str();
 
-            // Parse with proper til and flags
+            // Try to parse the type
             if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
-                // Try without PT_SIL for more detailed error
-                ptr = type_str.c_str(); // Reset pointer
-                if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
-                    // Try one more time with just basic flags
+                // Check if this is a named type
+                tinfo_t named_type;
+                if (named_type.get_named_type(idati, type_str.c_str())) {
+                    new_tif = named_type;
+                } else {
+                    // Try parsing with different flags
                     ptr = type_str.c_str(); // Reset pointer
-                    if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
-                        // If all parsing attempts fail, provide helpful error
-                        throw std::invalid_argument("Failed to parse type '" + std::string(type_str.c_str()) +
-                            "'. Make sure the type is valid and any custom types are defined in the IDB.");
+                    if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
+                        // Try one more time with just basic flags
+                        ptr = type_str.c_str(); // Reset pointer
+                        if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
+                            // If all parsing attempts fail, provide helpful error
+                            std::string error_msg = "Failed to parse type '" + std::string(type_str.c_str()) + "'.\n\n";
+
+                            // Check if it looks like a Windows type
+                            if (strstr(type_str.c_str(), "__int") || strstr(type_str.c_str(), "DWORD") ||
+                                strstr(type_str.c_str(), "WORD") || strstr(type_str.c_str(), "BYTE")) {
+                                error_msg += "This appears to be a Windows type. Try importing the mssdk type library:\n";
+                                error_msg += "  View -> Open subviews -> Type libraries (Shift+F11)\n";
+                                error_msg += "  Then load 'mssdk' or 'mssdk64' (for 64-bit)\n\n";
+                            }
+
+                            error_msg += "Make sure the type is valid and any custom types are defined in the IDB.";
+                            throw std::invalid_argument(error_msg);
+                        }
                     }
                 }
             }
