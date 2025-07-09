@@ -8,7 +8,6 @@
 namespace llm_re {
 
 // New function to parse address lists (handles both single values and arrays)
-// New function to parse address lists (handles both single values and arrays)
 std::vector<ea_t> ActionExecutor::parse_list_address_param(const json& params, const std::string& key) {
     if (!params.contains(key)) {
         throw std::invalid_argument("Missing parameter: " + key);
