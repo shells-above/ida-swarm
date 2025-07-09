@@ -1103,9 +1103,9 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
                 current_ftd.rettype.print(&current_ret_str);
                 new_ftd.rettype.print(&new_ret_str);
 
-                std::string warning = "Return type: size mismatch - current type '" + current_ret_str.c_str() +
+                std::string warning = "Return type: size mismatch - current type '" + std::string(current_ret_str.c_str()) +
                     "' (size " + std::to_string(current_ret_size) +
-                    ") vs new type '" + new_ret_str.c_str() +
+                    ") vs new type '" + std::string(new_ret_str.c_str()) +
                     "' (size " + std::to_string(new_ret_size) + ")";
                 size_warnings.push_back(warning);
             }
@@ -1464,9 +1464,9 @@ bool IDAUtils::set_local_variable(ea_t address, const std::string& current_name,
                     current_lvar->type().print(&current_type_str);
 
                     std::string error_msg = "TYPE SIZE MISMATCH WARNING: Variable '" + current_name +
-                        "' has type '" + current_type_str.c_str() +
+                        "' has type '" + std::string(current_type_str.c_str()) +
                         "' (size " + std::to_string(current_size) +
-                        ") but you're trying to set type '" + type_str.c_str() +
+                        ") but you're trying to set type '" + std::string(type_str.c_str()) +
                         "' (size " + std::to_string(new_size) +
                         ").\n\nChanging to a type with different size may break decompilation!\n\n" +
                         "To proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the type string.";
