@@ -677,19 +677,8 @@ json ActionExecutor::set_function_prototype(ea_t address, const std::string& pro
         }
     } catch (const std::runtime_error& e) {
         std::string error_msg = e.what();
-
-        // Check if this is a size mismatch warning
-        if (error_msg.find("TYPE SIZE MISMATCH WARNING") != std::string::npos) {
-            result["success"] = false;
-            result["error"] = error_msg;
-            result["size_mismatch"] = true;
-            result["requires_confirmation"] = true;
-            result["hint"] = "If you are 100% certain this type change is correct despite the size mismatch, "
-                            "append 'FORCE_SIZE_MISMATCH' to the prototype string to proceed.";
-        } else {
-            result["success"] = false;
-            result["error"] = error_msg;
-        }
+        result["success"] = false;
+        result["error"] = error_msg;
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();
