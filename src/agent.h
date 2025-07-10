@@ -287,11 +287,11 @@ Types are the foundation of readable reverse engineering. When you define struct
 
 1. **Define Structures Early and Iteratively**:
    - See a function accessing offset +0x10? Define a struct immediately (search for previously defined ones, and if none exist that match, create a new type)
-   - Don't know what's at offset +0x8? Add: _BYTE gap8[8];
+   - Don't know what's at offset +0x8? Add: uint8_t gap8[8];
    - See SOCKET at +0x0 and buffer at +0x20? Define it NOW. Gaps are ok! Just figure them out piece by piece later:
      struct NetworkContext {
          SOCKET sock;
-         _BYTE gap4[28];  // We'll figure this out later
+         uint8_t gap4[28];  // We'll figure this out later
          char buffer[256];
      };
 
@@ -308,8 +308,8 @@ Types are the foundation of readable reverse engineering. When you define struct
    - Local variables automatically get typed when you fix prototypes
 
 4. **Iterative Refinement Example**:
-   Pass 1: struct Context { void* field_0; int field_8; _BYTE gap_C[20]; };
-   Pass 2: struct Context { HANDLE hThread; int thread_id; _BYTE gap_C[20]; };
+   Pass 1: struct Context { void* field_0; int field_8; uint8_t gap_C[20]; };
+   Pass 2: struct Context { HANDLE hThread; int thread_id; uint8_t gap_C[20]; };
    Pass 3: struct ThreadContext { HANDLE hThread; DWORD thread_id; CRITICAL_SECTION lock; BOOL active; };
 
 QUALITY STANDARDS:

@@ -663,8 +663,8 @@ public:
         return "Set the complete function signature including return type, calling convention, and parameters. "
                "Use this when you need to change the overall function type or multiple parameters at once. "
                "For individual parameter/variable updates, use set_variable instead. "
-               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *, int)'). "
-               "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
+               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *, int);'). "
+               "Note: This does NOT validate the size of the types in the prototype, be EXTREMELY SURE you are providing the right sizes. You'll break decompilation if you don't";
     }
 
     json parameters_schema() const override {
@@ -760,6 +760,8 @@ public:
     std::string description() const override {
         return "Define structures that unlock understanding across the entire binary. "
                   "One good struct definition can transform dozens of functions from cryptic to clear. "
+                  "Remember to work iteratively on these types, your definition may not be perfect now, but you can iterate on it as you learn more. "
+                  "Make sure to chain these tool calls correctly if creating types that depend on one another (the order in which you supply tool calls is respected). "
                   "Always search existing types first - build on previous work.";
     }
 
@@ -824,8 +826,7 @@ public:
         return "Update any variable in a function - arguments or locals. Give them meaningful names and/or correct types. "
                "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
                "Works for both function arguments (a1, a2, etc.) and local variables (v1, v2, etc.). "
-               "Well-named variables make function logic self-documenting. "
-               "IMPORTANT: Tool validates type sizes to prevent breaking decompilation.";
+               "Well-named variables make function logic self-documenting. ";
     }
 
     json parameters_schema() const override {
@@ -833,7 +834,7 @@ public:
             .add_integer("address", "The function address")
             .add_string("variable_name", "Current variable name (e.g., 'v1', 'a2', or existing name)")
             .add_string("new_name", "New variable name", false)
-            .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT')", false)
+            .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT'). Be very careful with the size of the types", false)
             .build();
     }
 

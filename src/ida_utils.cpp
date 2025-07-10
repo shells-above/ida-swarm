@@ -1027,52 +1027,29 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
-        // Handle special modifiers
+        // Ensure the prototype ends with a semicolon
         qstring proto_str = prototype.c_str();
-        bool force_mismatch = proto_str.find("FORCE_SIZE_MISMATCH") != qstring::npos;
-        if (force_mismatch) {
-            proto_str.replace("FORCE_SIZE_MISMATCH", "");
-            proto_str.trim2();
+        proto_str.trim2();
+        if (!proto_str.ends_with(";")) {
+            proto_str.append(';');
         }
 
-        // First, try to parse as a complete declaration with names
+        // Parse the function declaration
         tinfo_t new_type;
         qstring func_name;
         const char* ptr = proto_str.c_str();
 
-        if (!parse_decl(&new_type, &func_name, get_idati(), ptr, PT_TYP | PT_SIL)) {
-            // If that fails, try parsing as a type only (no names)
+        // Use PT_SIL (silent) to suppress warnings
+        if (!parse_decl(&new_type, &func_name, get_idati(), ptr, PT_SIL)) {
+            // If parsing fails, try with different flags
             ptr = proto_str.c_str();
-            if (!parse_decl(&new_type, nullptr, get_idati(), ptr, PT_TYP | PT_SIL)) {
-                throw std::invalid_argument("Failed to parse function prototype");
+            if (!parse_decl(&new_type, &func_name, get_idati(), ptr, 0)) {
+                throw std::invalid_argument("Failed to parse function prototype: " + prototype);
             }
         }
 
         if (!new_type.is_func()) {
-            throw std::invalid_argument("Not a function type");
-        }
-
-        // For prototypes without parameter names, preserve existing names if any
-        tinfo_t current_type;
-        if (get_tinfo(&current_type, address)) {
-            func_type_data_t current_ftd, new_ftd;
-
-            if (current_type.get_func_details(&current_ftd) &&
-                new_type.get_func_details(&new_ftd)) {
-
-                // Preserve parameter names if new prototype doesn't specify them
-                for (size_t i = 0; i < new_ftd.size() && i < current_ftd.size(); i++) {
-                    if (new_ftd[i].name.empty() && !current_ftd[i].name.empty()) {
-                        new_ftd[i].name = current_ftd[i].name;
-                    }
-                }
-
-                // Recreate type with preserved names
-                tinfo_t final_type;
-                if (final_type.create_func(new_ftd)) {
-                    new_type = final_type;
-                }
-            }
+            throw std::invalid_argument("Parsed type is not a function");
         }
 
         // Apply the type
@@ -1080,7 +1057,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::runtime_error("Failed to apply function prototype");
         }
 
-        // Handle function renaming
+        // Handle function renaming if a name was provided
         if (!func_name.empty()) {
             set_name(address, func_name.c_str(), SN_CHECK);
         }
@@ -1226,6 +1203,28 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
             return success ? force : false;  // Return force flag only if parse succeeded
         };
 
+        // Helper to check if types have compatible sizes
+        auto types_have_compatible_sizes = [](const tinfo_t& current_type, const tinfo_t& new_type) -> bool {
+            // Get sizes
+            size_t current_size = current_type.get_size();
+            size_t new_size = new_type.get_size();
+
+            // Handle invalid sizes (can't determine size)
+            if (current_size == BADSIZE || new_size == BADSIZE) {
+                // If we can't determine size, we can't check compatibility
+                // In this case, allow the change (user knows what they're doing)
+                return true;
+            }
+
+            // If both are pointers, they're compatible (same pointer size on architecture)
+            if (current_type.is_ptr() && new_type.is_ptr()) {
+                return true;
+            }
+
+            // Otherwise, sizes must match exactly
+            return current_size == new_size;
+        };
+
         // Try to handle as function argument first
         tinfo_t func_type;
         func_type_data_t ftd;
@@ -1244,10 +1243,22 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
                             throw std::invalid_argument("Invalid type: " + new_type);
                         }
 
-                        // Check size mismatch
-                        if (!force && ftd[i].type.get_size() != new_tif.get_size()) {
+                        // Check size compatibility
+                        if (!force && !types_have_compatible_sizes(ftd[i].type, new_tif)) {
+                            size_t current_size = ftd[i].type.get_size();
+                            size_t new_size = new_tif.get_size();
+
+                            qstring current_type_str;
+                            qstring new_type_str;
+                            ftd[i].type.print(&current_type_str);
+                            new_tif.print(&new_type_str);
+
                             throw std::runtime_error(
-                                "Type size mismatch. Add 'FORCE_SIZE_MISMATCH' to override."
+                                "Type size mismatch: '" + std::string(current_type_str.c_str()) +
+                                "' (size " + std::to_string(current_size) +
+                                ") vs '" + std::string(new_type_str.c_str()) +
+                                "' (size " + std::to_string(new_size) +
+                                "). Add 'FORCE_SIZE_MISMATCH' to override."
                             );
                         }
 
@@ -1301,10 +1312,22 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
                 throw std::invalid_argument("Invalid type: " + new_type);
             }
 
-            // Check size mismatch
-            if (!force && lvar && lvar->type().get_size() != new_tif.get_size()) {
+            // Check size compatibility
+            if (!force && lvar && !types_have_compatible_sizes(lvar->type(), new_tif)) {
+                size_t current_size = lvar->type().get_size();
+                size_t new_size = new_tif.get_size();
+
+                qstring current_type_str;
+                qstring new_type_str;
+                lvar->type().print(&current_type_str);
+                new_tif.print(&new_type_str);
+
                 throw std::runtime_error(
-                    "Type size mismatch. Add 'FORCE_SIZE_MISMATCH' to override."
+                    "Type size mismatch: '" + std::string(current_type_str.c_str()) +
+                    "' (size " + std::to_string(current_size) +
+                    ") vs '" + std::string(new_type_str.c_str()) +
+                    "' (size " + std::to_string(new_size) +
+                    "). Add 'FORCE_SIZE_MISMATCH' to override."
                 );
             }
 
