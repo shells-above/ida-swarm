@@ -14,53 +14,6 @@ std::string format_address_hex(ea_t address) {
     return ss.str();
 }
 
-bool ensure_standard_types(til_t *til) {
-    if (!til) return false;
-
-    // Get the bitness of the current database
-    bool is_64bit = inf_is_64bit();
-
-    // List of type libraries to try importing based on the compiler/platform
-    struct til_info {
-        const char* name;
-        const char* desc;
-        bool for_64bit;
-    };
-
-    static const til_info type_libraries[] = {
-        // Microsoft types
-        {"ntddk", "Windows NT DDK", false},
-        {"ntddk64", "Windows NT DDK x64", true},
-
-        // GNU/Linux types
-        {"gnulnx_x86", "GNU/Linux x86", false},
-        {"gnulnx_x64", "GNU/Linux x64", true},
-
-        // macOS types
-        {"macosx", "macOS", false},
-        {"macosx64", "macOS x64", true},
-
-        {nullptr, nullptr, false}
-    };
-
-    // Try to import appropriate type libraries
-    bool any_loaded = false;
-    for (const til_info* ti = type_libraries; ti->name; ti++) {
-        // Skip libraries that don't match our bitness
-        if (ti->for_64bit != is_64bit) {
-            continue;
-        }
-
-        // Try to add this type library
-        int added_til = add_til(ti->name, ADDTIL_SILENT);
-        if (added_til) {
-            any_loaded = true;
-        }
-    }
-
-    return any_loaded;
-}
-
 ea_t IDAUtils::get_name_address(const std::string& name) {
     return execute_sync_wrapper([&name]() {
         return get_name_ea(BADADDR, name.c_str());
@@ -1074,226 +1027,62 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
-        // Get the IDB's type library for proper type resolution
-        til_t *idati = get_idati();
-        if (!idati) {
-            throw std::runtime_error("Failed to get IDA type library");
-        }
-
-        // Ensure standard types are available
-        ensure_standard_types(idati);
-
-        // Get current function type to check parameter count and sizes
-        tinfo_t current_type;
-        func_type_data_t current_ftd;
-        bool has_current_type = false;
-        size_t current_param_count = 0;
-
-        if (get_tinfo(&current_type, address)) {
-            if (current_type.get_func_details(&current_ftd)) {
-                has_current_type = true;
-                current_param_count = current_ftd.size();
-            }
-        }
-
-        // Parse the new prototype
-        tinfo_t new_type;
+        // Handle special modifiers
         qstring proto_str = prototype.c_str();
-
-        // Check for FORCE_SIZE_MISMATCH flag
-        bool force_mismatch = (proto_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
+        bool force_mismatch = proto_str.find("FORCE_SIZE_MISMATCH") != qstring::npos;
         if (force_mismatch) {
-            // Remove the flag before parsing
-            size_t force_pos = proto_str.find("FORCE_SIZE_MISMATCH");
-            proto_str.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
-            // Trim trailing whitespace
-            while (!proto_str.empty() && qisspace(proto_str.last())) {
-                proto_str.remove_last();
-            }
+            proto_str.replace("FORCE_SIZE_MISMATCH", "");
+            proto_str.trim2();
         }
 
-        const char *ptr = proto_str.c_str();
+        // First, try to parse as a complete declaration with names
+        tinfo_t new_type;
         qstring func_name;
+        const char* ptr = proto_str.c_str();
 
-        // Use the proper til and add PT_TYP for better type parsing
-        if (!parse_decl(&new_type, &func_name, idati, ptr, PT_SIL)) {
-            // If parsing fails, try with more permissive flags
-            ptr = proto_str.c_str(); // Reset pointer
-            if (!parse_decl(&new_type, &func_name, idati, ptr, 0)) {
-                throw std::invalid_argument("Failed to parse function prototype: " + prototype);
+        if (!parse_decl(&new_type, &func_name, get_idati(), ptr, PT_TYP | PT_SIL)) {
+            // If that fails, try parsing as a type only (no names)
+            ptr = proto_str.c_str();
+            if (!parse_decl(&new_type, nullptr, get_idati(), ptr, PT_TYP | PT_SIL)) {
+                throw std::invalid_argument("Failed to parse function prototype");
             }
         }
 
-        // Verify it's a function type
         if (!new_type.is_func()) {
-            throw std::invalid_argument("Parsed type is not a function");
+            throw std::invalid_argument("Not a function type");
         }
 
-        // Get details of the new type
-        func_type_data_t new_ftd;
-        if (!new_type.get_func_details(&new_ftd)) {
-            throw std::runtime_error("Failed to get function details from parsed prototype");
-        }
+        // For prototypes without parameter names, preserve existing names if any
+        tinfo_t current_type;
+        if (get_tinfo(&current_type, address)) {
+            func_type_data_t current_ftd, new_ftd;
 
-        // Check parameter count matches if we have current type info
-        if (has_current_type && new_ftd.size() != current_param_count) {
-            throw std::invalid_argument(
-                "Parameter count mismatch: current function has " +
-                std::to_string(current_param_count) + " parameters, new prototype has " +
-                std::to_string(new_ftd.size())
-            );
-        }
+            if (current_type.get_func_details(&current_ftd) &&
+                new_type.get_func_details(&new_ftd)) {
 
-        // Check for type size mismatches in parameters
-        if (has_current_type && !force_mismatch) {
-            std::vector<std::string> size_warnings;
-
-            for (size_t i = 0; i < current_ftd.size() && i < new_ftd.size(); i++) {
-                size_t current_size = current_ftd[i].type.get_size();
-                size_t new_size = new_ftd[i].type.get_size();
-
-                if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
-                    qstring current_type_str;
-                    qstring new_type_str;
-                    current_ftd[i].type.print(&current_type_str);
-                    new_ftd[i].type.print(&new_type_str);
-
-                    std::string warning = "Parameter " + std::to_string(i) +
-                        ": size mismatch - current type '" + current_type_str.c_str() +
-                        "' (size " + std::to_string(current_size) +
-                        ") vs new type '" + new_type_str.c_str() +
-                        "' (size " + std::to_string(new_size) + ")";
-                    size_warnings.push_back(warning);
-                }
-            }
-
-            // Check return type size
-            size_t current_ret_size = current_ftd.rettype.get_size();
-            size_t new_ret_size = new_ftd.rettype.get_size();
-
-            if (current_ret_size != new_ret_size && current_ret_size != BADSIZE && new_ret_size != BADSIZE) {
-                qstring current_ret_str;
-                qstring new_ret_str;
-                current_ftd.rettype.print(&current_ret_str);
-                new_ftd.rettype.print(&new_ret_str);
-
-                std::string warning = "Return type: size mismatch - current type '" + std::string(current_ret_str.c_str()) +
-                    "' (size " + std::to_string(current_ret_size) +
-                    ") vs new type '" + std::string(new_ret_str.c_str()) +
-                    "' (size " + std::to_string(new_ret_size) + ")";
-                size_warnings.push_back(warning);
-            }
-
-            if (!size_warnings.empty()) {
-                std::string error_msg = "TYPE SIZE MISMATCH WARNING: Changing types with different sizes may break decompilation!\n\n";
-                for (const auto& warning : size_warnings) {
-                    error_msg += "- " + warning + "\n";
-                }
-                error_msg += "\nTo proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the prototype string.";
-                throw std::runtime_error(error_msg);
-            }
-        }
-
-        // Extract parameter names from the prototype string (if any)
-        std::vector<std::string> param_names;
-
-        // Find the opening parenthesis
-        size_t paren_start = prototype.find('(');
-        size_t paren_end = prototype.rfind(')');
-        if (paren_start != std::string::npos && paren_end != std::string::npos && paren_start < paren_end) {
-            std::string params_str = prototype.substr(paren_start + 1, paren_end - paren_start - 1);
-
-            // Simple parameter parser
-            size_t pos = 0;
-            int paren_depth = 0;
-            size_t param_start = 0;
-
-            for (size_t i = 0; i <= params_str.length(); i++) {
-                char c = (i < params_str.length()) ? params_str[i] : ',';
-
-                if (c == '(') paren_depth++;
-                else if (c == ')') paren_depth--;
-
-                if ((c == ',' || i == params_str.length()) && paren_depth == 0) {
-                    if (i > param_start) {
-                        std::string param = params_str.substr(param_start, i - param_start);
-
-                        // Trim leading/trailing whitespace
-                        size_t first = param.find_first_not_of(" \t\n\r");
-                        size_t last = param.find_last_not_of(" \t\n\r");
-                        if (first != std::string::npos) {
-                            param = param.substr(first, last - first + 1);
-                        }
-
-                        // Try to extract parameter name
-                        std::string param_name;
-
-                        // Skip if this looks like just a type (no spaces after removing ptr/ref)
-                        std::string test_param = param;
-                        // Remove pointer and reference symbols from the end
-                        while (!test_param.empty() && (test_param.back() == '*' || test_param.back() == '&')) {
-                            test_param.pop_back();
-                        }
-                        // Trim again
-                        size_t test_last = test_param.find_last_not_of(" \t");
-                        if (test_last != std::string::npos) {
-                            test_param = test_param.substr(0, test_last + 1);
-                        }
-
-                        // Check if there's a space (indicating type + name)
-                        size_t last_space = test_param.rfind(' ');
-                        if (last_space != std::string::npos) {
-                            // Extract what comes after the last space as potential name
-                            std::string potential_name = test_param.substr(last_space + 1);
-
-                            // Validate it's a valid identifier
-                            if (!potential_name.empty() &&
-                                (std::isalpha(potential_name[0]) || potential_name[0] == '_')) {
-                                bool valid = true;
-                                for (char ch : potential_name) {
-                                    if (!std::isalnum(ch) && ch != '_') {
-                                        valid = false;
-                                        break;
-                                    }
-                                }
-                                if (valid) {
-                                    param_name = potential_name;
-                                }
-                            }
-                        }
-
-                        param_names.push_back(param_name);
+                // Preserve parameter names if new prototype doesn't specify them
+                for (size_t i = 0; i < new_ftd.size() && i < current_ftd.size(); i++) {
+                    if (new_ftd[i].name.empty() && !current_ftd[i].name.empty()) {
+                        new_ftd[i].name = current_ftd[i].name;
                     }
-                    param_start = i + 1;
+                }
+
+                // Recreate type with preserved names
+                tinfo_t final_type;
+                if (final_type.create_func(new_ftd)) {
+                    new_type = final_type;
                 }
             }
         }
 
-        // Apply parameter names to the func_type_data_t (if we found any)
-        for (size_t i = 0; i < new_ftd.size() && i < param_names.size(); i++) {
-            if (!param_names[i].empty()) {
-                new_ftd[i].name = param_names[i].c_str();
-            }
+        // Apply the type
+        if (!apply_tinfo(address, new_type, TINFO_DEFINITE)) {
+            throw std::runtime_error("Failed to apply function prototype");
         }
 
-        // Recreate the type with the updated parameter names
-        tinfo_t final_type;
-        if (!final_type.create_func(new_ftd)) {
-            throw std::runtime_error("Failed to create function type with parameter names");
-        }
-
-        // Apply the new type
-        if (!apply_tinfo(address, final_type, TINFO_DEFINITE)) {
-            return false;
-        }
-
-        // If function name was provided in prototype and different, update it
+        // Handle function renaming
         if (!func_name.empty()) {
-            qstring current_name;
-            get_func_name(&current_name, address);
-            if (current_name != func_name) {
-                set_name(address, func_name.c_str());
-            }
+            set_name(address, func_name.c_str(), SN_CHECK);
         }
 
         return true;
@@ -1398,19 +1187,10 @@ FunctionLocalsInfo IDAUtils::get_variables(ea_t address) {
 }
 
 bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type) {
-    return execute_sync_wrapper([address, &variable_name, &new_name, &new_type]() {
+    return execute_sync_wrapper([=]() {
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
-
-        // Get the IDB's type library for proper type resolution
-        til_t *idati = get_idati();
-        if (!idati) {
-            throw std::runtime_error("Failed to get IDA type library");
-        }
-
-        // Ensure standard types are available
-        ensure_standard_types(idati);
 
         // Initialize Hex-Rays if needed
         if (!init_hexrays_plugin()) {
@@ -1419,7 +1199,7 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
 
         func_t *func = get_func(address);
         if (!func) {
-            throw std::runtime_error("Cannot get function");
+            throw std::runtime_error("Invalid function address");
         }
 
         // Decompile to get variables
@@ -1429,258 +1209,116 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
             throw std::runtime_error("Failed to decompile function");
         }
 
-        const lvars_t *lvars = cfunc->get_lvars();
-        if (!lvars) {
-            throw std::runtime_error("Cannot get local variables");
-        }
+        // Helper to parse type with optional FORCE_SIZE_MISMATCH
+        auto parse_type = [](const std::string& type_str, tinfo_t& out_type) -> bool {
+            qstring clean_type = type_str.c_str();
 
-        // First, check if this is a function argument by checking function type
+            // Remove FORCE_SIZE_MISMATCH if present
+            size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
+            bool force = (force_pos != qstring::npos);
+            if (force) {
+                clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
+                clean_type.trim2();
+            }
+
+            bool success = parse_decl(&out_type, nullptr, get_idati(),
+                                    clean_type.c_str(), PT_TYP | PT_SIL);
+            return success ? force : false;  // Return force flag only if parse succeeded
+        };
+
+        // Try to handle as function argument first
         tinfo_t func_type;
         func_type_data_t ftd;
-        bool is_argument = false;
-        int arg_index = -1;
-
         if (get_tinfo(&func_type, address) && func_type.get_func_details(&ftd)) {
-            // Check if variable_name matches any argument
             for (int i = 0; i < ftd.size(); i++) {
-                std::string arg_name = ftd[i].name.c_str();
-                if (arg_name == variable_name ||
-                    ("arg" + std::to_string(i)) == variable_name ||
-                    ("a" + std::to_string(i + 1)) == variable_name) {  // Check common patterns like a1, a2
-                    is_argument = true;
-                    arg_index = i;
-                    break;
-                }
-            }
-        }
+                if (ftd[i].name == variable_name.c_str()) {
+                    // Found as argument
+                    bool changed = false;
 
-        // If it's an argument, handle it differently
-        if (is_argument && arg_index >= 0) {
-            bool need_update = false;
+                    // Update type if provided
+                    if (!new_type.empty()) {
+                        tinfo_t new_tif;
+                        bool force = parse_type(new_type, new_tif);
 
-            // Check type size if changing type
-            if (!new_type.empty()) {
-                // Parse the new type
-                tinfo_t new_tif;
-                qstring type_str = new_type.c_str();
-
-                // Check if FORCE_SIZE_MISMATCH is present
-                bool force_mismatch = (type_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
-
-                // Remove FORCE_SIZE_MISMATCH from the type string before parsing
-                if (force_mismatch) {
-                    qstring clean_type = type_str;
-                    size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
-                    if (force_pos != qstring::npos) {
-                        clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
-                        // Trim trailing whitespace
-                        while (!clean_type.empty() && qisspace(clean_type.last())) {
-                            clean_type.remove_last();
+                        if (!new_tif.is_correct()) {
+                            throw std::invalid_argument("Invalid type: " + new_type);
                         }
-                        type_str = clean_type;
-                    }
-                }
 
-                const char *ptr = type_str.c_str();
-
-                // Try to parse the type - if it fails, it might be because the type isn't defined
-                if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
-                    // Check if this is a known type that needs to be imported
-                    tinfo_t named_type;
-                    if (named_type.get_named_type(idati, type_str.c_str())) {
-                        new_tif = named_type;
-                    } else {
-                        // Try parsing with different flags
-                        ptr = type_str.c_str(); // Reset pointer
-                        if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
-                            // Try one more time with just basic flags
-                            ptr = type_str.c_str(); // Reset pointer
-                            if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
-                                // If all parsing attempts fail, provide helpful error
-                                std::string error_msg = "Failed to parse type '" + std::string(type_str.c_str()) + "'.\n\n";
-
-                                // Check if it looks like a Windows type
-                                if (strstr(type_str.c_str(), "__int") || strstr(type_str.c_str(), "DWORD") ||
-                                    strstr(type_str.c_str(), "WORD") || strstr(type_str.c_str(), "BYTE")) {
-                                    error_msg += "This appears to be a Windows type. Try importing the mssdk type library:\n";
-                                    error_msg += "  View -> Open subviews -> Type libraries (Shift+F11)\n";
-                                    error_msg += "  Then load 'mssdk' or 'mssdk64' (for 64-bit)\n\n";
-                                }
-
-                                error_msg += "Make sure the type is valid and any custom types are defined in the IDB.";
-                                throw std::invalid_argument(error_msg);
-                            }
+                        // Check size mismatch
+                        if (!force && ftd[i].type.get_size() != new_tif.get_size()) {
+                            throw std::runtime_error(
+                                "Type size mismatch. Add 'FORCE_SIZE_MISMATCH' to override."
+                            );
                         }
+
+                        ftd[i].type = new_tif;
+                        changed = true;
                     }
-                }
 
-                // Check size mismatch
-                size_t current_size = ftd[arg_index].type.get_size();
-                size_t new_size = new_tif.get_size();
-
-                if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
-                    if (!force_mismatch) {
-                        qstring current_type_str;
-                        ftd[arg_index].type.print(&current_type_str);
-
-                        std::string error_msg = "TYPE SIZE MISMATCH WARNING: Argument '" + variable_name +
-                            "' has type '" + std::string(current_type_str.c_str()) +
-                            "' (size " + std::to_string(current_size) +
-                            ") but you're trying to set type '" + std::string(type_str.c_str()) +
-                            "' (size " + std::to_string(new_size) +
-                            ").\n\nChanging to a type with different size may break decompilation!\n\n" +
-                            "To proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the type string.";
-
-                        throw std::runtime_error(error_msg);
+                    // Update name if provided
+                    if (!new_name.empty()) {
+                        ftd[i].name = new_name.c_str();
+                        changed = true;
                     }
-                }
 
-                ftd[arg_index].type = new_tif;
-                need_update = true;
-            }
-
-            // Update name if provided
-            if (!new_name.empty() && new_name != variable_name) {
-                ftd[arg_index].name = new_name.c_str();
-                need_update = true;
-            }
-
-            if (need_update) {
-                // Create new function type with updated parameter
-                tinfo_t new_func_type;
-                if (!new_func_type.create_func(ftd)) {
+                    // Apply changes
+                    if (changed) {
+                        tinfo_t new_func_type;
+                        new_func_type.create_func(ftd);
+                        return apply_tinfo(address, new_func_type, TINFO_DEFINITE);
+                    }
                     return false;
                 }
-
-                // Apply the updated type
-                return apply_tinfo(address, new_func_type, TINFO_DEFINITE);
             }
-
-            return false;
         }
 
-        // Not an argument, so it's a local variable
-        // Find the variable using locate_lvar
+        // Not an argument, handle as local variable
         lvar_locator_t ll;
         if (!locate_lvar(&ll, func->start_ea, variable_name.c_str())) {
             throw std::invalid_argument("Variable not found: " + variable_name);
         }
 
-        // Find the specific lvar for size checking
-        const lvar_t *current_lvar = nullptr;
+        // Find the lvar for size checking
+        const lvar_t *lvar = nullptr;
+        const lvars_t *lvars = cfunc->get_lvars();
         for (size_t i = 0; i < lvars->size(); i++) {
             if ((*lvars)[i].name == variable_name.c_str()) {
-                current_lvar = &(*lvars)[i];
+                lvar = &(*lvars)[i];
                 break;
             }
         }
 
-        if (!current_lvar) {
-            throw std::invalid_argument("Variable not found in decompiled function: " + variable_name);
-        }
-
-        // Prepare the saved info
         lvar_saved_info_t info;
         info.ll = ll;
-
         uint mli_flags = 0;
-        bool need_update = false;
-
-        // Update name if provided
-        if (!new_name.empty() && new_name != variable_name) {
-            info.name = new_name.c_str();
-            mli_flags |= MLI_NAME;
-            need_update = true;
-        }
 
         // Update type if provided
         if (!new_type.empty()) {
-            // Parse the new type
             tinfo_t new_tif;
-            qstring type_str = new_type.c_str();
+            bool force = parse_type(new_type, new_tif);
 
-            // Check if FORCE_SIZE_MISMATCH is present
-            bool force_mismatch = (type_str.find("FORCE_SIZE_MISMATCH") != qstring::npos);
-
-            // Remove FORCE_SIZE_MISMATCH from the type string before parsing
-            if (force_mismatch) {
-                qstring clean_type = type_str;
-                size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
-                if (force_pos != qstring::npos) {
-                    clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
-                    // Trim trailing whitespace
-                    while (!clean_type.empty() && qisspace(clean_type.last())) {
-                        clean_type.remove_last();
-                    }
-                    type_str = clean_type;
-                }
-            }
-
-            const char *ptr = type_str.c_str();
-
-            // Try to parse the type
-            if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP | PT_SIL)) {
-                // Check if this is a named type
-                tinfo_t named_type;
-                if (named_type.get_named_type(idati, type_str.c_str())) {
-                    new_tif = named_type;
-                } else {
-                    // Try parsing with different flags
-                    ptr = type_str.c_str(); // Reset pointer
-                    if (!parse_decl(&new_tif, nullptr, idati, ptr, PT_TYP)) {
-                        // Try one more time with just basic flags
-                        ptr = type_str.c_str(); // Reset pointer
-                        if (!parse_decl(&new_tif, nullptr, idati, ptr, 0)) {
-                            // If all parsing attempts fail, provide helpful error
-                            std::string error_msg = "Failed to parse type '" + std::string(type_str.c_str()) + "'.\n\n";
-
-                            // Check if it looks like a Windows type
-                            if (strstr(type_str.c_str(), "__int") || strstr(type_str.c_str(), "DWORD") ||
-                                strstr(type_str.c_str(), "WORD") || strstr(type_str.c_str(), "BYTE")) {
-                                error_msg += "This appears to be a Windows type. Try importing the mssdk type library:\n";
-                                error_msg += "  View -> Open subviews -> Type libraries (Shift+F11)\n";
-                                error_msg += "  Then load 'mssdk' or 'mssdk64' (for 64-bit)\n\n";
-                            }
-
-                            error_msg += "Make sure the type is valid and any custom types are defined in the IDB.";
-                            throw std::invalid_argument(error_msg);
-                        }
-                    }
-                }
+            if (!new_tif.is_correct()) {
+                throw std::invalid_argument("Invalid type: " + new_type);
             }
 
             // Check size mismatch
-            size_t current_size = current_lvar->type().get_size();
-            size_t new_size = new_tif.get_size();
-
-            if (current_size != new_size && current_size != BADSIZE && new_size != BADSIZE) {
-                if (!force_mismatch) {
-                    qstring current_type_str;
-                    current_lvar->type().print(&current_type_str);
-
-                    std::string error_msg = "TYPE SIZE MISMATCH WARNING: Variable '" + variable_name +
-                        "' has type '" + std::string(current_type_str.c_str()) +
-                        "' (size " + std::to_string(current_size) +
-                        ") but you're trying to set type '" + std::string(type_str.c_str()) +
-                        "' (size " + std::to_string(new_size) +
-                        ").\n\nChanging to a type with different size may break decompilation!\n\n" +
-                        "To proceed anyway, add 'FORCE_SIZE_MISMATCH' to the end of the type string.";
-
-                    throw std::runtime_error(error_msg);
-                }
+            if (!force && lvar && lvar->type().get_size() != new_tif.get_size()) {
+                throw std::runtime_error(
+                    "Type size mismatch. Add 'FORCE_SIZE_MISMATCH' to override."
+                );
             }
 
             info.type = new_tif;
             mli_flags |= MLI_TYPE;
-            need_update = true;
         }
 
-        if (!need_update) {
-            return false;
+        // Update name if provided
+        if (!new_name.empty()) {
+            info.name = new_name.c_str();
+            mli_flags |= MLI_NAME;
         }
 
-        // Apply the changes
-        return modify_user_lvar_info(func->start_ea, mli_flags, info);
+        return mli_flags ? modify_user_lvar_info(func->start_ea, mli_flags, info) : false;
     }, MFF_WRITE);
 }
 
