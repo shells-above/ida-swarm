@@ -220,14 +220,15 @@ message(STATUS "Qt Directory: ${QTDIR}")
 message(STATUS "IDA Library Directory: ${IDA_LIBDIR}")
 message(STATUS "Plugin Extension: ${PLUGIN_EXT}")
 
-# Optional sample executable (commented out by default)
-# add_executable(sample_file sample_file.cpp)
-# set_target_properties(sample_file PROPERTIES
-#     CMAKE_BUILD_TYPE Release
-# )
-#
-# target_compile_options(sample_file PRIVATE
-#     -O3          # Optimize
-#     -g0          # No debug info
-#     -DNDEBUG     # Release mode
-# )
+# sample executable
+add_executable(sample_file sample_file.cpp)
+set_target_properties(sample_file PROPERTIES
+    CMAKE_BUILD_TYPE Release
+)
+
+target_compile_options(sample_file PRIVATE
+    -O3          # Optimize
+    -g0          # No debug info
+    -DNDEBUG     # Release mode
+)
+

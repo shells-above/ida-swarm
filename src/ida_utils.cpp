@@ -1440,107 +1440,52 @@ SetLocalTypeResult IDAUtils::set_local_type(const std::string& definition, bool 
             return result;
         }
 
-        // Create a temporary til to parse into first
-        // This lets us extract exactly what was parsed
-        til_t *temp_til = new_til("temp", "temp");
-        if (!temp_til) {
+        // Parse the type definition
+        tinfo_t tif;
+        qstring type_name;
+        const char* ptr = definition.c_str();
+
+        if (!parse_decl(&tif, &type_name, til, ptr, PT_TYP | PT_SIL)) {
             result.success = false;
-            result.error_message = "Failed to create temporary type library";
+            result.error_message = "Failed to parse type definition";
             return result;
         }
 
-        // Parse into temporary til
-        int error_count = parse_decls(temp_til, definition.c_str(), nullptr, HTI_DCL);
-
-        if (error_count > 0) {
-            free_til(temp_til);
+        // Extract the actual type name
+        if (type_name.empty()) {
+            // For anonymous structs, generate a name
+            result.error_message = "Type definition must include a name";
             result.success = false;
-            result.error_message = "Failed to parse type definitions (" +
-                                 std::to_string(error_count) + " errors)";
             return result;
         }
 
-        // Extract all parsed type names
-        std::vector<std::string> parsed_names;
-        for (uint32 ord = 1; ord < get_ordinal_limit(temp_til); ord++) {
-            const char *name = get_numbered_type_name(temp_til, ord);
-            if (name && name[0]) {
-                parsed_names.push_back(name);
-            }
-        }
-
-        // Check for existing types if not replacing
+        // Check if type already exists
         if (!replace_existing) {
-            std::vector<std::string> existing_types;
-            for (const auto& name : parsed_names) {
-                if (get_type_ordinal(til, name.c_str()) > 0) {
-                    existing_types.push_back(name);
-                }
-            }
-
-            if (!existing_types.empty()) {
-                free_til(temp_til);
+            uint32 existing_ord = get_type_ordinal(til, type_name.c_str());
+            if (existing_ord != 0) {
                 result.success = false;
-                result.error_message = "Types already exist: ";
-                for (size_t i = 0; i < existing_types.size(); i++) {
-                    if (i > 0) result.error_message += ", ";
-                    result.error_message += existing_types[i];
-                }
+                result.error_message = "Type '" + std::string(type_name.c_str()) + "' already exists";
                 return result;
             }
         }
 
-        // Now copy the types from temp_til to the main til
-        for (uint32 ord = 1; ord < get_ordinal_limit(temp_til); ord++) {
-            const char *name = get_numbered_type_name(temp_til, ord);
-            if (!name || !name[0]) continue;
-
-            tinfo_t tif;
-            if (!tif.get_numbered_type(temp_til, ord)) continue;
-
-            // Set the type in the main til
-            int ntf_flags = NTF_TYPE;
-            if (replace_existing) ntf_flags |= NTF_REPLACE;
-
-            // Get existing ordinal if replacing
-            uint32 target_ord = 0;
-            if (replace_existing) {
-                int32 existing_ord = get_type_ordinal(til, name);
-                if (existing_ord > 0) {
-                    target_ord = existing_ord;
-                }
-            }
-
-            tinfo_code_t code = tif.set_numbered_type(til, target_ord, ntf_flags, name);
-
-            if (code != TERR_OK) {
-                free_til(temp_til);
-                result.success = false;
-                result.error_message = std::string("Failed to add type '") + name +
-                                     "': " + tinfo_errstr(code);
-                return result;
-            }
+        // Save the type to local types
+        int ntf_flags = NTF_TYPE;
+        if (replace_existing) {
+            ntf_flags |= NTF_REPLACE;
         }
 
-        free_til(temp_til);
+        uint32 ord = replace_existing ? get_type_ordinal(til, type_name.c_str()) : 0;
+        tinfo_code_t code = tif.set_numbered_type(til, ord, ntf_flags, type_name.c_str());
 
-        // Set the result type name(s)
-        if (parsed_names.empty()) {
+        if (code != TERR_OK) {
             result.success = false;
-            result.error_message = "No types were parsed from the definition";
+            result.error_message = "Failed to save type: " + std::string(tinfo_errstr(code));
             return result;
-        } else if (parsed_names.size() == 1) {
-            result.type_name = parsed_names[0];
-        } else {
-            // Multiple types - join them
-            result.type_name = "";
-            for (size_t i = 0; i < parsed_names.size(); i++) {
-                if (i > 0) result.type_name += ", ";
-                result.type_name += parsed_names[i];
-            }
         }
 
         result.success = true;
+        result.type_name = type_name.c_str();
         return result;
     }, MFF_WRITE);
 }
