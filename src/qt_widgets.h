@@ -55,7 +55,7 @@ namespace llm_re {
         } api;
 
         struct AgentSettings {
-            int max_iterations = 500;
+            int max_iterations = 1000;
             bool enable_thinking = false;
             bool enable_interleaved_thinking = false;
             bool enable_deep_analysis = false;

@@ -1331,8 +1331,8 @@ ConfigWidget::ConfigWidget(QWidget* parent) : QWidget(parent) {
     model_layout->addRow("Max Thinking Tokens:", max_thinking_tokens_spin);
 
     max_iterations_spin = new QSpinBox();
-    max_iterations_spin->setRange(1, 200);
-    max_iterations_spin->setValue(100);
+    max_iterations_spin->setRange(1, 10000);
+    max_iterations_spin->setValue(1000);
     model_layout->addRow("Max Iterations:", max_iterations_spin);
 
     temperature_spin = new QDoubleSpinBox();

@@ -514,7 +514,7 @@ public:
     json parameters_schema() const override {
         return ParameterBuilder()
             .add_integer("address", "The address to name")
-            .add_string("name", "The new name")
+            .add_string("name", "The new name. Do not provide reserved names such as word_401000.")
             .build();
     }
 
