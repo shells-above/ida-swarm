@@ -996,6 +996,11 @@ void MainForm::update_ui_state() {
 
 void MainForm::on_tab_changed(int index) {
     // Update focus based on tab
+    
+    // Refresh memory views when switching tabs
+    if (memory_widget_) {
+        memory_widget_->refresh_views();
+    }
 }
 
 void MainForm::on_log_level_changed(int index) {

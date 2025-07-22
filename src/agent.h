@@ -205,7 +205,7 @@ private:
     api::TokenTracker token_tracker_;
     std::vector<api::TokenTracker> tracker_sessions_;  // we add to this the previous token_tracker when we hit context limit
 
-    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // Trigger consolidation at 150k
+    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
 
     // Cache performance tracking
     struct CacheStats {
