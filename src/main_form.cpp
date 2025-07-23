@@ -998,8 +998,9 @@ void MainForm::on_tab_changed(int index) {
     // Update focus based on tab
     
     // Refresh memory views when switching tabs
+    // Pass false to not preserve selection since user is switching context
     if (memory_widget_) {
-        memory_widget_->refresh_views();
+        memory_widget_->refresh_views(false);
     }
 }
 

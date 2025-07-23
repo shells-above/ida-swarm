@@ -2121,6 +2121,19 @@ QColor MemoryDockWidget::get_type_color(const std::string& type) {
 }
 
 void MemoryDockWidget::populate_timeline_view() {
+    // Save current selection before clearing (only if preserve_selection_ is true)
+    QString selected_key;
+    if (preserve_selection_) {
+        QList<QTreeWidgetItem*> selected = timeline_tree_->selectedItems();
+        if (!selected.isEmpty()) {
+            selected_key = selected.first()->data(0, Qt::UserRole).toString();
+        }
+    }
+    
+    // Temporarily disconnect selection signal to prevent spurious updates
+    disconnect(timeline_tree_, &QTreeWidget::currentItemChanged,
+               this, &MemoryDockWidget::on_timeline_item_selected);
+    
     timeline_tree_->clear();
     if (!memory_) return;
 
@@ -2162,9 +2175,38 @@ void MemoryDockWidget::populate_timeline_view() {
     }
 
     timeline_tree_->sortByColumn(0, Qt::DescendingOrder);
+    
+    // Reconnect selection signal
+    connect(timeline_tree_, &QTreeWidget::currentItemChanged,
+            this, &MemoryDockWidget::on_timeline_item_selected);
+    
+    // Restore selection if we had one and preserve_selection_ is true
+    if (preserve_selection_ && !selected_key.isEmpty()) {
+        QTreeWidgetItemIterator it(timeline_tree_);
+        while (*it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == selected_key) {
+                timeline_tree_->setCurrentItem(*it);
+                break;
+            }
+            ++it;
+        }
+    }
 }
 
 void MemoryDockWidget::populate_function_view() {
+    // Save current selection before clearing (only if preserve_selection_ is true)
+    QString selected_key;
+    if (preserve_selection_) {
+        QList<QTreeWidgetItem*> selected = function_tree_->selectedItems();
+        if (!selected.isEmpty()) {
+            selected_key = selected.first()->data(0, Qt::UserRole).toString();
+        }
+    }
+    
+    // Temporarily disconnect selection signal to prevent spurious updates
+    disconnect(function_tree_, &QTreeWidget::currentItemChanged,
+               this, &MemoryDockWidget::on_function_item_selected);
+    
     function_tree_->clear();
     if (!memory_) return;
 
@@ -2253,9 +2295,42 @@ void MemoryDockWidget::populate_function_view() {
     }
 
     function_tree_->sortByColumn(1, Qt::DescendingOrder);
+    
+    // Reconnect selection signal
+    connect(function_tree_, &QTreeWidget::currentItemChanged,
+            this, &MemoryDockWidget::on_function_item_selected);
+    
+    // Restore selection if we had one and preserve_selection_ is true
+    if (preserve_selection_ && !selected_key.isEmpty()) {
+        QTreeWidgetItemIterator it(function_tree_);
+        while (*it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == selected_key) {
+                function_tree_->setCurrentItem(*it);
+                // Expand parent if this is a child item
+                if ((*it)->parent()) {
+                    (*it)->parent()->setExpanded(true);
+                }
+                break;
+            }
+            ++it;
+        }
+    }
 }
 
 void MemoryDockWidget::populate_analysis_browser() {
+    // Save current selection before clearing (only if preserve_selection_ is true)
+    QString selected_key;
+    if (preserve_selection_) {
+        QList<QListWidgetItem*> selected = analysis_list_->selectedItems();
+        if (!selected.isEmpty()) {
+            selected_key = selected.first()->data(Qt::UserRole).toString();
+        }
+    }
+    
+    // Temporarily disconnect selection signal to prevent spurious updates
+    disconnect(analysis_list_, &QListWidget::currentRowChanged,
+               this, &MemoryDockWidget::on_analysis_item_selected);
+    
     analysis_list_->clear();
     if (!memory_) return;
 
@@ -2316,6 +2391,21 @@ void MemoryDockWidget::populate_analysis_browser() {
 
     // Update info label
     analysis_info_label_->setText(QString("%1 analyses found").arg(analyses.size()));
+    
+    // Reconnect selection signal
+    connect(analysis_list_, &QListWidget::currentRowChanged,
+            this, &MemoryDockWidget::on_analysis_item_selected);
+    
+    // Restore selection if we had one and preserve_selection_ is true
+    if (preserve_selection_ && !selected_key.isEmpty()) {
+        for (int i = 0; i < analysis_list_->count(); ++i) {
+            QListWidgetItem* item = analysis_list_->item(i);
+            if (item->data(Qt::UserRole).toString() == selected_key) {
+                analysis_list_->setCurrentItem(item);
+                break;
+            }
+        }
+    }
 }
 
 void MemoryDockWidget::update_statistics() {
@@ -2353,28 +2443,43 @@ void MemoryDockWidget::update_statistics() {
         [](const auto& a, const auto& b) { return a.second > b.second; });
 
     // Generate HTML
-    QString html = R"(
+    // Get theme colors
+    QString bg_color, text_color, code_bg;
+    get_theme_colors(bg_color, text_color, code_bg);
+    
+    bool is_dark = (bg_color == "#2b2b2b");
+    
+    QString html = QString(R"(
         <html>
         <head>
         <style>
-            body { font-family: Arial, sans-serif; padding: 10px; }
-            h3 { color: #2c3e50; }
-            .stat-box { background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 5px; }
-            .stat-label { font-weight: bold; color: #7f8c8d; }
-            .stat-value { font-size: 1.2em; color: #2c3e50; }
-            table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-            th { background: #ecf0f1; padding: 5px; text-align: left; }
-            td { padding: 5px; border-bottom: 1px solid #ecf0f1; }
-            .type-note { color: #95a5a6; }
-            .type-finding { color: #e74c3c; }
-            .type-hypothesis { color: #f39c12; }
-            .type-question { color: #3498db; }
-            .type-analysis { color: #27ae60; }
-            .type-deep_analysis { color: #9b59b6; }
+            body { font-family: Arial, sans-serif; padding: 10px; background-color: %1; color: %2; }
+            h3, h4 { color: %2; }
+            .stat-box { background: %3; padding: 10px; margin: 5px 0; border-radius: 5px; }
+            .stat-label { font-weight: bold; color: %4; }
+            .stat-value { font-size: 1.2em; color: %2; }
+            table { width: 100%%; border-collapse: collapse; margin: 10px 0; }
+            th { background: %3; padding: 5px; text-align: left; color: %2; }
+            td { padding: 5px; border-bottom: 1px solid %3; color: %2; }
+            .type-note { color: %5; }
+            .type-finding { color: %6; }
+            .type-hypothesis { color: %7; }
+            .type-question { color: %8; }
+            .type-analysis { color: %9; }
+            .type-deep_analysis { color: %10; }
         </style>
         </head>
         <body>
-    )";
+    )").arg(bg_color)
+       .arg(text_color)
+       .arg(code_bg)
+       .arg(is_dark ? "#b0b0b0" : "#7f8c8d")  // stat-label color
+       .arg(is_dark ? "#c0c0c0" : "#95a5a6")  // note
+       .arg(is_dark ? "#ff6b6b" : "#e74c3c")  // finding
+       .arg(is_dark ? "#ffa94d" : "#f39c12")  // hypothesis
+       .arg(is_dark ? "#74a9ff" : "#3498db")  // question
+       .arg(is_dark ? "#69db7c" : "#27ae60")  // analysis
+       .arg(is_dark ? "#cc5de8" : "#9b59b6"); // deep_analysis
 
     html += "<h3>Memory Statistics</h3>";
 
@@ -2423,7 +2528,10 @@ void MemoryDockWidget::update_statistics() {
     stats_browser_->setHtml(html);
 }
 
-void MemoryDockWidget::refresh_views() {
+void MemoryDockWidget::refresh_views(bool preserve_selection) {
+    // Store whether we should preserve selection for populate methods
+    preserve_selection_ = preserve_selection;
+    
     // Refresh the current tab
     int current_tab = tabs_->currentIndex();
 
@@ -2433,6 +2541,29 @@ void MemoryDockWidget::refresh_views() {
         case 2: populate_analysis_browser(); break;
         case 3: build_relationship_graph(); break;
         case 4: update_statistics(); break;
+    }
+    
+    // Reset to default
+    preserve_selection_ = true;
+}
+
+void MemoryDockWidget::get_theme_colors(QString& bg_color, QString& text_color, QString& code_bg) {
+    // Get theme info from main form
+    MainForm* main_form = get_main_form();
+    bool is_dark_theme = false;
+    if (main_form) {
+        const Config* config = main_form->get_config();
+        is_dark_theme = (config->ui.theme == 0 || config->ui.theme == 1);
+    }
+
+    if (is_dark_theme) {
+        bg_color = "#2b2b2b";
+        text_color = "#ffffff";
+        code_bg = "#1e1e1e";
+    } else {
+        bg_color = "#ffffff";
+        text_color = "#000000";
+        code_bg = "#f5f5f5";
     }
 }
 
@@ -2577,21 +2708,42 @@ void MemoryDockWidget::on_timeline_item_selected() {
     QTreeWidgetItem* item = selected.first();
     QString key = item->data(0, Qt::UserRole).toString();
 
-    if (!memory_ || key.isEmpty()) return;
+    if (!memory_ || key.isEmpty()) {
+        timeline_viewer_->clear();
+        return;
+    }
 
     std::vector<AnalysisEntry> analyses = memory_->get_analysis(key.toStdString());
-    if (analyses.empty()) return;
+    if (analyses.empty()) {
+        timeline_viewer_->clear();
+        return;
+    }
 
     const auto& entry = analyses[0];
+    
+    // Verify the key matches what we requested
+    if (QString::fromStdString(entry.key) != key) {
+        timeline_viewer_->setText("Error: Data mismatch. Please refresh the view.");
+        return;
+    }
 
+    // Get theme colors
+    QString bg_color, text_color, code_bg;
+    get_theme_colors(bg_color, text_color, code_bg);
+    
     // Format detailed view
-    QString html = "<html><body style='font-family: Arial; padding: 10px;'>";
+    QString html = QString("<html><head><style>"
+                          "body { font-family: Arial; padding: 10px; background-color: %1; color: %2; }"
+                          "h3, h4 { color: %2; }"
+                          "div.metadata { background: %3; padding: 10px; margin: 10px 0; border-radius: 5px; }"
+                          "pre { background: %3; padding: 10px; border-radius: 5px; white-space: pre-wrap; }"
+                          "</style></head><body>").arg(bg_color).arg(text_color).arg(code_bg);
 
     // Header
     html += QString("<h3>%1</h3>").arg(QString::fromStdString(entry.type).toUpper());
 
     // Metadata
-    html += "<div style='background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px;'>";
+    html += "<div class='metadata'>";
     html += QString("<b>Key:</b> %1<br>").arg(QString::fromStdString(entry.key));
     html += QString("<b>Timestamp:</b> %1<br>").arg(
         QDateTime::fromSecsSinceEpoch(entry.timestamp).toString("yyyy-MM-dd hh:mm:ss"));
@@ -2616,7 +2768,7 @@ void MemoryDockWidget::on_timeline_item_selected() {
     // Content
     html += "<div style='margin-top: 20px;'>";
     html += "<h4>Content:</h4>";
-    html += "<pre style='background: #f8f8f8; padding: 10px; border-radius: 5px; white-space: pre-wrap;'>";
+    html += "<pre>";
     html += QString::fromStdString(entry.content).toHtmlEscaped();
     html += "</pre>";
     html += "</div>";
@@ -2647,13 +2799,29 @@ void MemoryDockWidget::on_function_item_selected() {
         auto analyses = memory_->get_analysis(key.toStdString());
         if (!analyses.empty()) {
             const auto& entry = analyses[0];
+            
+            // Verify the key matches what we requested
+            if (QString::fromStdString(entry.key) != key) {
+                function_viewer_->setText("Error: Data mismatch. Please refresh the view.");
+                return;
+            }
 
             QString content = QString::fromStdString(entry.content);
             function_viewer_->setPlainText(content);
+        } else {
+            function_viewer_->clear();
         }
     } else {
         // It's a function item - show summary
-        QString html = "<html><body style='font-family: Arial; padding: 10px;'>";
+        QString bg_color, text_color, code_bg;
+        get_theme_colors(bg_color, text_color, code_bg);
+        
+        QString html = QString("<html><head><style>"
+                              "body { font-family: Arial; padding: 10px; background-color: %1; color: %2; }"
+                              "h3, p { color: %2; }"
+                              "table { border-collapse: collapse; width: 100%%; }"
+                              "td { padding: 5px; border-bottom: 1px solid %3; }"
+                              "</style></head><body>").arg(bg_color).arg(text_color).arg(code_bg);
         html += QString("<h3>%1</h3>").arg(item->text(0));
         html += QString("<p>Total analyses: %1</p>").arg(item->text(1));
         html += QString("<p>Latest: %1</p>").arg(item->text(2));
@@ -2693,12 +2861,24 @@ void MemoryDockWidget::on_analysis_item_selected() {
     QListWidgetItem* item = selected.first();
     QString key = item->data(Qt::UserRole).toString();
 
-    if (!memory_ || key.isEmpty()) return;
+    if (!memory_ || key.isEmpty()) {
+        analysis_viewer_->clear();
+        return;
+    }
 
     auto analyses = memory_->get_analysis(key.toStdString());
-    if (analyses.empty()) return;
+    if (analyses.empty()) {
+        analysis_viewer_->clear();
+        return;
+    }
 
     const auto& entry = analyses[0];
+    
+    // Verify the key matches what we requested
+    if (QString::fromStdString(entry.key) != key) {
+        analysis_viewer_->setText("Error: Data mismatch. Please refresh the view.");
+        return;
+    }
 
     // Format for viewer with syntax highlighting if applicable
     QString content = QString::fromStdString(entry.content);
@@ -2707,13 +2887,25 @@ void MemoryDockWidget::on_analysis_item_selected() {
     if (entry.type == "analysis" || content.contains("```") ||
         content.contains("function") || content.contains("0x")) {
 
+        // Get theme colors
+        QString bg_color, text_color, code_bg;
+        get_theme_colors(bg_color, text_color, code_bg);
+        
+        // Adjust syntax highlight colors based on theme
+        bool is_dark = (bg_color == "#2b2b2b");
+        QString addr_color = is_dark ? "#6495ED" : "#0066cc";  // Light blue for addresses
+        QString keyword_color = is_dark ? "#FFA500" : "#ff6600";  // Orange for keywords
+        
         // Apply basic formatting
-        content.replace(QRegExp("(0x[0-9a-fA-F]+)"), "<span style='color: #0066cc;'>\\1</span>");
+        content.replace(QRegExp("(0x[0-9a-fA-F]+)"), QString("<span style='color: %1;'>\\1</span>").arg(addr_color));
         content.replace(QRegExp("\\b(function|if|else|for|while|return)\\b"),
-                       "<span style='color: #ff6600; font-weight: bold;'>\\1</span>");
+                       QString("<span style='color: %1; font-weight: bold;'>\\1</span>").arg(keyword_color));
 
-        QString html = "<html><body style='font-family: Consolas, monospace; padding: 10px;'>";
-        html += "<pre style='white-space: pre-wrap;'>" + content + "</pre>";
+        QString html = QString("<html><head><style>"
+                              "body { font-family: Consolas, monospace; padding: 10px; background-color: %1; color: %2; }"
+                              "pre { white-space: pre-wrap; color: %2; }"
+                              "</style></head><body>").arg(bg_color).arg(text_color);
+        html += "<pre>" + content + "</pre>";
         html += "</body></html>";
 
         analysis_viewer_->setHtml(html);

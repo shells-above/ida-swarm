@@ -443,6 +443,7 @@ private:
 
     std::shared_ptr<BinaryMemory> memory_;
     ea_t current_address_ = BADADDR;
+    bool preserve_selection_ = true;
 
     // Helper methods
     QString format_analysis_preview(const AnalysisEntry& entry, int max_length = 100);
@@ -450,6 +451,7 @@ private:
     QString get_function_name(ea_t address);
     QIcon get_type_icon(const std::string& type);
     QColor get_type_color(const std::string& type);
+    void get_theme_colors(QString& bg_color, QString& text_color, QString& code_bg);
 
     void populate_timeline_view();
     void populate_function_view();
@@ -471,7 +473,9 @@ private slots:
     void on_copy_analysis();
     void on_export_analysis();
     void on_goto_address();
-    void refresh_views();
+    
+public:
+    void refresh_views(bool preserve_selection = true);
 };
 
 
