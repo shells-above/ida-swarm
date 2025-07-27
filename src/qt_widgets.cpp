@@ -1872,6 +1872,10 @@ MemoryDockWidget::MemoryDockWidget(QWidget* parent) : QWidget(parent) {
     QVBoxLayout* layout = new QVBoxLayout(this);
 
     tabs_ = new QTabWidget();
+    connect(tabs_, &QTabWidget::currentChanged, [this](int index) {
+        // When switching tabs within memory widget, preserve selection
+        refresh_views(true);
+    });
     layout->addWidget(tabs_);
 
     // Create context menu actions
@@ -2130,9 +2134,8 @@ void MemoryDockWidget::populate_timeline_view() {
         }
     }
     
-    // Temporarily disconnect selection signal to prevent spurious updates
-    disconnect(timeline_tree_, &QTreeWidget::currentItemChanged,
-               this, &MemoryDockWidget::on_timeline_item_selected);
+    // Block signals to prevent spurious updates during refresh
+    timeline_tree_->blockSignals(true);
     
     timeline_tree_->clear();
     if (!memory_) return;
@@ -2176,9 +2179,8 @@ void MemoryDockWidget::populate_timeline_view() {
 
     timeline_tree_->sortByColumn(0, Qt::DescendingOrder);
     
-    // Reconnect selection signal
-    connect(timeline_tree_, &QTreeWidget::currentItemChanged,
-            this, &MemoryDockWidget::on_timeline_item_selected);
+    // Re-enable signals
+    timeline_tree_->blockSignals(false);
     
     // Restore selection if we had one and preserve_selection_ is true
     if (preserve_selection_ && !selected_key.isEmpty()) {
@@ -2186,10 +2188,15 @@ void MemoryDockWidget::populate_timeline_view() {
         while (*it) {
             if ((*it)->data(0, Qt::UserRole).toString() == selected_key) {
                 timeline_tree_->setCurrentItem(*it);
+                // Manually trigger the selection handler after restoring selection
+                on_timeline_item_selected();
                 break;
             }
             ++it;
         }
+    } else if (!preserve_selection_) {
+        // Clear the viewer if we're not preserving selection
+        timeline_viewer_->clear();
     }
 }
 
@@ -2203,9 +2210,8 @@ void MemoryDockWidget::populate_function_view() {
         }
     }
     
-    // Temporarily disconnect selection signal to prevent spurious updates
-    disconnect(function_tree_, &QTreeWidget::currentItemChanged,
-               this, &MemoryDockWidget::on_function_item_selected);
+    // Block signals to prevent spurious updates during refresh
+    function_tree_->blockSignals(true);
     
     function_tree_->clear();
     if (!memory_) return;
@@ -2296,9 +2302,8 @@ void MemoryDockWidget::populate_function_view() {
 
     function_tree_->sortByColumn(1, Qt::DescendingOrder);
     
-    // Reconnect selection signal
-    connect(function_tree_, &QTreeWidget::currentItemChanged,
-            this, &MemoryDockWidget::on_function_item_selected);
+    // Re-enable signals
+    function_tree_->blockSignals(false);
     
     // Restore selection if we had one and preserve_selection_ is true
     if (preserve_selection_ && !selected_key.isEmpty()) {
@@ -2310,10 +2315,15 @@ void MemoryDockWidget::populate_function_view() {
                 if ((*it)->parent()) {
                     (*it)->parent()->setExpanded(true);
                 }
+                // Manually trigger the selection handler after restoring selection
+                on_function_item_selected();
                 break;
             }
             ++it;
         }
+    } else if (!preserve_selection_) {
+        // Clear the viewer if we're not preserving selection
+        function_viewer_->clear();
     }
 }
 
@@ -2327,9 +2337,8 @@ void MemoryDockWidget::populate_analysis_browser() {
         }
     }
     
-    // Temporarily disconnect selection signal to prevent spurious updates
-    disconnect(analysis_list_, &QListWidget::currentRowChanged,
-               this, &MemoryDockWidget::on_analysis_item_selected);
+    // Block signals to prevent spurious updates during refresh
+    analysis_list_->blockSignals(true);
     
     analysis_list_->clear();
     if (!memory_) return;
@@ -2392,9 +2401,8 @@ void MemoryDockWidget::populate_analysis_browser() {
     // Update info label
     analysis_info_label_->setText(QString("%1 analyses found").arg(analyses.size()));
     
-    // Reconnect selection signal
-    connect(analysis_list_, &QListWidget::currentRowChanged,
-            this, &MemoryDockWidget::on_analysis_item_selected);
+    // Re-enable signals
+    analysis_list_->blockSignals(false);
     
     // Restore selection if we had one and preserve_selection_ is true
     if (preserve_selection_ && !selected_key.isEmpty()) {
@@ -2402,9 +2410,14 @@ void MemoryDockWidget::populate_analysis_browser() {
             QListWidgetItem* item = analysis_list_->item(i);
             if (item->data(Qt::UserRole).toString() == selected_key) {
                 analysis_list_->setCurrentItem(item);
+                // Manually trigger the selection handler after restoring selection
+                on_analysis_item_selected();
                 break;
             }
         }
+    } else if (!preserve_selection_) {
+        // Clear the viewer if we're not preserving selection
+        analysis_viewer_->clear();
     }
 }
 
@@ -2713,6 +2726,9 @@ void MemoryDockWidget::on_timeline_item_selected() {
         return;
     }
 
+    // Debug logging to identify mismatches
+    QString displayed_text = item->text(2);  // Preview column
+    
     std::vector<AnalysisEntry> analyses = memory_->get_analysis(key.toStdString());
     if (analyses.empty()) {
         timeline_viewer_->clear();
