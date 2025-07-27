@@ -6,136 +6,135 @@
 #define PATCH_MANAGER_H
 
 #include "common.h"
+#include <keystone/keystone.h>
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <chrono>
 #include <optional>
-#include <nlohmann/json.hpp>
-
-using json = nlohmann::json;
 
 namespace llm_re {
 
-// Represents a single patch applied to the binary
-struct PatchEntry {
+// Result structures for patch operations
+struct BytePatchResult {
+    bool success = false;
+    std::string error_message;
+    size_t bytes_patched = 0;
+};
+
+struct AssemblyPatchResult {
+    bool success = false;
+    std::string error_message;
+    size_t bytes_patched = 0;
+    size_t nops_added = 0;
+};
+
+// Simplified patch info for listing
+struct PatchInfo {
     ea_t address;
-    std::vector<uint8_t> original_bytes;
-    std::vector<uint8_t> patched_bytes;
+    std::string original_bytes_hex;
+    std::string patched_bytes_hex;
     std::string description;
     std::chrono::system_clock::time_point timestamp;
-    bool is_assembly_patch;  // true if created from assembly, false if raw bytes
-    std::string original_asm;  // Only filled for assembly patches
-    std::string patched_asm;   // Only filled for assembly patches
+    bool is_assembly_patch;
+    std::string original_asm;  // Only for assembly patches
+    std::string patched_asm;   // Only for assembly patches
 };
 
-// Result of a patch operation
-struct PatchResult {
-    bool success;
-    std::string error_message;
-    std::optional<PatchEntry> patch_entry;
+// Patch statistics
+struct PatchStatistics {
+    size_t total_patches;
+    size_t assembly_patches;
+    size_t byte_patches;
+    size_t total_bytes_patched;
 };
 
-// Manages all patches applied to the binary
+// Simplified PatchManager with embedded patchers
 class PatchManager {
 public:
     PatchManager();
     ~PatchManager();
 
-    // Initialize patch manager (creates backup if needed)
+    // Initialize patch manager (creates backup, initializes Keystone)
     bool initialize();
 
-    // Apply a patch (validates before applying)
-    PatchResult apply_patch(ea_t address, const std::vector<uint8_t>& new_bytes,
-                          const std::string& description, bool verify_original = true,
-                          const std::vector<uint8_t>& expected_original = {});
+    // Core 4 methods for the LLM tools
+    
+    // 1. Apply byte patch with mandatory original bytes verification
+    BytePatchResult apply_byte_patch(ea_t address, 
+                                    const std::string& original_hex,
+                                    const std::string& new_hex,
+                                    const std::string& description);
 
-    // Apply an assembly patch (includes assembly strings for tracking)
-    PatchResult apply_assembly_patch(ea_t address, const std::vector<uint8_t>& new_bytes,
-                                   const std::string& original_asm, const std::string& new_asm,
-                                   const std::string& description, bool verify_original = true,
-                                   const std::vector<uint8_t>& expected_original = {});
+    // 2. Apply assembly patch with mandatory original assembly verification  
+    AssemblyPatchResult apply_assembly_patch(ea_t address,
+                                           const std::string& original_asm,
+                                           const std::string& new_asm,
+                                           const std::string& description);
 
-    // Revert a specific patch
+    // 3. Revert a patch at address
     bool revert_patch(ea_t address);
-
-    // Revert all patches in a range
-    bool revert_range(ea_t start_ea, ea_t end_ea);
-
-    // Revert all patches
     bool revert_all();
 
-    // Check if an address is patched
-    bool is_patched(ea_t address) const;
-
-    // Check if a range contains any patches
-    bool has_patches_in_range(ea_t start_ea, ea_t end_ea) const;
-
-    // Get patch information for an address
-    std::optional<PatchEntry> get_patch(ea_t address) const;
-
-    // Get all patches
-    std::vector<PatchEntry> get_all_patches() const;
-
-    // Get patches in a range
-    std::vector<PatchEntry> get_patches_in_range(ea_t start_ea, ea_t end_ea) const;
-
-    // Save patches to file (for persistence)
-    bool save_patches(const std::string& filename) const;
-
-    // Load patches from file
-    bool load_patches(const std::string& filename);
-
-    // Export patches to JSON
-    json export_patches() const;
-
-    // Import patches from JSON
-    bool import_patches(const json& patches_json);
-
-    // Get backup file path
-    std::string get_backup_path() const { return backup_path_; }
-
-    // Check if backup exists
-    bool has_backup() const;
-
-    // Create backup of current binary
-    bool create_backup();
-
-    // Restore from backup
-    bool restore_from_backup();
-
-    // Get statistics
-    struct Statistics {
-        size_t total_patches;
-        size_t assembly_patches;
-        size_t byte_patches;
-        size_t total_bytes_patched;
-        std::chrono::system_clock::time_point first_patch_time;
-        std::chrono::system_clock::time_point last_patch_time;
-    };
-    Statistics get_statistics() const;
-
-    // Read bytes from address (public for BytePatcher)
-    std::vector<uint8_t> read_bytes(ea_t address, size_t size);
+    // 4. List patches
+    std::vector<PatchInfo> list_patches() const;
+    std::optional<PatchInfo> get_patch_info(ea_t address) const;
+    
+    // Statistics
+    PatchStatistics get_statistics() const;
 
 private:
-    // Map of address to patch entry
+    // Internal patch entry
+    struct PatchEntry {
+        ea_t address;
+        std::vector<uint8_t> original_bytes;
+        std::vector<uint8_t> patched_bytes;
+        std::string description;
+        std::chrono::system_clock::time_point timestamp;
+        bool is_assembly_patch;
+        std::string original_asm;
+        std::string patched_asm;
+    };
+
+    // Keystone assembler
+    ks_engine* ks_ = nullptr;
+    
+    // Patches storage
     std::unordered_map<ea_t, PatchEntry> patches_;
-
-    // Path to backup file
-    std::string backup_path_;
-
-    // Whether we've created a backup
-    bool backup_created_;
-
-    // Input file path
+    
+    // Backup management
     std::string input_file_path_;
+    std::string backup_path_;
+    bool backup_created_ = false;
 
-    // Helper functions
-    bool validate_patch_size(ea_t address, size_t patch_size, std::string& error_msg);
-    bool check_instruction_boundaries(ea_t address, size_t patch_size, std::string& error_msg);
+    // Safety validation methods
+    bool validate_address(ea_t address, std::string& error_msg);
+    bool validate_instruction_boundary(ea_t address, std::string& error_msg);
+    bool validate_patch_size(ea_t address, size_t old_size, size_t new_size, std::string& error_msg);
+    bool verify_original_bytes(ea_t address, const std::vector<uint8_t>& expected, std::string& error_msg);
+    bool verify_original_asm(ea_t address, const std::string& expected_asm, std::string& error_msg);
+    
+    // Hex string utilities
+    static bool is_valid_hex_string(const std::string& hex);
+    static std::vector<uint8_t> hex_string_to_bytes(const std::string& hex);
+    static std::string bytes_to_hex_string(const std::vector<uint8_t>& bytes);
+    
+    // Assembly utilities
+    bool init_keystone();
+    void cleanup_keystone();
+    std::pair<bool, std::vector<uint8_t>> assemble_instruction(const std::string& asm_str, ea_t address);
+    std::string disassemble_at(ea_t address);
+    std::string normalize_assembly(const std::string& asm_str);
+    std::vector<uint8_t> get_nop_bytes(size_t count, ea_t address = BADADDR);
+    
+    // IDA interaction
+    std::vector<uint8_t> read_bytes(ea_t address, size_t size);
     bool write_bytes(ea_t address, const std::vector<uint8_t>& bytes);
     void trigger_reanalysis(ea_t address, size_t size);
+    
+    // Backup management
+    bool create_backup();
+    bool has_backup() const;
 };
 
 } // namespace llm_re
