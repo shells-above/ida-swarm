@@ -147,8 +147,6 @@ include(cmake/BuildKeystone.cmake)
 set(SOURCES
         src/actions.cpp
         src/anthropic_api.cpp
-        src/assembly_patcher.cpp
-        src/byte_patcher.cpp
         src/deep_analysis.cpp
         src/ida_utils.cpp
         src/main_form.cpp
@@ -156,7 +154,6 @@ set(SOURCES
         src/patch_manager.cpp
         src/plugin.cpp
         src/qt_widgets.cpp
-        src/tool_patch.cpp
 )
 
 # Header files
@@ -164,8 +161,6 @@ set(HEADERS
         src/actions.h
         src/agent.h
         src/anthropic_api.h
-        src/assembly_patcher.h
-        src/byte_patcher.h
         src/common.h
         src/deep_analysis.h
         src/ida_utils.h
@@ -173,7 +168,6 @@ set(HEADERS
         src/memory.h
         src/message_types.h
         src/patch_manager.h
-        src/tool_patch.h
         src/tool_system.h
         src/qt_widgets.h
 )

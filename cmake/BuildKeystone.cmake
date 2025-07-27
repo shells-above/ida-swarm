@@ -7,6 +7,17 @@ include(ExternalProject)
 set(KEYSTONE_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/keystone-build)
 set(KEYSTONE_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/keystone-install)
 
+# Find Python executable
+find_program(PYTHON_EXECUTABLE NAMES python3 python
+    PATHS /opt/homebrew/bin /usr/local/bin /usr/bin
+    NO_DEFAULT_PATH)
+
+if(NOT PYTHON_EXECUTABLE)
+    message(FATAL_ERROR "Python not found. Please install Python 3.")
+endif()
+
+message(STATUS "Found Python: ${PYTHON_EXECUTABLE}")
+
 # Configure ExternalProject to build Keystone
 ExternalProject_Add(keystone_external
     GIT_REPOSITORY https://github.com/keystone-engine/keystone.git
@@ -22,8 +33,16 @@ ExternalProject_Add(keystone_external
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
-    BUILD_BYPRODUCTS ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
+        -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
+        -Wno-dev
+    BUILD_BYPRODUCTS 
+        ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
+        ${KEYSTONE_INSTALL_DIR}/include/keystone/keystone.h
 )
+
+# Create directory structure for imported target
+file(MAKE_DIRECTORY ${KEYSTONE_INSTALL_DIR}/include)
+file(MAKE_DIRECTORY ${KEYSTONE_INSTALL_DIR}/lib)
 
 # Create imported library target
 add_library(keystone STATIC IMPORTED)
