@@ -20,8 +20,8 @@ message(STATUS "Found Python: ${PYTHON_EXECUTABLE}")
 
 # Configure ExternalProject to build Keystone
 ExternalProject_Add(keystone_external
-    GIT_REPOSITORY https://github.com/keystone-engine/keystone.git
-    GIT_TAG 0.9.2
+    GIT_REPOSITORY https://github.com/gaasedelen/keystone.git
+    GIT_TAG master
     PREFIX ${KEYSTONE_PREFIX}
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${KEYSTONE_INSTALL_DIR}
