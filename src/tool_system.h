@@ -1136,7 +1136,6 @@ public:
     }
 };
 
-// Tool registry with type safety
 // Patch bytes tool - requires original bytes verification
 class PatchBytesTool : public Tool {
     std::shared_ptr<PatchManager> patch_manager_;
