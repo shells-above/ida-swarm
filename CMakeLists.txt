@@ -140,35 +140,8 @@ endif()
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-# Keystone Engine
-include(ExternalProject)
-set(KEYSTONE_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/keystone-prefix)
-set(KEYSTONE_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/keystone-install)
-
-ExternalProject_Add(keystone_external
-    GIT_REPOSITORY https://github.com/keystone-engine/keystone.git
-    GIT_TAG 0.9.2
-    PREFIX ${KEYSTONE_PREFIX}
-    CMAKE_ARGS
-        -DCMAKE_INSTALL_PREFIX=${KEYSTONE_INSTALL_DIR}
-        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-        -DBUILD_SHARED_LIBS=OFF
-        -DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64
-        -DBUILD_LIBS_ONLY=ON
-        -DCMAKE_CXX_STANDARD=11
-        -DCMAKE_CXX_FLAGS=-w
-    BUILD_BYPRODUCTS ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
-)
-
-# Create imported library
-add_library(keystone STATIC IMPORTED)
-set_target_properties(keystone PROPERTIES
-    IMPORTED_LOCATION ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
-)
-add_dependencies(keystone keystone_external)
-
-# Include Keystone headers
-include_directories(${KEYSTONE_INSTALL_DIR}/include)
+# Include Keystone build configuration
+include(cmake/BuildKeystone.cmake)
 
 # Source files
 set(SOURCES
