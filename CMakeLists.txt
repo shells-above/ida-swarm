@@ -154,6 +154,7 @@ set(SOURCES
         patching/patch_manager.cpp
         ui/main_form.cpp
         ui/qt_widgets.cpp
+        ui/stats_aggregator.cpp
 )
 
 # Header files
@@ -171,6 +172,7 @@ set(HEADERS
         agent/tool_system.h
         ui/main_form.h
         ui/qt_widgets.h
+        ui/stats_aggregator.h
 )
 
 # Create shared library (end in "64", won't be loaded if it doesn't)

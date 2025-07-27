@@ -293,17 +293,23 @@ class StatsDashboard : public QWidget {
     ChartWidget* tool_chart;
     ChartWidget* time_chart;
     QTextBrowser* summary_browser;
+    
+    // Reference to tool registry for direct stats access
+    const tools::ToolRegistry* tool_registry_;
 
 public:
     StatsDashboard(QWidget* parent = nullptr);
+    
+    // Set the tool registry reference
+    void set_tool_registry(const tools::ToolRegistry* registry);
 
+    // Update stats using direct registry access
     void update_stats(const json& agent_state,
-                     const std::vector<SessionInfo>& sessions,
-                     const json& tool_stats);
+                     const std::vector<SessionInfo>& sessions);
 
 private:
-    QString generate_summary_html(const json& stats);
-    void update_tool_chart(const json& tool_stats);
+    QString generate_summary_html();
+    void update_tool_chart();
     void update_time_chart(const std::vector<SessionInfo>& sessions);
 };
 

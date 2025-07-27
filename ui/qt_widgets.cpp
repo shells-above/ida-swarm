@@ -3,11 +3,33 @@
 //
 
 #include "ui/qt_widgets.h"
+#include "ui/stats_aggregator.h"
 
 #include "ui/main_form.h"
 
 
 namespace llm_re {
+
+// Simple syntax highlighter for template variables
+class TemplateVariableHighlighter : public QSyntaxHighlighter {
+public:
+    explicit TemplateVariableHighlighter(QTextDocument* parent = nullptr) 
+        : QSyntaxHighlighter(parent) {}
+
+protected:
+    void highlightBlock(const QString& text) override {
+        QTextCharFormat variable_format;
+        variable_format.setForeground(Qt::blue);
+        variable_format.setFontWeight(QFont::Bold);
+        
+        QRegularExpression var_regex("\\{[^}]+\\}");
+        QRegularExpressionMatchIterator it = var_regex.globalMatch(text);
+        while (it.hasNext()) {
+            QRegularExpressionMatch match = it.next();
+            setFormat(match.capturedStart(), match.capturedLength(), variable_format);
+        }
+    }
+};
     // Config implementation
     bool Config::save_to_file(const std::string& path) const {
         try {
@@ -1097,7 +1119,7 @@ protected:
     }
 };
 
-StatsDashboard::StatsDashboard(QWidget* parent) : QWidget(parent) {
+StatsDashboard::StatsDashboard(QWidget* parent) : QWidget(parent), tool_registry_(nullptr) {
     layout = new QGridLayout(this);
 
     // Create charts
@@ -1113,62 +1135,61 @@ StatsDashboard::StatsDashboard(QWidget* parent) : QWidget(parent) {
     layout->addWidget(summary_browser, 1, 1);
 }
 
+void StatsDashboard::set_tool_registry(const tools::ToolRegistry* registry) {
+    tool_registry_ = registry;
+}
+
 void StatsDashboard::update_stats(const json& agent_state,
-                                 const std::vector<SessionInfo>& sessions,
-                                 const json& tool_stats) {
-    // Update tool chart
-    update_tool_chart(tool_stats);
+                                 const std::vector<SessionInfo>& sessions) {
+    // Update tool chart using direct registry access
+    update_tool_chart();
 
     // Update time chart
     update_time_chart(sessions);
 
     // Update summary
-    json stats;
-    stats["total_sessions"] = sessions.size();
-    stats["total_time_ms"] = 0;
-
-    for (const auto& session : sessions) {
-        stats["total_time_ms"] = stats["total_time_ms"].get<int>() + session.duration_ms;
-    }
-
-    summary_browser->setHtml(generate_summary_html(stats));
+    summary_browser->setHtml(generate_summary_html());
 }
 
-QString StatsDashboard::generate_summary_html(const json& stats) {
+QString StatsDashboard::generate_summary_html() {
     QString html = "<h3>Summary Statistics</h3>";
     html += "<table style='width: 100%;'>";
 
-    html += QString("<tr><td><b>Total Sessions:</b></td><td>%1</td></tr>")
-        .arg(stats.value("total_sessions", 0));
-
-    int total_ms = stats.value("total_time_ms", 0);
-    html += QString("<tr><td><b>Total Time:</b></td><td>%1s</td></tr>")
-        .arg(total_ms / 1000.0, 0, 'f', 2);
+    if (tool_registry_) {
+        StatsAggregator aggregator(*tool_registry_);
+        
+        html += QString("<tr><td><b>Total Tool Executions:</b></td><td>%1</td></tr>")
+            .arg(aggregator.get_total_executions());
+        
+        html += QString("<tr><td><b>Overall Success Rate:</b></td><td>%1%</td></tr>")
+            .arg(aggregator.get_overall_success_rate() * 100, 0, 'f', 1);
+        
+        html += QString("<tr><td><b>Unique Tools Used:</b></td><td>%1</td></tr>")
+            .arg(aggregator.get_unique_tools_used());
+        
+        double total_ms = aggregator.get_total_duration_ms();
+        html += QString("<tr><td><b>Total Execution Time:</b></td><td>%1s</td></tr>")
+            .arg(total_ms / 1000.0, 0, 'f', 2);
+    }
 
     html += "</table>";
 
     return html;
 }
 
-void StatsDashboard::update_tool_chart(const json& tool_stats) {
+void StatsDashboard::update_tool_chart() {
     std::vector<std::pair<QString, double>> data;
 
-    if (tool_stats.is_object()) {
-        for (const auto& [tool_name, count] : tool_stats.items()) {
+    if (tool_registry_) {
+        StatsAggregator aggregator(*tool_registry_);
+        auto top_tools = aggregator.get_top_tools_by_usage(5);
+        
+        for (const auto& tool : top_tools) {
             data.push_back({
-                QString::fromStdString(tool_name),
-                count.get<double>()
+                QString::fromStdString(tool.name),
+                static_cast<double>(tool.execution_count)
             });
         }
-    }
-
-    // Sort by count
-    std::sort(data.begin(), data.end(),
-              [](const auto& a, const auto& b) { return a.second > b.second; });
-
-    // Keep top 5
-    if (data.size() > 5) {
-        data.resize(5);
     }
 
     tool_chart->set_data(data);
@@ -1847,11 +1868,302 @@ void TaskTemplateWidget::on_use_template() {
 }
 
 void TaskTemplateWidget::on_edit_template() {
-    // TODO: Implement template editor dialog
+    int index = template_list->currentRow();
+    if (index < 0 || index >= templates.size()) {
+        return;
+    }
+    
+    // Create the editor dialog
+    QDialog* dialog = new QDialog(this);
+    dialog->setWindowTitle("Edit Template");
+    dialog->setModal(true);
+    dialog->resize(600, 500);
+    
+    // Create form layout
+    QFormLayout* form_layout = new QFormLayout();
+    
+    // Template name
+    QLineEdit* name_edit = new QLineEdit(QString::fromStdString(templates[index].name));
+    form_layout->addRow("Name:", name_edit);
+    
+    // Template description
+    QTextEdit* desc_edit = new QTextEdit();
+    desc_edit->setPlainText(QString::fromStdString(templates[index].description));
+    desc_edit->setMaximumHeight(80);
+    form_layout->addRow("Description:", desc_edit);
+    
+    // Template task
+    QTextEdit* task_edit = new QTextEdit();
+    task_edit->setPlainText(QString::fromStdString(templates[index].task));
+    task_edit->setMinimumHeight(150);
+    
+    // Add syntax highlighting for variables
+    new TemplateVariableHighlighter(task_edit->document());
+    
+    form_layout->addRow("Task Template:", task_edit);
+    
+    // Variables table
+    QTableWidget* var_table = new QTableWidget(0, 3);
+    var_table->setHorizontalHeaderLabels({"Variable", "Default Value", "Description"});
+    var_table->horizontalHeader()->setStretchLastSection(true);
+    
+    // Populate with existing variables
+    for (const auto& [key, value] : templates[index].variables) {
+        int row = var_table->rowCount();
+        var_table->insertRow(row);
+        var_table->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(key)));
+        var_table->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(value)));
+        var_table->setItem(row, 2, new QTableWidgetItem(""));  // Description column
+    }
+    
+    // Add/Remove variable buttons
+    QHBoxLayout* var_buttons = new QHBoxLayout();
+    QPushButton* add_var = new QPushButton("Add Variable");
+    QPushButton* remove_var = new QPushButton("Remove Variable");
+    var_buttons->addWidget(add_var);
+    var_buttons->addWidget(remove_var);
+    var_buttons->addStretch();
+    
+    connect(add_var, &QPushButton::clicked, [var_table]() {
+        int row = var_table->rowCount();
+        var_table->insertRow(row);
+        var_table->setItem(row, 0, new QTableWidgetItem(""));
+        var_table->setItem(row, 1, new QTableWidgetItem(""));
+        var_table->setItem(row, 2, new QTableWidgetItem(""));
+    });
+    
+    connect(remove_var, &QPushButton::clicked, [var_table]() {
+        int row = var_table->currentRow();
+        if (row >= 0) {
+            var_table->removeRow(row);
+        }
+    });
+    
+    form_layout->addRow("Variables:", var_table);
+    form_layout->addRow("", var_buttons);
+    
+    // Dialog buttons
+    QDialogButtonBox* button_box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    
+    // Main layout
+    QVBoxLayout* main_layout = new QVBoxLayout(dialog);
+    main_layout->addLayout(form_layout);
+    main_layout->addWidget(button_box);
+    
+    // Connect dialog buttons
+    connect(button_box, &QDialogButtonBox::accepted, [=]() {
+        // Update the template
+        templates[index].name = name_edit->text().toStdString();
+        templates[index].description = desc_edit->toPlainText().toStdString();
+        templates[index].task = task_edit->toPlainText().toStdString();
+        
+        // Update variables
+        templates[index].variables.clear();
+        for (int i = 0; i < var_table->rowCount(); i++) {
+            QString key = var_table->item(i, 0)->text();
+            QString value = var_table->item(i, 1)->text();
+            if (!key.isEmpty()) {
+                templates[index].variables[key.toStdString()] = value.toStdString();
+            }
+        }
+        
+        // Save and refresh
+        save_templates();
+        load_templates();
+        
+        dialog->accept();
+    });
+    
+    connect(button_box, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    
+    dialog->exec();
+    delete dialog;
 }
 
 void TaskTemplateWidget::on_new_template() {
-    // TODO: Implement new template dialog
+    // Create the new template dialog (similar to edit but with empty fields)
+    QDialog* dialog = new QDialog(this);
+    dialog->setWindowTitle("New Template");
+    dialog->setModal(true);
+    dialog->resize(600, 500);
+    
+    // Create form layout
+    QFormLayout* form_layout = new QFormLayout();
+    
+    // Template name
+    QLineEdit* name_edit = new QLineEdit();
+    form_layout->addRow("Name:", name_edit);
+    
+    // Template description
+    QTextEdit* desc_edit = new QTextEdit();
+    desc_edit->setMaximumHeight(80);
+    form_layout->addRow("Description:", desc_edit);
+    
+    // Template task
+    QTextEdit* task_edit = new QTextEdit();
+    task_edit->setMinimumHeight(150);
+    task_edit->setPlaceholderText("Enter your task template here. Use {variable_name} for variables.");
+    
+    // Add syntax highlighting for variables
+    new TemplateVariableHighlighter(task_edit->document());
+    
+    form_layout->addRow("Task Template:", task_edit);
+    
+    // Variables table
+    QTableWidget* var_table = new QTableWidget(0, 3);
+    var_table->setHorizontalHeaderLabels({"Variable", "Default Value", "Description"});
+    var_table->horizontalHeader()->setStretchLastSection(true);
+    
+    // Add some common variables by default
+    var_table->insertRow(0);
+    var_table->setItem(0, 0, new QTableWidgetItem("current_ea"));
+    var_table->setItem(0, 1, new QTableWidgetItem("current_ea"));
+    var_table->setItem(0, 2, new QTableWidgetItem("Current address in IDA"));
+    
+    // Add/Remove variable buttons
+    QHBoxLayout* var_buttons = new QHBoxLayout();
+    QPushButton* add_var = new QPushButton("Add Variable");
+    QPushButton* remove_var = new QPushButton("Remove Variable");
+    var_buttons->addWidget(add_var);
+    var_buttons->addWidget(remove_var);
+    var_buttons->addStretch();
+    
+    connect(add_var, &QPushButton::clicked, [var_table]() {
+        int row = var_table->rowCount();
+        var_table->insertRow(row);
+        var_table->setItem(row, 0, new QTableWidgetItem(""));
+        var_table->setItem(row, 1, new QTableWidgetItem(""));
+        var_table->setItem(row, 2, new QTableWidgetItem(""));
+    });
+    
+    connect(remove_var, &QPushButton::clicked, [var_table]() {
+        int row = var_table->currentRow();
+        if (row >= 0) {
+            var_table->removeRow(row);
+        }
+    });
+    
+    form_layout->addRow("Variables:", var_table);
+    form_layout->addRow("", var_buttons);
+    
+    // Template presets dropdown
+    QComboBox* preset_combo = new QComboBox();
+    preset_combo->addItem("-- Select a preset --");
+    preset_combo->addItem("Analyze Function");
+    preset_combo->addItem("Find Vulnerabilities");
+    preset_combo->addItem("Identify Crypto");
+    preset_combo->addItem("Document Structure");
+    preset_combo->addItem("Trace Data Flow");
+    
+    connect(preset_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            [=](int index) {
+        if (index == 1) {  // Analyze Function
+            name_edit->setText("Analyze Function");
+            desc_edit->setPlainText("Perform deep analysis of a function");
+            task_edit->setPlainText("Please analyze the function at {current_ea} and provide:\n"
+                                   "1. Purpose and functionality\n"
+                                   "2. Parameters and return value\n"
+                                   "3. Key operations and algorithm\n"
+                                   "4. Potential issues or vulnerabilities");
+        } else if (index == 2) {  // Find Vulnerabilities
+            name_edit->setText("Find Vulnerabilities");
+            desc_edit->setPlainText("Search for security vulnerabilities");
+            task_edit->setPlainText("Search for potential security vulnerabilities in this binary, including:\n"
+                                   "- Buffer overflows\n"
+                                   "- Format string bugs\n"
+                                   "- Integer overflows\n"
+                                   "- Use after free\n"
+                                   "- Race conditions");
+        } else if (index == 3) {  // Identify Crypto
+            name_edit->setText("Identify Crypto");
+            desc_edit->setPlainText("Find and identify cryptographic functions");
+            task_edit->setPlainText("Identify all cryptographic functions in this binary:\n"
+                                   "- Hash functions (MD5, SHA, etc.)\n"
+                                   "- Encryption/decryption routines\n"
+                                   "- Key generation or key scheduling\n"
+                                   "- Random number generation");
+        } else if (index == 4) {  // Document Structure
+            name_edit->setText("Document Structure");
+            desc_edit->setPlainText("Document a data structure");
+            task_edit->setPlainText("Document the data structure at {current_ea}:\n"
+                                   "- Field names and types\n"
+                                   "- Purpose of each field\n"
+                                   "- Size and alignment\n"
+                                   "- Usage patterns in the code");
+            
+            // Clear variables table and add current_ea
+            var_table->setRowCount(0);
+            var_table->insertRow(0);
+            var_table->setItem(0, 0, new QTableWidgetItem("current_ea"));
+            var_table->setItem(0, 1, new QTableWidgetItem("current_ea"));
+            var_table->setItem(0, 2, new QTableWidgetItem("Address of structure"));
+        } else if (index == 5) {  // Trace Data Flow
+            name_edit->setText("Trace Data Flow");
+            desc_edit->setPlainText("Trace data flow from a specific point");
+            task_edit->setPlainText("Trace the data flow starting from {current_ea}:\n"
+                                   "- Where does the data come from?\n"
+                                   "- How is it transformed?\n"
+                                   "- Where does it go?\n"
+                                   "- What validation is performed?");
+        }
+    });
+    
+    form_layout->insertRow(0, "Preset:", preset_combo);
+    
+    // Dialog buttons
+    QDialogButtonBox* button_box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    
+    // Main layout
+    QVBoxLayout* main_layout = new QVBoxLayout(dialog);
+    main_layout->addLayout(form_layout);
+    main_layout->addWidget(button_box);
+    
+    // Connect dialog buttons
+    connect(button_box, &QDialogButtonBox::accepted, [=]() {
+        QString name = name_edit->text().trimmed();
+        
+        // Validate name
+        if (name.isEmpty()) {
+            QMessageBox::warning(dialog, "Invalid Name", "Template name cannot be empty.");
+            return;
+        }
+        
+        // Check for duplicate names
+        for (const auto& tmpl : templates) {
+            if (tmpl.name == name.toStdString()) {
+                QMessageBox::warning(dialog, "Duplicate Name", 
+                                   "A template with this name already exists.");
+                return;
+            }
+        }
+        
+        // Create new template
+        TaskTemplate new_template;
+        new_template.name = name.toStdString();
+        new_template.description = desc_edit->toPlainText().toStdString();
+        new_template.task = task_edit->toPlainText().toStdString();
+        
+        // Add variables
+        for (int i = 0; i < var_table->rowCount(); i++) {
+            QString key = var_table->item(i, 0)->text();
+            QString value = var_table->item(i, 1)->text();
+            if (!key.isEmpty()) {
+                new_template.variables[key.toStdString()] = value.toStdString();
+            }
+        }
+        
+        // Add to templates and save
+        templates.push_back(new_template);
+        save_templates();
+        load_templates();
+        
+        dialog->accept();
+    });
+    
+    connect(button_box, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    
+    dialog->exec();
+    delete dialog;
 }
 
 void TaskTemplateWidget::on_delete_template() {

@@ -1435,8 +1435,20 @@ public:
 
 // Tool registry with type safety
 class ToolRegistry {
+public:
+    // Tool usage statistics
+    struct ToolStats {
+        int execution_count = 0;
+        int success_count = 0;
+        int failure_count = 0;
+        double total_duration_ms = 0.0;
+        std::chrono::steady_clock::time_point last_used;
+    };
+
+private:
     std::unordered_map<std::string, std::unique_ptr<Tool>> tools;
     std::vector<std::string> tool_order;  // Maintain registration order
+    std::unordered_map<std::string, ToolStats> tool_stats;
 
 public:
     void register_tool(std::unique_ptr<Tool> tool) {
@@ -1541,13 +1553,74 @@ public:
             return messages::Message::tool_result(tool_use.id, error_result.dump());
         }
 
+        // Track execution start time
+        auto start_time = std::chrono::steady_clock::now();
+        
+        // Execute the tool
         ToolResult result = tool->execute(tool_use.input);
+        
+        // Track execution end time
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+        
+        // Update statistics
+        ToolStats& stats = tool_stats[tool_use.name];
+        stats.execution_count++;
+        stats.total_duration_ms += duration_ms;
+        stats.last_used = end_time;
+        
+        if (result.wasSuccess) {
+            stats.success_count++;
+        } else {
+            stats.failure_count++;
+        }
+        
         return messages::Message::tool_result(tool_use.id, result.to_json().dump());
     }
 
     // Get tool names for logging
     std::vector<std::string> get_tool_names() const {
         return tool_order;
+    }
+    
+    // Direct access to tool statistics
+    const std::unordered_map<std::string, ToolStats>& get_tool_stats() const {
+        return tool_stats;
+    }
+    
+    // Get tool usage statistics
+    json get_tool_statistics() const {
+        json stats = json::array();
+        
+        for (const auto& tool_name : tool_order) {
+            auto it = tool_stats.find(tool_name);
+            if (it != tool_stats.end() && it->second.execution_count > 0) {
+                const ToolStats& tool_stat = it->second;
+                
+                json stat;
+                stat["name"] = tool_name;
+                stat["execution_count"] = tool_stat.execution_count;
+                stat["success_count"] = tool_stat.success_count;
+                stat["failure_count"] = tool_stat.failure_count;
+                stat["success_rate"] = (tool_stat.execution_count > 0) 
+                    ? (double)tool_stat.success_count / tool_stat.execution_count 
+                    : 0.0;
+                stat["average_duration_ms"] = (tool_stat.execution_count > 0)
+                    ? tool_stat.total_duration_ms / tool_stat.execution_count
+                    : 0.0;
+                
+                // Add time since last use
+                if (tool_stat.last_used.time_since_epoch().count() > 0) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - tool_stat.last_used);
+                    stat["seconds_since_last_use"] = duration.count();
+                }
+                
+                stats.push_back(stat);
+            }
+        }
+        
+        return stats;
     }
 };
 

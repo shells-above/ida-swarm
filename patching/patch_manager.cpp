@@ -14,6 +14,7 @@
 #include <allins.hpp>
 #include <segment.hpp>
 #include <segregs.hpp>
+#include <funcs.hpp>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -35,10 +36,26 @@ PatchManager::~PatchManager() {
 bool PatchManager::initialize() {
     // All IDA operations must be in sync wrapper
     return IDAUtils::execute_sync_wrapper([this]() -> bool {
-        // Get input file path
+        // Get the actual binary file path (not the IDB path)
         char buf[MAXSTR];
-        get_input_file_path(buf, sizeof(buf));
-        input_file_path_ = buf;
+        // get_input_file_path returns the IDB path, we need the actual binary
+        // Use get_path(PATH_TYPE_IDB) and then derive the binary path
+        qstring idb_path = get_path(PATH_TYPE_IDB);
+        
+        // Try to get the actual input file that IDA is analyzing
+        if (get_root_filename(buf, sizeof(buf)) > 0) {
+            // This gives us the input file name, now get the full path
+            char dir_buf[MAXSTR];
+            qdirname(dir_buf, sizeof(dir_buf), idb_path.c_str());
+            input_file_path_ = std::string(dir_buf) + "/" + std::string(buf);
+        } else {
+            // Fallback: use the idb path without extension
+            input_file_path_ = idb_path.c_str();
+            size_t dot_pos = input_file_path_.rfind('.');
+            if (dot_pos != std::string::npos) {
+                input_file_path_ = input_file_path_.substr(0, dot_pos);
+            }
+        }
         
         // Create backup path
         backup_path_ = input_file_path_ + ".bak";
@@ -122,9 +139,13 @@ BytePatchResult PatchManager::apply_byte_patch(ea_t address,
         }
         
         // Create backup on first patch
-        if (!backup_created_ && !create_backup()) {
-            result.error_message = "Failed to create backup";
-            return result;
+        if (!backup_created_) {
+            if (!create_backup()) {
+                result.error_message = "Failed to create backup. Check IDA output window for details.";
+                msg("ERROR: Backup creation failed in apply_byte_patch. backup_created_=%d, input_file='%s', backup_path='%s'\n", 
+                    backup_created_, input_file_path_.c_str(), backup_path_.c_str());
+                return result;
+            }
         }
         
         // Apply the patch
@@ -688,10 +709,14 @@ bool PatchManager::init_keystone() {
 }
 
 void PatchManager::cleanup_keystone() {
-    if (ks_) {
-        ks_close(ks_);
-        ks_ = nullptr;
-    }
+    // Wrap cleanup in sync wrapper to ensure thread safety
+    IDAUtils::execute_sync_wrapper([this]() -> bool {
+        if (ks_) {
+            ks_close(ks_);
+            ks_ = nullptr;
+        }
+        return true;
+    }, MFF_WRITE);
 }
 
 std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const std::string& asm_str, ea_t address) {
@@ -1057,15 +1082,63 @@ bool PatchManager::write_bytes(ea_t address, const std::vector<uint8_t>& bytes) 
 }
 
 void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
-    // Mark range for reanalysis
-    del_items(address, DELIT_SIMPLE, size);
-    auto_mark_range(address, address + size, AU_USED);
-    auto_wait();
+    msg("Triggering reanalysis for patch at 0x%llX (size: %zu bytes)\n", 
+        (uint64_t)address, size);
+    
+    // Check if the address is inside a function
+    func_t *func = get_func(address);
+    if (func != nullptr) {
+        // We're patching inside a function - need to reanalyze the entire function
+        ea_t func_start = func->start_ea;
+        ea_t func_end = func->end_ea;
+        
+        msg("Patch at 0x%llX is inside function at 0x%llX-0x%llX, reanalyzing entire function\n", 
+            (uint64_t)address, (uint64_t)func_start, (uint64_t)func_end);
+        
+        // Delete the function definition first
+        del_func(func_start);
+        
+        // Delete all items in the function range
+        del_items(func_start, DELIT_SIMPLE, func_end - func_start);
+        
+        // Mark the entire function range for reanalysis
+        auto_mark_range(func_start, func_end, AU_USED);
+        
+        // Force immediate analysis
+        plan_and_wait(func_start, func_end);
+        
+        // Try to recreate the function
+        if (!add_func(func_start, func_end)) {
+            msg("Failed to recreate function with original boundaries, trying auto-detection\n");
+            // If add_func with explicit end fails, try without end address
+            // This lets IDA determine the function boundaries
+            if (!add_func(func_start, BADADDR)) {
+                msg("WARNING: Failed to recreate function at 0x%llX after patch\n", (uint64_t)func_start);
+                // Last resort: create instructions manually
+                create_insn(func_start);
+            }
+        }
+        
+        // Final wait to ensure everything is processed
+        auto_wait();
+    } else {
+        // Not in a function - use original behavior
+        del_items(address, DELIT_SIMPLE, size);
+        auto_mark_range(address, address + size, AU_USED);
+        auto_wait();
+    }
 }
 
 // Backup management
 bool PatchManager::create_backup() {
     if (backup_created_) {
+        return true;
+    }
+    
+    // Check if backup already exists
+    if (qfileexist(backup_path_.c_str())) {
+        backup_created_ = true;
+        msg("Backup file already exists: %s\n", backup_path_.c_str());
         return true;
     }
     

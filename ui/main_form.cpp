@@ -3,6 +3,7 @@
 //
 
 #include "ui/main_form.h"
+#include "core/ida_utils.h"
 
 namespace llm_re {
 
@@ -384,6 +385,9 @@ void MainForm::setup_central_widget() {
 void MainForm::setup_agent() {
     // Create agent
     agent_ = std::make_unique<REAgent>(*config_);
+    
+    // Set tool registry reference in stats dashboard
+    stats_dashboard_->set_tool_registry(&agent_->get_tool_registry());
 
     // Set single callback
     agent_->set_message_callback([this](AgentMessageType type, const json& data) {
@@ -594,7 +598,18 @@ void MainForm::on_search_clicked() {
     connect(search_dialog, &ui::SearchDialog::result_selected,
             this, &MainForm::on_search_result_selected);
 
-    // TODO: Update search data
+    // Provide search data to the dialog
+    if (agent_) {
+        // Get messages from conversation
+        std::vector<messages::Message> messages = agent_->get_conversation().get_messages();
+        
+        // Get memory snapshot
+        json memory_snapshot = agent_->get_memory()->export_memory_snapshot();
+        
+        // Set the search data
+        search_dialog->set_search_data(log_entries_, messages, memory_snapshot);
+    }
+    
     search_dialog->show();  // Non-modal - user can interact with main window
     search_dialog->raise();
 }
@@ -924,29 +939,120 @@ void MainForm::handle_final_report(const json& data) {
 }
 
 void MainForm::on_search_result_selected(const ui::SearchDialog::SearchResult& result) {
-    // TODO: Implement search result handling
+    // Handle different types of search results
+    switch (result.type) {
+        case ui::SearchDialog::Logs: {
+            // Find and highlight the log entry
+            QString search_text = QString::fromStdString(result.match);
+            QTextDocument* doc = log_viewer_->document();
+            QTextCursor cursor = doc->find(search_text);
+            
+            if (!cursor.isNull()) {
+                log_viewer_->setTextCursor(cursor);
+                log_viewer_->ensureCursorVisible();
+                
+                // Highlight the match
+                QTextCharFormat format;
+                format.setBackground(Qt::yellow);
+                cursor.mergeCharFormat(format);
+            }
+            
+            // Switch to log tab
+            main_tabs_->setCurrentIndex(1);  // Assuming logs are on tab 1
+            break;
+        }
+        
+        case ui::SearchDialog::Messages: {
+            // Find the message in the chat
+            // Switch to chat tab
+            main_tabs_->setCurrentIndex(0);  // Assuming chat is on tab 0
+            
+            // Scroll to the message if we can find it by line number
+            if (result.line_number >= 0 && result.line_number < message_list_->count()) {
+                message_list_->setCurrentRow(result.line_number);
+                message_list_->scrollToItem(message_list_->item(result.line_number));
+            }
+            break;
+        }
+        
+        case ui::SearchDialog::Memory: {
+            // Open memory dock and highlight the analysis
+            if (memory_dock_ && memory_dock_->isVisible()) {
+                // If metadata contains an address, navigate to it
+                if (result.metadata.contains("address")) {
+                    ea_t address = result.metadata["address"];
+                    memory_widget_->set_current_address(address);
+                    
+                    // Also jump to the address in IDA
+                    jumpto(address);
+                }
+            }
+            break;
+        }
+        
+        case ui::SearchDialog::All:
+        default:
+            // For 'All' type, just show the context
+            msg("Search result: %s\n", result.context.c_str());
+            break;
+    }
 }
 
 void MainForm::on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& tmpl) {
     std::string task = tmpl.task;
 
-    // todo Replace variables
-    // for (const auto& [key, value] : tmpl.variables) {
-    //     std::string placeholder = "{" + key + "}";
-    //     std::string actual_value;
-    //
-    //     if (value == "current_ea") {
-    //         actual_value = format_address(current_addr);
-    //     } else {
-    //         actual_value = value;
-    //     }
-    //
-    //     size_t pos = 0;
-    //     while ((pos = task.find(placeholder, pos)) != std::string::npos) {
-    //         task.replace(pos, placeholder.length(), actual_value);
-    //         pos += actual_value.length();
-    //     }
-    // }
+    // Replace template variables
+    for (const auto& [key, value] : tmpl.variables) {
+        std::string placeholder = "{" + key + "}";
+        std::string actual_value;
+
+        // Handle special variables
+        if (value == "current_ea") {
+            ea_t current_addr = get_screen_ea();
+            actual_value = format_address(current_addr);
+        } else if (value == "function_name") {
+            ea_t current_addr = get_screen_ea();
+            func_t* func = get_func(current_addr);
+            if (func) {
+                qstring fname;
+                get_func_name(&fname, func->start_ea);
+                actual_value = fname.c_str();
+            } else {
+                actual_value = "<no function>";
+            }
+        } else if (value == "selection") {
+            // Get selected text or bytes
+            ea_t sel_start, sel_end;
+            if (read_range_selection(nullptr, &sel_start, &sel_end)) {
+                if (sel_end > sel_start) {
+                    // Format as hex bytes
+                    std::stringstream ss;
+                    for (ea_t ea = sel_start; ea < sel_end && ea < sel_start + 16; ea++) {
+                        uint8_t byte = get_byte(ea);
+                        ss << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
+                    }
+                    if (sel_end - sel_start > 16) {
+                        ss << "...";
+                    }
+                    actual_value = ss.str();
+                } else {
+                    actual_value = "<no selection>";
+                }
+            } else {
+                actual_value = "<no selection>";
+            }
+        } else {
+            // Use the default value
+            actual_value = value;
+        }
+
+        // Replace all occurrences
+        size_t pos = 0;
+        while ((pos = task.find(placeholder, pos)) != std::string::npos) {
+            task.replace(pos, placeholder.length(), actual_value);
+            pos += actual_value.length();
+        }
+    }
 
     // Make sure we're showing the correct widget
     if (continue_widget_->isVisible()) {
@@ -960,11 +1066,9 @@ void MainForm::on_template_selected(const ui::TaskTemplateWidget::TaskTemplate& 
     }
 }
 void MainForm::update_statistics() {
-    json tool_stats;
-    // TODO: Collect tool usage statistics
-
+    // Update stats dashboard with current sessions
     if (agent_) {
-        stats_dashboard_->update_stats(agent_->get_state_json(), sessions_, tool_stats);
+        stats_dashboard_->update_stats(agent_->get_state_json(), sessions_);
     }
 }
 
