@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "actions.h"
 #include "deep_analysis.h"
+#include "patch_manager.h"
 
 namespace llm_re::tools {
 
@@ -1136,6 +1137,308 @@ public:
 };
 
 // Tool registry with type safety
+// Patch bytes tool - requires original bytes verification
+class PatchBytesTool : public Tool {
+    std::shared_ptr<PatchManager> patch_manager_;
+    
+public:
+    PatchBytesTool(std::shared_ptr<BinaryMemory> mem,
+                   std::shared_ptr<ActionExecutor> exec,
+                   std::shared_ptr<PatchManager> pm)
+        : Tool(mem, exec), patch_manager_(pm) {}
+    
+    std::string name() const override {
+        return "patch_bytes";
+    }
+    
+    std::string description() const override {
+        return "Patch raw bytes at a specific address with mandatory verification. "
+               "REQUIRES original bytes for safety verification before patching. "
+               "Checks instruction boundaries and validates all inputs.";
+    }
+    
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "Target address to patch")
+            .add_string("original_bytes", "Original bytes in hex format for verification (e.g., '90 90 90' or '909090')")
+            .add_string("new_bytes", "New bytes to write in hex format")
+            .add_string("description", "REQUIRED: Description of why this patch is being applied (for audit trail)")
+            .build();
+    }
+    
+    ToolResult execute(const json& input) override {
+        if (!patch_manager_) {
+            return ToolResult::failure("Patch manager not initialized");
+        }
+        
+        try {
+            // Parse and validate parameters
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            std::string original_hex = input.at("original_bytes");
+            std::string new_hex = input.at("new_bytes");
+            std::string description = input.at("description");  // Required for audit trail
+            
+            if (description.empty()) {
+                return ToolResult::failure("Description is required for audit trail");
+            }
+            
+            // Apply the byte patch with verification (thread safety handled in PatchManager)
+            auto patch_result = patch_manager_->apply_byte_patch(
+                address, original_hex, new_hex, description);
+            
+            if (patch_result.success) {
+                json data;
+                data["address"] = HexAddress(address);
+                data["original_bytes"] = original_hex;
+                data["new_bytes"] = new_hex;
+                data["bytes_patched"] = patch_result.bytes_patched;
+                data["description"] = description;
+                data["timestamp"] = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                return ToolResult::success(data);
+            } else {
+                return ToolResult::failure(patch_result.error_message);
+            }
+            
+        } catch (const std::exception& e) {
+            return ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Patch assembly tool - requires original assembly verification
+class PatchAssemblyTool : public Tool {
+    std::shared_ptr<PatchManager> patch_manager_;
+    
+public:
+    PatchAssemblyTool(std::shared_ptr<BinaryMemory> mem,
+                      std::shared_ptr<ActionExecutor> exec,
+                      std::shared_ptr<PatchManager> pm)
+        : Tool(mem, exec), patch_manager_(pm) {}
+    
+    std::string name() const override {
+        return "patch_assembly";
+    }
+    
+    std::string description() const override {
+        return "Patch assembly instructions at a specific address with mandatory verification. "
+               "REQUIRES original assembly for safety verification before patching. "
+               "Automatically handles NOP padding if new instruction is smaller.";
+    }
+    
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "Target address to patch")
+            .add_string("original_asm", "Original assembly instruction(s) for verification")
+            .add_string("new_asm", "New assembly instruction(s) to write")
+            .add_string("description", "REQUIRED: Description of why this patch is being applied (for audit trail)")
+            .build();
+    }
+    
+    ToolResult execute(const json& input) override {
+        if (!patch_manager_) {
+            return ToolResult::failure("Patch manager not initialized");
+        }
+        
+        try {
+            // Parse and validate parameters
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+            std::string original_asm = input.at("original_asm");
+            std::string new_asm = input.at("new_asm");
+            std::string description = input.at("description");  // Required for audit trail
+            
+            if (description.empty()) {
+                return ToolResult::failure("Description is required for audit trail");
+            }
+            
+            // Apply the assembly patch with verification (thread safety handled in PatchManager)
+            auto patch_result = patch_manager_->apply_assembly_patch(
+                address, original_asm, new_asm, description);
+            
+            if (patch_result.success) {
+                json data;
+                data["address"] = HexAddress(address);
+                data["original_asm"] = original_asm;
+                data["new_asm"] = new_asm;
+                data["bytes_patched"] = patch_result.bytes_patched;
+                data["description"] = description;
+                data["timestamp"] = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                if (patch_result.nops_added > 0) {
+                    data["nops_added"] = patch_result.nops_added;
+                }
+                return ToolResult::success(data);
+            } else {
+                return ToolResult::failure(patch_result.error_message);
+            }
+            
+        } catch (const std::exception& e) {
+            return ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Revert patches tool
+class RevertPatchTool : public Tool {
+    std::shared_ptr<PatchManager> patch_manager_;
+    
+public:
+    RevertPatchTool(std::shared_ptr<BinaryMemory> mem,
+                    std::shared_ptr<ActionExecutor> exec,
+                    std::shared_ptr<PatchManager> pm)
+        : Tool(mem, exec), patch_manager_(pm) {}
+    
+    std::string name() const override {
+        return "revert_patch";
+    }
+    
+    std::string description() const override {
+        return "Revert a previously applied patch at a specific address or revert all patches. "
+               "Restores original bytes from before the patch was applied.";
+    }
+    
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "Address of patch to revert", false)
+            .add_boolean("revert_all", "Revert all patches", false)
+            .build();
+    }
+    
+    ToolResult execute(const json& input) override {
+        if (!patch_manager_) {
+            return ToolResult::failure("Patch manager not initialized");
+        }
+        
+        try {
+            json data;
+            bool success = false;
+            
+            if (input.value("revert_all", false)) {
+                // Revert all patches
+                success = patch_manager_->revert_all();
+                if (success) {
+                    data["reverted"] = "all";
+                    data["message"] = "All patches reverted successfully";
+                }
+            } else if (input.contains("address")) {
+                // Revert single patch
+                ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+                success = patch_manager_->revert_patch(address);
+                if (success) {
+                    data["address"] = HexAddress(address);
+                    data["message"] = "Patch reverted successfully";
+                }
+            } else {
+                return ToolResult::failure("Must specify address or revert_all");
+            }
+            
+            if (!success) {
+                return ToolResult::failure("No patch found at specified address");
+            }
+            
+            return ToolResult::success(data);
+            
+        } catch (const std::exception& e) {
+            return ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// List patches tool
+class ListPatchesTool : public Tool {
+    std::shared_ptr<PatchManager> patch_manager_;
+    
+public:
+    ListPatchesTool(std::shared_ptr<BinaryMemory> mem,
+                    std::shared_ptr<ActionExecutor> exec,
+                    std::shared_ptr<PatchManager> pm)
+        : Tool(mem, exec), patch_manager_(pm) {}
+    
+    std::string name() const override {
+        return "list_patches";
+    }
+    
+    std::string description() const override {
+        return "List all applied patches with their descriptions, timestamps, and original/new bytes. "
+               "Shows the complete audit trail of all modifications.";
+    }
+    
+    json parameters_schema() const override {
+        return ParameterBuilder()
+            .add_integer("address", "List only patch at specific address", false)
+            .build();
+    }
+    
+    ToolResult execute(const json& input) override {
+        if (!patch_manager_) {
+            return ToolResult::failure("Patch manager not initialized");
+        }
+        
+        try {
+            json data;
+            json patches_json = json::array();
+            
+            if (input.contains("address")) {
+                // Get single patch
+                ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+                auto patch_info = patch_manager_->get_patch_info(address);
+                
+                if (patch_info.has_value()) {
+                    const auto& patch = patch_info.value();
+                    json patch_json;
+                    patch_json["address"] = HexAddress(patch.address);
+                    patch_json["original_bytes"] = patch.original_bytes_hex;
+                    patch_json["patched_bytes"] = patch.patched_bytes_hex;
+                    patch_json["description"] = patch.description;
+                    patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
+                    patch_json["is_assembly_patch"] = patch.is_assembly_patch;
+                    
+                    if (patch.is_assembly_patch) {
+                        patch_json["original_asm"] = patch.original_asm;
+                        patch_json["patched_asm"] = patch.patched_asm;
+                    }
+                    
+                    patches_json.push_back(patch_json);
+                }
+            } else {
+                // List all patches
+                auto all_patches = patch_manager_->list_patches();
+                
+                for (const auto& patch : all_patches) {
+                    json patch_json;
+                    patch_json["address"] = HexAddress(patch.address);
+                    patch_json["original_bytes"] = patch.original_bytes_hex;
+                    patch_json["patched_bytes"] = patch.patched_bytes_hex;
+                    patch_json["description"] = patch.description;
+                    patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
+                    patch_json["is_assembly_patch"] = patch.is_assembly_patch;
+                    
+                    if (patch.is_assembly_patch) {
+                        patch_json["original_asm"] = patch.original_asm;
+                        patch_json["patched_asm"] = patch.patched_asm;
+                    }
+                    
+                    patches_json.push_back(patch_json);
+                }
+            }
+            
+            data["patches"] = patches_json;
+            data["count"] = patches_json.size();
+            
+            // Add statistics
+            auto stats = patch_manager_->get_statistics();
+            data["statistics"]["total_patches"] = stats.total_patches;
+            data["statistics"]["assembly_patches"] = stats.assembly_patches;
+            data["statistics"]["byte_patches"] = stats.byte_patches;
+            data["statistics"]["total_bytes_patched"] = stats.total_bytes_patched;
+            
+            return ToolResult::success(data);
+            
+        } catch (const std::exception& e) {
+            return ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Tool registry with type safety
 class ToolRegistry {
     std::unordered_map<std::string, std::unique_ptr<Tool>> tools;
     std::vector<std::string> tool_order;  // Maintain registration order
@@ -1154,7 +1457,7 @@ public:
         register_tool(std::make_unique<ToolType>(std::forward<Args>(args)...));
     }
 
-    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr) {
+    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr, std::shared_ptr<PatchManager> patch_manager = nullptr) {
         // Core navigation and info tools
         register_tool_type<GetXrefsTool>(memory, executor);
         register_tool_type<GetFunctionInfoTool>(memory, executor);
@@ -1189,6 +1492,14 @@ public:
         register_tool_type<SearchLocalTypesTool>(memory, executor);
         register_tool_type<GetLocalTypeTool>(memory, executor);
         register_tool_type<SetLocalTypeTool>(memory, executor);
+
+        // Patch tools
+        if (patch_manager) {
+            register_tool_type<PatchBytesTool>(memory, executor, patch_manager);
+            register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
+            register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
+            register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
+        }
 
         // Special tools
         register_tool_type<SubmitFinalReportTool>(memory, executor);
