@@ -100,19 +100,8 @@ BytePatchResult PatchManager::apply_byte_patch(ea_t address,
             return result;
         }
         
-        // Check instruction boundary
-        if (!validate_instruction_boundary(address, error_msg)) {
-            result.error_message = error_msg;
-            return result;
-        }
-        
-        // Additional alignment check for byte patches on RISC architectures
-        if ((PH.id == PLFM_ARM || PH.id == PLFM_PPC || 
-             PH.id == PLFM_MIPS || PH.id == PLFM_SPARC) && new_bytes.size() % 4 != 0) {
-            result.error_message = "Byte patch size (" + std::to_string(new_bytes.size()) + 
-                                 ") must be a multiple of 4 bytes on RISC architecture to maintain instruction alignment.";
-            return result;
-        }
+        // Skip instruction boundary check for byte patches - they should work on data too
+        // The alignment check below is also not needed for data patches
         
         // Verify original bytes match
         if (!verify_original_bytes(address, expected_bytes, error_msg)) {
