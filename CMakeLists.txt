@@ -106,7 +106,7 @@ endif()
 
 # Include directories
 include_directories(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${IDASDK_PATH}/include
         ${IDA_PLUGINS_PATH}/hexrays_sdk/include
         ${CMAKE_CURRENT_BINARY_DIR}  # For MOC generated files
@@ -145,31 +145,32 @@ include(cmake/BuildKeystone.cmake)
 
 # Source files
 set(SOURCES
-        src/actions.cpp
-        src/anthropic_api.cpp
-        src/deep_analysis.cpp
-        src/ida_utils.cpp
-        src/main_form.cpp
-        src/memory.cpp
-        src/patch_manager.cpp
-        src/plugin.cpp
-        src/qt_widgets.cpp
+        core/plugin.cpp
+        core/ida_utils.cpp
+        api/anthropic_api.cpp
+        analysis/actions.cpp
+        analysis/deep_analysis.cpp
+        analysis/memory.cpp
+        patching/patch_manager.cpp
+        ui/main_form.cpp
+        ui/qt_widgets.cpp
 )
 
 # Header files
 set(HEADERS
-        src/actions.h
-        src/agent.h
-        src/anthropic_api.h
-        src/common.h
-        src/deep_analysis.h
-        src/ida_utils.h
-        src/main_form.h
-        src/memory.h
-        src/message_types.h
-        src/patch_manager.h
-        src/tool_system.h
-        src/qt_widgets.h
+        core/common.h
+        core/ida_utils.h
+        core/ida_validators.h
+        api/anthropic_api.h
+        api/message_types.h
+        analysis/actions.h
+        analysis/deep_analysis.h
+        analysis/memory.h
+        patching/patch_manager.h
+        agent/agent.h
+        agent/tool_system.h
+        ui/main_form.h
+        ui/qt_widgets.h
 )
 
 # Create shared library (end in "64", won't be loaded if it doesn't)
@@ -225,16 +226,3 @@ message(STATUS "IDA Plugins Path: ${IDA_PLUGINS_PATH}")
 message(STATUS "Qt Directory: ${QTDIR}")
 message(STATUS "IDA Library Directory: ${IDA_LIBDIR}")
 message(STATUS "Plugin Extension: ${PLUGIN_EXT}")
-
-# sample executable
-add_executable(sample_file sample_file.cpp)
-set_target_properties(sample_file PROPERTIES
-    CMAKE_BUILD_TYPE Release
-)
-
-target_compile_options(sample_file PRIVATE
-    -O3          # Optimize
-    -g0          # No debug info
-    -DNDEBUG     # Release mode
-)
-
