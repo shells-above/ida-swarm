@@ -3,6 +3,7 @@
 //
 
 #include "tool_patch.h"
+#include "ida_utils.h"
 #include <ida.hpp>
 #include <sstream>
 #include <iomanip>
@@ -138,115 +139,113 @@ ToolResult PatchBytesTool::execute(const json& input) {
 }
 
 // RevertPatchTool implementation
-RevertPatchTool::RevertPatchTool() {}
-
-json RevertPatchTool::execute(const json& params) {
-    json result;
-    
+ToolResult RevertPatchTool::execute(const json& input) {
     if (!patch_manager_) {
-        result["success"] = false;
-        result["error"] = "Patch manager not initialized";
-        return result;
+        return ToolResult::failure("Patch manager not initialized");
     }
     
     try {
-        bool success = false;
+        // Execute in thread-safe context
+        auto result = IDAUtils::execute_sync_wrapper([&]() -> std::pair<bool, json> {
+            json data;
+            bool success = false;
+            
+            if (input.value("revert_all", false)) {
+                // Revert all patches
+                success = patch_manager_->revert_all();
+                data["reverted"] = "all";
+            } else if (input.contains("address")) {
+                // Revert single patch
+                ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
+                success = patch_manager_->revert_patch(address);
+                data["address"] = HexAddress(address);
+            } else if (input.contains("start_address") && input.contains("end_address")) {
+                // Revert range
+                ea_t start = ActionExecutor::parse_single_address_value(input.at("start_address"));
+                ea_t end = ActionExecutor::parse_single_address_value(input.at("end_address"));
+                success = patch_manager_->revert_range(start, end);
+                data["start_address"] = HexAddress(start);
+                data["end_address"] = HexAddress(end);
+            } else {
+                return {false, json{{"error", "Must specify address, range, or revert_all"}}};
+            }
+            
+            return {success, data};
+        }, MFF_WRITE);
         
-        if (params.value("revert_all", false)) {
-            // Revert all patches
-            success = patch_manager_->revert_all();
-            result["reverted"] = "all";
-        } else if (params.contains("address")) {
-            // Revert single patch
-            ea_t address = parse_hex_address(params["address"]);
-            success = patch_manager_->revert_patch(address);
-            result["address"] = HexAddress(address);
-        } else if (params.contains("start_address") && params.contains("end_address")) {
-            // Revert range
-            ea_t start = parse_hex_address(params["start_address"]);
-            ea_t end = parse_hex_address(params["end_address"]);
-            success = patch_manager_->revert_range(start, end);
-            result["start_address"] = HexAddress(start);
-            result["end_address"] = HexAddress(end);
+        if (result.first) {
+            return ToolResult::success(result.second);
         } else {
-            result["success"] = false;
-            result["error"] = "Must specify address, range, or revert_all";
-            return result;
-        }
-        
-        result["success"] = success;
-        if (!success) {
-            result["error"] = "No patches found to revert";
+            if (result.second.contains("error")) {
+                return ToolResult::failure(result.second["error"]);
+            }
+            return ToolResult::failure("No patches found to revert");
         }
         
     } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = std::string("Exception: ") + e.what();
+        return ToolResult::failure(std::string("Exception: ") + e.what());
     }
-    
-    return result;
 }
 
 // ListPatchesTool implementation
-ListPatchesTool::ListPatchesTool() {}
-
-json ListPatchesTool::execute(const json& params) {
-    json result;
-    
+ToolResult ListPatchesTool::execute(const json& input) {
     if (!patch_manager_) {
-        result["success"] = false;
-        result["error"] = "Patch manager not initialized";
-        return result;
+        return ToolResult::failure("Patch manager not initialized");
     }
     
     try {
-        std::vector<PatchEntry> patches;
-        
-        if (params.contains("start_address") && params.contains("end_address")) {
-            // List patches in range
-            ea_t start = parse_hex_address(params["start_address"]);
-            ea_t end = parse_hex_address(params["end_address"]);
-            patches = patch_manager_->get_patches_in_range(start, end);
-        } else {
-            // List all patches
-            patches = patch_manager_->get_all_patches();
-        }
-        
-        json patches_json = json::array();
-        for (const auto& patch : patches) {
-            json patch_json;
-            patch_json["address"] = HexAddress(patch.address);
-            patch_json["original_bytes"] = BytePatcher::bytes_to_hex_string(patch.original_bytes);
-            patch_json["patched_bytes"] = BytePatcher::bytes_to_hex_string(patch.patched_bytes);
-            patch_json["description"] = patch.description;
-            patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
-            patch_json["is_assembly_patch"] = patch.is_assembly_patch;
+        // Execute in thread-safe context
+        auto result = IDAUtils::execute_sync_wrapper([&]() -> json {
+            std::vector<PatchEntry> patches;
             
-            if (patch.is_assembly_patch) {
-                patch_json["original_asm"] = patch.original_asm;
-                patch_json["patched_asm"] = patch.patched_asm;
+            if (input.contains("start_address") && input.contains("end_address")) {
+                // List patches in range
+                ea_t start = ActionExecutor::parse_single_address_value(input.at("start_address"));
+                ea_t end = ActionExecutor::parse_single_address_value(input.at("end_address"));
+                patches = patch_manager_->get_patches_in_range(start, end);
+            } else {
+                // List all patches
+                patches = patch_manager_->get_all_patches();
             }
             
-            patches_json.push_back(patch_json);
-        }
+            json data;
+            json patches_json = json::array();
+            
+            for (const auto& patch : patches) {
+                json patch_json;
+                patch_json["address"] = HexAddress(patch.address);
+                patch_json["original_bytes"] = BytePatcher::bytes_to_hex_string(patch.original_bytes);
+                patch_json["patched_bytes"] = BytePatcher::bytes_to_hex_string(patch.patched_bytes);
+                patch_json["description"] = patch.description;
+                patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
+                patch_json["is_assembly_patch"] = patch.is_assembly_patch;
+                
+                if (patch.is_assembly_patch) {
+                    patch_json["original_asm"] = patch.original_asm;
+                    patch_json["patched_asm"] = patch.patched_asm;
+                }
+                
+                patches_json.push_back(patch_json);
+            }
+            
+            data["patches"] = patches_json;
+            data["count"] = patches.size();
+            
+            // Add statistics
+            auto stats = patch_manager_->get_statistics();
+            data["statistics"]["total_patches"] = stats.total_patches;
+            data["statistics"]["assembly_patches"] = stats.assembly_patches;
+            data["statistics"]["byte_patches"] = stats.byte_patches;
+            data["statistics"]["total_bytes_patched"] = stats.total_bytes_patched;
+            
+            return data;
+        });
         
-        result["success"] = true;
-        result["patches"] = patches_json;
-        result["count"] = patches.size();
-        
-        // Add statistics
-        auto stats = patch_manager_->get_statistics();
-        result["statistics"]["total_patches"] = stats.total_patches;
-        result["statistics"]["assembly_patches"] = stats.assembly_patches;
-        result["statistics"]["byte_patches"] = stats.byte_patches;
-        result["statistics"]["total_bytes_patched"] = stats.total_bytes_patched;
+        return ToolResult::success(result);
         
     } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = std::string("Exception: ") + e.what();
+        return ToolResult::failure(std::string("Exception: ") + e.what());
     }
-    
-    return result;
 }
 
 // PatchToolsManager implementation
@@ -255,45 +254,43 @@ PatchToolsManager::PatchToolsManager() {}
 PatchToolsManager::~PatchToolsManager() = default;
 
 bool PatchToolsManager::initialize() {
-    // Create managers
-    patch_manager_ = std::make_shared<PatchManager>();
-    if (!patch_manager_->initialize()) {
-        return false;
-    }
+    // Create managers - initialization happens in thread-safe context
+    bool init_success = IDAUtils::execute_sync_wrapper([&]() -> bool {
+        patch_manager_ = std::make_shared<PatchManager>();
+        if (!patch_manager_->initialize()) {
+            return false;
+        }
+        
+        assembly_patcher_ = std::make_shared<AssemblyPatcher>(patch_manager_.get());
+        if (!assembly_patcher_->initialize()) {
+            return false;
+        }
+        
+        byte_patcher_ = std::make_shared<BytePatcher>(patch_manager_.get());
+        
+        return true;
+    }, MFF_WRITE);
     
-    assembly_patcher_ = std::make_shared<AssemblyPatcher>(patch_manager_.get());
-    if (!assembly_patcher_->initialize()) {
-        return false;
-    }
-    
-    byte_patcher_ = std::make_shared<BytePatcher>(patch_manager_.get());
-    
-    return true;
+    return init_success;
 }
 
-void PatchToolsManager::register_tools(ToolSystem* tool_system) {
-    if (!tool_system) return;
+void PatchToolsManager::register_tools(ToolRegistry* tool_registry,
+                                     std::shared_ptr<BinaryMemory> memory,
+                                     std::shared_ptr<ActionExecutor> executor) {
+    if (!tool_registry) return;
     
-    // Create new tool instances for registration
-    auto assembly_tool = std::make_unique<PatchAssemblyTool>();
-    assembly_tool->set_patch_manager(patch_manager_);
-    assembly_tool->set_assembly_patcher(assembly_patcher_);
+    // Register patch tools
+    tool_registry->register_tool(std::make_unique<PatchAssemblyTool>(
+        memory, executor, patch_manager_, assembly_patcher_));
     
-    auto bytes_tool = std::make_unique<PatchBytesTool>();
-    bytes_tool->set_patch_manager(patch_manager_);
-    bytes_tool->set_byte_patcher(byte_patcher_);
+    tool_registry->register_tool(std::make_unique<PatchBytesTool>(
+        memory, executor, patch_manager_, byte_patcher_));
     
-    auto revert_tool = std::make_unique<RevertPatchTool>();
-    revert_tool->set_patch_manager(patch_manager_);
+    tool_registry->register_tool(std::make_unique<RevertPatchTool>(
+        memory, executor, patch_manager_));
     
-    auto list_tool = std::make_unique<ListPatchesTool>();
-    list_tool->set_patch_manager(patch_manager_);
-    
-    // Register tools
-    tool_system->register_tool(std::move(assembly_tool));
-    tool_system->register_tool(std::move(bytes_tool));
-    tool_system->register_tool(std::move(revert_tool));
-    tool_system->register_tool(std::move(list_tool));
+    tool_registry->register_tool(std::make_unique<ListPatchesTool>(
+        memory, executor, patch_manager_));
 }
 
-} // namespace llm_re
+} // namespace llm_re::tools

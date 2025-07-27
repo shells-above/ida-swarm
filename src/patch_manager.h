@@ -11,6 +11,9 @@
 #include <string>
 #include <chrono>
 #include <optional>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 namespace llm_re {
 
