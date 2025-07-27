@@ -13,7 +13,7 @@
 #include "actions.h"
 #include "qt_widgets.h"
 #include "deep_analysis.h"
-#include "tool_patch.h"
+#include "patch_manager.h"
 
 namespace llm_re {
 
@@ -195,7 +195,7 @@ private:
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     tools::ToolRegistry tool_registry_;                              // registry of tools that use the action executor
     api::AnthropicClient api_client_;                                // api client
-    std::unique_ptr<tools::PatchToolsManager> patch_tools_manager_;  // manages patch tools
+    std::shared_ptr<PatchManager> patch_manager_;  // simplified patch manager
 
     // State management
     AgentState state_;
@@ -407,15 +407,15 @@ public:
         task_semaphore_ = qsem_create(nullptr, 0);
 
         // Register all tools
-        tool_registry_.register_all_tools(memory_, executor_, config.agent.enable_deep_analysis, deep_analysis_manager_);
-
-        // Initialize and register patch tools
-        patch_tools_manager_ = std::make_unique<tools::PatchToolsManager>();
-        if (patch_tools_manager_->initialize()) {
-            patch_tools_manager_->register_tools(&tool_registry_, memory_, executor_);
-        } else {
-            send_log(LogLevel::WARNING, "Failed to initialize patch tools");
+        // Initialize patch manager
+        patch_manager_ = std::make_shared<PatchManager>();
+        if (!patch_manager_->initialize()) {
+            send_log(LogLevel::WARNING, "Failed to initialize patch manager");
+            patch_manager_ = nullptr;
         }
+
+        // Register all tools including patch tools
+        tool_registry_.register_all_tools(memory_, executor_, config.agent.enable_deep_analysis, deep_analysis_manager_, patch_manager_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
