@@ -140,16 +140,50 @@ endif()
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
+# Keystone Engine
+include(ExternalProject)
+set(KEYSTONE_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/keystone-prefix)
+set(KEYSTONE_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/keystone-install)
+
+ExternalProject_Add(keystone_external
+    GIT_REPOSITORY https://github.com/keystone-engine/keystone.git
+    GIT_TAG 0.9.2
+    PREFIX ${KEYSTONE_PREFIX}
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${KEYSTONE_INSTALL_DIR}
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64
+        -DBUILD_LIBS_ONLY=ON
+        -DCMAKE_CXX_STANDARD=11
+        -DCMAKE_CXX_FLAGS=-w
+    BUILD_BYPRODUCTS ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
+)
+
+# Create imported library
+add_library(keystone STATIC IMPORTED)
+set_target_properties(keystone PROPERTIES
+    IMPORTED_LOCATION ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
+)
+add_dependencies(keystone keystone_external)
+
+# Include Keystone headers
+include_directories(${KEYSTONE_INSTALL_DIR}/include)
+
 # Source files
 set(SOURCES
         src/actions.cpp
         src/anthropic_api.cpp
+        src/assembly_patcher.cpp
+        src/byte_patcher.cpp
         src/deep_analysis.cpp
         src/ida_utils.cpp
         src/main_form.cpp
         src/memory.cpp
+        src/patch_manager.cpp
         src/plugin.cpp
         src/qt_widgets.cpp
+        src/tool_patch.cpp
 )
 
 # Header files
@@ -157,12 +191,16 @@ set(HEADERS
         src/actions.h
         src/agent.h
         src/anthropic_api.h
+        src/assembly_patcher.h
+        src/byte_patcher.h
         src/common.h
         src/deep_analysis.h
         src/ida_utils.h
         src/main_form.h
         src/memory.h
         src/message_types.h
+        src/patch_manager.h
+        src/tool_patch.h
         src/tool_system.h
         src/qt_widgets.h
 )
@@ -187,6 +225,7 @@ target_link_libraries(ida_llm_agent64
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        keystone
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}

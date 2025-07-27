@@ -13,6 +13,7 @@
 #include "actions.h"
 #include "qt_widgets.h"
 #include "deep_analysis.h"
+#include "tool_patch.h"
 
 namespace llm_re {
 
@@ -192,8 +193,9 @@ private:
     std::shared_ptr<BinaryMemory> memory_;                        // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                    // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;  // manages deep analysis tasks
-    tools::ToolRegistry tool_registry_;         // registry of tools that use the action executor
-    api::AnthropicClient api_client_;           // api client
+    tools::ToolRegistry tool_registry_;                           // registry of tools that use the action executor
+    api::AnthropicClient api_client_;                             // api client
+    std::unique_ptr<PatchToolsManager> patch_tools_manager_;      // manages patch tools
 
     // State management
     AgentState state_;
@@ -406,6 +408,14 @@ public:
 
         // Register all tools
         tool_registry_.register_all_tools(memory_, executor_, config.agent.enable_deep_analysis, deep_analysis_manager_);
+
+        // Initialize and register patch tools
+        patch_tools_manager_ = std::make_unique<PatchToolsManager>();
+        if (patch_tools_manager_->initialize()) {
+            patch_tools_manager_->register_tools(&tool_registry_);
+        } else {
+            send_log(LogLevel::WARNING, "Failed to initialize patch tools");
+        }
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
