@@ -53,18 +53,14 @@ public:
     void clearSelection();
     QList<Message*> selectedMessages() const;
     
-    // Export
-    void exportConversation(const QString& format = "markdown");
-    void exportToPdf(const QString& fileName);
     void copySelectedMessages();
     
     // Settings
     void setBubbleStyle(MessageBubble::BubbleStyle style);
     void setCompactMode(bool compact);
-    void setShowAvatars(bool show);
     void setShowTimestamps(bool show);
     void setMaxBubbleWidth(int width);
-    void setInputMode(const QString& mode); // "single", "multi", "vim"
+    void setInputMode(const QString& mode); // "single", "multi"
     
     // Tool execution
     void startToolExecution(const QUuid& messageId, const QString& toolName);
@@ -92,7 +88,6 @@ signals:
     void selectionChanged();
     void conversationCleared();
     void searchRequested(const QString& text);
-    void exportRequested(const QString& format);
     void sessionChanged(const QString& sessionId);
     void unsavedChangesChanged(bool hasChanges);
     void toolExecutionRequested(const QString& toolName, const QJsonObject& params);
@@ -122,7 +117,6 @@ private slots:
     void onBubbleClicked(const QUuid& id);
     void onBubbleContextMenu(const QUuid& id, const QPoint& pos);
     void onBubbleLinkClicked(const QUrl& url);
-    void onBubbleReplyRequested(const QUuid& id);
     void onBubbleEditRequested(const QUuid& id);
     void onBubbleDeleteRequested(const QUuid& id);
     void onInputTextChanged();
@@ -171,11 +165,9 @@ private:
     QAction* newSessionAction_ = nullptr;
     QAction* saveSessionAction_ = nullptr;
     QAction* loadSessionAction_ = nullptr;
-    QAction* exportAction_ = nullptr;
     QAction* clearAction_ = nullptr;
     QAction* searchAction_ = nullptr;
     QAction* compactModeAction_ = nullptr;
-    QAction* showAvatarsAction_ = nullptr;
     QAction* showTimestampsAction_ = nullptr;
     
     // State
@@ -188,7 +180,6 @@ private:
     QString inputMode_ = "multi";
     MessageBubble::BubbleStyle bubbleStyle_ = MessageBubble::BubbleStyle::Modern;
     bool compactMode_ = false;
-    bool showAvatars_ = true;
     bool showTimestamps_ = true;
     int maxBubbleWidth_ = 600;
     
@@ -208,8 +199,7 @@ class ConversationInputArea : public BaseStyledWidget {
 public:
     enum InputMode {
         SingleLine,
-        MultiLine,
-        Vim
+        MultiLine
     };
     
     explicit ConversationInputArea(QWidget* parent = nullptr);
@@ -230,8 +220,6 @@ public:
     int wordCount() const;
     int charCount() const;
     
-    // Vim mode commands
-    void executeVimCommand(const QString& command);
     
 signals:
     void submitRequested();
@@ -251,30 +239,13 @@ protected:
 private:
     void setupSingleLineMode();
     void setupMultiLineMode();
-    void setupVimMode();
     void updateLayout();
-    bool handleVimKeyPress(QKeyEvent* event);
-    void processVimNormalModeKey(QKeyEvent* event);
-    void processVimInsertModeKey(QKeyEvent* event);
-    void executeVimMotion(const QString& motion);
-    void executeVimEdit(const QString& command);
-    void updateVimPlaceholder();
-    void updateVimStatusLabel();
     
     InputMode mode_ = MultiLine;
     QWidget* currentWidget_ = nullptr;
     QLineEdit* singleLineEdit_ = nullptr;
     QTextEdit* multiLineEdit_ = nullptr;
-    QTextEdit* vimEdit_ = nullptr;
-    QLabel* vimStatusLabel_ = nullptr;
-    
-    // Vim state
-    QString vimMode_ = "INSERT";
-    QString vimCommand_;
-    int vimRepeatCount_ = 1;
-    QString vimYankBuffer_;
-    QTextCursor vimSavedCursor_;
-    bool vimCommandMode_ = false;
+    QLabel* statusLabel_ = nullptr;
 };
 
 // Search bar widget
@@ -375,7 +346,6 @@ private:
     QComboBox* bubbleStyleCombo_ = nullptr;
     QSlider* fontSizeSlider_ = nullptr;
     QCheckBox* compactModeCheck_ = nullptr;
-    QCheckBox* showAvatarsCheck_ = nullptr;
     QCheckBox* showTimestampsCheck_ = nullptr;
     QCheckBox* autoSaveCheck_ = nullptr;
     QSpinBox* autoSaveIntervalSpin_ = nullptr;

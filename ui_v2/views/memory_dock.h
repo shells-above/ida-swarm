@@ -104,7 +104,6 @@ public:
     void setShowLabels(bool show);
     void setAnimated(bool animated);
     
-    void exportGraph(const QString& format);
     
 signals:
     void entryClicked(const QUuid& id);
@@ -158,7 +157,6 @@ public:
     void setGroupBy(const QString& field);
     void setMetric(const QString& metric);
     
-    void exportHeatmap(const QString& format);
     
 signals:
     void cellClicked(const QString& group, const QString& subgroup);
@@ -237,9 +235,6 @@ public:
     QStringList savedQueries() const;
     void deleteQuery(const QString& name);
     
-    // Export
-    void exportData(const QString& format = "json");
-    void exportSelection(const QString& format = "json");
     
     // Bulk operations
     void tagSelection(const QStringList& tags);
@@ -254,7 +249,6 @@ signals:
     void selectionChanged(const QList<QUuid>& ids);
     void viewModeChanged(const QString& mode);
     void filterChanged();
-    void dataExported(const QString& path);
     void navigateToAddress(const QString& address);
     void analyzeRequested(const QUuid& id);
     
@@ -269,7 +263,6 @@ private slots:
     void onViewModeChanged(int index);
     void onSearchTextChanged(const QString& text);
     void onAdvancedFilterClicked();
-    void onExportClicked();
     void onImportClicked();
     void onEntryActivated(const QModelIndex& index);
     void onSelectionChanged();
@@ -307,7 +300,6 @@ private:
     QComboBox* groupByCombo_ = nullptr;
     QAction* refreshAction_ = nullptr;
     QAction* importAction_ = nullptr;
-    QAction* exportAction_ = nullptr;
     QAction* filterAction_ = nullptr;
     QAction* bookmarkAction_ = nullptr;
     QAction* deleteAction_ = nullptr;

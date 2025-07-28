@@ -57,9 +57,6 @@ void Message::removeAttachment(const QString& id) {
     );
 }
 
-void Message::addReply(const QUuid& replyId) {
-    replies_.push_back(replyId);
-}
 
 bool Message::matchesSearch(const QString& searchText, bool includeContent,
                           bool includeTags, bool includeAttachments) const {
@@ -103,13 +100,10 @@ QJsonObject Message::toJson() const {
     meta["timestamp"] = metadata_.timestamp.toString(Qt::ISODate);
     meta["author"] = metadata_.author;
     meta["tags"] = QJsonArray::fromStringList(metadata_.tags);
-    meta["parentId"] = metadata_.parentId.toString();
     meta["isEdited"] = metadata_.isEdited;
     meta["editedAt"] = metadata_.editedAt.toString(Qt::ISODate);
     meta["isPinned"] = metadata_.isPinned;
     meta["isBookmarked"] = metadata_.isBookmarked;
-    meta["viewCount"] = metadata_.viewCount;
-    meta["reactions"] = QJsonArray::fromStringList(metadata_.reactions);
     meta["language"] = metadata_.language;
     meta["fileName"] = metadata_.fileName;
     meta["lineNumber"] = metadata_.lineNumber;
@@ -167,14 +161,6 @@ QJsonObject Message::toJson() const {
         obj["attachments"] = atts;
     }
     
-    // Replies
-    if (!replies_.empty()) {
-        QJsonArray reps;
-        for (const auto& reply : replies_) {
-            reps.append(reply.toString());
-        }
-        obj["replies"] = reps;
-    }
     
     return obj;
 }
@@ -194,13 +180,10 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         msg->metadata_.timestamp = QDateTime::fromString(meta["timestamp"].toString(), Qt::ISODate);
         msg->metadata_.author = meta["author"].toString();
         msg->metadata_.tags = meta["tags"].toArray().toVariantList().toStringList();
-        msg->metadata_.parentId = QUuid::fromString(meta["parentId"].toString());
         msg->metadata_.isEdited = meta["isEdited"].toBool();
         msg->metadata_.editedAt = QDateTime::fromString(meta["editedAt"].toString(), Qt::ISODate);
         msg->metadata_.isPinned = meta["isPinned"].toBool();
         msg->metadata_.isBookmarked = meta["isBookmarked"].toBool();
-        msg->metadata_.viewCount = meta["viewCount"].toInt();
-        msg->metadata_.reactions = meta["reactions"].toArray().toVariantList().toStringList();
         msg->metadata_.language = meta["language"].toString();
         msg->metadata_.fileName = meta["fileName"].toString();
         msg->metadata_.lineNumber = meta["lineNumber"].toInt();
@@ -259,13 +242,6 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         }
     }
     
-    // Replies
-    if (json.contains("replies")) {
-        QJsonArray reps = json["replies"].toArray();
-        for (const QJsonValue& val : reps) {
-            msg->replies_.push_back(QUuid::fromString(val.toString()));
-        }
-    }
     
     return msg;
 }
@@ -438,8 +414,6 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
         case SearchMatchRole:
             return searchMatches_.contains(msg->id());
             
-        case ThreadDepthRole:
-            return node->threadDepth;
             
         case IsEditedRole:
             return msg->metadata().isEdited;
@@ -450,11 +424,6 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
         case IsBookmarkedRole:
             return msg->metadata().isBookmarked;
             
-        case HasRepliesRole:
-            return msg->hasReplies();
-            
-        case ReactionCountRole:
-            return msg->metadata().reactions.count();
             
         case ProgressRole:
             if (msg->hasToolExecution()) {
@@ -530,22 +499,10 @@ void ConversationModel::addMessage(std::unique_ptr<Message> message) {
     QUuid id = message->id();
     node->message = std::move(message);
     
-    // Handle threading
-    if (!node->message->metadata().parentId.isNull()) {
-        MessageNode* parent = findNode(node->message->metadata().parentId);
-        if (parent) {
-            node->parent = parent;
-            parent->children.push_back(node.get());
-            parent->message->addReply(id);
-        }
-    } else {
-        roots_.push_back(node.get());
-    }
     
     nodeMap_[id] = node.get();
     nodes_.push_back(std::move(node));
     
-    buildThreadTree();
     applyFilters();
     
     endInsertRows();
@@ -569,7 +526,6 @@ void ConversationModel::insertMessage(int index, std::unique_ptr<Message> messag
     nodeMap_[id] = node.get();
     nodes_.insert(nodes_.begin() + index, std::move(node));
     
-    buildThreadTree();
     applyFilters();
     
     endInsertRows();
@@ -594,13 +550,6 @@ void ConversationModel::removeMessage(const QUuid& id) {
         beginRemoveRows(QModelIndex(), row, row);
     }
     
-    // Remove from parent's children
-    if (node->parent) {
-        auto& siblings = node->parent->children;
-        siblings.erase(std::remove(siblings.begin(), siblings.end(), node), siblings.end());
-    } else {
-        roots_.erase(std::remove(roots_.begin(), roots_.end(), node), roots_.end());
-    }
     
     // Remove from maps
     nodeMap_.erase(id);
@@ -614,7 +563,6 @@ void ConversationModel::removeMessage(const QUuid& id) {
         nodes_.end()
     );
     
-    buildThreadTree();
     applyFilters();
     
     if (row >= 0) {
@@ -750,53 +698,10 @@ void ConversationModel::addToolExecutionOutput(const QUuid& messageId, const QSt
     });
 }
 
-void ConversationModel::addReply(const QUuid& parentId, std::unique_ptr<Message> reply) {
-    reply->metadata().parentId = parentId;
-    addMessage(std::move(reply));
-}
 
-std::vector<const Message*> ConversationModel::getThread(const QUuid& rootId) const {
-    std::vector<const Message*> thread;
-    MessageNode* root = findNode(rootId);
-    if (!root) return thread;
-    
-    std::function<void(MessageNode*)> collectThread = [&](MessageNode* node) {
-        thread.push_back(node->message.get());
-        for (MessageNode* child : node->children) {
-            collectThread(child);
-        }
-    };
-    
-    collectThread(root);
-    return thread;
-}
 
-void ConversationModel::collapseThread(const QUuid& rootId) {
-    MessageNode* node = findNode(rootId);
-    if (!node || node->children.empty()) return;
-    
-    node->collapsed = true;
-    buildThreadTree();
-    applyFilters();
-    
-    emit threadCollapsed(rootId);
-}
 
-void ConversationModel::expandThread(const QUuid& rootId) {
-    MessageNode* node = findNode(rootId);
-    if (!node) return;
-    
-    node->collapsed = false;
-    buildThreadTree();
-    applyFilters();
-    
-    emit threadExpanded(rootId);
-}
 
-bool ConversationModel::isThreadCollapsed(const QUuid& rootId) const {
-    MessageNode* node = findNode(rootId);
-    return node ? node->collapsed : false;
-}
 
 void ConversationModel::setSearchFilter(const QString& searchText) {
     if (searchFilter_ == searchText) return;
@@ -871,186 +776,6 @@ std::vector<const Message*> ConversationModel::getBookmarkedMessages() const {
     return bookmarked;
 }
 
-void ConversationModel::addReaction(const QUuid& id, const QString& reaction) {
-    Message* msg = getMessage(id);
-    if (!msg) return;
-    
-    if (!msg->metadata().reactions.contains(reaction)) {
-        msg->metadata().reactions.append(reaction);
-        emitDataChangedForMessage(id);
-    }
-}
-
-void ConversationModel::removeReaction(const QUuid& id, const QString& reaction) {
-    Message* msg = getMessage(id);
-    if (!msg) return;
-    
-    msg->metadata().reactions.removeAll(reaction);
-    emitDataChangedForMessage(id);
-}
-
-QString ConversationModel::exportToMarkdown(bool includeMetadata) const {
-    QString markdown;
-    
-    for (const auto& node : visibleNodes_) {
-        const Message* msg = node->message.get();
-        if (!msg) continue;
-        
-        // Add thread indentation
-        for (int i = 0; i < node->threadDepth; ++i) {
-            markdown += "  ";
-        }
-        
-        // Role prefix
-        markdown += QString("**%1**: ").arg(msg->roleString());
-        
-        // Content
-        markdown += msg->content() + "\n";
-        
-        // Metadata
-        if (includeMetadata) {
-            markdown += QString("*%1*\n").arg(
-                msg->metadata().timestamp.toString("yyyy-MM-dd hh:mm:ss"));
-            
-            if (msg->metadata().isEdited) {
-                markdown += QString("*(edited %1)*\n").arg(
-                    msg->metadata().editedAt.toString("yyyy-MM-dd hh:mm:ss"));
-            }
-            
-            if (!msg->metadata().tags.isEmpty()) {
-                markdown += "Tags: " + msg->metadata().tags.join(", ") + "\n";
-            }
-        }
-        
-        // Tool execution
-        if (msg->hasToolExecution()) {
-            const ToolExecution* exec = msg->toolExecution();
-            markdown += QString("```\nTool: %1\nStatus: %2\n")
-                .arg(exec->toolName)
-                .arg(exec->state == ToolExecutionState::Completed ? "Success" : "Failed");
-            
-            if (!exec->output.isEmpty()) {
-                markdown += "Output:\n" + exec->output + "\n";
-            }
-            if (!exec->error.isEmpty()) {
-                markdown += "Error:\n" + exec->error + "\n";
-            }
-            markdown += "```\n";
-        }
-        
-        // Analysis entries
-        if (msg->hasAnalysis()) {
-            for (const auto& entry : msg->analysisEntries()) {
-                markdown += QString("\n**%1**: %2\n")
-                    .arg(entry.type)
-                    .arg(entry.content);
-                
-                if (!entry.functionName.isEmpty()) {
-                    markdown += QString("Function: %1 @ 0x%2\n")
-                        .arg(entry.functionName)
-                        .arg(entry.address, 0, 16);
-                }
-            }
-        }
-        
-        markdown += "\n---\n\n";
-    }
-    
-    return markdown;
-}
-
-QString ConversationModel::exportToHtml(bool includeStyles) const {
-    QString html;
-    
-    if (includeStyles) {
-        html = R"(
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    .message { margin: 10px 0; padding: 10px; border-radius: 8px; }
-    .user { background: #e3f2fd; margin-left: 20%; }
-    .assistant { background: #f5f5f5; margin-right: 20%; }
-    .system { background: #fff3e0; font-style: italic; }
-    .tool { background: #e8f5e9; font-family: monospace; }
-    .error { background: #ffebee; color: #c62828; }
-    .metadata { font-size: 0.8em; color: #666; margin-top: 5px; }
-    .analysis { background: #f3e5f5; padding: 5px; margin: 5px 0; }
-    pre { background: #263238; color: #aed581; padding: 10px; overflow-x: auto; }
-</style>
-</head>
-<body>
-)";
-    }
-    
-    for (const auto& node : visibleNodes_) {
-        const Message* msg = node->message.get();
-        if (!msg) continue;
-        
-        QString roleClass = msg->roleString().toLower();
-        html += QString("<div class='message %1'>").arg(roleClass);
-        
-        // Content
-        html += QString("<strong>%1:</strong> %2")
-            .arg(msg->roleString())
-            .arg(msg->htmlContent().isEmpty() ? 
-                 UIUtils::escapeHtml(msg->content()) : msg->htmlContent());
-        
-        // Metadata
-        html += QString("<div class='metadata'>%1</div>")
-            .arg(msg->metadata().timestamp.toString("yyyy-MM-dd hh:mm:ss"));
-        
-        // Tool execution
-        if (msg->hasToolExecution()) {
-            const ToolExecution* exec = msg->toolExecution();
-            html += "<pre>";
-            html += UIUtils::escapeHtml(QString("Tool: %1\nStatus: %2\n")
-                .arg(exec->toolName)
-                .arg(exec->state == ToolExecutionState::Completed ? "Success" : "Failed"));
-            
-            if (!exec->output.isEmpty()) {
-                html += UIUtils::escapeHtml("Output:\n" + exec->output);
-            }
-            html += "</pre>";
-        }
-        
-        // Analysis entries
-        if (msg->hasAnalysis()) {
-            for (const auto& entry : msg->analysisEntries()) {
-                html += QString("<div class='analysis'><strong>%1:</strong> %2</div>")
-                    .arg(entry.type)
-                    .arg(UIUtils::escapeHtml(entry.content));
-            }
-        }
-        
-        html += "</div>";
-    }
-    
-    if (includeStyles) {
-        html += "</body></html>";
-    }
-    
-    return html;
-}
-
-QJsonDocument ConversationModel::exportToJson() const {
-    QJsonArray messages;
-    
-    for (const auto& node : nodes_) {
-        if (node->message) {
-            messages.append(node->message->toJson());
-        }
-    }
-    
-    QJsonObject root;
-    root["version"] = 1;
-    root["exportDate"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    root["messages"] = messages;
-    root["messageCount"] = messages.size();
-    
-    return QJsonDocument(root);
-}
 
 void ConversationModel::importFromJson(const QJsonDocument& doc, bool append) {
     if (!doc.isObject()) return;
@@ -1179,60 +904,20 @@ void ConversationModel::redo() {
     }
 }
 
-void ConversationModel::buildThreadTree() {
-    // Clear existing tree structure
-    roots_.clear();
-    for (auto& node : nodes_) {
-        node->children.clear();
-        node->parent = nullptr;
-    }
-    
-    // Build parent-child relationships
-    for (auto& node : nodes_) {
-        if (!node->message) continue;
-        
-        if (node->message->metadata().parentId.isNull()) {
-            roots_.push_back(node.get());
-        } else {
-            MessageNode* parent = findNode(node->message->metadata().parentId);
-            if (parent) {
-                node->parent = parent;
-                parent->children.push_back(node.get());
-            } else {
-                // Orphaned message, treat as root
-                roots_.push_back(node.get());
-            }
-        }
-    }
-    
-    // Sort roots by timestamp
-    std::sort(roots_.begin(), roots_.end(), [](MessageNode* a, MessageNode* b) {
-        return a->message->metadata().timestamp < b->message->metadata().timestamp;
-    });
-    
-    // Update thread depths
-    for (MessageNode* root : roots_) {
-        updateThreadDepths(root, 0);
-    }
-}
 
-void ConversationModel::updateThreadDepths(MessageNode* node, int depth) {
-    if (!node) return;
-    
-    node->threadDepth = depth;
-    
-    for (MessageNode* child : node->children) {
-        updateThreadDepths(child, depth + 1);
-    }
-}
 
 void ConversationModel::applyFilters() {
     visibleNodes_.clear();
     searchMatches_.clear();
     
     // Collect all nodes that match filters
-    for (MessageNode* root : roots_) {
-        collectVisibleNodes(root, visibleNodes_);
+    for (auto& node : nodes_) {
+        if (node && node->message) {
+            node->matchesFilter = messageMatchesFilters(node->message.get());
+            if (node->matchesFilter) {
+                visibleNodes_.push_back(node.get());
+            }
+        }
     }
     
     // Update search matches
@@ -1284,22 +969,6 @@ ConversationModel::MessageNode* ConversationModel::findNode(const QUuid& id) con
     return it != nodeMap_.end() ? it->second : nullptr;
 }
 
-void ConversationModel::collectVisibleNodes(MessageNode* node, std::vector<MessageNode*>& visible) const {
-    if (!node || !node->message) return;
-    
-    node->matchesFilter = messageMatchesFilters(node->message.get());
-    
-    if (node->matchesFilter) {
-        visible.push_back(node);
-    }
-    
-    // Include children if not collapsed
-    if (!node->collapsed) {
-        for (MessageNode* child : node->children) {
-            collectVisibleNodes(child, visible);
-        }
-    }
-}
 
 void ConversationModel::emitDataChangedForMessage(const QUuid& id) {
     QModelIndex idx = indexForMessage(id);
@@ -1336,16 +1005,10 @@ void ConversationDelegate::paint(QPainter* painter, const QStyleOptionViewItem& 
         painter->fillRect(option.rect, option.palette.highlight());
     }
     
-    // Draw thread indicator
-    int threadDepth = index.data(ConversationModel::ThreadDepthRole).toInt();
-    bool hasReplies = index.data(ConversationModel::HasRepliesRole).toBool();
-    if (threadDepth > 0 || hasReplies) {
-        drawThreadIndicator(painter, option.rect, threadDepth, hasReplies);
-    }
     
     // Calculate bubble rect
     QRect bubbleRect = option.rect.adjusted(
-        Design::SPACING_MD + threadDepth * Design::SPACING_LG,
+        Design::SPACING_MD,
         Design::SPACING_SM,
         -Design::SPACING_MD,
         -Design::SPACING_SM
@@ -1382,12 +1045,6 @@ void ConversationDelegate::paint(QPainter* painter, const QStyleOptionViewItem& 
     if (msg->hasAttachments()) {
         QRect attachRect = bubbleRect.adjusted(0, bubbleRect.height() + Design::SPACING_SM, 0, 0);
         drawAttachments(painter, attachRect, msg->attachments());
-    }
-    
-    // Draw reactions
-    if (!msg->metadata().reactions.isEmpty()) {
-        QRect reactRect = bubbleRect.adjusted(0, bubbleRect.height() + Design::SPACING_XS, 0, 0);
-        drawReactions(painter, reactRect, msg->metadata().reactions);
     }
     
     painter->restore();
@@ -1429,11 +1086,6 @@ QSize ConversationDelegate::sizeHint(const QStyleOptionViewItem& option,
         height += 80; // Approximate height for attachment preview
     }
     
-    // Add space for reactions
-    if (!msg->metadata().reactions.isEmpty()) {
-        height += 30;
-    }
-    
     // Add vertical spacing
     height += 2 * Design::SPACING_SM;
     
@@ -1465,14 +1117,7 @@ bool ConversationDelegate::editorEvent(QEvent* event, QAbstractItemModel* model,
             }
         }
         
-        if (hitArea.startsWith("reaction:")) {
-            QString reaction = hitArea.mid(9);
-            emit reactionClicked(msg->id(), reaction);
-            return true;
-        } else if (hitArea == "reply") {
-            emit replyRequested(msg->id());
-            return true;
-        } else if (hitArea.startsWith("attachment:")) {
+        if (hitArea.startsWith("attachment:")) {
             QString attachmentId = hitArea.mid(11);
             emit attachmentClicked(msg->id(), attachmentId);
             return true;
@@ -1517,23 +1162,6 @@ void ConversationDelegate::drawMessageBubble(QPainter* painter, const QStyleOpti
     painter->setPen(Qt::NoPen);
     painter->setBrush(bubbleColor);
     painter->drawRoundedRect(bubbleRect, Design::RADIUS_MD, Design::RADIUS_MD);
-    
-    // Draw avatar if enabled
-    if (showAvatars_) {
-        QRect avatarRect(bubbleRect.left() - 40, bubbleRect.top(), 32, 32);
-        if (message->role() == MessageRole::User) {
-            avatarRect.moveLeft(bubbleRect.right() + 8);
-        }
-        
-        painter->setBrush(ThemeManager::darken(bubbleColor, 20));
-        painter->drawEllipse(avatarRect);
-        
-        // Draw initial
-        painter->setPen(colors.textInverse);
-        painter->setFont(theme.typography().body);
-        painter->drawText(avatarRect, Qt::AlignCenter, 
-                         message->roleString().left(1).toUpper());
-    }
     
     // Draw content
     QRect contentRect = bubbleRect.adjusted(
@@ -1801,56 +1429,6 @@ void ConversationDelegate::drawAttachments(QPainter* painter, const QRect& rect,
     }
 }
 
-void ConversationDelegate::drawReactions(QPainter* painter, const QRect& rect,
-                                       const QStringList& reactions) const {
-    const auto& theme = ThemeManager::instance();
-    const auto& colors = theme.colors();
-    
-    int x = rect.left();
-    
-    for (const QString& reaction : reactions) {
-        QRect reactionRect(x, rect.top(), 40, 24);
-        
-        // Draw reaction bubble
-        painter->setPen(QPen(colors.border, 1));
-        painter->setBrush(colors.surfaceHover);
-        painter->drawRoundedRect(reactionRect, 12, 12);
-        
-        // Draw reaction emoji
-        painter->setPen(colors.textPrimary);
-        painter->setFont(theme.typography().body);
-        painter->drawText(reactionRect, Qt::AlignCenter, reaction);
-        
-        // Store hit area
-        hitAreas_[reaction][QString("reaction:%1").arg(reaction)] = reactionRect;
-        
-        x += reactionRect.width() + Design::SPACING_XS;
-    }
-}
-
-void ConversationDelegate::drawThreadIndicator(QPainter* painter, const QRect& rect,
-                                             int depth, bool hasReplies) const {
-    const auto& colors = ThemeManager::instance().colors();
-    
-    // Draw vertical lines for thread depth
-    painter->setPen(QPen(colors.border, 1, Qt::DotLine));
-    
-    for (int i = 0; i < depth; ++i) {
-        int x = rect.left() + Design::SPACING_SM + i * Design::SPACING_LG;
-        painter->drawLine(x, rect.top(), x, rect.bottom());
-    }
-    
-    // Draw reply indicator
-    if (hasReplies) {
-        int x = rect.left() + Design::SPACING_SM + depth * Design::SPACING_LG;
-        int y = rect.center().y();
-        
-        painter->setPen(QPen(colors.primary, 2));
-        painter->drawLine(x, y, x + 10, y);
-        painter->drawLine(x + 7, y - 3, x + 10, y);
-        painter->drawLine(x + 7, y + 3, x + 10, y);
-    }
-}
 
 QRect ConversationDelegate::hitTest(const QPoint& pos, const QStyleOptionViewItem& option,
                                   const QModelIndex& index) const {

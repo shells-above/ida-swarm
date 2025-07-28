@@ -917,25 +917,6 @@ bool KeyboardNavigator::handleKeyPress(QKeyEvent* event)
         return true;
     }
     
-    // Vi-style navigation
-    if (viNavigationEnabled_ && modifiers == Qt::NoModifier) {
-        switch (key) {
-        case Qt::Key_J:
-            emit navigateNext();
-            return true;
-        case Qt::Key_K:
-            emit navigatePrevious();
-            return true;
-        case Qt::Key_H:
-            emit customNavigation("left");
-            return true;
-        case Qt::Key_L:
-            emit customNavigation("right");
-            return true;
-        default:
-            break;
-        }
-    }
     
     return false;
 }

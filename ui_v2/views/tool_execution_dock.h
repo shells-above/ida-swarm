@@ -226,9 +226,6 @@ public:
     void setStatusFilter(const QList<ToolExecution::Status>& statuses);
     void clearFilters();
     
-    // Export
-    void exportData(const QString& format = "json");
-    void exportMetrics(const QString& format = "csv");
     
     // Tool management
     void registerTool(const QString& name, const QString& description);

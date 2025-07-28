@@ -63,7 +63,6 @@ void MessageBubble::setupUI() {
     if (analysisWidget_) mainLayout->addWidget(analysisWidget_);
     if (attachmentsWidget_) mainLayout->addWidget(attachmentsWidget_);
     if (footerWidget_) mainLayout->addWidget(footerWidget_);
-    if (reactionsWidget_) mainLayout->addWidget(reactionsWidget_);
     
     createContextMenu();
 }
@@ -75,11 +74,6 @@ void MessageBubble::createHeader() {
     layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_SM, 
                               Design::SPACING_MD, Design::SPACING_SM);
     
-    // Avatar
-    avatarLabel_ = new QLabel(this);
-    avatarLabel_->setFixedSize(32, 32);
-    avatarLabel_->setScaledContents(true);
-    layout->addWidget(avatarLabel_);
     
     // Name and role
     auto* nameLayout = new QVBoxLayout();
@@ -152,21 +146,7 @@ void MessageBubble::createFooter() {
     layout->setSpacing(Design::SPACING_SM);
     layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, Design::SPACING_SM);
     
-    // Reply button
-    replyButton_ = new QToolButton(this);
-    replyButton_->setIcon(ThemeManager::instance().themedIcon("reply"));
-    replyButton_->setToolTip(tr("Reply"));
-    replyButton_->setAutoRaise(true);
-    connect(replyButton_, &QToolButton::clicked, this, &MessageBubble::onReplyAction);
-    layout->addWidget(replyButton_);
     
-    // Reaction button
-    reactionButton_ = new QToolButton(this);
-    reactionButton_->setIcon(ThemeManager::instance().themedIcon("emoji"));
-    reactionButton_->setToolTip(tr("Add Reaction"));
-    reactionButton_->setAutoRaise(true);
-    connect(reactionButton_, &QToolButton::clicked, this, &MessageBubble::onReactionAction);
-    layout->addWidget(reactionButton_);
     
     // Share button
     shareButton_ = new QToolButton(this);
@@ -274,29 +254,6 @@ void MessageBubble::createAttachmentsWidget() {
     attachmentsWidget_->setVisible(message_ && message_->hasAttachments());
 }
 
-void MessageBubble::createReactionsWidget() {
-    if (!reactionsWidget_) {
-        reactionsWidget_ = new QWidget(this);
-        auto* layout = new QHBoxLayout(reactionsWidget_);
-        layout->setSpacing(Design::SPACING_XS);
-        layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, Design::SPACING_SM);
-        
-        reactionBar_ = new QWidget(this);
-        auto* reactionLayout = new QHBoxLayout(reactionBar_);
-        reactionLayout->setSpacing(Design::SPACING_XS);
-        reactionLayout->setContentsMargins(0, 0, 0, 0);
-        
-        layout->addWidget(reactionBar_);
-        layout->addStretch();
-        
-        // Insert at the end
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(layout())) {
-            mainLayout->addWidget(reactionsWidget_);
-        }
-    }
-    
-    reactionsWidget_->setVisible(message_ && !message_->metadata().reactions.isEmpty());
-}
 
 void MessageBubble::createContextMenu() {
     contextMenu_ = new QMenu(this);
@@ -312,19 +269,6 @@ void MessageBubble::createContextMenu() {
     
     contextMenu_->addSeparator();
     
-    replyAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("reply"),
-                                          tr("Reply"), this, &MessageBubble::onReplyAction);
-    
-    // Reaction submenu
-    reactionMenu_ = contextMenu_->addMenu(ThemeManager::instance().themedIcon("emoji"),
-                                         tr("React"));
-    
-    QStringList commonReactions = {"👍", "👎", "❤️", "😂", "😮", "🎉", "🤔", "👀"};
-    for (const QString& reaction : commonReactions) {
-        reactionMenu_->addAction(reaction, [this, reaction]() {
-            emit reactionAdded(reaction);
-        });
-    }
     
     contextMenu_->addSeparator();
     
@@ -349,22 +293,6 @@ void MessageBubble::updateMessage() {
     sizeCacheDirty_ = true;
     
     // Update header
-    if (avatarLabel_) {
-        // Create avatar with initial
-        QPixmap avatar(32, 32);
-        avatar.fill(Qt::transparent);
-        QPainter p(&avatar);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setBrush(message_->roleColor());
-        p.setPen(Qt::NoPen);
-        p.drawEllipse(avatar.rect());
-        p.setPen(ThemeManager::instance().colors().textInverse);
-        p.setFont(ThemeManager::instance().typography().subtitle);
-        p.drawText(avatar.rect(), Qt::AlignCenter, 
-                  message_->roleString().left(1).toUpper());
-        avatarLabel_->setPixmap(avatar);
-        avatarLabel_->setVisible(showAvatar_);
-    }
     
     if (nameLabel_) {
         nameLabel_->setText(message_->metadata().author.isEmpty() ? 
@@ -402,11 +330,6 @@ void MessageBubble::updateMessage() {
         updateAttachmentsDisplay();
     }
     
-    // Update reactions
-    if (!message_->metadata().reactions.isEmpty()) {
-        createReactionsWidget();
-        updateReactionsDisplay();
-    }
     
     // Update context menu state
     if (pinAction_) {
@@ -592,55 +515,6 @@ void MessageBubble::updateAttachmentsDisplay() {
     qobject_cast<QHBoxLayout*>(attachmentsWidget_->layout())->addStretch();
 }
 
-void MessageBubble::updateReactionsDisplay() {
-    if (!message_ || !reactionBar_) return;
-    
-    // Clear existing reactions
-    QLayoutItem* item;
-    while ((item = reactionBar_->layout()->takeAt(0))) {
-        delete item->widget();
-        delete item;
-    }
-    
-    const auto& colors = ThemeManager::instance().colors();
-    
-    for (const QString& reaction : message_->metadata().reactions) {
-        auto* reactionButton = new QToolButton(this);
-        reactionButton->setText(reaction);
-        reactionButton->setAutoRaise(true);
-        reactionButton->setCheckable(true);
-        reactionButton->setChecked(true);
-        reactionButton->setStyleSheet(QString(
-            "QToolButton { "
-            "  background-color: %1; "
-            "  border: 1px solid %2; "
-            "  border-radius: 12px; "
-            "  padding: 2px 8px; "
-            "}"
-            "QToolButton:hover { "
-            "  background-color: %3; "
-            "}")
-            .arg(colors.surfaceHover.name())
-            .arg(colors.border.name())
-            .arg(colors.surface.name()));
-        
-        connect(reactionButton, &QToolButton::clicked, [this, reaction]() {
-            emit reactionRemoved(reaction);
-        });
-        
-        reactionBar_->layout()->addWidget(reactionButton);
-    }
-    
-    // Add "add reaction" button
-    auto* addReactionButton = new QToolButton(this);
-    addReactionButton->setText("+");
-    addReactionButton->setAutoRaise(true);
-    addReactionButton->setToolTip(tr("Add reaction"));
-    connect(addReactionButton, &QToolButton::clicked, 
-            this, &MessageBubble::onReactionAction);
-    
-    reactionBar_->layout()->addWidget(addReactionButton);
-}
 
 void MessageBubble::setBubbleStyle(BubbleStyle style) {
     if (bubbleStyle_ != style) {
@@ -697,15 +571,6 @@ void MessageBubble::applyBubbleStyle() {
     }
 }
 
-void MessageBubble::setShowAvatar(bool show) {
-    if (showAvatar_ != show) {
-        showAvatar_ = show;
-        if (avatarLabel_) {
-            avatarLabel_->setVisible(show);
-        }
-        updateLayout();
-    }
-}
 
 void MessageBubble::setShowTimestamp(bool show) {
     if (showTimestamp_ != show) {
@@ -929,43 +794,6 @@ QString MessageBubble::toPlainText() const {
     return message_->content();
 }
 
-QString MessageBubble::toMarkdown() const {
-    if (!message_) return QString();
-    
-    QString markdown;
-    
-    // Role and timestamp
-    markdown += QString("**%1** - %2\n\n").arg(message_->roleString())
-                .arg(message_->metadata().timestamp.toString("yyyy-MM-dd hh:mm:ss"));
-    
-    // Content
-    markdown += message_->content() + "\n";
-    
-    // Tool execution
-    if (message_->hasToolExecution()) {
-        const ToolExecution* exec = message_->toolExecution();
-        markdown += QString("\n```\nTool: %1\nStatus: %2\n")
-            .arg(exec->toolName)
-            .arg(exec->state == ToolExecutionState::Completed ? "Success" : "Failed");
-        
-        if (!exec->output.isEmpty()) {
-            markdown += "Output:\n" + exec->output + "\n";
-        }
-        markdown += "```\n";
-    }
-    
-    return markdown;
-}
-
-QString MessageBubble::toHtml() const {
-    if (!message_) return QString();
-    
-    if (contentViewer_ && contentViewer_->isVisible()) {
-        return contentViewer_->toHtml();
-    }
-    
-    return UIUtils::escapeHtml(message_->content());
-}
 
 void MessageBubble::setExpandProgress(qreal progress) {
     expandProgress_ = progress;
@@ -1087,8 +915,8 @@ void MessageBubble::enterEvent(QEvent* event) {
 void MessageBubble::leaveEvent(QEvent* event) {
     CardWidget::leaveEvent(event);
     
-    // Hide footer when not hovering (unless has reactions)
-    if (footerWidget_ && (!message_ || message_->metadata().reactions.isEmpty())) {
+    // Hide footer when not hovering
+    if (footerWidget_) {
         footerWidget_->setVisible(false);
     }
 }
@@ -1107,9 +935,6 @@ void MessageBubble::onCopyAction() {
     emit copyRequested();
 }
 
-void MessageBubble::onReplyAction() {
-    emit replyRequested();
-}
 
 void MessageBubble::onEditAction() {
     emit editRequested();
@@ -1133,20 +958,6 @@ void MessageBubble::onBookmarkAction() {
     }
 }
 
-void MessageBubble::onReactionAction() {
-    // Show reaction picker
-    auto* picker = new ReactionPicker(this);
-    connect(picker, &ReactionPicker::reactionSelected, [this](const QString& reaction) {
-        emit reactionAdded(reaction);
-        sender()->deleteLater();
-    });
-    
-    QPoint pos = reactionButton_ ? 
-        reactionButton_->mapToGlobal(QPoint(0, reactionButton_->height())) :
-        mapToGlobal(QPoint(width() / 2, height()));
-    
-    picker->popup(pos);
-}
 
 void MessageBubble::onAnimationFinished() {
     currentAnimation_ = nullptr;
@@ -1177,9 +988,6 @@ void MessageBubble::updateLayout() {
     updateGeometry();
 }
 
-void MessageBubble::paintAvatar(QPainter* painter, const QRect& rect) {
-    // Avatar is drawn in the label, this is for custom painting if needed
-}
 
 void MessageBubble::paintStatusIndicator(QPainter* painter, const QRect& rect) {
     if (!message_) return;
@@ -1742,139 +1550,5 @@ void TypingIndicator::paintContent(QPainter* painter) {
     }
 }
 
-// ReactionPicker implementation
-
-ReactionPicker::ReactionPicker(QWidget* parent)
-    : BaseStyledWidget(parent) {
-    
-    setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
-    setAttribute(Qt::WA_TranslucentBackground);
-    setShadowEnabled(true);
-    setBorderRadius(Design::RADIUS_MD);
-    
-    // Default reactions
-    reactions_ = {"👍", "👎", "❤️", "😂", "😮", "🎉", "🤔", "👀",
-                 "🔥", "🚀", "✅", "❌", "💡", "👏", "😱", "😎"};
-    
-    calculateLayout();
-}
-
-void ReactionPicker::setAvailableReactions(const QStringList& reactions) {
-    reactions_ = reactions;
-    calculateLayout();
-    update();
-}
-
-void ReactionPicker::setRecentReactions(const QStringList& recent) {
-    recentReactions_ = recent;
-    update();
-}
-
-void ReactionPicker::popup(const QPoint& pos) {
-    move(pos);
-    show();
-    raise();
-    activateWindow();
-}
-
-void ReactionPicker::hide() {
-    QWidget::hide();
-    hoveredReaction_.clear();
-}
-
-void ReactionPicker::paintEvent(QPaintEvent* event) {
-    BaseStyledWidget::paintEvent(event);
-    
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    const auto& colors = ThemeManager::instance().colors();
-    
-    // Draw reactions
-    for (auto it = reactionRects_.begin(); it != reactionRects_.end(); ++it) {
-        const QString& reaction = it.key();
-        const QRect& rect = it.value();
-        
-        // Draw hover background
-        if (reaction == hoveredReaction_) {
-            painter.setBrush(colors.surfaceHover);
-            painter.setPen(Qt::NoPen);
-            painter.drawRoundedRect(rect, Design::RADIUS_SM, Design::RADIUS_SM);
-        }
-        
-        // Draw reaction
-        painter.setPen(colors.textPrimary);
-        painter.setFont(QFont(ThemeManager::instance().typography().body.family(), 20));
-        painter.drawText(rect, Qt::AlignCenter, reaction);
-    }
-}
-
-void ReactionPicker::mousePressEvent(QMouseEvent* event) {
-    QString reaction = reactionAt(event->pos());
-    if (!reaction.isEmpty()) {
-        emit reactionSelected(reaction);
-        hide();
-    } else {
-        BaseStyledWidget::mousePressEvent(event);
-    }
-}
-
-void ReactionPicker::mouseMoveEvent(QMouseEvent* event) {
-    updateHover(event->pos());
-    BaseStyledWidget::mouseMoveEvent(event);
-}
-
-void ReactionPicker::leaveEvent(QEvent* event) {
-    hoveredReaction_.clear();
-    update();
-    BaseStyledWidget::leaveEvent(event);
-}
-
-void ReactionPicker::calculateLayout() {
-    reactionRects_.clear();
-    
-    int padding = Design::SPACING_SM;
-    int totalWidth = columns_ * itemSize_ + (columns_ - 1) * spacing_ + 2 * padding;
-    int rows = (reactions_.size() + columns_ - 1) / columns_;
-    int totalHeight = rows * itemSize_ + (rows - 1) * spacing_ + 2 * padding;
-    
-    resize(totalWidth, totalHeight);
-    
-    // Layout reactions in grid
-    int x = padding;
-    int y = padding;
-    int col = 0;
-    
-    for (const QString& reaction : reactions_) {
-        QRect rect(x, y, itemSize_, itemSize_);
-        reactionRects_[reaction] = rect;
-        
-        col++;
-        if (col >= columns_) {
-            col = 0;
-            x = padding;
-            y += itemSize_ + spacing_;
-        } else {
-            x += itemSize_ + spacing_;
-        }
-    }
-}
-
-QString ReactionPicker::reactionAt(const QPoint& pos) const {
-    for (auto it = reactionRects_.begin(); it != reactionRects_.end(); ++it) {
-        if (it.value().contains(pos)) {
-            return it.key();
-        }
-    }
-    return QString();
-}
-
-void ReactionPicker::updateHover(const QPoint& pos) {
-    QString reaction = reactionAt(pos);
-    if (reaction != hoveredReaction_) {
-        hoveredReaction_ = reaction;
-        update();
-    }
-}
 
 } // namespace llm_re::ui_v2

@@ -72,10 +72,6 @@ public:
     void scrollToBottom();
     void ensureVisible(int position);
     
-    // Export options
-    void exportToPdf(const QString& filePath);
-    void exportToHtml(const QString& filePath);
-    void print();
     
     // Customization
     void setLinkColor(const QColor& color);
@@ -89,9 +85,6 @@ public:
     void setImageCaching(bool cache) { imageCachingEnabled_ = cache; }
     void setMaxImageWidth(int width) { maxImageWidth_ = width; }
     
-    // Table of contents
-    QStringList tableOfContents() const;
-    void scrollToHeading(int level, const QString& text);
 
 signals:
     void linkClicked(const QUrl& url);
@@ -185,14 +178,12 @@ public:
     
     QString processMarkdown(const QString& markdown);
     void setCodeBlockTemplate(const QString& template_);
-    void setHeadingAnchors(bool enable) { enableHeadingAnchors_ = enable; }
     void setTableStyling(bool enable) { enableTableStyling_ = enable; }
     void setTaskListSupport(bool enable) { enableTaskLists_ = enable; }
     void setEmojiSupport(bool enable) { enableEmoji_ = enable; }
     void setFootnoteSupport(bool enable) { enableFootnotes_ = enable; }
     void setMathSupport(bool enable) { enableMath_ = enable; }
     
-    QStringList extractTableOfContents(const QString& markdown);
 
 private:
     QString preprocessMarkdown(const QString& markdown);
@@ -202,11 +193,9 @@ private:
     QString processEmoji(const QString& text);
     QString processFootnotes(const QString& text);
     QString processMath(const QString& text);
-    QString addHeadingAnchors(const QString& html);
-    QString styleTablesString styleTablesString styleTables(const QString& html);
+    QString styleTables(const QString& html);
     
     QString codeBlockTemplate_;
-    bool enableHeadingAnchors_ = true;
     bool enableTableStyling_ = true;
     bool enableTaskLists_ = true;
     bool enableEmoji_ = true;

@@ -244,9 +244,6 @@ public:
                               std::function<void()> action);
     void clearNavigationKeys();
     
-    // Vi-style navigation
-    void enableViNavigation(bool enable) { viNavigationEnabled_ = enable; }
-    bool isViNavigationEnabled() const { return viNavigationEnabled_; }
     
 signals:
     void navigateNext();
@@ -267,7 +264,6 @@ private:
     bool handleKeyPress(QKeyEvent* event);
     
     bool enabled_ = true;
-    bool viNavigationEnabled_ = false;
     
     QList<KeyBinding> keyBindings_;
     

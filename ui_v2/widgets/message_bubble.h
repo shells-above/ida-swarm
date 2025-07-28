@@ -52,8 +52,6 @@ public:
     void setMaxWidth(int width) { maxWidth_ = width; }
     int maxWidth() const { return maxWidth_; }
     
-    void setShowAvatar(bool show);
-    bool showAvatar() const { return showAvatar_; }
     
     void setShowTimestamp(bool show);
     bool showTimestamp() const { return showTimestamp_; }
@@ -94,10 +92,8 @@ public:
     void setSearchHighlight(const QString& text);
     void clearSearchHighlight();
     
-    // Export
+    // Text access
     QString toPlainText() const;
-    QString toMarkdown() const;
-    QString toHtml() const;
     
     // Animation properties
     qreal expandProgress() const { return expandProgress_; }
@@ -118,11 +114,8 @@ signals:
     void doubleClicked();
     void contextMenuRequested(const QPoint& pos);
     void linkClicked(const QUrl& url);
-    void replyRequested();
     void editRequested();
     void deleteRequested();
-    void reactionAdded(const QString& reaction);
-    void reactionRemoved(const QString& reaction);
     void attachmentClicked(const MessageAttachment& attachment);
     void toolOutputToggled();
     void copyRequested();
@@ -148,12 +141,10 @@ protected:
 private slots:
     void onContentLinkClicked(const QUrl& url);
     void onCopyAction();
-    void onReplyAction();
     void onEditAction();
     void onDeleteAction();
     void onPinAction();
     void onBookmarkAction();
-    void onReactionAction();
     void onAnimationFinished();
     void onToolProgressChanged();
     
@@ -165,18 +156,15 @@ private:
     void createToolExecutionWidget();
     void createAnalysisWidget();
     void createAttachmentsWidget();
-    void createReactionsWidget();
     void createContextMenu();
     void updateLayout();
     void updateContentDisplay();
     void updateToolExecutionDisplay();
     void updateAnalysisDisplay();
     void updateAttachmentsDisplay();
-    void updateReactionsDisplay();
     void applyBubbleStyle();
     void startAnimation();
     QRect calculateBubbleRect() const;
-    void paintAvatar(QPainter* painter, const QRect& rect);
     void paintStatusIndicator(QPainter* painter, const QRect& rect);
     void paintSelectionOverlay(QPainter* painter);
     
@@ -192,10 +180,8 @@ private:
     QWidget* toolWidget_ = nullptr;
     QWidget* analysisWidget_ = nullptr;
     QWidget* attachmentsWidget_ = nullptr;
-    QWidget* reactionsWidget_ = nullptr;
     
     // Header components
-    QLabel* avatarLabel_ = nullptr;
     QLabel* nameLabel_ = nullptr;
     QLabel* roleLabel_ = nullptr;
     QLabel* timestampLabel_ = nullptr;
@@ -213,16 +199,12 @@ private:
     QToolButton* toolOutputToggle_ = nullptr;
     
     // Footer components
-    QWidget* reactionBar_ = nullptr;
-    QToolButton* replyButton_ = nullptr;
-    QToolButton* reactionButton_ = nullptr;
     QToolButton* shareButton_ = nullptr;
     
     // State
     bool isSelected_ = false;
     bool isHighlighted_ = false;
     bool isExpanded_ = true;
-    bool showAvatar_ = true;
     bool showTimestamp_ = true;
     bool compactMode_ = false;
     bool interactive_ = true;
@@ -239,12 +221,10 @@ private:
     // Context menu
     QMenu* contextMenu_ = nullptr;
     QAction* copyAction_ = nullptr;
-    QAction* replyAction_ = nullptr;
     QAction* editAction_ = nullptr;
     QAction* deleteAction_ = nullptr;
     QAction* pinAction_ = nullptr;
     QAction* bookmarkAction_ = nullptr;
-    QMenu* reactionMenu_ = nullptr;
     
     // Metrics cache
     mutable QSize cachedSize_;
@@ -385,44 +365,5 @@ private:
     QPropertyAnimation* phaseAnimation_ = nullptr;
 };
 
-// Reaction picker widget
-class ReactionPicker : public BaseStyledWidget {
-    Q_OBJECT
-    
-public:
-    explicit ReactionPicker(QWidget* parent = nullptr);
-    
-    void setAvailableReactions(const QStringList& reactions);
-    QStringList availableReactions() const { return reactions_; }
-    
-    void setRecentReactions(const QStringList& recent);
-    QStringList recentReactions() const { return recentReactions_; }
-    
-    void popup(const QPoint& pos);
-    void hide();
-    
-signals:
-    void reactionSelected(const QString& reaction);
-    void customReactionRequested();
-    
-protected:
-    void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void leaveEvent(QEvent* event) override;
-    
-private:
-    void calculateLayout();
-    QString reactionAt(const QPoint& pos) const;
-    void updateHover(const QPoint& pos);
-    
-    QStringList reactions_;
-    QStringList recentReactions_;
-    QHash<QString, QRect> reactionRects_;
-    QString hoveredReaction_;
-    int columns_ = 8;
-    int itemSize_ = 32;
-    int spacing_ = 4;
-};
 
 } // namespace llm_re::ui_v2

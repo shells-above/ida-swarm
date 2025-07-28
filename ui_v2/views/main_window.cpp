@@ -366,11 +366,6 @@ void MainWindow::createActions() {
     saveAsAction_->setStatusTip(tr("Save the session with a new name"));
     connect(saveAsAction_, &QAction::triggered, this, &MainWindow::onFileSaveAs);
     
-    exportAction_ = new QAction(UIUtils::icon("document-export"), tr("&Export..."), this);
-    exportAction_->setShortcut(QKeySequence(tr("Ctrl+E")));
-    exportAction_->setStatusTip(tr("Export conversation, memory, or statistics"));
-    connect(exportAction_, &QAction::triggered, this, &MainWindow::onFileExport);
-    
     exitAction_ = new QAction(UIUtils::icon("application-exit"), tr("E&xit"), this);
     exitAction_->setShortcut(QKeySequence::Quit);
     exitAction_->setStatusTip(tr("Exit the application"));
@@ -472,8 +467,6 @@ void MainWindow::createActions() {
     keyboardShortcutsAction_->setShortcut(QKeySequence(tr("Ctrl+?")));
     connect(keyboardShortcutsAction_, &QAction::triggered, this, &MainWindow::onHelpKeyboardShortcuts);
     
-    checkUpdatesAction_ = new QAction(tr("Check for &Updates..."), this);
-    connect(checkUpdatesAction_, &QAction::triggered, this, &MainWindow::onHelpCheckUpdates);
     
     aboutAction_ = new QAction(tr("&About LLM RE Agent"), this);
     connect(aboutAction_, &QAction::triggered, this, &MainWindow::onHelpAbout);
@@ -509,8 +502,6 @@ void MainWindow::createMenus() {
     }
     updateRecentFiles();
     
-    fileMenu_->addSeparator();
-    fileMenu_->addAction(exportAction_);
     fileMenu_->addSeparator();
     fileMenu_->addAction(exitAction_);
     
@@ -612,7 +603,6 @@ void MainWindow::createMenus() {
     helpMenu_->addAction(documentationAction_);
     helpMenu_->addAction(keyboardShortcutsAction_);
     helpMenu_->addSeparator();
-    helpMenu_->addAction(checkUpdatesAction_);
     helpMenu_->addSeparator();
     helpMenu_->addAction(aboutAction_);
     helpMenu_->addAction(aboutQtAction_);
@@ -1263,171 +1253,6 @@ bool MainWindow::hasUnsavedChanges() const {
     return hasUnsavedChanges_ || conversationView_->hasUnsavedChanges();
 }
 
-void MainWindow::exportConversation() {
-    auto* dialog = new QDialog(this);
-    dialog->setWindowTitle(tr("Export Conversation"));
-    dialog->setModal(true);
-    
-    auto* layout = new QVBoxLayout(dialog);
-    
-    auto* formatGroup = new QGroupBox(tr("Export Format"), dialog);
-    auto* formatLayout = new QVBoxLayout(formatGroup);
-    
-    auto* markdownRadio = new QRadioButton(tr("Markdown (.md)"), formatGroup);
-    auto* htmlRadio = new QRadioButton(tr("HTML (.html)"), formatGroup);
-    auto* pdfRadio = new QRadioButton(tr("PDF (.pdf)"), formatGroup);
-    auto* jsonRadio = new QRadioButton(tr("JSON (.json)"), formatGroup);
-    
-    markdownRadio->setChecked(true);
-    formatLayout->addWidget(markdownRadio);
-    formatLayout->addWidget(htmlRadio);
-    formatLayout->addWidget(pdfRadio);
-    formatLayout->addWidget(jsonRadio);
-    
-    auto* optionsGroup = new QGroupBox(tr("Options"), dialog);
-    auto* optionsLayout = new QVBoxLayout(optionsGroup);
-    
-    auto* includeMetadataCheck = new QCheckBox(tr("Include metadata"), optionsGroup);
-    auto* includeTimestampsCheck = new QCheckBox(tr("Include timestamps"), optionsGroup);
-    auto* includeToolOutputCheck = new QCheckBox(tr("Include tool outputs"), optionsGroup);
-    
-    includeMetadataCheck->setChecked(true);
-    includeTimestampsCheck->setChecked(true);
-    includeToolOutputCheck->setChecked(true);
-    
-    optionsLayout->addWidget(includeMetadataCheck);
-    optionsLayout->addWidget(includeTimestampsCheck);
-    optionsLayout->addWidget(includeToolOutputCheck);
-    
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        dialog
-    );
-    
-    layout->addWidget(formatGroup);
-    layout->addWidget(optionsGroup);
-    layout->addWidget(buttonBox);
-    
-    connect(buttonBox, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    
-    if (dialog->exec() == QDialog::Accepted) {
-        QString format;
-        QString extension;
-        
-        if (markdownRadio->isChecked()) {
-            format = "markdown";
-            extension = "md";
-        } else if (htmlRadio->isChecked()) {
-            format = "html";
-            extension = "html";
-        } else if (pdfRadio->isChecked()) {
-            format = "pdf";
-            extension = "pdf";
-        } else if (jsonRadio->isChecked()) {
-            format = "json";
-            extension = "json";
-        }
-        
-        QString fileName = QFileDialog::getSaveFileName(
-            this, tr("Export Conversation"),
-            QDir::homePath() + "/conversation." + extension,
-            tr("%1 Files (*.%2);;All Files (*)").arg(format.toUpper()).arg(extension)
-        );
-        
-        if (!fileName.isEmpty()) {
-            conversationView_->exportConversation(format);
-            showStatusMessage(tr("Exported to: %1").arg(QFileInfo(fileName).fileName()));
-        }
-    }
-    
-    dialog->deleteLater();
-}
-
-void MainWindow::exportMemory() {
-    if (memoryDock_) {
-        memoryDock_->exportData();
-    }
-}
-
-void MainWindow::exportStatistics() {
-    if (statsDock_) {
-        statsDock_->exportData();
-    }
-}
-
-void MainWindow::exportAll() {
-    auto* dialog = new QDialog(this);
-    dialog->setWindowTitle(tr("Export All Data"));
-    dialog->setModal(true);
-    
-    auto* layout = new QVBoxLayout(dialog);
-    
-    auto* label = new QLabel(tr("Select data to export:"), dialog);
-    layout->addWidget(label);
-    
-    auto* conversationCheck = new QCheckBox(tr("Conversation"), dialog);
-    auto* memoryCheck = new QCheckBox(tr("Memory Analysis"), dialog);
-    auto* statsCheck = new QCheckBox(tr("Statistics"), dialog);
-    auto* settingsCheck = new QCheckBox(tr("Settings"), dialog);
-    
-    conversationCheck->setChecked(true);
-    memoryCheck->setChecked(true);
-    statsCheck->setChecked(true);
-    settingsCheck->setChecked(false);
-    
-    layout->addWidget(conversationCheck);
-    layout->addWidget(memoryCheck);
-    layout->addWidget(statsCheck);
-    layout->addWidget(settingsCheck);
-    
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        dialog
-    );
-    
-    layout->addWidget(buttonBox);
-    
-    connect(buttonBox, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    
-    if (dialog->exec() == QDialog::Accepted) {
-        QString dirName = QFileDialog::getExistingDirectory(
-            this, tr("Export Directory"),
-            QDir::homePath()
-        );
-        
-        if (!dirName.isEmpty()) {
-            QDir dir(dirName);
-            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-            QString exportDir = dir.filePath("llmre_export_" + timestamp);
-            
-            if (dir.mkdir("llmre_export_" + timestamp)) {
-                QDir exportPath(exportDir);
-                
-                if (conversationCheck->isChecked()) {
-                    conversationView_->exportConversation("json");
-                }
-                
-                if (memoryCheck->isChecked() && memoryDock_) {
-                    memoryDock_->exportData();
-                }
-                
-                if (statsCheck->isChecked() && statsDock_) {
-                    statsDock_->exportData();
-                }
-                
-                if (settingsCheck->isChecked()) {
-                    saveSettings();
-                }
-                
-                showStatusMessage(tr("All data exported to: %1").arg(exportDir));
-            }
-        }
-    }
-    
-    dialog->deleteLater();
-}
 
 void MainWindow::showSettings() {
     auto* dialog = new QDialog(this);
@@ -1476,10 +1301,6 @@ void MainWindow::showSettings() {
     auto* compactModeCheck = new QCheckBox(tr("Compact mode"), appearanceTab);
     compactModeCheck->setChecked(conversationView_->property("compactMode").toBool());
     appearanceLayout->addRow(compactModeCheck);
-    
-    auto* showAvatarsCheck = new QCheckBox(tr("Show avatars"), appearanceTab);
-    showAvatarsCheck->setChecked(true);
-    appearanceLayout->addRow(showAvatarsCheck);
     
     auto* showTimestampsCheck = new QCheckBox(tr("Show timestamps"), appearanceTab);
     showTimestampsCheck->setChecked(true);
@@ -1547,7 +1368,6 @@ void MainWindow::showSettings() {
         conversationView_->setAutoSaveEnabled(autoSaveCheck->isChecked());
         conversationView_->setAutoSaveInterval(autoSaveIntervalSpin->value());
         conversationView_->setCompactMode(compactModeCheck->isChecked());
-        conversationView_->setShowAvatars(showAvatarsCheck->isChecked());
         conversationView_->setShowTimestamps(showTimestampsCheck->isChecked());
         
         showTrayIcon_ = trayIconCheck->isChecked();
@@ -1803,17 +1623,6 @@ void MainWindow::toggleFullScreen() {
     emit fullScreenChanged(isFullScreen());
 }
 
-void MainWindow::checkForUpdates() {
-    showStatusMessage(tr("Checking for updates..."));
-    
-    // Simulate update check
-    QTimer::singleShot(2000, [this]() {
-        QMessageBox::information(
-            this, tr("Check for Updates"),
-            tr("You are using the latest version of LLM RE Agent.")
-        );
-    });
-}
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (closeToTray_ && trayIcon_ && trayIcon_->isVisible()) {
@@ -1926,9 +1735,6 @@ void MainWindow::onFileSaveAs() {
     saveSessionAs();
 }
 
-void MainWindow::onFileExport() {
-    exportConversation();
-}
 
 void MainWindow::onFileExit() {
     close();
@@ -2114,9 +1920,6 @@ void MainWindow::onHelpKeyboardShortcuts() {
     showKeyboardShortcuts();
 }
 
-void MainWindow::onHelpCheckUpdates() {
-    checkForUpdates();
-}
 
 void MainWindow::onHelpAbout() {
     showAbout();
@@ -2151,7 +1954,6 @@ void MainWindow::updateActions() {
     
     saveAction_->setEnabled(hasSession);
     saveAsAction_->setEnabled(hasSession);
-    exportAction_->setEnabled(hasSession);
     
     // Update edit actions based on focus
     QWidget* focusWidget = QApplication::focusWidget();

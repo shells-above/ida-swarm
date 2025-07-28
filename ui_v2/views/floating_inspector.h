@@ -105,8 +105,7 @@ public:
     void findNext();
     void findPrevious();
     
-    // Export
-    void exportContent(const QString& format = "txt");
+    // Clipboard
     void copyToClipboard();
     
 signals:

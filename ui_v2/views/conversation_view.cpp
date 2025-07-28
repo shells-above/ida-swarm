@@ -136,23 +136,6 @@ void ConversationView::createToolBar() {
     
     toolBar_->addSeparator();
     
-    // Export
-    exportAction_ = toolBar_->addAction(
-        ThemeManager::instance().themedIcon("export"),
-        tr("Export"), [this]() {
-            auto* menu = new QMenu(this);
-            menu->addAction(tr("Export as Markdown"), [this]() { 
-                exportConversation("markdown"); 
-            });
-            menu->addAction(tr("Export as HTML"), [this]() { 
-                exportConversation("html"); 
-            });
-            menu->addAction(tr("Export as PDF"), [this]() { 
-                exportConversation("pdf"); 
-            });
-            menu->exec(QCursor::pos());
-            menu->deleteLater();
-        });
     
     // Clear
     clearAction_ = toolBar_->addAction(
@@ -194,13 +177,6 @@ void ConversationView::createToolBar() {
         setCompactMode(checked);
     });
     
-    showAvatarsAction_ = viewMenu->addAction(tr("Show Avatars"));
-    showAvatarsAction_->setCheckable(true);
-    showAvatarsAction_->setChecked(showAvatars_);
-    connect(showAvatarsAction_, &QAction::toggled, [this](bool checked) {
-        setShowAvatars(checked);
-    });
-    
     showTimestampsAction_ = viewMenu->addAction(tr("Show Timestamps"));
     showTimestampsAction_->setCheckable(true);
     showTimestampsAction_->setChecked(showTimestamps_);
@@ -226,7 +202,6 @@ void ConversationView::createToolBar() {
     
     addInputModeAction(tr("Single Line"), "single");
     addInputModeAction(tr("Multi Line"), "multi");
-    addInputModeAction(tr("Vim"), "vim");
     
     viewMenu->addSeparator();
     
@@ -551,177 +526,6 @@ QList<Message*> ConversationView::selectedMessages() const {
     return messages;
 }
 
-void ConversationView::exportConversation(const QString& format) {
-    if (!model_) return;
-    
-    QString filter;
-    QString defaultExt;
-    
-    if (format == "markdown") {
-        filter = tr("Markdown Files (*.md)");
-        defaultExt = ".md";
-    } else if (format == "html") {
-        filter = tr("HTML Files (*.html)");
-        defaultExt = ".html";
-    } else if (format == "pdf") {
-        filter = tr("PDF Files (*.pdf)");
-        defaultExt = ".pdf";
-    } else {
-        return;
-    }
-    
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Conversation"), 
-        QString("conversation_%1%2").arg(sessionId_).arg(defaultExt),
-        filter);
-    
-    if (fileName.isEmpty()) return;
-    
-    QString content;
-    if (format == "markdown") {
-        content = model_->exportToMarkdown();
-    } else if (format == "html") {
-        content = model_->exportToHtml();
-    }
-    
-    if (format == "pdf") {
-        exportToPdf(fileName);
-    } else {
-        QFile file(fileName);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream stream(&file);
-            stream << content;
-            
-            statusLabel_->setText(tr("Exported to %1").arg(QFileInfo(fileName).fileName()));
-        } else {
-            QMessageBox::warning(this, tr("Export Failed"),
-                               tr("Failed to export conversation."));
-        }
-    }
-    
-    emit exportRequested(format);
-}
-
-void ConversationView::exportToPdf(const QString& fileName) {
-    if (!model_) return;
-    
-    QPdfWriter writer(fileName);
-    writer.setPageSize(QPageSize::A4);
-    writer.setPageMargins(QMarginsF(20, 20, 20, 20));
-    writer.setResolution(300);
-    
-    QPainter painter(&writer);
-    if (!painter.isActive()) {
-        QMessageBox::warning(this, tr("Export Failed"),
-                           tr("Failed to create PDF file."));
-        return;
-    }
-    
-    // Set up fonts
-    QFont titleFont("Arial", 16, QFont::Bold);
-    QFont headerFont("Arial", 12, QFont::Bold);
-    QFont normalFont("Arial", 10);
-    QFont codeFont("Consolas", 9);
-    
-    painter.setFont(titleFont);
-    
-    // Calculate page dimensions
-    const int pageWidth = painter.viewport().width();
-    const int pageHeight = painter.viewport().height();
-    const int margin = 50;
-    const int contentWidth = pageWidth - 2 * margin;
-    int yPos = margin;
-    
-    // Title
-    painter.drawText(QRect(margin, yPos, contentWidth, 50), 
-                    Qt::AlignCenter, 
-                    tr("Conversation Export - %1").arg(sessionId_));
-    yPos += 70;
-    
-    // Export timestamp
-    painter.setFont(normalFont);
-    painter.drawText(QRect(margin, yPos, contentWidth, 30),
-                    Qt::AlignRight,
-                    QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"));
-    yPos += 50;
-    
-    // Draw messages
-    int messageCount = model_->rowCount();
-    for (int i = 0; i < messageCount; ++i) {
-        QModelIndex index = model_->index(i, 0);
-        Message* msg = static_cast<Message*>(index.internalPointer());
-        if (!msg) continue;
-        
-        // Check if we need a new page
-        if (yPos > pageHeight - 200) {
-            writer.newPage();
-            yPos = margin;
-        }
-        
-        // Message header (role and timestamp)
-        painter.setFont(headerFont);
-        painter.setPen(msg->role() == Message::User ? QColor(0, 0, 200) : 
-                      msg->role() == Message::Assistant ? QColor(0, 150, 0) :
-                      msg->role() == Message::System ? QColor(150, 0, 0) :
-                      QColor(100, 100, 100));
-        
-        QString header = QString("%1 - %2")
-            .arg(msg->roleString())
-            .arg(msg->timestamp().toString("hh:mm:ss"));
-        painter.drawText(QRect(margin, yPos, contentWidth, 25), 
-                        Qt::AlignLeft, header);
-        yPos += 30;
-        
-        // Message content
-        painter.setFont(normalFont);
-        painter.setPen(Qt::black);
-        
-        // Handle content that might contain code blocks or formatting
-        QString content = msg->content();
-        
-        // Simple text wrapping
-        QStringList lines = content.split('\n');
-        for (const QString& line : lines) {
-            if (line.trimmed().startsWith("```")) {
-                // Code block
-                painter.setFont(codeFont);
-                painter.fillRect(QRect(margin, yPos, contentWidth, 20), 
-                               QColor(245, 245, 245));
-            } else if (line.trimmed().endsWith("```")) {
-                painter.setFont(normalFont);
-            }
-            
-            // Word wrap long lines
-            QRect boundingRect = painter.fontMetrics().boundingRect(
-                QRect(margin, yPos, contentWidth, 1000),
-                Qt::TextWordWrap,
-                line
-            );
-            
-            painter.drawText(QRect(margin, yPos, contentWidth, boundingRect.height()),
-                           Qt::TextWordWrap, line);
-            yPos += boundingRect.height() + 5;
-            
-            // Check for new page
-            if (yPos > pageHeight - 100) {
-                writer.newPage();
-                yPos = margin;
-            }
-        }
-        
-        // Add spacing between messages
-        yPos += 20;
-        
-        // Draw separator line
-        painter.setPen(QPen(QColor(200, 200, 200), 1));
-        painter.drawLine(margin, yPos, pageWidth - margin, yPos);
-        yPos += 20;
-    }
-    
-    painter.end();
-    
-    statusLabel_->setText(tr("Exported to %1").arg(QFileInfo(fileName).fileName()));
-}
 
 void ConversationView::copySelectedMessages() {
     QStringList texts;
@@ -748,17 +552,6 @@ void ConversationView::setCompactMode(bool compact) {
     markUnsavedChanges();
 }
 
-void ConversationView::setShowAvatars(bool show) {
-    showAvatars_ = show;
-    
-    // Update all bubbles
-    for (MessageBubble* bubble : bubbleContainer_->getAllBubbles()) {
-        bubble->setShowAvatar(show);
-    }
-    
-    showAvatarsAction_->setChecked(show);
-    markUnsavedChanges();
-}
 
 void ConversationView::setShowTimestamps(bool show) {
     showTimestamps_ = show;
@@ -788,8 +581,6 @@ void ConversationView::setInputMode(const QString& mode) {
                 inputArea_->setMode(ConversationInputArea::SingleLine);
             } else if (mode == "multi") {
                 inputArea_->setMode(ConversationInputArea::MultiLine);
-            } else if (mode == "vim") {
-                inputArea_->setMode(ConversationInputArea::Vim);
             }
         }
         
@@ -877,13 +668,13 @@ void ConversationView::saveSession(const QString& path) {
     session["id"] = sessionId_;
     session["version"] = 1;
     session["created"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    session["messages"] = model_->exportToJson().object()["messages"];
+    // Note: export functionality has been removed
+    // Session saving now only stores settings, not messages
     
     // Settings
     QJsonObject settings;
     settings["bubbleStyle"] = static_cast<int>(bubbleStyle_);
     settings["compactMode"] = compactMode_;
-    settings["showAvatars"] = showAvatars_;
     settings["showTimestamps"] = showTimestamps_;
     settings["maxBubbleWidth"] = maxBubbleWidth_;
     settings["inputMode"] = inputMode_;
@@ -949,7 +740,6 @@ void ConversationView::loadSession(const QString& path) {
         setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
             settings["bubbleStyle"].toInt()));
         setCompactMode(settings["compactMode"].toBool());
-        setShowAvatars(settings["showAvatars"].toBool());
         setShowTimestamps(settings["showTimestamps"].toBool());
         setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
         setInputMode(settings["inputMode"].toString());
@@ -1167,9 +957,6 @@ void ConversationView::onBubbleContextMenu(const QUuid& id, const QPoint& pos) {
     
     menu.addSeparator();
     
-    menu.addAction(ThemeManager::instance().themedIcon("reply"), tr("Reply"), [this, id]() {
-        onBubbleReplyRequested(id);
-    });
     
     auto* pinAction = menu.addAction(ThemeManager::instance().themedIcon("pin"), 
                                     msg->metadata().isPinned ? tr("Unpin") : tr("Pin"));
@@ -1196,18 +983,6 @@ void ConversationView::onBubbleLinkClicked(const QUrl& url) {
     emit linkClicked(url);
 }
 
-void ConversationView::onBubbleReplyRequested(const QUuid& id) {
-    Message* msg = model_->getMessage(id);
-    if (!msg) return;
-    
-    // Quote the message in input
-    QString quote = QString("> %1\n\n").arg(msg->content().split('\n').join("\n> "));
-    if (inputArea_) {
-        QString currentText = inputArea_->text();
-        inputArea_->setText(currentText + quote);
-        inputArea_->focus();
-    }
-}
 
 void ConversationView::onBubbleEditRequested(const QUuid& id) {
     Message* msg = model_->getMessage(id);
@@ -1528,8 +1303,6 @@ QString ConversationInputArea::text() const {
         return singleLineEdit_->text();
     } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
         return multiLineEdit_->toPlainText();
-    } else if (vimEdit_ && currentWidget_ == vimEdit_) {
-        return vimEdit_->toPlainText();
     }
     return QString();
 }
@@ -1539,15 +1312,12 @@ void ConversationInputArea::setText(const QString& text) {
         singleLineEdit_->setText(text);
     } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
         multiLineEdit_->setPlainText(text);
-    } else if (vimEdit_ && currentWidget_ == vimEdit_) {
-        vimEdit_->setPlainText(text);
     }
 }
 
 void ConversationInputArea::clear() {
     if (singleLineEdit_) singleLineEdit_->clear();
     if (multiLineEdit_) multiLineEdit_->clear();
-    if (vimEdit_) vimEdit_->clear();
 }
 
 void ConversationInputArea::focus() {
@@ -1561,16 +1331,12 @@ void ConversationInputArea::selectAll() {
         singleLineEdit_->selectAll();
     } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
         multiLineEdit_->selectAll();
-    } else if (vimEdit_ && currentWidget_ == vimEdit_) {
-        // For vim edit, switch to visual mode and select all
-        vimEdit_->executeCommand("ggVG");
     }
 }
 
 void ConversationInputArea::setPlaceholder(const QString& text) {
     if (singleLineEdit_) singleLineEdit_->setPlaceholderText(text);
     if (multiLineEdit_) multiLineEdit_->setPlaceholderText(text);
-    if (vimEdit_) vimEdit_->setPlaceholderText(text);
 }
 
 void ConversationInputArea::setMaxLength(int length) {
@@ -1588,42 +1354,6 @@ int ConversationInputArea::charCount() const {
     return text().length();
 }
 
-void ConversationInputArea::executeVimCommand(const QString& command) {
-    if (mode_ != Vim) return;
-    
-    // Remove the leading colon if present
-    QString cmd = command;
-    if (cmd.startsWith(":")) {
-        cmd = cmd.mid(1);
-    }
-    
-    // Handle vim commands
-    if (cmd == "w" || cmd == "wq") {
-        // :w - write/submit
-        emit submitRequested();
-        if (cmd == "wq") {
-            // Also clear for :wq
-            clear();
-        }
-    } else if (cmd == "q" || cmd == "q!") {
-        // :q - quit/cancel
-        clear();
-        emit cancelRequested();
-    } else if (cmd == "set number" || cmd == "set nu") {
-        // Could implement line numbers display
-        vimStatusLabel_->setText(tr("Line numbers not implemented"));
-    } else if (cmd.isEmpty()) {
-        // Just pressed enter on empty command
-        return;
-    } else {
-        // Unknown command
-        vimStatusLabel_->setText(tr("Unknown command: :%1").arg(cmd));
-    }
-    
-    // Clear command mode after execution
-    vimCommandMode_ = false;
-    vimCommand_.clear();
-}
 
 void ConversationInputArea::keyPressEvent(QKeyEvent* event) {
     // Mode-specific key handling will be implemented in the respective setup methods
@@ -1660,10 +1390,6 @@ bool ConversationInputArea::eventFilter(QObject* watched, QEvent* event) {
             }
         }
         
-        // Vim mode key handling
-        if (mode_ == Vim && watched == vimEdit_) {
-            return handleVimKeyPress(keyEvent);
-        }
     }
     
     return BaseStyledWidget::eventFilter(watched, event);
@@ -1691,8 +1417,6 @@ void ConversationInputArea::dropEvent(QDropEvent* event) {
     } else if (mimeData->hasText()) {
         if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
             multiLineEdit_->insertPlainText(mimeData->text());
-        } else if (vimEdit_ && currentWidget_ == vimEdit_) {
-            vimEdit_->insertPlainText(mimeData->text());
         } else if (singleLineEdit_ && currentWidget_ == singleLineEdit_) {
             singleLineEdit_->insert(mimeData->text());
         }
@@ -1735,11 +1459,6 @@ void ConversationInputArea::setupMultiLineMode() {
         currentWidget_->hide();
     }
     
-    // Remove vim status label if it exists
-    if (vimStatusLabel_) {
-        layout()->removeWidget(vimStatusLabel_);
-        vimStatusLabel_->hide();
-    }
     
     // Create container for multi-line mode
     auto* container = new QWidget(this);
@@ -1760,10 +1479,10 @@ void ConversationInputArea::setupMultiLineMode() {
             emit textChanged();
             
             // Update status with character/word count
-            if (vimStatusLabel_ && vimStatusLabel_->isVisible()) {
+            if (statusLabel_ && statusLabel_->isVisible()) {
                 int words = wordCount();
                 int chars = charCount();
-                vimStatusLabel_->setText(tr("%1 words, %2 chars").arg(words).arg(chars));
+                statusLabel_->setText(tr("%1 words, %2 chars").arg(words).arg(chars));
             }
         });
         
@@ -1774,18 +1493,18 @@ void ConversationInputArea::setupMultiLineMode() {
     containerLayout->addWidget(multiLineEdit_);
     
     // Create status bar for character/word count
-    if (!vimStatusLabel_) {
-        vimStatusLabel_ = new QLabel(this);
-        vimStatusLabel_->setFont(ThemeManager::instance().typography().caption);
-        vimStatusLabel_->setAlignment(Qt::AlignRight);
+    if (!statusLabel_) {
+        statusLabel_ = new QLabel(this);
+        statusLabel_->setFont(ThemeManager::instance().typography().caption);
+        statusLabel_->setAlignment(Qt::AlignRight);
         
         const auto& colors = ThemeManager::instance().colors();
-        vimStatusLabel_->setStyleSheet(QString("QLabel { color: %1; padding: 2px 5px; }")
+        statusLabel_->setStyleSheet(QString("QLabel { color: %1; padding: 2px 5px; }")
                                      .arg(colors.textSecondary.name()));
     }
     
-    vimStatusLabel_->setText(tr("0 words, 0 chars"));
-    containerLayout->addWidget(vimStatusLabel_);
+    statusLabel_->setText(tr("0 words, 0 chars"));
+    containerLayout->addWidget(statusLabel_);
     
     // Add container to main layout
     layout()->addWidget(container);
@@ -1796,109 +1515,6 @@ void ConversationInputArea::setupMultiLineMode() {
     multiLineEdit_->setFocus();
 }
 
-void ConversationInputArea::setupVimMode() {
-    // Remove current widget
-    if (currentWidget_) {
-        layout()->removeWidget(currentWidget_);
-        currentWidget_->hide();
-    }
-    
-    // Create container for vim mode
-    auto* container = new QWidget(this);
-    auto* containerLayout = new QVBoxLayout(container);
-    containerLayout->setSpacing(0);
-    containerLayout->setContentsMargins(0, 0, 0, 0);
-    
-    // Create vim text edit if needed
-    if (!vimEdit_) {
-        vimEdit_ = new QTextEdit(this);
-        vimEdit_->setAcceptRichText(false);
-        vimEdit_->setMinimumHeight(60);
-        vimEdit_->setMaximumHeight(200);
-        
-        // Set monospace font for vim mode
-        QFont font("Consolas, Monaco, monospace");
-        font.setPointSize(10);
-        vimEdit_->setFont(font);
-        
-        connect(vimEdit_, &QTextEdit::textChanged, [this]() {
-            emit textChanged();
-        });
-        
-        // Install event filter for vim key handling
-        vimEdit_->installEventFilter(this);
-    }
-    
-    // Update placeholder based on mode
-    updateVimPlaceholder();
-    
-    containerLayout->addWidget(vimEdit_);
-    
-    // Create vim status bar
-    if (!vimStatusLabel_) {
-        vimStatusLabel_ = new QLabel(this);
-        vimStatusLabel_->setFont(ThemeManager::instance().typography().caption);
-        vimStatusLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        
-        const auto& colors = ThemeManager::instance().colors();
-        vimStatusLabel_->setStyleSheet(QString(
-            "QLabel { background-color: %1; color: %2; padding: 4px 8px; border-top: 1px solid %3; }"
-        ).arg(colors.surface.name())
-         .arg(colors.textPrimary.name())
-         .arg(colors.border.name()));
-    }
-    
-    updateVimStatusLabel();
-    containerLayout->addWidget(vimStatusLabel_);
-    
-    // Add container to main layout
-    layout()->addWidget(container);
-    container->show();
-    currentWidget_ = container;
-    
-    // Set initial vim mode to INSERT
-    vimMode_ = "INSERT";
-    vimCommandMode_ = false;
-    vimCommand_.clear();
-    
-    // Set focus
-    vimEdit_->setFocus();
-}
-
-void ConversationInputArea::updateVimPlaceholder() {
-    if (!vimEdit_) return;
-    
-    if (vimMode_ == "INSERT") {
-        vimEdit_->setPlaceholderText(tr("-- INSERT -- Type your message..."));
-    } else {
-        vimEdit_->setPlaceholderText(tr("-- NORMAL -- Press 'i' to insert, ':w' to send"));
-    }
-}
-
-void ConversationInputArea::updateVimStatusLabel() {
-    if (!vimStatusLabel_) return;
-    
-    QString status;
-    if (vimCommandMode_) {
-        status = ":" + vimCommand_;
-    } else if (vimMode_ == "INSERT") {
-        status = "-- INSERT --";
-    } else if (vimMode_ == "NORMAL") {
-        status = "-- NORMAL --";
-    } else if (vimMode_ == "VISUAL") {
-        status = "-- VISUAL --";
-    }
-    
-    // Add position info
-    if (vimEdit_) {
-        QTextCursor cursor = vimEdit_->textCursor();
-        int line = cursor.blockNumber() + 1;
-        int col = cursor.columnNumber() + 1;
-        status += QString("  %1:%2").arg(line).arg(col);
-    }
-    
-    vimStatusLabel_->setText(status);
-}
 
 void ConversationInputArea::updateLayout() {
     switch (mode_) {
@@ -1908,210 +1524,8 @@ void ConversationInputArea::updateLayout() {
         case MultiLine:
             setupMultiLineMode();
             break;
-        case Vim:
-            setupVimMode();
-            break;
     }
 }
 
-bool ConversationInputArea::handleVimKeyPress(QKeyEvent* event) {
-    if (!vimEdit_) return false;
-    
-    // Update status label on any key press
-    updateVimStatusLabel();
-    
-    if (vimMode_ == "INSERT") {
-        processVimInsertModeKey(event);
-        return false; // Let default handling process most keys in insert mode
-    } else if (vimMode_ == "NORMAL") {
-        processVimNormalModeKey(event);
-        return true; // Consume all keys in normal mode
-    }
-    
-    return false;
-}
-
-void ConversationInputArea::processVimInsertModeKey(QKeyEvent* event) {
-    // ESC to switch to normal mode
-    if (event->key() == Qt::Key_Escape) {
-        vimMode_ = "NORMAL";
-        updateVimPlaceholder();
-        updateVimStatusLabel();
-        
-        // Move cursor back one position (vim behavior)
-        QTextCursor cursor = vimEdit_->textCursor();
-        if (cursor.position() > 0) {
-            cursor.movePosition(QTextCursor::Left);
-            vimEdit_->setTextCursor(cursor);
-        }
-    }
-}
-
-void ConversationInputArea::processVimNormalModeKey(QKeyEvent* event) {
-    QTextCursor cursor = vimEdit_->textCursor();
-    
-    // Command mode
-    if (vimCommandMode_) {
-        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-            // Execute command
-            executeVimCommand(vimCommand_);
-            vimCommandMode_ = false;
-            vimCommand_.clear();
-            updateVimStatusLabel();
-        } else if (event->key() == Qt::Key_Escape) {
-            // Cancel command
-            vimCommandMode_ = false;
-            vimCommand_.clear();
-            updateVimStatusLabel();
-        } else if (event->key() == Qt::Key_Backspace) {
-            if (!vimCommand_.isEmpty()) {
-                vimCommand_.chop(1);
-                updateVimStatusLabel();
-            } else {
-                vimCommandMode_ = false;
-                updateVimStatusLabel();
-            }
-        } else if (!event->text().isEmpty()) {
-            vimCommand_ += event->text();
-            updateVimStatusLabel();
-        }
-        return;
-    }
-    
-    // Start command mode
-    if (event->key() == Qt::Key_Colon) {
-        vimCommandMode_ = true;
-        vimCommand_.clear();
-        updateVimStatusLabel();
-        return;
-    }
-    
-    // Mode switching
-    switch (event->key()) {
-        case Qt::Key_I:
-            vimMode_ = "INSERT";
-            updateVimPlaceholder();
-            updateVimStatusLabel();
-            return;
-            
-        case Qt::Key_A:
-            vimMode_ = "INSERT";
-            cursor.movePosition(QTextCursor::Right);
-            vimEdit_->setTextCursor(cursor);
-            updateVimPlaceholder();
-            updateVimStatusLabel();
-            return;
-            
-        case Qt::Key_O:
-            vimMode_ = "INSERT";
-            cursor.movePosition(QTextCursor::EndOfBlock);
-            vimEdit_->setTextCursor(cursor);
-            vimEdit_->insertPlainText("\n");
-            updateVimPlaceholder();
-            updateVimStatusLabel();
-            return;
-    }
-    
-    // Movement commands
-    switch (event->key()) {
-        case Qt::Key_H:
-            cursor.movePosition(QTextCursor::Left);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_J:
-            cursor.movePosition(QTextCursor::Down);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_K:
-            cursor.movePosition(QTextCursor::Up);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_L:
-            cursor.movePosition(QTextCursor::Right);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_W:
-            cursor.movePosition(QTextCursor::NextWord);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_B:
-            cursor.movePosition(QTextCursor::PreviousWord);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_0:
-            cursor.movePosition(QTextCursor::StartOfBlock);
-            vimEdit_->setTextCursor(cursor);
-            break;
-            
-        case Qt::Key_Dollar:
-            cursor.movePosition(QTextCursor::EndOfBlock);
-            vimEdit_->setTextCursor(cursor);
-            break;
-    }
-    
-    // Editing commands
-    QString key = event->text().toLower();
-    if (key == "x") {
-        // Delete character under cursor
-        cursor.deleteChar();
-    } else if (key == "d" && event->modifiers() == Qt::NoModifier) {
-        // Check for dd (delete line)
-        static bool lastWasD = false;
-        static QTime lastDTime;
-        
-        if (lastWasD && lastDTime.elapsed() < 500) {
-            // dd - delete line
-            cursor.movePosition(QTextCursor::StartOfBlock);
-            cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
-            cursor.movePosition(QTextCursor::Right, QTextCursor::KeepAnchor); // Include newline
-            vimYankBuffer_ = cursor.selectedText();
-            cursor.removeSelectedText();
-            lastWasD = false;
-        } else {
-            lastWasD = true;
-            lastDTime.start();
-        }
-    } else if (key == "y" && event->modifiers() == Qt::NoModifier) {
-        // Check for yy (yank line)
-        static bool lastWasY = false;
-        static QTime lastYTime;
-        
-        if (lastWasY && lastYTime.elapsed() < 500) {
-            // yy - yank line
-            cursor.movePosition(QTextCursor::StartOfBlock);
-            cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
-            cursor.movePosition(QTextCursor::Right, QTextCursor::KeepAnchor); // Include newline
-            vimYankBuffer_ = cursor.selectedText();
-            cursor.clearSelection();
-            vimEdit_->setTextCursor(cursor);
-            lastWasY = false;
-        } else {
-            lastWasY = true;
-            lastYTime.start();
-        }
-    } else if (key == "p") {
-        // Paste after cursor
-        if (!vimYankBuffer_.isEmpty()) {
-            cursor.movePosition(QTextCursor::Right);
-            cursor.insertText(vimYankBuffer_);
-        }
-    }
-    
-    updateVimStatusLabel();
-}
-
-void ConversationInputArea::executeVimMotion(const QString& motion) {
-    // Implement more complex vim motions if needed
-}
-
-void ConversationInputArea::executeVimEdit(const QString& command) {
-    // Implement more complex vim edit commands if needed
-}
 
 } // namespace llm_re::ui_v2

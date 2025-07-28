@@ -49,7 +49,6 @@ public:
     
     virtual void setData(const QList<StatDataPoint>& data) = 0;
     virtual void refresh() = 0;
-    virtual void exportChart(const QString& format);
     
     QChart* chart() const { return chart_; }
     
@@ -369,10 +368,6 @@ public:
     void setCurrentView(const QString& view);
     void refreshAll();
     
-    // Export
-    void exportData(const QString& format = "csv");
-    void exportCharts(const QString& format = "png");
-    void generateReport(const QString& format = "pdf");
     
     // Custom metrics
     void registerCustomMetric(const QString& name, const QString& unit);
@@ -386,7 +381,6 @@ signals:
     void dataPointClicked(const StatDataPoint& point);
     void timeRangeChanged(const QDateTime& start, const QDateTime& end);
     void viewChanged(const QString& view);
-    void reportGenerated(const QString& path);
     void customMetricUpdated(const QString& name, double value);
     
 public slots:
@@ -400,7 +394,6 @@ private slots:
     void onTimeRangeChanged();
     void onViewTabChanged(int index);
     void onRefreshClicked();
-    void onExportClicked();
     void onSettingsClicked();
     void onChartDataPointClicked(const StatDataPoint& point);
     void updateRealtimeMetrics();
@@ -451,7 +444,6 @@ private:
     
     // Actions
     QAction* refreshAction_ = nullptr;
-    QAction* exportAction_ = nullptr;
     QAction* settingsAction_ = nullptr;
     QAction* realtimeAction_ = nullptr;
     
@@ -486,8 +478,6 @@ public:
     void setChartAnimationsEnabled(bool enabled);
     bool chartAnimationsEnabled() const;
     
-    void setExportFormats(const QStringList& formats);
-    QStringList exportFormats() const;
     
 private:
     void setupUI();

@@ -21,8 +21,6 @@
 #include <QSet>
 #include <QApplication>
 #include <QClipboard>
-#include <QPrinter>
-#include <QPrintDialog>
 #include <QFileDialog>
 #include <QTextDocumentWriter>
 #include <QDesktopServices>
@@ -820,28 +818,6 @@ void MarkdownViewer::ensureVisible(int position) {
     textBrowser_->ensureCursorVisible();
 }
 
-void MarkdownViewer::exportToPdf(const QString& filePath) {
-    QPrinter printer(QPrinter::HighResolution);
-    printer.setOutputFormat(QPrinter::PdfFormat);
-    printer.setOutputFileName(filePath);
-    textBrowser_->document()->print(&printer);
-}
-
-void MarkdownViewer::exportToHtml(const QString& filePath) {
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream stream(&file);
-        stream << toHtml();
-    }
-}
-
-void MarkdownViewer::print() {
-    QPrinter printer(QPrinter::HighResolution);
-    QPrintDialog dialog(&printer, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        textBrowser_->document()->print(&printer);
-    }
-}
 
 void MarkdownViewer::setLinkColor(const QColor& color) {
     // Update stylesheet with new link color
@@ -866,44 +842,6 @@ void MarkdownViewer::setDocumentMargins(const QMargins& margins) {
     textBrowser_->document()->setDocumentMargin(margins.top());
 }
 
-QStringList MarkdownViewer::tableOfContents() const {
-    if (currentContentType_ == "markdown") {
-        return markdownProcessor_->extractTableOfContents(currentContent_);
-    }
-    
-    // Extract from HTML
-    QStringList toc;
-    QTextDocument* doc = textBrowser_->document();
-    QTextCursor cursor(doc);
-    
-    while (!cursor.atEnd()) {
-        QTextBlock block = cursor.block();
-        if (block.blockFormat().headingLevel() > 0) {
-            toc.append(QString("%1 %2")
-                      .arg(QString(block.blockFormat().headingLevel(), '#'))
-                      .arg(block.text()));
-        }
-        cursor.movePosition(QTextCursor::NextBlock);
-    }
-    
-    return toc;
-}
-
-void MarkdownViewer::scrollToHeading(int level, const QString& text) {
-    QTextDocument* doc = textBrowser_->document();
-    QTextCursor cursor(doc);
-    
-    while (!cursor.atEnd()) {
-        QTextBlock block = cursor.block();
-        if (block.blockFormat().headingLevel() == level && 
-            block.text().contains(text, Qt::CaseInsensitive)) {
-            textBrowser_->setTextCursor(cursor);
-            textBrowser_->ensureCursorVisible();
-            break;
-        }
-        cursor.movePosition(QTextCursor::NextBlock);
-    }
-}
 
 void MarkdownViewer::refresh() {
     if (currentContentType_ == "markdown") {
@@ -1169,9 +1107,6 @@ QString MarkdownProcessor::preprocessMarkdown(const QString& markdown) {
 QString MarkdownProcessor::postprocessHtml(const QString& html) {
     QString result = html;
     
-    if (enableHeadingAnchors_) {
-        result = addHeadingAnchors(result);
-    }
     
     if (enableTableStyling_) {
         result = styleTables(result);
@@ -1359,30 +1294,6 @@ QString MarkdownProcessor::processMath(const QString& text) {
     return result;
 }
 
-QString MarkdownProcessor::addHeadingAnchors(const QString& html) {
-    QString result = html;
-    
-    QRegularExpression headingRegex("<h([1-6])>(.*?)</h\\1>");
-    QRegularExpressionMatchIterator it = headingRegex.globalMatch(html);
-    
-    while (it.hasNext()) {
-        QRegularExpressionMatch match = it.next();
-        int level = match.captured(1).toInt();
-        QString text = match.captured(2);
-        
-        // Create anchor from heading text
-        QString anchor = text.toLower()
-            .replace(QRegularExpression("[^a-z0-9\\s-]"), "")
-            .replace(QRegularExpression("\\s+"), "-");
-        
-        QString replacement = QString("<h%1 id='%2'>%3</h%1>")
-            .arg(level).arg(anchor).arg(text);
-        
-        result.replace(match.captured(), replacement);
-    }
-    
-    return result;
-}
 
 QString MarkdownProcessor::styleTables(const QString& html) {
     QString result = html;
@@ -1393,23 +1304,6 @@ QString MarkdownProcessor::styleTables(const QString& html) {
     return result;
 }
 
-QStringList MarkdownProcessor::extractTableOfContents(const QString& markdown) {
-    QStringList toc;
-    QStringList lines = markdown.split('\n');
-    
-    QRegularExpression headingRegex("^(#{1,6})\\s+(.+)$");
-    
-    for (const QString& line : lines) {
-        QRegularExpressionMatch match = headingRegex.match(line);
-        if (match.hasMatch()) {
-            QString prefix = match.captured(1);
-            QString text = match.captured(2);
-            toc.append(QString("%1 %2").arg(prefix).arg(text));
-        }
-    }
-    
-    return toc;
-}
 
 // CodeBlockHighlighter implementation
 

@@ -167,7 +167,6 @@ struct ComponentStyles {
     struct Message {
         int padding = Design::SPACING_MD;
         int borderRadius = Design::RADIUS_LG;
-        int avatarSize = 32;
         int maxWidth = 600;
     };
     

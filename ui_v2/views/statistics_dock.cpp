@@ -88,18 +88,6 @@ void BaseChartWidget::setTheme(const QString& theme) {
     applyChartTheme();
 }
 
-void BaseChartWidget::exportChart(const QString& format) {
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Chart"),
-        QString("chart.%1").arg(format),
-        tr("%1 Files (*.%2)").arg(format.toUpper()).arg(format)
-    );
-    
-    if (!fileName.isEmpty()) {
-        QPixmap pixmap = chartView_->grab();
-        pixmap.save(fileName);
-    }
-}
 
 void BaseChartWidget::applyChartTheme() {
     if (chartTheme_ == "dark") {
@@ -1488,7 +1476,6 @@ void StatisticsDock::createToolBar() {
     realtimeAction_ = toolBar_->addAction(UIUtils::icon("media-playback-start"), tr("Real-time"));
     realtimeAction_->setCheckable(true);
     
-    exportAction_ = toolBar_->addAction(UIUtils::icon("document-export"), tr("Export"));
     
     settingsAction_ = toolBar_->addAction(UIUtils::icon("configure"), tr("Settings"));
 }
@@ -1604,8 +1591,6 @@ void StatisticsDock::connectSignals() {
     connect(realtimeAction_, &QAction::toggled,
             this, &StatisticsDock::setRealtimeEnabled);
     
-    connect(exportAction_, &QAction::triggered,
-            this, &StatisticsDock::onExportClicked);
     
     connect(settingsAction_, &QAction::triggered,
             this, &StatisticsDock::onSettingsClicked);
@@ -1686,88 +1671,7 @@ void StatisticsDock::refreshAll() {
     updateAllCharts();
 }
 
-void StatisticsDock::exportData(const QString& format) {
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Statistics Data"),
-        QString("statistics.%1").arg(format),
-        tr("%1 Files (*.%2)").arg(format.toUpper()).arg(format)
-    );
-    
-    if (!fileName.isEmpty()) {
-        QFile file(fileName);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, tr("Export Failed"),
-                               tr("Could not open file for writing."));
-            return;
-        }
-        
-        QTextStream stream(&file);
-        
-        if (format == "csv") {
-            // CSV export
-            stream << "Timestamp,Category,Subcategory,Value,Metadata\n";
-            
-            for (const StatDataPoint& point : dataPoints_) {
-                stream << point.timestamp.toString(Qt::ISODate) << ","
-                      << point.category << ","
-                      << point.subcategory << ","
-                      << point.value << ","
-                      << QJsonDocument(point.metadata).toJson(QJsonDocument::Compact) << "\n";
-            }
-        } else if (format == "json") {
-            // JSON export
-            QJsonArray array;
-            for (const StatDataPoint& point : dataPoints_) {
-                QJsonObject obj;
-                obj["timestamp"] = point.timestamp.toString(Qt::ISODate);
-                obj["category"] = point.category;
-                obj["subcategory"] = point.subcategory;
-                obj["value"] = point.value;
-                obj["metadata"] = point.metadata;
-                array.append(obj);
-            }
-            
-            QJsonDocument doc(array);
-            stream << doc.toJson(QJsonDocument::Indented);
-        }
-        
-        file.close();
-    }
-}
 
-void StatisticsDock::exportCharts(const QString& format) {
-    QString dirName = QFileDialog::getExistingDirectory(
-        this, tr("Export Charts Directory"),
-        QDir::homePath()
-    );
-    
-    if (!dirName.isEmpty()) {
-        QDir dir(dirName);
-        
-        // Export each chart
-        messageChart_->exportChart(format);
-        toolChart_->exportChart(format);
-        performanceChart_->exportChart(format);
-        tokenChart_->exportChart(format);
-        memoryChart_->exportChart(format);
-    }
-}
-
-void StatisticsDock::generateReport(const QString& format) {
-    // Generate comprehensive report
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Generate Report"),
-        QString("statistics_report.%1").arg(format),
-        tr("%1 Files (*.%2)").arg(format.toUpper()).arg(format)
-    );
-    
-    if (!fileName.isEmpty()) {
-        // Generate report content
-        // This would include all statistics, charts, and analysis
-        
-        emit reportGenerated(fileName);
-    }
-}
 
 void StatisticsDock::registerCustomMetric(const QString& name, const QString& unit) {
     customMetrics_[name] = 0;
@@ -1874,21 +1778,6 @@ void StatisticsDock::onRefreshClicked() {
     refreshAll();
 }
 
-void StatisticsDock::onExportClicked() {
-    auto* menu = new QMenu(this);
-    
-    menu->addAction(tr("Export Data as CSV"), [this]() { exportData("csv"); });
-    menu->addAction(tr("Export Data as JSON"), [this]() { exportData("json"); });
-    menu->addSeparator();
-    menu->addAction(tr("Export Charts as PNG"), [this]() { exportCharts("png"); });
-    menu->addAction(tr("Export Charts as SVG"), [this]() { exportCharts("svg"); });
-    menu->addSeparator();
-    menu->addAction(tr("Generate PDF Report"), [this]() { generateReport("pdf"); });
-    menu->addAction(tr("Generate HTML Report"), [this]() { generateReport("html"); });
-    
-    menu->exec(QCursor::pos());
-    menu->deleteLater();
-}
 
 void StatisticsDock::onSettingsClicked() {
     auto* dialog = new StatsSettingsDialog(this);

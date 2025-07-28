@@ -42,13 +42,10 @@ struct MessageMetadata {
     QDateTime timestamp;
     QString author;
     QStringList tags;
-    QUuid parentId; // For threaded conversations
     bool isEdited = false;
     QDateTime editedAt;
     bool isPinned = false;
     bool isBookmarked = false;
-    int viewCount = 0;
-    QStringList reactions;
     QString language; // For code blocks
     QString fileName; // Associated file
     int lineNumber = -1; // Associated line
@@ -153,11 +150,6 @@ public:
     void addAttachment(const MessageAttachment& attachment);
     void removeAttachment(const QString& id);
     
-    // Thread management
-    bool isThreadRoot() const { return metadata_.parentId.isNull(); }
-    bool hasReplies() const { return !replies_.empty(); }
-    const std::vector<QUuid>& replies() const { return replies_; }
-    void addReply(const QUuid& replyId);
     
     // Search and filtering
     bool matchesSearch(const QString& searchText, bool includeContent = true,
@@ -184,7 +176,6 @@ private:
     std::unique_ptr<ToolExecution> toolExecution_;
     std::vector<AnalysisEntry> analysisEntries_;
     std::vector<MessageAttachment> attachments_;
-    std::vector<QUuid> replies_;
 };
 
 // Conversation model
@@ -210,12 +201,9 @@ public:
         AttachmentsRole,
         MetadataRole,
         SearchMatchRole,
-        ThreadDepthRole,
         IsEditedRole,
         IsPinnedRole,
         IsBookmarkedRole,
-        HasRepliesRole,
-        ReactionCountRole,
         ProgressRole
     };
     
@@ -256,12 +244,6 @@ public:
     void setToolExecutionProgress(const QUuid& messageId, int value, const QString& text = QString());
     void addToolExecutionOutput(const QUuid& messageId, const QString& output);
     
-    // Thread management
-    void addReply(const QUuid& parentId, std::unique_ptr<Message> reply);
-    std::vector<const Message*> getThread(const QUuid& rootId) const;
-    void collapseThread(const QUuid& rootId);
-    void expandThread(const QUuid& rootId);
-    bool isThreadCollapsed(const QUuid& rootId) const;
     
     // Filtering and search
     void setSearchFilter(const QString& searchText);
@@ -281,14 +263,7 @@ public:
     std::vector<const Message*> getPinnedMessages() const;
     std::vector<const Message*> getBookmarkedMessages() const;
     
-    // Reactions
-    void addReaction(const QUuid& id, const QString& reaction);
-    void removeReaction(const QUuid& id, const QString& reaction);
     
-    // Export
-    QString exportToMarkdown(bool includeMetadata = true) const;
-    QString exportToHtml(bool includeStyles = true) const;
-    QJsonDocument exportToJson() const;
     void importFromJson(const QJsonDocument& doc, bool append = false);
     
     // Statistics
@@ -332,33 +307,23 @@ signals:
     void statisticsChanged();
     void conversationCleared();
     void filtersChanged();
-    void threadCollapsed(const QUuid& rootId);
-    void threadExpanded(const QUuid& rootId);
     
 private:
     struct MessageNode {
         std::unique_ptr<Message> message;
-        std::vector<MessageNode*> children;
-        MessageNode* parent = nullptr;
-        bool collapsed = false;
         bool matchesFilter = true;
-        int threadDepth = 0;
     };
     
-    void buildThreadTree();
-    void updateThreadDepths(MessageNode* node, int depth = 0);
     void applyFilters();
     bool messageMatchesFilters(const Message* msg) const;
     MessageNode* findNode(const QUuid& id) const;
-    void collectVisibleNodes(MessageNode* node, std::vector<MessageNode*>& visible) const;
     void emitDataChangedForMessage(const QUuid& id);
     QModelIndex indexForMessage(const QUuid& id) const;
     
     // Storage
     std::vector<std::unique_ptr<MessageNode>> nodes_;
     std::unordered_map<QUuid, MessageNode*, QUuidHash> nodeMap_;
-    std::vector<MessageNode*> visibleNodes_; // Flattened view for display
-    std::vector<MessageNode*> roots_; // Thread roots
+    std::vector<MessageNode*> visibleNodes_; // Visible messages for display
     
     // Filters
     QString searchFilter_;
@@ -396,15 +361,12 @@ public:
     
     // Customization
     void setCompactMode(bool compact) { compactMode_ = compact; }
-    void setShowAvatars(bool show) { showAvatars_ = show; }
     void setShowTimestamps(bool show) { showTimestamps_ = show; }
     void setMaxBubbleWidth(int width) { maxBubbleWidth_ = width; }
     void setAnimateMessages(bool animate) { animateMessages_ = animate; }
     
 signals:
     void linkClicked(const QUrl& url);
-    void replyRequested(const QUuid& messageId);
-    void reactionClicked(const QUuid& messageId, const QString& reaction);
     void attachmentClicked(const QUuid& messageId, const QString& attachmentId);
     void toolOutputToggled(const QUuid& messageId);
     
@@ -417,16 +379,11 @@ private:
                            const std::vector<AnalysisEntry>& entries) const;
     void drawAttachments(QPainter* painter, const QRect& rect,
                         const std::vector<MessageAttachment>& attachments) const;
-    void drawReactions(QPainter* painter, const QRect& rect,
-                      const QStringList& reactions) const;
-    void drawThreadIndicator(QPainter* painter, const QRect& rect,
-                           int depth, bool hasReplies) const;
     
     QRect hitTest(const QPoint& pos, const QStyleOptionViewItem& option,
                   const QModelIndex& index) const;
     
     bool compactMode_ = false;
-    bool showAvatars_ = true;
     bool showTimestamps_ = true;
     int maxBubbleWidth_ = 600;
     bool animateMessages_ = true;

@@ -1011,59 +1011,6 @@ void FloatingInspector::highlightSearchResults()
     }
 }
 
-void FloatingInspector::exportContent(const QString& format)
-{
-    QString fileName = QFileDialog::getSaveFileName(this, 
-        "Export Inspector Content", 
-        QString("inspector_%1.%2").arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss")).arg(format),
-        QString("%1 Files (*.%2)").arg(format.toUpper()).arg(format));
-        
-    if (fileName.isEmpty()) return;
-    
-    QFile file(fileName);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return;
-    }
-    
-    QTextStream stream(&file);
-    
-    // Export based on current content type
-    switch (currentType_) {
-    case MessageContent:
-        stream << "Role: " << roleLabel_->text() << "\n\n";
-        stream << messageEdit_->toPlainText() << "\n";
-        break;
-        
-    case MemoryContent:
-        stream << addressLabel_->text() << "\n\n";
-        stream << "Hex:\n" << memoryHexEdit_->toPlainText() << "\n\n";
-        stream << "ASCII:\n" << memoryAsciiEdit_->toPlainText() << "\n";
-        break;
-        
-    case ToolContent:
-        stream << toolNameLabel_->text() << "\n\n";
-        stream << "Parameters:\n" << parametersEdit_->toPlainText() << "\n\n";
-        stream << "Output:\n" << outputEdit_->toPlainText() << "\n";
-        break;
-        
-    case ErrorContent:
-        stream << "Error: " << errorMessageEdit_->toPlainText() << "\n\n";
-        stream << "Stack Trace:\n" << stackTraceEdit_->toPlainText() << "\n";
-        break;
-        
-    case MetricsContent:
-        for (int row = 0; row < metricsTable_->rowCount(); ++row) {
-            stream << metricsTable_->item(row, 0)->text() << ": ";
-            stream << metricsTable_->item(row, 1)->text() << "\n";
-        }
-        break;
-        
-    default:
-        break;
-    }
-    
-    file.close();
-}
 
 void FloatingInspector::copyToClipboard()
 {

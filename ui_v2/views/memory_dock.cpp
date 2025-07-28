@@ -330,34 +330,6 @@ void MemoryGraphView::setAnimated(bool animated) {
     animated_ = animated;
 }
 
-void MemoryGraphView::exportGraph(const QString& format) {
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Graph"),
-        QString("memory_graph.%1").arg(format),
-        tr("%1 Files (*.%2)").arg(format.toUpper()).arg(format)
-    );
-    
-    if (!fileName.isEmpty()) {
-        if (format == "svg") {
-            QSvgGenerator generator;
-            generator.setFileName(fileName);
-            generator.setSize(scene_->sceneRect().size().toSize());
-            generator.setViewBox(scene_->sceneRect());
-            
-            QPainter painter(&generator);
-            scene_->render(&painter);
-        } else if (format == "png" || format == "jpg") {
-            QImage image(scene_->sceneRect().size().toSize(), QImage::Format_ARGB32);
-            image.fill(Qt::white);
-            
-            QPainter painter(&image);
-            painter.setRenderHint(QPainter::Antialiasing);
-            scene_->render(&painter);
-            
-            image.save(fileName);
-        }
-    }
-}
 
 void MemoryGraphView::zoomIn() {
     scale(1.2, 1.2);
@@ -676,27 +648,6 @@ void MemoryHeatmapView::setMetric(const QString& metric) {
     update();
 }
 
-void MemoryHeatmapView::exportHeatmap(const QString& format) {
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Heatmap"),
-        QString("memory_heatmap.%1").arg(format),
-        tr("%1 Files (*.%2)").arg(format.toUpper()).arg(format)
-    );
-    
-    if (!fileName.isEmpty()) {
-        QImage image(size(), QImage::Format_ARGB32);
-        image.fill(Qt::white);
-        
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing);
-        
-        // Render heatmap
-        paintEvent(nullptr);
-        render(&painter);
-        
-        image.save(fileName);
-    }
-}
 
 void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
@@ -1020,7 +971,6 @@ void MemoryDock::createToolBar() {
     toolBar_->addSeparator();
     
     importAction_ = toolBar_->addAction(UIUtils::icon("document-import"), tr("Import"));
-    exportAction_ = toolBar_->addAction(UIUtils::icon("document-export"), tr("Export"));
 }
 
 void MemoryDock::createViews() {
@@ -1098,8 +1048,6 @@ void MemoryDock::connectSignals() {
     connect(importAction_, &QAction::triggered,
             this, &MemoryDock::onImportClicked);
     
-    connect(exportAction_, &QAction::triggered,
-            this, &MemoryDock::onExportClicked);
     
     connect(bookmarkAction_, &QAction::triggered,
             [this]() { bookmarkSelection(bookmarkAction_->isChecked()); });
@@ -1425,80 +1373,6 @@ void MemoryDock::deleteQuery(const QString& name) {
     saveSettings();
 }
 
-void MemoryDock::exportData(const QString& format) {
-    QString filter;
-    QString extension;
-    
-    if (format == "json") {
-        filter = tr("JSON Files (*.json)");
-        extension = "json";
-    } else if (format == "csv") {
-        filter = tr("CSV Files (*.csv)");
-        extension = "csv";
-    } else if (format == "xml") {
-        filter = tr("XML Files (*.xml)");
-        extension = "xml";
-    }
-    
-    QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Export Memory Data"),
-        QString("memory_data.%1").arg(extension),
-        filter
-    );
-    
-    if (!fileName.isEmpty()) {
-        QFile file(fileName);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, tr("Export Failed"),
-                               tr("Could not open file for writing."));
-            return;
-        }
-        
-        QTextStream stream(&file);
-        
-        if (format == "json") {
-            QJsonArray array;
-            for (const MemoryEntry& entry : model_->entries()) {
-                QJsonObject obj;
-                obj["id"] = entry.id.toString();
-                obj["address"] = entry.address;
-                obj["function"] = entry.function;
-                obj["module"] = entry.module;
-                obj["analysis"] = entry.analysis;
-                obj["tags"] = QJsonArray::fromStringList(entry.tags);
-                obj["timestamp"] = entry.timestamp.toString(Qt::ISODate);
-                obj["confidence"] = entry.confidence;
-                obj["isBookmarked"] = entry.isBookmarked;
-                obj["metadata"] = entry.metadata;
-                array.append(obj);
-            }
-            
-            QJsonDocument doc(array);
-            stream << doc.toJson(QJsonDocument::Indented);
-        } else if (format == "csv") {
-            // CSV header
-            stream << "Address,Function,Module,Analysis,Tags,Timestamp,Confidence,Bookmarked\n";
-            
-            for (const MemoryEntry& entry : model_->entries()) {
-                stream << entry.address << ","
-                      << entry.function << ","
-                      << entry.module << ","
-                      << "\"" << entry.analysis.replace("\"", "\"\"") << "\","
-                      << entry.tags.join(";") << ","
-                      << entry.timestamp.toString(Qt::ISODate) << ","
-                      << entry.confidence << ","
-                      << (entry.isBookmarked ? "Yes" : "No") << "\n";
-            }
-        }
-        
-        file.close();
-        emit dataExported(fileName);
-    }
-}
-
-void MemoryDock::exportSelection(const QString& format) {
-    // Similar to exportData but only for selected entries
-}
 
 void MemoryDock::tagSelection(const QStringList& tags) {
     for (const QUuid& id : selectedEntries_) {
@@ -1667,18 +1541,6 @@ void MemoryDock::onAdvancedFilterClicked() {
     dialog->deleteLater();
 }
 
-void MemoryDock::onExportClicked() {
-    auto* menu = new QMenu(this);
-    
-    menu->addAction(tr("Export All as JSON"), [this]() { exportData("json"); });
-    menu->addAction(tr("Export All as CSV"), [this]() { exportData("csv"); });
-    menu->addSeparator();
-    menu->addAction(tr("Export Selection as JSON"), [this]() { exportSelection("json"); });
-    menu->addAction(tr("Export Selection as CSV"), [this]() { exportSelection("csv"); });
-    
-    menu->exec(QCursor::pos());
-    menu->deleteLater();
-}
 
 void MemoryDock::onImportClicked() {
     importData();

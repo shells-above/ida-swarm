@@ -73,11 +73,6 @@ public:
     void saveSessionAs();
     bool hasUnsavedChanges() const;
     
-    // Export
-    void exportConversation();
-    void exportMemory();
-    void exportStatistics();
-    void exportAll();
     
     // Settings
     void showSettings();
@@ -104,7 +99,6 @@ public slots:
     void showStatusMessage(const QString& message, int timeout = 2000);
     void updateWindowTitle();
     void toggleFullScreen();
-    void checkForUpdates();
     
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -120,7 +114,6 @@ private slots:
     void onFileOpen();
     void onFileSave();
     void onFileSaveAs();
-    void onFileExport();
     void onFileExit();
     void onEditUndo();
     void onEditRedo();
@@ -145,7 +138,6 @@ private slots:
     void onToolsExecutionHistory();
     void onHelpDocumentation();
     void onHelpKeyboardShortcuts();
-    void onHelpCheckUpdates();
     void onHelpAbout();
     void onThemeChanged();
     void onDockLocationChanged(Qt::DockWidgetArea area);
@@ -226,7 +218,6 @@ private:
     QAction* openAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* saveAsAction_ = nullptr;
-    QAction* exportAction_ = nullptr;
     QAction* exitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
@@ -250,7 +241,6 @@ private:
     QAction* executionHistoryAction_ = nullptr;
     QAction* documentationAction_ = nullptr;
     QAction* keyboardShortcutsAction_ = nullptr;
-    QAction* checkUpdatesAction_ = nullptr;
     QAction* aboutAction_ = nullptr;
     QAction* aboutQtAction_ = nullptr;
     
