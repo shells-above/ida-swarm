@@ -52,7 +52,6 @@ find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_CHARTS_FRAMEWORK QtCharts PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 
 # Create IMPORTED targets for Qt tools so AUTOMOC/AUTOUIC/AUTORCC can find them
 add_executable(Qt5::moc IMPORTED)
@@ -124,7 +123,6 @@ include_directories(
         "${QTDIR}/lib/QtSql.framework/Headers"
         "${QTDIR}/lib/QtXml.framework/Headers"
         "${QTDIR}/lib/QtOpenGL.framework/Headers"
-        "${QTDIR}/lib/QtCharts.framework/Headers"
 )
 
 # Find IDA libraries
@@ -174,6 +172,14 @@ set(SOURCES
         ui_v2/widgets/markdown_viewer.cpp
         ui_v2/widgets/command_palette.cpp
         ui_v2/widgets/tool_execution_visualizer.cpp
+        # ui_v2 custom charts
+        ui_v2/widgets/charts/custom_chart_base.cpp
+        ui_v2/widgets/charts/chart_theme.cpp
+        ui_v2/widgets/charts/line_chart.cpp
+        ui_v2/widgets/charts/circular_chart.cpp
+        ui_v2/widgets/charts/bar_chart.cpp
+        ui_v2/widgets/charts/heatmap_widget.cpp
+        ui_v2/widgets/charts/sparkline_widget.cpp
 )
 
 # Header files
@@ -210,6 +216,15 @@ set(HEADERS
         ui_v2/widgets/markdown_viewer.h
         ui_v2/widgets/command_palette.h
         ui_v2/widgets/tool_execution_visualizer.h
+        # ui_v2 custom charts
+        ui_v2/widgets/charts/chart_types.h
+        ui_v2/widgets/charts/custom_chart_base.h
+        ui_v2/widgets/charts/chart_theme.h
+        ui_v2/widgets/charts/line_chart.h
+        ui_v2/widgets/charts/circular_chart.h
+        ui_v2/widgets/charts/bar_chart.h
+        ui_v2/widgets/charts/heatmap_widget.h
+        ui_v2/widgets/charts/sparkline_widget.h
 )
 
 # Create shared library (end in "64", won't be loaded if it doesn't)
@@ -242,7 +257,6 @@ target_link_libraries(ida_llm_agent64
         ${QT_SQL_FRAMEWORK}
         ${QT_XML_FRAMEWORK}
         ${QT_OPENGL_FRAMEWORK}
-        ${QT_CHARTS_FRAMEWORK}
 )
 
 # Post-build: Copy plugin to IDA plugins directory
