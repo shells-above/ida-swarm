@@ -6,12 +6,13 @@
 #define AGENT_H
 
 #include "core/common.h"
+#include "core/config.h"
+#include "core/types.h"
 #include "api/message_types.h"
 #include "agent/tool_system.h"
 #include "api/anthropic_api.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
-#include "ui/qt_widgets.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
 

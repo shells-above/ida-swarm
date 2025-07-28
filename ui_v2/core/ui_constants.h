@@ -1,9 +1,6 @@
 #pragma once
 
-#include <QColor>
-#include <QString>
-#include <QFont>
-#include <QMargins>
+#include "ui_v2_common.h"
 
 namespace llm_re::ui_v2 {
 

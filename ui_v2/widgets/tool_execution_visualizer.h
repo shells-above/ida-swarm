@@ -1,22 +1,8 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
 #include "../views/tool_execution_dock.h"
-#include <QPropertyAnimation>
-#include <QParallelAnimationGroup>
-#include <QSequentialAnimationGroup>
-#include <QTimer>
-#include <QGraphicsOpacityEffect>
-#include <memory>
-#include <unordered_map>
-
-class QGraphicsScene;
-class QGraphicsView;
-class QGraphicsItem;
-class QGraphicsTextItem;
-class QGraphicsEllipseItem;
-class QGraphicsRectItem;
-class QGraphicsPathItem;
 
 namespace llm_re::ui_v2 {
 
@@ -117,7 +103,7 @@ private:
     QGraphicsView* view_ = nullptr;
     
     // Nodes and connections
-    std::unordered_map<QUuid, ToolExecutionNode*> nodes_;
+    std::unordered_map<QUuid, ToolExecutionNode*, QUuidHash> nodes_;
     std::vector<ConnectionLine*> connections_;
     
     // State
@@ -140,6 +126,7 @@ private:
 // Tool execution node representation
 class ToolExecutionNode : public QObject, public QGraphicsItem {
     Q_OBJECT
+    Q_INTERFACES(QGraphicsItem)
     Q_PROPERTY(qreal progress READ progress WRITE setProgress)
     Q_PROPERTY(qreal scale READ scale WRITE setScale)
     Q_PROPERTY(qreal opacity READ opacity WRITE setOpacity)

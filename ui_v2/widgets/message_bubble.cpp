@@ -1,22 +1,7 @@
+#include "../core/ui_v2_common.h"
 #include "message_bubble.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QToolButton>
-#include <QProgressBar>
-#include <QTextEdit>
-#include <QPainter>
-#include <QMouseEvent>
-#include <QMenu>
-#include <QTimer>
-#include <QScrollArea>
-#include <QGraphicsDropShadowEffect>
-#include <QPropertyAnimation>
-#include <QParallelAnimationGroup>
-#include <QSequentialAnimationGroup>
-#include <cmath>
 
 namespace llm_re::ui_v2 {
 
@@ -80,7 +65,7 @@ void MessageBubble::createHeader() {
     nameLayout->setSpacing(0);
     
     nameLabel_ = new QLabel(this);
-    nameLabel_->setFont(ThemeManager::instance().typography().subtitle);
+    nameLabel_->setFont(ThemeManager::instance().typography().body);
     nameLayout->addWidget(nameLabel_);
     
     roleLabel_ = new QLabel(this);
@@ -172,7 +157,7 @@ void MessageBubble::createToolExecutionWidget() {
         auto* headerLayout = new QHBoxLayout();
         
         toolNameLabel_ = new QLabel(this);
-        toolNameLabel_->setFont(ThemeManager::instance().typography().subtitle);
+        toolNameLabel_->setFont(ThemeManager::instance().typography().body);
         headerLayout->addWidget(toolNameLabel_);
         
         headerLayout->addStretch();
@@ -207,7 +192,7 @@ void MessageBubble::createToolExecutionWidget() {
         layout->addWidget(toolOutputEdit_);
         
         // Insert after content
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(layout())) {
+        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
             int index = mainLayout->indexOf(contentWidget_) + 1;
             mainLayout->insertWidget(index, toolWidget_);
         }
@@ -226,7 +211,7 @@ void MessageBubble::createAnalysisWidget() {
         // Analysis entries will be created dynamically
         
         // Insert after tool widget or content
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(layout())) {
+        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
             int index = mainLayout->indexOf(toolWidget_ ? toolWidget_ : contentWidget_) + 1;
             mainLayout->insertWidget(index, analysisWidget_);
         }
@@ -245,7 +230,7 @@ void MessageBubble::createAttachmentsWidget() {
         // Attachment previews will be created dynamically
         
         // Insert before footer
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(layout())) {
+        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
             int index = footerWidget_ ? mainLayout->indexOf(footerWidget_) : mainLayout->count();
             mainLayout->insertWidget(index, attachmentsWidget_);
         }
@@ -304,8 +289,10 @@ void MessageBubble::updateMessage() {
     }
     
     if (timestampLabel_) {
-        timestampLabel_->setText(UIUtils::formatRelativeTime(
-            message_->metadata().timestamp));
+        // Convert QDateTime to std::chrono::system_clock::time_point
+        auto timestamp = std::chrono::system_clock::from_time_t(
+            message_->metadata().timestamp.toSecsSinceEpoch());
+        timestampLabel_->setText(UIUtils::formatRelativeTime(timestamp));
         timestampLabel_->setVisible(showTimestamp_);
     }
     
@@ -414,16 +401,16 @@ void MessageBubble::updateToolExecutionDisplay() {
     
     // Update progress
     if (exec->state == ToolExecutionState::Running) {
-        toolProgress_->setValue(exec->progressValue);
-        if (!exec->progressText.isEmpty()) {
-            toolProgress_->setToolTip(exec->progressText);
+        toolProgress_->setValue(exec->progress);
+        if (!exec->progressMessage.isEmpty()) {
+            toolProgress_->setToolTip(exec->progressMessage);
         }
     }
     
     // Update output
     QString output = exec->output;
-    if (!exec->error.isEmpty()) {
-        output += "\n\nError:\n" + exec->error;
+    if (!exec->errorMessage.isEmpty()) {
+        output += "\n\nError:\n" + exec->errorMessage;
     }
     toolOutputEdit_->setPlainText(output);
     
@@ -590,7 +577,7 @@ void MessageBubble::setCompactMode(bool compact) {
         int spacing = compact ? Design::SPACING_XS : Design::SPACING_SM;
         int margin = compact ? Design::SPACING_SM : Design::SPACING_MD;
         
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(layout())) {
+        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
             mainLayout->setSpacing(spacing);
         }
         
@@ -629,7 +616,7 @@ void MessageBubble::animateIn() {
         case AnimationType::SlideIn: {
             // Slide from right for user, left for others
             int startX = message_ && message_->role() == MessageRole::User ?
-                        parent()->width() : -width();
+                        qobject_cast<QWidget*>(parent())->width() : -(this->width());
             move(startX, y());
             
             auto* anim = new QPropertyAnimation(this, "pos", this);

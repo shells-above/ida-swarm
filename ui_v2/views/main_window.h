@@ -1,19 +1,9 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
 #include "conversation_view.h"
 #include "../widgets/command_palette.h"
-#include <QMainWindow>
-#include <QSystemTrayIcon>
-#include <memory>
-
-class QDockWidget;
-class QToolBar;
-class QStatusBar;
-class QMenu;
-class QAction;
-class QSplitter;
-class QStackedWidget;
 
 namespace llm_re::ui_v2 {
 

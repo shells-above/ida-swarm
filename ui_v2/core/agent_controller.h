@@ -1,11 +1,9 @@
 #pragma once
 
+#include "ui_v2_common.h"
 #include "agent/agent.h"
 #include "../models/conversation_model.h"
 #include "api/message_types.h"
-#include <QObject>
-#include <memory>
-#include <functional>
 
 namespace llm_re::ui_v2 {
 
@@ -118,6 +116,7 @@ private:
     bool isInitialized_ = false;
     int currentIteration_ = 0;
     std::map<QString, QString> toolIdToMessageId_;  // tool_id -> message_id mapping
+    std::map<QString, QUuid> toolIdToExecId_;  // tool_id -> execution_id mapping
     
     // Statistics
     std::chrono::steady_clock::time_point sessionStart_;

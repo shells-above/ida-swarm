@@ -1,19 +1,6 @@
 #pragma once
 
-#include <QObject>
-#include <QWidget>
-#include <QPointer>
-#include <QList>
-#include <QHash>
-#include <QRect>
-#include <QPropertyAnimation>
-#include <memory>
-
-class QScrollArea;
-class QAbstractScrollArea;
-class QTimer;
-class QFocusEvent;
-class QKeyEvent;
+#include "ui_v2_common.h"
 
 namespace llm_re::ui_v2 {
 

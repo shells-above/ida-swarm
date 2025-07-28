@@ -1,42 +1,13 @@
+#include "../core/ui_v2_common.h"
 #include "markdown_viewer.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include <QTextBrowser>
-#include <QVBoxLayout>
-#include <QScrollBar>
-#include <QMenu>
-#include <QAction>
-#include <QContextMenuEvent>
-#include <QPainter>
-#include <QTextDocument>
-#include <QTextCursor>
-#include <QTextBlock>
-#include <QTextList>
-#include <QTextFragment>
-#include <QTextStream>
-#include <QTextImageFormat>
-#include <QTextTable>
-#include <QTextTableCell>
-#include <QRegularExpression>
-#include <QSet>
-#include <QApplication>
-#include <QClipboard>
-#include <QFileDialog>
-#include <QTextDocumentWriter>
-#include <QDesktopServices>
-#include <QMimeData>
-#include <QInputDialog>
-#include <QPixmap>
-#include <QPixmapCache>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <cmath>
 
 namespace llm_re::ui_v2 {
 
 MarkdownViewer::MarkdownViewer(QWidget* parent)
-    : BaseStyledWidget(parent) {
+    : BaseStyledWidget(parent),
+      textBrowser_(nullptr) {
     
     markdownProcessor_ = std::make_unique<MarkdownProcessor>(this);
     setupTextBrowser();
@@ -663,7 +634,20 @@ void MarkdownViewer::setZoomFactor(qreal factor) {
     if (factor > 5.0) factor = 5.0;
     
     currentZoom_ = factor;
-    textBrowser_->setZoomFactor(factor);
+    
+    // Apply zoom by scaling the font size
+    QFont font = textBrowser_->font();
+    font.setPointSizeF(ThemeManager::instance().typography().body.pointSize() * factor);
+    textBrowser_->setFont(font);
+    
+    // Also scale the document's default font
+    QTextDocument* doc = textBrowser_->document();
+    if (doc) {
+        QFont docFont = doc->defaultFont();
+        docFont.setPointSizeF(ThemeManager::instance().typography().body.pointSize() * factor);
+        doc->setDefaultFont(docFont);
+    }
+    
     emit zoomFactorChanged(factor);
 }
 

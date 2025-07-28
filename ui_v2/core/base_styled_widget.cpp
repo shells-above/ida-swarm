@@ -1,9 +1,5 @@
+#include "ui_v2_common.h"
 #include "base_styled_widget.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QTimer>
-#include <QStyleOption>
-#include <cmath>
 
 namespace llm_re::ui_v2 {
 

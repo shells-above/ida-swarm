@@ -1,9 +1,8 @@
 #pragma once
 
+#include "../../core/ui_v2_common.h"
 #include "custom_chart_base.h"
 #include "chart_theme.h"
-#include <memory>
-#include <vector>
 
 namespace llm_re::ui_v2::charts {
 
@@ -90,9 +89,6 @@ public:
     void enableClustering(bool enabled);
     void setClusterThreshold(double threshold);
     void highlightCluster(int clusterIndex);
-    
-    // Export
-    QImage toImage(const QSize& size = QSize());
     
     // Data update
     void updateData() override;
@@ -212,6 +208,21 @@ private:
     // Animation
     std::vector<std::vector<double>> animatedValues_;
     std::vector<std::vector<double>> targetValues_;
+    
+    // Additional display properties not in HeatmapTheme
+    bool showAxes_ = true;
+    QColor gridColor_ = QColor(128, 128, 128, 50);
+    float gridWidth_ = 1.0f;
+    int valuePrecision_ = 2;
+    float valueFontSize_ = 10.0f;
+    float labelFontSize_ = 10.0f;
+    QColor textColor_;  // Will be set from ThemeManager
+    bool rotateLabels_ = false;
+    bool showColorScale_ = true;
+    QColor selectionColor_ = QColor(0, 120, 215, 100);
+    bool highlightRow_ = false;
+    bool highlightColumn_ = false;
+    QColor highlightColor_ = QColor(255, 255, 0, 50);
 };
 
 } // namespace llm_re::ui_v2::charts

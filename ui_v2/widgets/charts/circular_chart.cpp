@@ -1,9 +1,6 @@
+#include "../../core/ui_v2_common.h"
 #include "circular_chart.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <cmath>
-#include <numeric>
+#include "../../core/theme_manager.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -215,8 +212,8 @@ void CircularChart::updateData() {
 
 int CircularChart::segmentAt(const QPointF& pos) const {
     for (size_t i = 0; i < segments_.size(); ++i) {
-        if (isPointInSegment(pos, i)) {
-            return i;
+        if (isPointInSegment(pos, static_cast<int>(i))) {
+            return static_cast<int>(i);
         }
     }
     return -1;
@@ -276,7 +273,7 @@ int CircularChart::findNearestDataPoint(const QPointF& pos, int& seriesIndex) {
 
 void CircularChart::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        int segment = segmentAt(event->position());
+        int segment = segmentAt(event->pos());
         if (segment >= 0) {
             selectedSegment_ = segment;
             emit segmentClicked(segment);
@@ -288,7 +285,7 @@ void CircularChart::mousePressEvent(QMouseEvent* event) {
 }
 
 void CircularChart::mouseMoveEvent(QMouseEvent* event) {
-    int segment = segmentAt(event->position());
+    int segment = segmentAt(event->pos());
     
     if (segment != hoveredSegment_) {
         hoveredSegment_ = segment;
@@ -326,7 +323,7 @@ void CircularChart::drawDonutChart(QPainter* painter) {
         }
         
         drawSegment(painter, chartCircleRect_, startAngle, spanAngle, 
-                   segments_[i].color, i);
+                   segments_[i].color, static_cast<int>(i));
     }
     
     // Draw center content for donut
@@ -340,7 +337,7 @@ void CircularChart::drawDonutChart(QPainter* painter) {
             if (segments_[i].spanAngle > 5.0) { // Only show label if segment is large enough
                 drawSegmentLabel(painter, chartCircleRect_, 
                                segments_[i].startAngle, segments_[i].spanAngle,
-                               data_[i], i);
+                               data_[i], static_cast<int>(i));
             }
         }
     }
@@ -352,14 +349,14 @@ void CircularChart::drawGaugeChart(QPainter* painter) {
     painter->save();
     
     // Draw background arc
-    QPen arcPen(themeColor(ThemeColor::Border));
+    QPen arcPen(ThemeManager::instance().colors().border);
     arcPen.setWidth(20);
     arcPen.setCapStyle(Qt::RoundCap);
     painter->setPen(arcPen);
     painter->setBrush(Qt::NoBrush);
     
     double totalSpan = 270.0; // Gauge typically spans 270 degrees
-    painter->drawArc(chartCircleRect_, theme_.startAngle * 16, totalSpan * 16);
+    painter->drawArc(chartCircleRect_, static_cast<int>(theme_.startAngle * 16), static_cast<int>(totalSpan * 16));
     
     // Draw colored segments based on thresholds
     if (!gaugeThresholds_.empty()) {
@@ -377,8 +374,8 @@ void CircularChart::drawGaugeChart(QPainter* painter) {
             segmentPen.setCapStyle(Qt::RoundCap);
             painter->setPen(segmentPen);
             
-            painter->drawArc(chartCircleRect_, startAngle * 16, 
-                           (endAngle - startAngle) * 16);
+            painter->drawArc(chartCircleRect_, static_cast<int>(startAngle * 16), 
+                           static_cast<int>((endAngle - startAngle) * 16));
         }
     }
     
@@ -387,7 +384,7 @@ void CircularChart::drawGaugeChart(QPainter* painter) {
     valueAngle *= animationState_.getEasedProgress();
     
     // Determine color based on value
-    QColor valueColor = themeColor(ThemeColor::Primary);
+    QColor valueColor = ThemeManager::instance().colors().primary;
     for (const auto& threshold : gaugeThresholds_) {
         if (gaugeValue_ <= threshold.first) {
             valueColor = threshold.second;
@@ -404,14 +401,14 @@ void CircularChart::drawGaugeChart(QPainter* painter) {
         glowPen.setColor(valueColor);
         painter->setPen(glowPen);
         painter->drawArc(chartCircleRect_.adjusted(-2, -2, 2, 2), 
-                        theme_.startAngle * 16, valueAngle * 16);
+                        static_cast<int>(theme_.startAngle * 16), static_cast<int>(valueAngle * 16));
     }
     
     QPen valuePen(valueColor);
     valuePen.setWidth(15);
     valuePen.setCapStyle(Qt::RoundCap);
     painter->setPen(valuePen);
-    painter->drawArc(chartCircleRect_, theme_.startAngle * 16, valueAngle * 16);
+    painter->drawArc(chartCircleRect_, static_cast<int>(theme_.startAngle * 16), static_cast<int>(valueAngle * 16));
     
     // Draw needle
     drawGaugeNeedle(painter, gaugeValue_);
@@ -420,7 +417,7 @@ void CircularChart::drawGaugeChart(QPainter* painter) {
     drawGaugeScale(painter);
     
     // Draw center value
-    painter->setPen(themeColor(ThemeColor::Text));
+    painter->setPen(ThemeManager::instance().colors().textPrimary);
     QFont valueFont = font();
     valueFont.setPointSize(24);
     valueFont.setBold(true);
@@ -438,7 +435,7 @@ void CircularChart::drawRadialBarChart(QPainter* painter) {
     painter->save();
     
     // Calculate bar width and spacing
-    float barWidth = (outerRadius_ - innerRadius_) / data_.size();
+    float barWidth = (outerRadius_ - innerRadius_) / static_cast<float>(data_.size());
     float spacing = barWidth * 0.1f;
     
     // Find max value for scaling
@@ -449,23 +446,16 @@ void CircularChart::drawRadialBarChart(QPainter* painter) {
     
     // Draw radial bars
     for (size_t i = 0; i < data_.size(); ++i) {
-        float currentInner = innerRadius_ + i * barWidth + spacing;
+        float currentInner = innerRadius_ + static_cast<float>(i) * barWidth + spacing;
         float currentOuter = currentInner + barWidth - 2 * spacing;
-        
-        QRectF innerRect = chartCircleRect_.adjusted(
-            currentInner - outerRadius_, currentInner - outerRadius_,
-            -(currentInner - outerRadius_), -(currentInner - outerRadius_));
-        QRectF outerRect = chartCircleRect_.adjusted(
-            currentOuter - outerRadius_, currentOuter - outerRadius_,
-            -(currentOuter - outerRadius_), -(currentOuter - outerRadius_));
         
         // Calculate angle based on value
         double angle = 360.0 * (data_[i].y / maxValue);
         angle *= animationState_.getEasedProgress();
         
         // Draw background ring
-        QPen bgPen(themeColor(ThemeColor::Border));
-        bgPen.setWidth(currentOuter - currentInner);
+        QPen bgPen(ThemeManager::instance().colors().border);
+        bgPen.setWidth(static_cast<int>(currentOuter - currentInner));
         bgPen.setCapStyle(Qt::RoundCap);
         painter->setPen(bgPen);
         painter->setBrush(Qt::NoBrush);
@@ -476,7 +466,7 @@ void CircularChart::drawRadialBarChart(QPainter* painter) {
             currentInner + currentOuter,
             currentInner + currentOuter);
         
-        painter->drawArc(barRect, theme_.startAngle * 16, 360 * 16);
+        painter->drawArc(barRect, static_cast<int>(theme_.startAngle * 16), 360 * 16);
         
         // Draw value arc
         QColor barColor = data_[i].color;
@@ -485,15 +475,15 @@ void CircularChart::drawRadialBarChart(QPainter* painter) {
         }
         
         QPen barPen(barColor);
-        barPen.setWidth(currentOuter - currentInner);
+        barPen.setWidth(static_cast<int>(currentOuter - currentInner));
         barPen.setCapStyle(Qt::RoundCap);
         painter->setPen(barPen);
         
-        painter->drawArc(barRect, theme_.startAngle * 16, angle * 16);
+        painter->drawArc(barRect, static_cast<int>(theme_.startAngle * 16), static_cast<int>(angle * 16));
         
         // Draw label
         if (theme_.showLabels && !data_[i].label.isEmpty()) {
-            painter->setPen(themeColor(ThemeColor::Text));
+            painter->setPen(ThemeManager::instance().colors().textPrimary);
             QFont labelFont = font();
             labelFont.setPointSize(10);
             painter->setFont(labelFont);
@@ -606,12 +596,12 @@ void CircularChart::drawSegmentLabel(QPainter* painter, const QRectF& rect, doub
     textRect.moveCenter(labelPos);
     textRect.adjust(-5, -2, 5, 2);
     
-    QColor bgColor = themeColor(ThemeColor::Background);
+    QColor bgColor = ThemeManager::instance().colors().background;
     bgColor.setAlpha(200);
     painter->fillRect(textRect, bgColor);
     
     // Draw label text
-    painter->setPen(themeColor(ThemeColor::Text));
+    painter->setPen(ThemeManager::instance().colors().textPrimary);
     painter->drawText(textRect, Qt::AlignCenter, labelText);
     
     painter->restore();
@@ -627,7 +617,7 @@ void CircularChart::drawCenterContent(QPainter* painter) {
     if (effects_.glassMorphism) {
         ChartUtils::drawGlassMorphism(painter, centerRect, effects_);
     } else {
-        QColor centerBg = themeColor(ThemeColor::Background);
+        QColor centerBg = ThemeManager::instance().colors().background;
         centerBg.setAlpha(240);
         painter->setBrush(centerBg);
         painter->setPen(Qt::NoPen);
@@ -635,7 +625,7 @@ void CircularChart::drawCenterContent(QPainter* painter) {
     }
     
     // Draw center text
-    painter->setPen(themeColor(ThemeColor::Text));
+    painter->setPen(ThemeManager::instance().colors().textPrimary);
     
     if (!centerValue_.isEmpty()) {
         // Draw value
@@ -652,7 +642,7 @@ void CircularChart::drawCenterContent(QPainter* painter) {
             QFont labelFont = font();
             labelFont.setPointSize(12);
             painter->setFont(labelFont);
-            painter->setPen(themeColor(ThemeColor::TextSecondary));
+            painter->setPen(ThemeManager::instance().colors().textSecondary);
             
             QRectF labelRect = centerRect;
             labelRect.moveTop(centerRect.center().y() + 10);
@@ -695,13 +685,13 @@ void CircularChart::drawGaugeNeedle(QPainter* painter, double value) {
     
     // Draw needle with gradient
     QLinearGradient needleGradient(0, 0, 0, outerRadius_);
-    needleGradient.setColorAt(0, themeColor(ThemeColor::Text));
-    needleGradient.setColorAt(1, themeColor(ThemeColor::Primary));
+    needleGradient.setColorAt(0, ThemeManager::instance().colors().textPrimary);
+    needleGradient.setColorAt(1, ThemeManager::instance().colors().primary);
     
     painter->fillPath(needle, needleGradient);
     
     // Draw center cap
-    painter->setBrush(themeColor(ThemeColor::Text));
+    painter->setBrush(ThemeManager::instance().colors().textPrimary);
     painter->setPen(Qt::NoPen);
     painter->drawEllipse(QPointF(0, 0), innerRadius_ * 0.15, innerRadius_ * 0.15);
     
@@ -711,7 +701,7 @@ void CircularChart::drawGaugeNeedle(QPainter* painter, double value) {
 void CircularChart::drawGaugeScale(QPainter* painter) {
     painter->save();
     
-    QPen scalePen(themeColor(ThemeColor::TextSecondary));
+    QPen scalePen(ThemeManager::instance().colors().textSecondary);
     scalePen.setWidth(1);
     painter->setPen(scalePen);
     

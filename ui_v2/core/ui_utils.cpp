@@ -1,19 +1,6 @@
+#include "ui_v2_common.h"
 #include "ui_utils.h"
 #include "ui_constants.h"
-#include <QGraphicsOpacityEffect>
-#include <QScrollBar>
-#include <QTimer>
-#include <QTextDocument>
-#include <QFontMetrics>
-#include <QPainter>
-#include <QDesktopServices>
-#include <QUrl>
-#include <QProcess>
-#include <QRegularExpression>
-#include <QApplication>
-#include <QAbstractScrollArea>
-#include <QScrollArea>
-#include <cmath>
 
 namespace llm_re::ui_v2 {
 
@@ -432,7 +419,9 @@ void UIUtils::setWidgetVisible(QWidget* widget, bool visible, bool animated) {
 void UIUtils::scrollToWidget(QWidget* widget, QAbstractScrollArea* scrollArea) {
     if (!widget || !scrollArea) return;
     
-    scrollArea->ensureWidgetVisible(widget);
+    if (QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea)) {
+        sa->ensureWidgetVisible(widget);
+    }
 }
 
 QWidget* UIUtils::findParentOfType(QWidget* widget, const char* className) {
@@ -449,68 +438,11 @@ QWidget* UIUtils::findParentOfType(QWidget* widget, const char* className) {
     return nullptr;
 }
 
-bool UIUtils::validateEmail(const QString& email) {
-    QRegularExpression regex(R"(^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$)");
-    return regex.match(email).hasMatch();
-}
-
-bool UIUtils::validateUrl(const QString& url) {
-    QUrl qurl(url);
-    return qurl.isValid() && (qurl.scheme() == "http" || qurl.scheme() == "https");
-}
-
-bool UIUtils::validateHexColor(const QString& color) {
-    QRegularExpression regex("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$");
-    return regex.match(color).hasMatch();
-}
-
-void UIUtils::openUrl(const QString& url) {
-    QDesktopServices::openUrl(QUrl(url));
-}
-
-void UIUtils::openFile(const QString& path) {
-    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-}
-
-void UIUtils::revealInExplorer(const QString& path) {
-#ifdef Q_OS_WIN
-    QProcess::startDetached("explorer.exe", {"/select,", QDir::toNativeSeparators(path)});
-#elif defined(Q_OS_MAC)
-    QProcess::execute("/usr/bin/osascript", {"-e", 
-        QString("tell application \"Finder\" to reveal POSIX file \"%1\"").arg(path)});
-    QProcess::execute("/usr/bin/osascript", {"-e", 
-        "tell application \"Finder\" to activate"});
-#else
-    // Linux - try various file managers
-    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).dir().absolutePath()));
-#endif
-}
-
-QString UIUtils::getPlatformTheme() {
-    // This is a simplified version - in production you'd check system settings
-#ifdef Q_OS_MAC
-    // Check macOS dark mode
-    QProcess process;
-    process.start("defaults", {"read", "-g", "AppleInterfaceStyle"});
-    process.waitForFinished();
-    return process.readAllStandardOutput().contains("Dark") ? "dark" : "light";
-#elif defined(Q_OS_WIN)
-    // Check Windows dark mode via registry
-    QSettings settings("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                      QSettings::NativeFormat);
-    return settings.value("AppsUseLightTheme", 1).toInt() == 0 ? "dark" : "light";
-#else
-    // Linux - check for common dark theme hints
-    QString theme = qgetenv("GTK_THEME").toLower();
-    return theme.contains("dark") ? "dark" : "light";
-#endif
-}
-
 void UIUtils::dumpWidgetTree(QWidget* widget, int indent) {
     if (!widget) return;
     
     QString indentStr(indent * 2, ' ');
-    qDebug() << qPrintable(indentStr + widgetInfo(widget));
+    qDebug() << qPrintable(indentStr) << qPrintable(widgetInfo(widget));
     
     for (QObject* child : widget->children()) {
         if (QWidget* childWidget = qobject_cast<QWidget*>(child)) {

@@ -1,11 +1,7 @@
 #pragma once
 
-#include <QString>
-#include <QWidget>
-#include <QPropertyAnimation>
-#include <QGraphicsOpacityEffect>
-#include <chrono>
-#include <functional>
+#include "ui_v2_common.h"
+#include "ui_constants.h"
 
 namespace llm_re::ui_v2 {
 
@@ -63,18 +59,7 @@ public:
     static void setWidgetVisible(QWidget* widget, bool visible, bool animated = true);
     static void scrollToWidget(QWidget* widget, QAbstractScrollArea* scrollArea);
     static QWidget* findParentOfType(QWidget* widget, const char* className);
-    
-    // Validation utilities
-    static bool validateEmail(const QString& email);
-    static bool validateUrl(const QString& url);
-    static bool validateHexColor(const QString& color);
-    
-    // Platform utilities
-    static void openUrl(const QString& url);
-    static void openFile(const QString& path);
-    static void revealInExplorer(const QString& path);
-    static QString getPlatformTheme(); // "dark" or "light"
-    
+
     // Debug utilities
     static void dumpWidgetTree(QWidget* widget, int indent = 0);
     static QString widgetInfo(QWidget* widget);

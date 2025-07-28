@@ -1,38 +1,6 @@
+#include "../core/ui_v2_common.h"
 #include "floating_inspector.h"
 #include "../core/theme_manager.h"
-#include <QTimer>
-#include <QTextEdit>
-#include <QLabel>
-#include <QToolButton>
-#include <QListWidget>
-#include <QStackedWidget>
-#include <QScrollArea>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGridLayout>
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <QApplication>
-#include <QScreen>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QTableWidget>
-#include <QLineEdit>
-#include <QTreeWidget>
-#include <QTextDocument>
-#include <QTextCursor>
-#include <QClipboard>
-#include <QFileDialog>
-#include <QFile>
-#include <QTextStream>
-#include <QDragEnterEvent>
-#include <QMimeData>
-#include <QSlider>
-#include <QComboBox>
-#include <QSyntaxHighlighter>
-#include <QTextCharFormat>
-#include <QRegularExpression>
 
 namespace llm_re::ui_v2 {
 
@@ -155,10 +123,13 @@ void FloatingInspector::createContent()
     roleLabel_->setObjectName("messageRole");
     messageLayout->addWidget(roleLabel_);
     
-    messageEdit_ = new QTextEdit(this);
+    messageEdit_ = new QTextBrowser(this);
     messageEdit_->setReadOnly(true);
     messageEdit_->setObjectName("messageContent");
-    connect(messageEdit_, &QTextEdit::anchorClicked, this, &FloatingInspector::onLinkClicked);
+    messageEdit_->setOpenExternalLinks(false); // Handle links internally
+    connect(messageEdit_, &QTextBrowser::anchorClicked, this, [this](const QUrl& url) {
+        onLinkClicked(url.toString());
+    });
     messageLayout->addWidget(messageEdit_, 1);
     
     metadataList_ = new QListWidget(this);
@@ -308,14 +279,6 @@ void FloatingInspector::createFooter()
     
     layout->addWidget(searchEdit_);
     layout->addWidget(searchResultLabel_);
-    
-    // Export
-    exportButton_ = new QToolButton(this);
-    exportButton_->setIcon(QIcon(":/icons/export.png"));
-    exportButton_->setToolTip("Export");
-    connect(exportButton_, &QToolButton::clicked, [this]() { exportContent(); });
-    
-    layout->addWidget(exportButton_);
 }
 
 void FloatingInspector::showMessage(const QString& role, const QString& content, const QJsonObject& metadata)
@@ -1053,7 +1016,7 @@ void FloatingInspector::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
         isDragging_ = true;
-        dragStartPos_ = event->globalPosition().toPoint() - pos();
+        dragStartPos_ = event->globalPos() - pos();
         setCursor(Qt::ClosedHandCursor);
     }
     BaseStyledWidget::mousePressEvent(event);
@@ -1062,7 +1025,7 @@ void FloatingInspector::mousePressEvent(QMouseEvent* event)
 void FloatingInspector::mouseMoveEvent(QMouseEvent* event)
 {
     if (isDragging_ && (event->buttons() & Qt::LeftButton)) {
-        move(event->globalPosition().toPoint() - dragStartPos_);
+        move(event->globalPos() - dragStartPos_);
         position_ = Manual;
         emit positionChanged(Manual);
     }
@@ -1078,7 +1041,7 @@ void FloatingInspector::mouseReleaseEvent(QMouseEvent* event)
     BaseStyledWidget::mouseReleaseEvent(event);
 }
 
-void FloatingInspector::enterEvent(QEnterEvent* event)
+void FloatingInspector::enterEvent(QEvent* event)
 {
     stopAutoHideTimer();
     
@@ -1392,7 +1355,18 @@ void PropertyInspector::inspectJson(const QJsonObject& json)
         }
         default:
             item->setText(1, value.toString());
-            item->setText(2, QJsonValue::typeNames[value.type()]);
+            // Get type name based on QJsonValue::Type
+            QString typeName;
+            switch (value.type()) {
+                case QJsonValue::Null: typeName = "null"; break;
+                case QJsonValue::Bool: typeName = "bool"; break;
+                case QJsonValue::Double: typeName = "number"; break;
+                case QJsonValue::String: typeName = "string"; break;
+                case QJsonValue::Array: typeName = "array"; break;
+                case QJsonValue::Object: typeName = "object"; break;
+                default: typeName = "undefined"; break;
+            }
+            item->setText(2, typeName);
         }
     };
     

@@ -1,13 +1,7 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
-#include <QTextBrowser>
-#include <QSyntaxHighlighter>
-#include <memory>
-#include <unordered_map>
-
-class QTextDocument;
-class QMenu;
 
 namespace llm_re::ui_v2 {
 

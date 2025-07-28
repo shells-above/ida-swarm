@@ -1,25 +1,7 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
-#include "../models/memory_model.h"
-#include <QDockWidget>
-#include <QAbstractItemModel>
-#include <QSortFilterProxyModel>
-#include <memory>
-
-class QTreeView;
-class QTableView;
-class QListView;
-class QGraphicsView;
-class QGraphicsScene;
-class QToolBar;
-class QLineEdit;
-class QComboBox;
-class QSlider;
-class QSplitter;
-class QStackedWidget;
-class QMenu;
-class QAction;
 
 namespace llm_re::ui_v2 {
 
@@ -39,6 +21,11 @@ struct MemoryEntry {
     // Relationships
     QList<QUuid> references;
     QList<QUuid> referencedBy;
+    
+    // Equality operator for QList operations
+    bool operator==(const MemoryEntry& other) const {
+        return id == other.id;
+    }
 };
 
 // Graph node for visualization
@@ -86,6 +73,87 @@ public:
 private:
     MemoryGraphNode* source_;
     MemoryGraphNode* target_;
+};
+
+// Memory model implementation
+class MemoryModel : public QAbstractItemModel {
+    Q_OBJECT
+
+public:
+    enum Column {
+        AddressColumn,
+        FunctionColumn,
+        ModuleColumn,
+        TagsColumn,
+        TimestampColumn,
+        ConfidenceColumn,
+        ColumnCount
+    };
+
+    enum Role {
+        EntryRole = Qt::UserRole + 1,
+        IdRole,
+        BookmarkedRole,
+        ConfidenceRole
+    };
+
+    explicit MemoryModel(QObject* parent = nullptr);
+    ~MemoryModel() override;
+
+    // QAbstractItemModel interface
+    QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
+    QModelIndex parent(const QModelIndex& child) const override;
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+    Qt::ItemFlags flags(const QModelIndex& index) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
+
+    // Data management
+    void addEntry(const MemoryEntry& entry);
+    void updateEntry(const QUuid& id, const MemoryEntry& entry);
+    void removeEntry(const QUuid& id);
+    void clearEntries();
+
+    MemoryEntry entry(const QUuid& id) const;
+    QList<MemoryEntry> entries() const { return entries_; }
+
+    // Grouping
+    void setGroupBy(const QString& field);
+    QString groupBy() const { return groupBy_; }
+
+    // Statistics
+    int totalEntries() const { return entries_.size(); }
+    int bookmarkedCount() const;
+    QStringList allTags() const;
+    QStringList allModules() const;
+    QStringList allFunctions() const;
+
+signals:
+    void entryAdded(const QUuid& id);
+    void entryUpdated(const QUuid& id);
+    void entryRemoved(const QUuid& id);
+    void modelReset();
+
+private:
+    struct TreeNode {
+        QString name;
+        TreeNode* parent = nullptr;
+        QList<TreeNode*> children;
+        MemoryEntry* entry = nullptr;
+        bool isGroup = false;
+    };
+
+    void rebuildTree();
+    void clearTree();
+    TreeNode* nodeForIndex(const QModelIndex& index) const;
+    QModelIndex indexForNode(TreeNode* node) const;
+
+    QList<MemoryEntry> entries_;
+    QHash<QUuid, MemoryEntry*> entryMap_;
+    TreeNode* rootNode_ = nullptr;
+    QString groupBy_ = "module";
 };
 
 // Graph view for memory relationships
@@ -157,6 +225,7 @@ public:
     void setGroupBy(const QString& field);
     void setMetric(const QString& metric);
     
+    QString groupBy() const { return groupBy_; }
     
 signals:
     void cellClicked(const QString& group, const QString& subgroup);
@@ -349,85 +418,7 @@ private:
     QCheckBox* bookmarkedOnlyCheck_ = nullptr;
 };
 
-// Memory model implementation
-class MemoryModel : public QAbstractItemModel {
-    Q_OBJECT
-    
-public:
-    enum Column {
-        AddressColumn,
-        FunctionColumn,
-        ModuleColumn,
-        TagsColumn,
-        TimestampColumn,
-        ConfidenceColumn,
-        ColumnCount
-    };
-    
-    enum Role {
-        EntryRole = Qt::UserRole + 1,
-        IdRole,
-        BookmarkedRole,
-        ConfidenceRole
-    };
-    
-    explicit MemoryModel(QObject* parent = nullptr);
-    ~MemoryModel() override;
-    
-    // QAbstractItemModel interface
-    QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
-    QModelIndex parent(const QModelIndex& child) const override;
-    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
-    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
-    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
-    QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
-    Qt::ItemFlags flags(const QModelIndex& index) const override;
-    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
-    
-    // Data management
-    void addEntry(const MemoryEntry& entry);
-    void updateEntry(const QUuid& id, const MemoryEntry& entry);
-    void removeEntry(const QUuid& id);
-    void clearEntries();
-    
-    MemoryEntry entry(const QUuid& id) const;
-    QList<MemoryEntry> entries() const { return entries_; }
-    
-    // Grouping
-    void setGroupBy(const QString& field);
-    QString groupBy() const { return groupBy_; }
-    
-    // Statistics
-    int totalEntries() const { return entries_.size(); }
-    int bookmarkedCount() const;
-    QStringList allTags() const;
-    QStringList allModules() const;
-    QStringList allFunctions() const;
-    
-signals:
-    void entryAdded(const QUuid& id);
-    void entryUpdated(const QUuid& id);
-    void entryRemoved(const QUuid& id);
-    void modelReset();
-    
-private:
-    struct TreeNode {
-        QString name;
-        TreeNode* parent = nullptr;
-        QList<TreeNode*> children;
-        MemoryEntry* entry = nullptr;
-        bool isGroup = false;
-    };
-    
-    void rebuildTree();
-    void clearTree();
-    TreeNode* nodeForIndex(const QModelIndex& index) const;
-    QModelIndex indexForNode(TreeNode* node) const;
-    
-    QList<MemoryEntry> entries_;
-    QHash<QUuid, MemoryEntry*> entryMap_;
-    TreeNode* rootNode_ = nullptr;
-    QString groupBy_ = "module";
-};
-
 } // namespace llm_re::ui_v2
+
+// Register MemoryEntry with Qt's meta-type system
+Q_DECLARE_METATYPE(llm_re::ui_v2::MemoryEntry)

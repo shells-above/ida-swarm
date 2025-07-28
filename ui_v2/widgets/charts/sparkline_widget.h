@@ -1,9 +1,8 @@
 #pragma once
 
+#include "../../core/ui_v2_common.h"
 #include "custom_chart_base.h"
 #include "chart_theme.h"
-#include <deque>
-#include <memory>
 
 namespace llm_re::ui_v2::charts {
 
@@ -179,6 +178,13 @@ private:
     QColor fillColor_;
     QColor positiveColor_;
     QColor negativeColor_;
+    QColor neutralColor_;       // For WinLoss neutral values
+    QColor targetColor_;        // For Bullet chart target line
+    QColor referenceLineColor_; // For reference line
+    
+    // Display properties
+    int valuePrecision_ = 2;
+    float valueFontSize_ = 10.0f;
     
     // Thresholds and bands
     struct Threshold {

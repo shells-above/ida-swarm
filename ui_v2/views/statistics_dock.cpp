@@ -1,1075 +1,1181 @@
+#include "../core/ui_v2_common.h"
 #include "statistics_dock.h"
 #include "../core/theme_manager.h"
-#include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
-#include <QtCharts/QChartView>
-#include <QtCharts/QChart>
-#include <QtCharts/QLineSeries>
-#include <QtCharts/QAreaSeries>
-#include <QtCharts/QBarSeries>
-#include <QtCharts/QBarSet>
-#include <QtCharts/QPieSeries>
-#include <QtCharts/QPieSlice>
-#include <QtCharts/QScatterSeries>
-#include <QtCharts/QValueAxis>
-#include <QtCharts/QDateTimeAxis>
-#include <QtCharts/QBarCategoryAxis>
-#include <QtCharts/QLegend>
-#include <QToolBar>
-#include <QTabWidget>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QSplitter>
-#include <QTableWidget>
-#include <QTreeWidget>
-#include <QComboBox>
-#include <QSpinBox>
-#include <QCheckBox>
-#include <QPushButton>
-#include <QLabel>
-#include <QDateTimeEdit>
-#include <QTimer>
-#include <QMenu>
-#include <QAction>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QPainter>
-#include <QMouseEvent>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QSettings>
-#include <QListWidget>
-#include <QDialogButtonBox>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QtMath>
-#include <algorithm>
-
-QT_CHARTS_USE_NAMESPACE
 
 namespace llm_re::ui_v2 {
 
-// BaseChartWidget implementation
-
-BaseChartWidget::BaseChartWidget(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
-    setupChart();
-}
-
-BaseChartWidget::~BaseChartWidget() = default;
-
-void BaseChartWidget::setupChart() {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+StatisticsDock::StatisticsDock(QWidget* parent)
+    : BaseStyledWidget(parent) {
+    setupUI();
+    createToolBar();
+    createViews();
+    connectSignals();
+    loadSettings();
     
-    chart_ = new QChart();
-    chart_->setAnimationOptions(animated_ ? QChart::AllAnimations : QChart::NoAnimation);
+    // Initialize time range
+    endTime_ = QDateTime::currentDateTime();
+    startTime_ = endTime_.addSecs(-24 * 3600);
     
-    chartView_ = new QChartView(chart_, this);
-    chartView_->setRenderHint(QPainter::Antialiasing);
+    // Setup timers
+    refreshTimer_ = new QTimer(this);
+    refreshTimer_->setInterval(5000);
+    connect(refreshTimer_, &QTimer::timeout, this, &StatisticsDock::updateStatistics);
     
-    layout->addWidget(chartView_);
+    realtimeTimer_ = new QTimer(this);
+    realtimeTimer_->setInterval(1000);
+    connect(realtimeTimer_, &QTimer::timeout, this, &StatisticsDock::updateRealtimeMetrics);
     
-    applyChartTheme();
+    // Initialize with empty data
+    updateStatistics();
 }
 
-void BaseChartWidget::setTitle(const QString& title) {
-    chart_->setTitle(title);
+StatisticsDock::~StatisticsDock() {
+    saveSettings();
 }
 
-void BaseChartWidget::setAnimated(bool animated) {
-    animated_ = animated;
-    chart_->setAnimationOptions(animated_ ? QChart::AllAnimations : QChart::NoAnimation);
-}
-
-void BaseChartWidget::setTheme(const QString& theme) {
-    chartTheme_ = theme;
-    applyChartTheme();
-}
-
-
-void BaseChartWidget::applyChartTheme() {
-    if (chartTheme_ == "dark") {
-        chart_->setTheme(QChart::ChartThemeDark);
-        chart_->setBackgroundBrush(ThemeManager::instance()->color(ThemeManager::Surface));
-        chart_->setTitleBrush(ThemeManager::instance()->color(ThemeManager::OnSurface));
-        
-        auto* legend = chart_->legend();
-        if (legend) {
-            legend->setLabelColor(ThemeManager::instance()->color(ThemeManager::OnSurface));
-        }
-    } else {
-        chart_->setTheme(QChart::ChartThemeLight);
+void StatisticsDock::addDataPoint(const StatDataPoint& point) {
+    dataPoints_.append(point);
+    
+    // Keep only data within time range
+    dataPoints_.erase(
+        std::remove_if(dataPoints_.begin(), dataPoints_.end(),
+                      [this](const StatDataPoint& p) {
+                          return p.timestamp < startTime_ || p.timestamp > endTime_;
+                      }),
+        dataPoints_.end()
+    );
+    
+    if (realtimeEnabled_) {
+        updateRealtimeMetrics();
     }
 }
 
-// MessageStatsChart implementation
-
-MessageStatsChart::MessageStatsChart(QWidget* parent)
-    : BaseChartWidget(parent)
-{
-    setTitle(tr("Message Statistics"));
+void StatisticsDock::addDataPoints(const QList<StatDataPoint>& points) {
+    dataPoints_.append(points);
     
-    createSeries();
-    updateAxes();
+    // Keep only data within time range
+    dataPoints_.erase(
+        std::remove_if(dataPoints_.begin(), dataPoints_.end(),
+                      [this](const StatDataPoint& p) {
+                          return p.timestamp < startTime_ || p.timestamp > endTime_;
+                      }),
+        dataPoints_.end()
+    );
+    
+    updateStatistics();
 }
 
-void MessageStatsChart::setData(const QList<StatDataPoint>& data) {
-    data_ = data;
-    updateChart();
+void StatisticsDock::clearData() {
+    dataPoints_.clear();
+    cachedStats_ = QJsonObject();
+    lastUpdate_ = QDateTime();
+    
+    // Clear all charts
+    if (messageChart_) messageChart_->clearSeries();
+    if (tokenUsageChart_) tokenUsageChart_->clearData();
+    if (toolUsageChart_) toolUsageChart_->clearSeries();
+    if (performanceChart_) performanceChart_->clearSeries();
+    if (memoryAnalysisChart_) memoryAnalysisChart_->clearData();
+    
+    // Clear sparklines
+    if (cpuSparkline_) cpuSparkline_->clearData();
+    if (memorySparkline_) memorySparkline_->clearData();
+    if (tokenRateSparkline_) tokenRateSparkline_->clearData();
+    
+    updateStatistics();
 }
 
-void MessageStatsChart::refresh() {
-    updateChart();
-}
-
-void MessageStatsChart::setTimeRange(const QDateTime& start, const QDateTime& end) {
+void StatisticsDock::setTimeRange(const QDateTime& start, const QDateTime& end) {
     startTime_ = start;
     endTime_ = end;
     
-    if (xAxis_) {
-        xAxis_->setRange(start, end);
-    }
+    if (startDateEdit_) startDateEdit_->setDateTime(start);
+    if (endDateEdit_) endDateEdit_->setDateTime(end);
+    
+    emit timeRangeChanged(start, end);
+    updateStatistics();
 }
 
-void MessageStatsChart::setGroupBy(const QString& groupBy) {
-    groupBy_ = groupBy;
-    updateChart();
-}
-
-void MessageStatsChart::setMetric(const QString& metric) {
-    metric_ = metric;
-    updateChart();
-}
-
-void MessageStatsChart::createSeries() {
-    // Create line series for each message type
-    userSeries_ = new QLineSeries();
-    userSeries_->setName(tr("User"));
-    userSeries_->setColor(QColor("#2196F3"));
+void StatisticsDock::setCurrentView(const QString& view) {
+    if (!viewTabs_) return;
     
-    assistantSeries_ = new QLineSeries();
-    assistantSeries_->setName(tr("Assistant"));
-    assistantSeries_->setColor(QColor("#4CAF50"));
-    
-    systemSeries_ = new QLineSeries();
-    systemSeries_->setName(tr("System"));
-    systemSeries_->setColor(QColor("#FF9800"));
-    
-    // Create area series for total
-    auto* totalSeries = new QLineSeries();
-    totalArea_ = new QAreaSeries(totalSeries);
-    totalArea_->setName(tr("Total"));
-    totalArea_->setColor(QColor("#9E9E9E"));
-    totalArea_->setOpacity(0.3);
-    
-    // Add to chart
-    chart_->addSeries(totalArea_);
-    chart_->addSeries(userSeries_);
-    chart_->addSeries(assistantSeries_);
-    chart_->addSeries(systemSeries_);
-}
-
-void MessageStatsChart::updateAxes() {
-    // Time axis
-    xAxis_ = new QDateTimeAxis();
-    xAxis_->setFormat("MMM dd hh:mm");
-    xAxis_->setTitleText(tr("Time"));
-    chart_->addAxis(xAxis_, Qt::AlignBottom);
-    
-    // Value axis
-    yAxis_ = new QValueAxis();
-    yAxis_->setTitleText(metric_ == "count" ? tr("Message Count") : 
-                        metric_ == "length" ? tr("Message Length") : tr("Token Count"));
-    chart_->addAxis(yAxis_, Qt::AlignLeft);
-    
-    // Attach axes to series
-    userSeries_->attachAxis(xAxis_);
-    userSeries_->attachAxis(yAxis_);
-    assistantSeries_->attachAxis(xAxis_);
-    assistantSeries_->attachAxis(yAxis_);
-    systemSeries_->attachAxis(xAxis_);
-    systemSeries_->attachAxis(yAxis_);
-    totalArea_->attachAxis(xAxis_);
-    totalArea_->attachAxis(yAxis_);
-}
-
-void MessageStatsChart::updateChart() {
-    // Clear existing data
-    userSeries_->clear();
-    assistantSeries_->clear();
-    systemSeries_->clear();
-    
-    // Group data by time period
-    QHash<QDateTime, QHash<QString, double>> groupedData;
-    
-    for (const StatDataPoint& point : data_) {
-        if (point.category != "message") continue;
-        
-        // Round timestamp based on groupBy
-        QDateTime groupTime = point.timestamp;
-        if (groupBy_ == "hour") {
-            groupTime = QDateTime(groupTime.date(), QTime(groupTime.time().hour(), 0));
-        } else if (groupBy_ == "day") {
-            groupTime = QDateTime(groupTime.date(), QTime(0, 0));
-        } else if (groupBy_ == "week") {
-            int dayOfWeek = groupTime.date().dayOfWeek();
-            groupTime = groupTime.addDays(-dayOfWeek + 1);
-            groupTime = QDateTime(groupTime.date(), QTime(0, 0));
-        } else if (groupBy_ == "month") {
-            groupTime = QDateTime(QDate(groupTime.date().year(), groupTime.date().month(), 1), QTime(0, 0));
+    for (int i = 0; i < viewTabs_->count(); ++i) {
+        if (viewTabs_->tabText(i) == view) {
+            viewTabs_->setCurrentIndex(i);
+            break;
         }
-        
-        double value = point.value;
-        if (metric_ == "length") {
-            value = point.metadata.value("length").toDouble();
-        } else if (metric_ == "tokens") {
-            value = point.metadata.value("tokens").toDouble();
-        }
-        
-        groupedData[groupTime][point.subcategory] += value;
-    }
-    
-    // Add data to series
-    QList<QDateTime> times = groupedData.keys();
-    std::sort(times.begin(), times.end());
-    
-    double maxValue = 0;
-    for (const QDateTime& time : times) {
-        double userValue = groupedData[time].value("user", 0);
-        double assistantValue = groupedData[time].value("assistant", 0);
-        double systemValue = groupedData[time].value("system", 0);
-        double totalValue = userValue + assistantValue + systemValue;
-        
-        userSeries_->append(time.toMSecsSinceEpoch(), userValue);
-        assistantSeries_->append(time.toMSecsSinceEpoch(), assistantValue);
-        systemSeries_->append(time.toMSecsSinceEpoch(), systemValue);
-        
-        if (totalArea_->upperSeries()) {
-            static_cast<QLineSeries*>(totalArea_->upperSeries())->append(
-                time.toMSecsSinceEpoch(), totalValue
-            );
-        }
-        
-        maxValue = std::max(maxValue, totalValue);
-    }
-    
-    // Update axes ranges
-    if (!times.isEmpty()) {
-        xAxis_->setRange(times.first(), times.last());
-        yAxis_->setRange(0, maxValue * 1.1);
     }
 }
 
-// ToolUsageChart implementation
-
-ToolUsageChart::ToolUsageChart(QWidget* parent)
-    : BaseChartWidget(parent)
-{
-    setTitle(tr("Tool Usage"));
-}
-
-void ToolUsageChart::setData(const QList<StatDataPoint>& data) {
-    data_ = data;
-    updateChart();
-}
-
-void ToolUsageChart::refresh() {
-    updateChart();
-}
-
-void ToolUsageChart::setChartType(const QString& type) {
-    chartType_ = type;
-    updateChart();
-}
-
-void ToolUsageChart::setMetric(const QString& metric) {
-    metric_ = metric;
-    updateChart();
-}
-
-void ToolUsageChart::setTopN(int n) {
-    topN_ = n;
-    updateChart();
-}
-
-void ToolUsageChart::updateChart() {
-    // Clear existing series
-    chart_->removeAllSeries();
-    
-    if (chartType_ == "bar") {
-        createBarChart();
-    } else if (chartType_ == "pie") {
-        createPieChart();
-    } else if (chartType_ == "stacked") {
-        createStackedChart();
+void StatisticsDock::refreshAll() {
+    updateStatistics();
+    if (realtimeEnabled_) {
+        updateRealtimeMetrics();
     }
 }
 
-void ToolUsageChart::createBarChart() {
-    // Aggregate data by tool
-    QHash<QString, double> toolData;
+void StatisticsDock::registerCustomMetric(const QString& name, const QString& unit) {
+    customMetrics_[name] = 0.0;
     
-    for (const StatDataPoint& point : data_) {
-        if (point.category != "tool") continue;
+    if (realtimeWidget_) {
+        realtimeWidget_->addMetric(name, unit);
+    }
+}
+
+void StatisticsDock::updateCustomMetric(const QString& name, double value) {
+    customMetrics_[name] = value;
+    
+    if (realtimeWidget_) {
+        realtimeWidget_->updateMetric(name, value);
+    }
+    
+    emit customMetricUpdated(name, value);
+}
+
+void StatisticsDock::setRealtimeEnabled(bool enabled) {
+    realtimeEnabled_ = enabled;
+    
+    if (realtimeAction_) {
+        realtimeAction_->setChecked(enabled);
+    }
+    
+    if (enabled) {
+        if (realtimeWidget_) realtimeWidget_->start();
+        realtimeTimer_->start();
+    } else {
+        if (realtimeWidget_) realtimeWidget_->stop();
+        realtimeTimer_->stop();
+    }
+}
+
+void StatisticsDock::updateStatistics() {
+    calculateStatistics();
+    updateAllCharts();
+    
+    if (summaryWidget_) {
+        summaryWidget_->updateStats(cachedStats_);
+    }
+    
+    lastUpdate_ = QDateTime::currentDateTime();
+}
+
+void StatisticsDock::resetTimeRange() {
+    endTime_ = QDateTime::currentDateTime();
+    startTime_ = endTime_.addSecs(-24 * 3600);
+    setTimeRange(startTime_, endTime_);
+}
+
+void StatisticsDock::onThemeChanged() {
+    BaseStyledWidget::onThemeChanged();
+    
+    // Update stat card colors
+    if (summaryWidget_) {
+        // The cards are managed internally by StatsSummaryWidget
+        // Just trigger an update to refresh the colors
+        summaryWidget_->update();
+    }
+    
+    // Re-process data to update chart colors
+    if (!dataPoints_.empty()) {
+        updateStatistics();
+    }
+}
+
+void StatisticsDock::onTimeRangeChanged() {
+    if (startDateEdit_ && endDateEdit_) {
+        setTimeRange(startDateEdit_->dateTime(), endDateEdit_->dateTime());
+    }
+}
+
+void StatisticsDock::onViewTabChanged(int index) {
+    QString viewName = viewTabs_->tabText(index);
+    emit viewChanged(viewName);
+}
+
+void StatisticsDock::onRefreshClicked() {
+    refreshAll();
+}
+
+void StatisticsDock::onSettingsClicked() {
+    StatsSettingsDialog dialog(this);
+    
+    dialog.setAutoRefreshEnabled(autoRefreshCheck_->isChecked());
+    dialog.setRefreshInterval(refreshIntervalSpin_->value());
+    dialog.setDefaultTimeRange(presetCombo_->currentText());
+    dialog.setChartAnimationsEnabled(true);  // Default to true since charts don't have animation getter
+    
+    if (dialog.exec() == QDialog::Accepted) {
+        autoRefreshCheck_->setChecked(dialog.isAutoRefreshEnabled());
+        refreshIntervalSpin_->setValue(dialog.refreshInterval());
         
-        double value = point.value;
-        if (metric_ == "duration") {
-            value = point.metadata.value("duration").toDouble();
-        } else if (metric_ == "success_rate") {
-            // Calculate success rate
-            bool success = point.metadata.value("success").toBool();
-            if (toolData.contains(point.subcategory)) {
-                // Running average
-                double current = toolData[point.subcategory];
-                toolData[point.subcategory] = (current + (success ? 100 : 0)) / 2;
-            } else {
-                toolData[point.subcategory] = success ? 100 : 0;
+        // Animation settings handled internally by charts
+        // No need to set animation on individual charts
+        
+        saveSettings();
+    }
+}
+
+void StatisticsDock::onChartDataPointClicked(int seriesIndex, int pointIndex) {
+    // Handle chart interaction
+    if (seriesIndex >= 0 && pointIndex >= 0 && pointIndex < dataPoints_.size()) {
+        emit dataPointClicked(dataPoints_[pointIndex]);
+    }
+}
+
+void StatisticsDock::updateRealtimeMetrics() {
+    // Update real-time metrics based on recent data
+    if (!realtimeWidget_) return;
+    
+    // Calculate metrics from recent data (last minute)
+    QDateTime recentTime = QDateTime::currentDateTime().addSecs(-60);
+    
+    double totalTokens = 0;
+    double messageCount = 0;
+    
+    for (const auto& point : dataPoints_) {
+        if (point.timestamp >= recentTime) {
+            if (point.category == "tokens") {
+                totalTokens += point.value;
+            } else if (point.category == "messages") {
+                messageCount += point.value;
             }
-            continue;
         }
-        
-        toolData[point.subcategory] += value;
     }
     
-    // Sort by value and take top N
-    QList<QPair<QString, double>> sortedData;
-    for (auto it = toolData.begin(); it != toolData.end(); ++it) {
-        sortedData.append({it.key(), it.value()});
+    // Update sparklines with recent values
+    if (tokenRateSparkline_) {
+        tokenRateSparkline_->appendValue(totalTokens);
     }
     
-    std::sort(sortedData.begin(), sortedData.end(),
-             [](const auto& a, const auto& b) { return a.second > b.second; });
-    
-    if (sortedData.size() > topN_) {
-        sortedData = sortedData.mid(0, topN_);
+    // Update custom metrics
+    for (auto it = customMetrics_.begin(); it != customMetrics_.end(); ++it) {
+        realtimeWidget_->updateMetric(it.key(), it.value());
     }
-    
-    // Create bar series
-    barSeries_ = new QBarSeries();
-    auto* set = new QBarSet(metric_);
-    
-    QStringList categories;
-    for (const auto& item : sortedData) {
-        categories << item.first;
-        *set << item.second;
-    }
-    
-    barSeries_->append(set);
-    chart_->addSeries(barSeries_);
-    
-    // Create axes
-    auto* axisX = new QBarCategoryAxis();
-    axisX->append(categories);
-    chart_->addAxis(axisX, Qt::AlignBottom);
-    barSeries_->attachAxis(axisX);
-    
-    auto* axisY = new QValueAxis();
-    axisY->setTitleText(metric_ == "count" ? tr("Count") :
-                       metric_ == "duration" ? tr("Duration (ms)") :
-                       tr("Success Rate (%)"));
-    chart_->addAxis(axisY, Qt::AlignLeft);
-    barSeries_->attachAxis(axisY);
 }
 
-void ToolUsageChart::createPieChart() {
-    // Aggregate data by tool
-    QHash<QString, double> toolData;
+void StatisticsDock::setupUI() {
+    auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
     
-    for (const StatDataPoint& point : data_) {
-        if (point.category != "tool") continue;
-        
-        double value = point.value;
-        if (metric_ == "duration") {
-            value = point.metadata.value("duration").toDouble();
-        }
-        
-        toolData[point.subcategory] += value;
-    }
+    // Create main widget
+    auto* contentWidget = new QWidget(this);
+    mainLayout->addWidget(contentWidget);
     
-    // Create pie series
-    pieSeries_ = new QPieSeries();
+    auto* contentLayout = new QVBoxLayout(contentWidget);
+    contentLayout->setContentsMargins(8, 8, 8, 8);
+    contentLayout->setSpacing(8);
+}
+
+void StatisticsDock::createToolBar() {
+    toolBar_ = new QToolBar(this);
+    toolBar_->setMovable(false);
     
-    // Sort and take top N
-    QList<QPair<QString, double>> sortedData;
-    double total = 0;
-    for (auto it = toolData.begin(); it != toolData.end(); ++it) {
-        sortedData.append({it.key(), it.value()});
-        total += it.value();
-    }
+    // Time range controls
+    startDateEdit_ = new QDateTimeEdit(startTime_, this);
+    startDateEdit_->setCalendarPopup(true);
+    startDateEdit_->setDisplayFormat("yyyy-MM-dd HH:mm");
+    toolBar_->addWidget(new QLabel("From:", this));
+    toolBar_->addWidget(startDateEdit_);
     
-    std::sort(sortedData.begin(), sortedData.end(),
-             [](const auto& a, const auto& b) { return a.second > b.second; });
+    endDateEdit_ = new QDateTimeEdit(endTime_, this);
+    endDateEdit_->setCalendarPopup(true);
+    endDateEdit_->setDisplayFormat("yyyy-MM-dd HH:mm");
+    toolBar_->addWidget(new QLabel("To:", this));
+    toolBar_->addWidget(endDateEdit_);
     
-    double otherValue = 0;
-    for (int i = 0; i < sortedData.size(); ++i) {
-        if (i < topN_) {
-            auto* slice = pieSeries_->append(sortedData[i].first, sortedData[i].second);
-            slice->setLabelVisible(true);
-            slice->setLabel(QString("%1 (%2%)").arg(sortedData[i].first)
-                          .arg(sortedData[i].second / total * 100, 0, 'f', 1));
+    // Preset dropdown
+    presetCombo_ = new QComboBox(this);
+    presetCombo_->addItems({"Last Hour", "Last 24 Hours", "Last Week", "Last Month", "Custom"});
+    presetCombo_->setCurrentText("Last 24 Hours");
+    toolBar_->addWidget(presetCombo_);
+    
+    toolBar_->addSeparator();
+    
+    // Auto refresh
+    autoRefreshCheck_ = new QCheckBox("Auto Refresh", this);
+    toolBar_->addWidget(autoRefreshCheck_);
+    
+    refreshIntervalSpin_ = new QSpinBox(this);
+    refreshIntervalSpin_->setRange(1, 60);
+    refreshIntervalSpin_->setValue(5);
+    refreshIntervalSpin_->setSuffix(" sec");
+    toolBar_->addWidget(refreshIntervalSpin_);
+    
+    toolBar_->addSeparator();
+    
+    // Actions
+    refreshAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("refresh"), "Refresh");
+    realtimeAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("realtime"), "Real-time");
+    realtimeAction_->setCheckable(true);
+    settingsAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("settings"), "Settings");
+    
+    // Add spacer
+    auto* spacer = new QWidget();
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolBar_->addWidget(spacer);
+    
+    // Add sparklines
+    cpuSparkline_ = new charts::SparklineWidget(this);
+    cpuSparkline_->setMinimumSize(100, 20);
+    cpuSparkline_->setMaximumSize(100, 20);
+    toolBar_->addWidget(cpuSparkline_);
+    
+    memorySparkline_ = new charts::SparklineWidget(this);
+    memorySparkline_->setMinimumSize(100, 20);
+    memorySparkline_->setMaximumSize(100, 20);
+    toolBar_->addWidget(memorySparkline_);
+    
+    tokenRateSparkline_ = new charts::SparklineWidget(this);
+    tokenRateSparkline_->setMinimumSize(100, 20);
+    tokenRateSparkline_->setMaximumSize(100, 20);
+    toolBar_->addWidget(tokenRateSparkline_);
+    
+    // Add toolbar to main layout
+    qobject_cast<QVBoxLayout*>(layout())->insertWidget(0, toolBar_);
+}
+
+void StatisticsDock::createViews() {
+    viewTabs_ = new QTabWidget(this);
+    viewTabs_->setDocumentMode(true);
+    
+    // Summary tab
+    auto* summaryTab = new QWidget();
+    auto* summaryLayout = new QVBoxLayout(summaryTab);
+    
+    summaryWidget_ = new StatsSummaryWidget(summaryTab);
+    summaryLayout->addWidget(summaryWidget_);
+    
+    detailsTable_ = new QTableWidget(summaryTab);
+    detailsTable_->setColumnCount(4);
+    QStringList headers;
+    headers << "Metric" << "Current" << "Average" << "Total";
+    detailsTable_->setHorizontalHeaderLabels(headers);
+    detailsTable_->horizontalHeader()->setStretchLastSection(true);
+    summaryLayout->addWidget(detailsTable_);
+    
+    viewTabs_->addTab(summaryTab, "Summary");
+    
+    // Messages tab
+    auto* messagesTab = new QWidget();
+    auto* messagesLayout = new QVBoxLayout(messagesTab);
+    
+    createMessageStatsChart();
+    messagesLayout->addWidget(messageChart_);
+    
+    viewTabs_->addTab(messagesTab, "Messages");
+    
+    // Token Usage tab
+    auto* tokensTab = new QWidget();
+    auto* tokensLayout = new QVBoxLayout(tokensTab);
+    
+    createTokenUsageChart();
+    tokensLayout->addWidget(tokenUsageChart_);
+    
+    viewTabs_->addTab(tokensTab, "Token Usage");
+    
+    // Tool Usage tab
+    auto* toolsTab = new QWidget();
+    auto* toolsLayout = new QVBoxLayout(toolsTab);
+    
+    createToolUsageChart();
+    toolsLayout->addWidget(toolUsageChart_);
+    
+    viewTabs_->addTab(toolsTab, "Tool Usage");
+    
+    // Performance tab
+    auto* perfTab = new QWidget();
+    auto* perfLayout = new QVBoxLayout(perfTab);
+    
+    createPerformanceChart();
+    perfLayout->addWidget(performanceChart_);
+    
+    viewTabs_->addTab(perfTab, "Performance");
+    
+    // Memory Analysis tab
+    auto* memoryTab = new QWidget();
+    auto* memoryLayout = new QVBoxLayout(memoryTab);
+    
+    createMemoryAnalysisChart();
+    memoryLayout->addWidget(memoryAnalysisChart_);
+    
+    viewTabs_->addTab(memoryTab, "Memory Analysis");
+    
+    // Real-time tab
+    auto* realtimeTab = new QWidget();
+    auto* realtimeLayout = new QVBoxLayout(realtimeTab);
+    
+    realtimeWidget_ = new RealtimeMetricsWidget(realtimeTab);
+    realtimeWidget_->addMetric("Response Time", "ms", 0, 5000);
+    realtimeWidget_->addMetric("Token Rate", "tokens/sec", 0, 100);
+    realtimeWidget_->addMetric("Memory Usage", "MB", 0, 1024);
+    realtimeWidget_->addMetric("Active Tools", "", 0, 10);
+    
+    realtimeLayout->addWidget(realtimeWidget_);
+    
+    viewTabs_->addTab(realtimeTab, "Real-time");
+    
+    // Comparison tab
+    auto* comparisonTab = new QWidget();
+    auto* comparisonLayout = new QVBoxLayout(comparisonTab);
+    
+    comparisonWidget_ = new HistoricalComparisonWidget(comparisonTab);
+    comparisonWidget_->setMetrics({"Messages", "Tokens", "Errors", "Response Time"});
+    
+    comparisonLayout->addWidget(comparisonWidget_);
+    
+    viewTabs_->addTab(comparisonTab, "Comparison");
+    
+    // Add tabs to main layout
+    qobject_cast<QVBoxLayout*>(layout()->itemAt(0)->widget()->layout())->addWidget(viewTabs_);
+}
+
+void StatisticsDock::connectSignals() {
+    // Time range
+    connect(startDateEdit_, &QDateTimeEdit::dateTimeChanged, this, &StatisticsDock::onTimeRangeChanged);
+    connect(endDateEdit_, &QDateTimeEdit::dateTimeChanged, this, &StatisticsDock::onTimeRangeChanged);
+    
+    // Preset combo
+    connect(presetCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            [this](int index) {
+                switch (index) {
+                    case 0: // Last Hour
+                        endTime_ = QDateTime::currentDateTime();
+                        startTime_ = endTime_.addSecs(-3600);
+                        break;
+                    case 1: // Last 24 Hours
+                        endTime_ = QDateTime::currentDateTime();
+                        startTime_ = endTime_.addDays(-1);
+                        break;
+                    case 2: // Last Week
+                        endTime_ = QDateTime::currentDateTime();
+                        startTime_ = endTime_.addDays(-7);
+                        break;
+                    case 3: // Last Month
+                        endTime_ = QDateTime::currentDateTime();
+                        startTime_ = endTime_.addMonths(-1);
+                        break;
+                    case 4: // Custom
+                        return;
+                }
+                setTimeRange(startTime_, endTime_);
+            });
+    
+    // Auto refresh
+    connect(autoRefreshCheck_, &QCheckBox::toggled, [this](bool checked) {
+        if (checked) {
+            refreshTimer_->start(refreshIntervalSpin_->value() * 1000);
         } else {
-            otherValue += sortedData[i].second;
+            refreshTimer_->stop();
         }
+    });
+    
+    connect(refreshIntervalSpin_, QOverload<int>::of(&QSpinBox::valueChanged),
+            [this](int value) {
+                refreshTimer_->setInterval(value * 1000);
+            });
+    
+    // Actions
+    connect(refreshAction_, &QAction::triggered, this, &StatisticsDock::onRefreshClicked);
+    connect(realtimeAction_, &QAction::toggled, this, &StatisticsDock::setRealtimeEnabled);
+    connect(settingsAction_, &QAction::triggered, this, &StatisticsDock::onSettingsClicked);
+    
+    // View tabs
+    connect(viewTabs_, &QTabWidget::currentChanged, this, &StatisticsDock::onViewTabChanged);
+    
+    // Chart interactions
+    if (messageChart_) {
+        connect(messageChart_, &charts::LineChart::dataPointClicked,
+                this, &StatisticsDock::onChartDataPointClicked);
     }
     
-    if (otherValue > 0) {
-        auto* slice = pieSeries_->append(tr("Other"), otherValue);
-        slice->setLabelVisible(true);
-        slice->setLabel(QString("Other (%1%)").arg(otherValue / total * 100, 0, 'f', 1));
-    }
-    
-    chart_->addSeries(pieSeries_);
-}
-
-void ToolUsageChart::createStackedChart() {
-    // Group data by time and tool
-    QHash<QDateTime, QHash<QString, double>> timeData;
-    QSet<QString> allTools;
-    
-    for (const StatDataPoint& point : data_) {
-        if (point.category != "tool") continue;
-        
-        // Round to hour
-        QDateTime time(point.timestamp.date(), QTime(point.timestamp.time().hour(), 0));
-        
-        double value = point.value;
-        if (metric_ == "duration") {
-            value = point.metadata.value("duration").toDouble();
-        }
-        
-        timeData[time][point.subcategory] += value;
-        allTools.insert(point.subcategory);
-    }
-    
-    // Create stacked bar series
-    auto* series = new QBarSeries();
-    
-    // Create bar sets for each tool
-    QHash<QString, QBarSet*> toolSets;
-    for (const QString& tool : allTools) {
-        auto* set = new QBarSet(tool);
-        toolSets[tool] = set;
-        series->append(set);
-    }
-    
-    // Add data
-    QList<QDateTime> times = timeData.keys();
-    std::sort(times.begin(), times.end());
-    
-    QStringList categories;
-    for (const QDateTime& time : times) {
-        categories << time.toString("MM/dd hh:00");
-        
-        for (const QString& tool : allTools) {
-            *toolSets[tool] << timeData[time].value(tool, 0);
-        }
-    }
-    
-    series->setLabelsVisible(true);
-    chart_->addSeries(series);
-    
-    // Create axes
-    auto* axisX = new QBarCategoryAxis();
-    axisX->append(categories);
-    chart_->addAxis(axisX, Qt::AlignBottom);
-    series->attachAxis(axisX);
-    
-    auto* axisY = new QValueAxis();
-    axisY->setTitleText(metric_ == "count" ? tr("Count") : tr("Duration (ms)"));
-    chart_->addAxis(axisY, Qt::AlignLeft);
-    series->attachAxis(axisY);
-}
-
-// PerformanceChart implementation
-
-PerformanceChart::PerformanceChart(QWidget* parent)
-    : BaseChartWidget(parent)
-{
-    setTitle(tr("Performance Metrics"));
-    
-    // Create time axis
-    timeAxis_ = new QDateTimeAxis();
-    timeAxis_->setFormat("hh:mm:ss");
-    timeAxis_->setTitleText(tr("Time"));
-    chart_->addAxis(timeAxis_, Qt::AlignBottom);
-}
-
-void PerformanceChart::setData(const QList<StatDataPoint>& data) {
-    data_ = data;
-    updateChart();
-}
-
-void PerformanceChart::refresh() {
-    updateChart();
-}
-
-void PerformanceChart::addMetric(const QString& name, const QString& unit) {
-    if (!metrics_.contains(name)) {
-        MetricInfo info;
-        info.name = name;
-        info.unit = unit;
-        info.series = new QLineSeries();
-        info.series->setName(name);
-        
-        // Create Y axis for this metric
-        info.axis = new QValueAxis();
-        info.axis->setTitleText(QString("%1 (%2)").arg(name).arg(unit));
-        
-        metrics_[name] = info;
-        
-        chart_->addSeries(info.series);
-        chart_->addAxis(info.axis, metrics_.size() % 2 == 0 ? Qt::AlignLeft : Qt::AlignRight);
-        
-        info.series->attachAxis(timeAxis_);
-        info.series->attachAxis(info.axis);
+    if (summaryWidget_) {
+        connect(summaryWidget_, &StatsSummaryWidget::statClicked,
+                [this](const QString& name) {
+                    // Switch to appropriate tab based on stat name
+                    if (name.contains("Message")) {
+                        viewTabs_->setCurrentIndex(1);
+                    } else if (name.contains("Token")) {
+                        viewTabs_->setCurrentIndex(2);
+                    }
+                });
     }
 }
 
-void PerformanceChart::removeMetric(const QString& name) {
-    if (metrics_.contains(name)) {
-        MetricInfo info = metrics_.take(name);
-        
-        chart_->removeSeries(info.series);
-        chart_->removeAxis(info.axis);
-        
-        delete info.series;
-        delete info.axis;
+void StatisticsDock::loadSettings() {
+    QSettings settings;
+    settings.beginGroup("Statistics");
+    
+    autoRefreshCheck_->setChecked(settings.value("autoRefresh", false).toBool());
+    refreshIntervalSpin_->setValue(settings.value("refreshInterval", 5).toInt());
+    presetCombo_->setCurrentText(settings.value("defaultTimeRange", "Last 24 Hours").toString());
+    
+    settings.endGroup();
+}
+
+void StatisticsDock::saveSettings() {
+    QSettings settings;
+    settings.beginGroup("Statistics");
+    
+    settings.setValue("autoRefresh", autoRefreshCheck_->isChecked());
+    settings.setValue("refreshInterval", refreshIntervalSpin_->value());
+    settings.setValue("defaultTimeRange", presetCombo_->currentText());
+    
+    settings.endGroup();
+}
+
+void StatisticsDock::calculateStatistics() {
+    cachedStats_ = QJsonObject();
+    
+    // Process data points
+    processMessageStats();
+    processTokenUsage();
+    processToolUsage();
+    processPerformance();
+    processMemoryAnalysis();
+    
+    // Add summary stats
+    cachedStats_["totalDataPoints"] = dataPoints_.size();
+    cachedStats_["timeRange"] = QJsonObject{
+        {"start", startTime_.toString(Qt::ISODate)},
+        {"end", endTime_.toString(Qt::ISODate)}
+    };
+}
+
+void StatisticsDock::updateAllCharts() {
+    // Update each chart with processed data
+    if (messageChart_) {
+        messageChart_->updateData();
+    }
+    
+    if (tokenUsageChart_) {
+        tokenUsageChart_->updateData();
+    }
+    
+    if (toolUsageChart_) {
+        toolUsageChart_->updateData();
+    }
+    
+    if (performanceChart_) {
+        performanceChart_->updateData();
+    }
+    
+    if (memoryAnalysisChart_) {
+        memoryAnalysisChart_->updateData();
     }
 }
 
-void PerformanceChart::setMetricVisible(const QString& name, bool visible) {
-    if (metrics_.contains(name)) {
-        metrics_[name].visible = visible;
-        metrics_[name].series->setVisible(visible);
-    }
+void StatisticsDock::createMessageStatsChart() {
+    messageChart_ = new charts::LineChart(this);
+    messageChart_->setTitle("Message Statistics");
+    // Axis titles are handled internally by the chart
+    // Legend is shown by default (LegendConfig position = Right)
+    messageChart_->setTimeSeriesMode(true);
+    
+    // Add series
+    charts::ChartSeries userMessages("User Messages");
+    userMessages.color = ThemeManager::instance().colors().userMessage;
+    messageChart_->addSeries(userMessages);
+    
+    charts::ChartSeries assistantMessages("Assistant Messages");
+    assistantMessages.color = ThemeManager::instance().colors().assistantMessage;
+    messageChart_->addSeries(assistantMessages);
+    
+    charts::ChartSeries toolMessages("Tool Messages");
+    toolMessages.color = getMetricColor("tool_messages");
+    messageChart_->addSeries(toolMessages);
 }
 
-void PerformanceChart::updateChart() {
-    // Clear all series
-    for (auto& info : metrics_) {
-        info.series->clear();
-    }
+void StatisticsDock::createTokenUsageChart() {
+    tokenUsageChart_ = new charts::CircularChart(this);
+    tokenUsageChart_->setTitle("Token Usage Distribution");
+    tokenUsageChart_->setChartType(charts::CircularChart::Donut);
+    // Chart will show legend and values by default
+}
+
+void StatisticsDock::createToolUsageChart() {
+    toolUsageChart_ = new charts::BarChart(this);
+    toolUsageChart_->setTitle("Tool Usage Statistics");
+    // Chart shows values by default
+    toolUsageChart_->setGradient(true);
     
-    // Group data by metric
-    QHash<QString, QList<QPair<QDateTime, double>>> metricData;
+    // Set categories
+    QStringList tools = {"Read", "Write", "Edit", "Search", "Execute", "Other"};
+    toolUsageChart_->setCategories(tools);
+}
+
+void StatisticsDock::createPerformanceChart() {
+    performanceChart_ = new charts::LineChart(this);
+    performanceChart_->setTitle("Performance Metrics");
+    // Chart configuration - titles and modes are set internally
+    performanceChart_->setTimeSeriesMode(true);
     
-    for (const StatDataPoint& point : data_) {
-        if (point.category == "performance") {
-            metricData[point.subcategory].append({point.timestamp, point.value});
-        }
-    }
+    // Add series
+    charts::ChartSeries responseTime("Response Time (ms)");
+    responseTime.color = getMetricColor("response_time");
+    responseTime.lineWidth = 2.0f;
+    performanceChart_->addSeries(responseTime);
     
-    // Update series
-    for (auto it = metricData.begin(); it != metricData.end(); ++it) {
-        if (metrics_.contains(it.key())) {
-            MetricInfo& info = metrics_[it.key()];
+    charts::ChartSeries throughput("Throughput (req/min)");
+    throughput.color = getMetricColor("throughput");
+    throughput.lineWidth = 2.0f;
+    performanceChart_->addSeries(throughput);
+}
+
+void StatisticsDock::createMemoryAnalysisChart() {
+    memoryAnalysisChart_ = new charts::HeatmapWidget(this);
+    memoryAnalysisChart_->setTitle("Memory Access Patterns");
+    memoryAnalysisChart_->setColorScale(charts::HeatmapTheme::ColorScale::Turbo);
+    memoryAnalysisChart_->setShowValues(false);
+    memoryAnalysisChart_->setMemoryMode(true);
+    
+    // Set initial data
+    std::vector<std::vector<double>> dummyData(16, std::vector<double>(32, 0.0));
+    memoryAnalysisChart_->setData(dummyData);
+}
+
+void StatisticsDock::processMessageStats() {
+    // Count messages by type over time
+    QMap<QDateTime, QMap<QString, int>> messagesByTime;
+    
+    for (const auto& point : dataPoints_) {
+        if (point.category == "message") {
+            // Round to nearest minute
+            QDateTime rounded = point.timestamp;
+            rounded.setTime(QTime(rounded.time().hour(), rounded.time().minute()));
             
-            // Sort by time
-            auto& points = it.value();
-            std::sort(points.begin(), points.end(),
-                     [](const auto& a, const auto& b) { return a.first < b.first; });
-            
-            // Add to series
-            double minValue = std::numeric_limits<double>::max();
-            double maxValue = std::numeric_limits<double>::min();
-            
-            for (const auto& point : points) {
-                info.series->append(point.first.toMSecsSinceEpoch(), point.second);
-                minValue = std::min(minValue, point.second);
-                maxValue = std::max(maxValue, point.second);
-            }
-            
-            // Update axis range
-            if (info.axis && minValue < maxValue) {
-                info.axis->setRange(minValue * 0.9, maxValue * 1.1);
-            }
+            messagesByTime[rounded][point.subcategory]++;
         }
     }
     
-    // Update time axis range
-    if (!data_.isEmpty()) {
-        auto minTime = std::min_element(data_.begin(), data_.end(),
-            [](const auto& a, const auto& b) { return a.timestamp < b.timestamp; });
-        auto maxTime = std::max_element(data_.begin(), data_.end(),
-            [](const auto& a, const auto& b) { return a.timestamp < b.timestamp; });
+    // Update chart
+    if (messageChart_) {
+        messageChart_->clearSeries();
         
-        timeAxis_->setRange(minTime->timestamp, maxTime->timestamp);
+        for (auto it = messagesByTime.begin(); it != messagesByTime.end(); ++it) {
+            double timestamp = it.key().toMSecsSinceEpoch();
+            
+            messageChart_->appendDataPoint(0, charts::ChartDataPoint(
+                timestamp, it.value()["user"], "User"));
+            messageChart_->appendDataPoint(1, charts::ChartDataPoint(
+                timestamp, it.value()["assistant"], "Assistant"));
+            messageChart_->appendDataPoint(2, charts::ChartDataPoint(
+                timestamp, it.value()["tool"], "Tool"));
+        }
     }
+    
+    // Update summary stats
+    int totalMessages = 0;
+    for (const auto& point : dataPoints_) {
+        if (point.category == "message") {
+            totalMessages++;
+        }
+    }
+    
+    cachedStats_["messages"] = QJsonObject{
+        {"total", totalMessages},
+        {"perHour", totalMessages * 3600.0 / startTime_.secsTo(endTime_)}
+    };
 }
 
-// TokenUsageChart implementation
-
-TokenUsageChart::TokenUsageChart(QWidget* parent)
-    : BaseChartWidget(parent)
-{
-    setTitle(tr("Token Usage"));
+void StatisticsDock::processTokenUsage() {
+    // Calculate token usage by type
+    QMap<QString, double> tokensByType;
+    double totalTokens = 0;
     
-    // Create series
-    inputTokensSeries_ = new QLineSeries();
-    inputTokensSeries_->setName(tr("Input Tokens"));
-    inputTokensSeries_->setColor(QColor("#2196F3"));
-    
-    outputTokensSeries_ = new QLineSeries();
-    outputTokensSeries_->setName(tr("Output Tokens"));
-    outputTokensSeries_->setColor(QColor("#4CAF50"));
-    
-    totalTokensSeries_ = new QLineSeries();
-    totalTokensSeries_->setName(tr("Total Tokens"));
-    totalTokensSeries_->setColor(QColor("#FF9800"));
-    
-    cumulativeSeries_ = new QLineSeries();
-    cumulativeSeries_->setName(tr("Cumulative"));
-    cumulativeSeries_->setColor(QColor("#9C27B0"));
-    
-    costSeries_ = new QLineSeries();
-    costSeries_->setName(tr("Cost"));
-    costSeries_->setColor(QColor("#F44336"));
-    
-    chart_->addSeries(inputTokensSeries_);
-    chart_->addSeries(outputTokensSeries_);
-    chart_->addSeries(totalTokensSeries_);
-    chart_->addSeries(cumulativeSeries_);
-    chart_->addSeries(costSeries_);
-    
-    // Create axes
-    auto* xAxis = new QDateTimeAxis();
-    xAxis->setFormat("hh:mm");
-    xAxis->setTitleText(tr("Time"));
-    chart_->addAxis(xAxis, Qt::AlignBottom);
-    
-    auto* yAxis = new QValueAxis();
-    yAxis->setTitleText(tr("Tokens"));
-    chart_->addAxis(yAxis, Qt::AlignLeft);
-    
-    auto* costAxis = new QValueAxis();
-    costAxis->setTitleText(tr("Cost ($)"));
-    chart_->addAxis(costAxis, Qt::AlignRight);
-    
-    // Attach series to axes
-    inputTokensSeries_->attachAxis(xAxis);
-    inputTokensSeries_->attachAxis(yAxis);
-    outputTokensSeries_->attachAxis(xAxis);
-    outputTokensSeries_->attachAxis(yAxis);
-    totalTokensSeries_->attachAxis(xAxis);
-    totalTokensSeries_->attachAxis(yAxis);
-    cumulativeSeries_->attachAxis(xAxis);
-    cumulativeSeries_->attachAxis(yAxis);
-    costSeries_->attachAxis(xAxis);
-    costSeries_->attachAxis(costAxis);
-}
-
-void TokenUsageChart::setData(const QList<StatDataPoint>& data) {
-    data_ = data;
-    updateChart();
-}
-
-void TokenUsageChart::refresh() {
-    updateChart();
-}
-
-void TokenUsageChart::setModel(const QString& model) {
-    model_ = model;
-    updateChart();
-}
-
-void TokenUsageChart::setCostPerToken(double cost) {
-    costPerToken_ = cost;
-    updateChart();
-}
-
-void TokenUsageChart::setShowCost(bool show) {
-    showCost_ = show;
-    costSeries_->setVisible(show);
-}
-
-void TokenUsageChart::setShowCumulative(bool show) {
-    showCumulative_ = show;
-    cumulativeSeries_->setVisible(show);
-}
-
-void TokenUsageChart::updateChart() {
-    // Clear series
-    inputTokensSeries_->clear();
-    outputTokensSeries_->clear();
-    totalTokensSeries_->clear();
-    cumulativeSeries_->clear();
-    costSeries_->clear();
-    
-    // Filter and sort data
-    QList<StatDataPoint> tokenData;
-    for (const StatDataPoint& point : data_) {
+    for (const auto& point : dataPoints_) {
         if (point.category == "tokens") {
-            tokenData.append(point);
+            tokensByType[point.subcategory] += point.value;
+            totalTokens += point.value;
         }
     }
     
-    std::sort(tokenData.begin(), tokenData.end(),
-             [](const auto& a, const auto& b) { return a.timestamp < b.timestamp; });
-    
-    // Process data
-    double cumulative = 0;
-    double cumulativeCost = 0;
-    
-    for (const StatDataPoint& point : tokenData) {
-        qint64 time = point.timestamp.toMSecsSinceEpoch();
+    // Update chart
+    if (tokenUsageChart_) {
+        tokenUsageChart_->clearData();
         
-        if (point.subcategory == "input") {
-            inputTokensSeries_->append(time, point.value);
-        } else if (point.subcategory == "output") {
-            outputTokensSeries_->append(time, point.value);
-        } else if (point.subcategory == "total") {
-            totalTokensSeries_->append(time, point.value);
-            cumulative += point.value;
-            cumulativeSeries_->append(time, cumulative);
-            
-            double cost = point.value * costPerToken_;
-            cumulativeCost += cost;
-            costSeries_->append(time, cumulativeCost);
+        // Get theme-appropriate colors
+        std::vector<QColor> themeColors = charts::ChartTheme::getSeriesColors(
+            ThemeManager::instance().currentTheme());
+        QList<QColor> colors(themeColors.begin(), themeColors.end());
+        
+        int colorIndex = 0;
+        for (auto it = tokensByType.begin(); it != tokensByType.end(); ++it) {
+            charts::ChartDataPoint point;
+            point.y = it.value();  // Use y for the value (slice size)
+            point.label = it.key();
+            point.color = colors[colorIndex % colors.size()];
+            tokenUsageChart_->addDataPoint(point);
+            colorIndex++;
         }
+        
+        // Update display with total tokens
+        tokenUsageChart_->setTitle(QString("Total Tokens: %1").arg(
+            QString::number(totalTokens, 'f', 0)));
+    }
+    
+    cachedStats_["tokens"] = QJsonObject{
+        {"total", totalTokens},
+        {"byType", QJsonDocument::fromVariant(QVariant::fromValue(tokensByType)).object()}
+    };
+}
+
+void StatisticsDock::processToolUsage() {
+    // Count tool usage
+    QMap<QString, int> toolCounts;
+    
+    for (const auto& point : dataPoints_) {
+        if (point.category == "tool") {
+            toolCounts[point.subcategory]++;
+        }
+    }
+    
+    // Update chart
+    if (toolUsageChart_) {
+        toolUsageChart_->clearSeries();
+        
+        std::vector<double> values;
+        for (const auto& category : toolUsageChart_->categories()) {
+            values.push_back(toolCounts[category]);
+        }
+        
+        toolUsageChart_->addSeries("Usage Count", values);
+    }
+    
+    cachedStats_["tools"] = QJsonObject{
+        {"usage", QJsonDocument::fromVariant(QVariant::fromValue(toolCounts)).object()}
+    };
+}
+
+void StatisticsDock::processPerformance() {
+    // Calculate performance metrics over time
+    QMap<QDateTime, QMap<QString, double>> perfByTime;
+    
+    for (const auto& point : dataPoints_) {
+        if (point.category == "performance") {
+            // Round to nearest minute
+            QDateTime rounded = point.timestamp;
+            rounded.setTime(QTime(rounded.time().hour(), rounded.time().minute()));
+            
+            if (point.subcategory == "response_time") {
+                perfByTime[rounded]["response_time"] = point.value;
+            } else if (point.subcategory == "throughput") {
+                perfByTime[rounded]["throughput"] = point.value;
+            }
+        }
+    }
+    
+    // Update chart
+    if (performanceChart_) {
+        performanceChart_->clearSeries();
+        
+        for (auto it = perfByTime.begin(); it != perfByTime.end(); ++it) {
+            double timestamp = it.key().toMSecsSinceEpoch();
+            
+            if (it.value().contains("response_time")) {
+                performanceChart_->appendDataPoint(0, charts::ChartDataPoint(
+                    timestamp, it.value()["response_time"], "Response Time"));
+            }
+            
+            if (it.value().contains("throughput")) {
+                performanceChart_->appendDataPoint(1, charts::ChartDataPoint(
+                    timestamp, it.value()["throughput"], "Throughput"));
+            }
+        }
+    }
+    
+    // Calculate averages
+    double avgResponseTime = 0;
+    int responseTimeCount = 0;
+    
+    for (const auto& point : dataPoints_) {
+        if (point.category == "performance" && point.subcategory == "response_time") {
+            avgResponseTime += point.value;
+            responseTimeCount++;
+        }
+    }
+    
+    if (responseTimeCount > 0) {
+        avgResponseTime /= responseTimeCount;
+    }
+    
+    cachedStats_["performance"] = QJsonObject{
+        {"avgResponseTime", avgResponseTime},
+        {"samples", responseTimeCount}
+    };
+}
+
+void StatisticsDock::processMemoryAnalysis() {
+    // Create memory access heatmap data
+    const int rows = 16;
+    const int cols = 32;
+    std::vector<std::vector<double>> heatmapData(rows, std::vector<double>(cols, 0.0));
+    
+    // Process memory access patterns from data points
+    for (const auto& point : dataPoints_) {
+        if (point.category == "memory" && point.metadata.contains("address")) {
+            quint64 address = point.metadata["address"].toString().toULongLong(nullptr, 16);
+            int row = (address / 32) % rows;
+            int col = address % cols;
+            
+            if (row < rows && col < cols) {
+                heatmapData[row][col] += point.value;
+            }
+        }
+    }
+    
+    // Normalize data
+    double maxValue = 0;
+    for (const auto& row : heatmapData) {
+        for (double val : row) {
+            maxValue = std::max(maxValue, val);
+        }
+    }
+    
+    if (maxValue > 0) {
+        for (auto& row : heatmapData) {
+            for (double& val : row) {
+                val /= maxValue;
+            }
+        }
+    }
+    
+    // Update chart
+    if (memoryAnalysisChart_) {
+        memoryAnalysisChart_->setData(heatmapData);
     }
 }
 
-// MemoryAnalysisChart implementation
-
-MemoryAnalysisChart::MemoryAnalysisChart(QWidget* parent)
-    : BaseChartWidget(parent)
-{
-    setTitle(tr("Memory Analysis"));
+// Theme helper methods
+QList<QColor> StatisticsDock::getChartSeriesColors() const {
+    std::vector<QColor> themeColors = charts::ChartTheme::getSeriesColors(
+        ThemeManager::instance().currentTheme());
+    return QList<QColor>(themeColors.begin(), themeColors.end());
 }
 
-void MemoryAnalysisChart::setData(const QList<StatDataPoint>& data) {
-    data_ = data;
-    updateChart();
-}
-
-void MemoryAnalysisChart::refresh() {
-    updateChart();
-}
-
-void MemoryAnalysisChart::setAnalysisType(const QString& type) {
-    analysisType_ = type;
-    updateChart();
-}
-
-void MemoryAnalysisChart::setGroupBy(const QString& groupBy) {
-    groupBy_ = groupBy;
-    updateChart();
-}
-
-void MemoryAnalysisChart::updateChart() {
-    // Clear existing series
-    chart_->removeAllSeries();
+QColor StatisticsDock::getMetricColor(const QString& metricType) const {
+    const auto& colors = ThemeManager::instance().colors();
     
-    if (analysisType_ == "coverage") {
-        // Create scatter plot for coverage
-        scatterSeries_ = new QScatterSeries();
-        scatterSeries_->setName(tr("Coverage"));
-        scatterSeries_->setMarkerSize(10);
-        
-        for (const StatDataPoint& point : data_) {
-            if (point.category == "memory" && point.subcategory == "coverage") {
-                double x = point.metadata.value("address").toDouble();
-                double y = point.value; // Coverage percentage
-                scatterSeries_->append(x, y);
-            }
-        }
-        
-        chart_->addSeries(scatterSeries_);
-        
-        // Create axes
-        auto* xAxis = new QValueAxis();
-        xAxis->setTitleText(tr("Address"));
-        chart_->addAxis(xAxis, Qt::AlignBottom);
-        scatterSeries_->attachAxis(xAxis);
-        
-        auto* yAxis = new QValueAxis();
-        yAxis->setTitleText(tr("Coverage (%)"));
-        yAxis->setRange(0, 100);
-        chart_->addAxis(yAxis, Qt::AlignLeft);
-        scatterSeries_->attachAxis(yAxis);
-        
-    } else if (analysisType_ == "confidence") {
-        // Create bar chart for confidence by group
-        barSeries_ = new QBarSeries();
-        
-        // Group data
-        QHash<QString, QList<double>> groupedData;
-        
-        for (const StatDataPoint& point : data_) {
-            if (point.category == "memory" && point.subcategory == "confidence") {
-                QString group;
-                if (groupBy_ == "module") {
-                    group = point.metadata.value("module").toString();
-                } else if (groupBy_ == "function") {
-                    group = point.metadata.value("function").toString();
-                }
-                
-                if (!group.isEmpty()) {
-                    groupedData[group].append(point.value);
-                }
-            }
-        }
-        
-        // Calculate average confidence per group
-        auto* set = new QBarSet(tr("Average Confidence"));
-        QStringList categories;
-        
-        for (auto it = groupedData.begin(); it != groupedData.end(); ++it) {
-            double sum = 0;
-            for (double val : it.value()) {
-                sum += val;
-            }
-            double avg = sum / it.value().size();
-            
-            categories << it.key();
-            *set << avg;
-        }
-        
-        barSeries_->append(set);
-        chart_->addSeries(barSeries_);
-        
-        // Create axes
-        auto* xAxis = new QBarCategoryAxis();
-        xAxis->append(categories);
-        chart_->addAxis(xAxis, Qt::AlignBottom);
-        barSeries_->attachAxis(xAxis);
-        
-        auto* yAxis = new QValueAxis();
-        yAxis->setTitleText(tr("Confidence (%)"));
-        yAxis->setRange(0, 100);
-        chart_->addAxis(yAxis, Qt::AlignLeft);
-        barSeries_->attachAxis(yAxis);
-        
-    } else if (analysisType_ == "complexity") {
-        // Create scatter plot for complexity
-        scatterSeries_ = new QScatterSeries();
-        scatterSeries_->setName(tr("Complexity"));
-        scatterSeries_->setMarkerSize(8);
-        
-        for (const StatDataPoint& point : data_) {
-            if (point.category == "memory" && point.subcategory == "complexity") {
-                double size = point.metadata.value("size").toDouble();
-                double complexity = point.value;
-                scatterSeries_->append(size, complexity);
-            }
-        }
-        
-        chart_->addSeries(scatterSeries_);
-        
-        // Create axes
-        auto* xAxis = new QValueAxis();
-        xAxis->setTitleText(tr("Function Size"));
-        chart_->addAxis(xAxis, Qt::AlignBottom);
-        scatterSeries_->attachAxis(xAxis);
-        
-        auto* yAxis = new QValueAxis();
-        yAxis->setTitleText(tr("Cyclomatic Complexity"));
-        chart_->addAxis(yAxis, Qt::AlignLeft);
-        scatterSeries_->attachAxis(yAxis);
+    if (metricType == "success") return colors.success;
+    if (metricType == "warning") return colors.warning;
+    if (metricType == "error") return colors.error;
+    if (metricType == "info") return colors.info;
+    if (metricType == "primary") return colors.primary;
+    
+    // Specific metric types
+    if (metricType == "tool_messages") return colors.info;
+    if (metricType == "response_time") return colors.warning;
+    if (metricType == "throughput") return colors.success;
+    
+    // Default to using series colors based on hash
+    int colorIndex = qHash(metricType) % 6;
+    return charts::ChartTheme::getSeriesColor(ThemeManager::instance().currentTheme(), colorIndex);
+}
+
+QColor StatisticsDock::getMetricRangeColor(double normalizedValue) const {
+    const auto& colors = ThemeManager::instance().colors();
+    
+    if (normalizedValue < 0.33) {
+        return colors.success;
+    } else if (normalizedValue < 0.66) {
+        return colors.warning;
+    } else {
+        return colors.error;
     }
 }
 
 // StatsSummaryWidget implementation
-
 StatsSummaryWidget::StatsSummaryWidget(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
-    setMouseTracking(true);
+    : BaseStyledWidget(parent) {
+    setMinimumHeight(150);
+    
+    // Setup animation timer
+    animationTimer_ = new QTimer(this);
+    animationTimer_->setInterval(16);
+    connect(animationTimer_, &QTimer::timeout, [this]() {
+        bool needsUpdate = false;
+        for (auto& card : cards_) {
+            if (card.animationProgress < 1.0f) {
+                card.animationProgress = std::min(1.0f, card.animationProgress + 0.05f);
+                needsUpdate = true;
+            }
+        }
+        
+        if (needsUpdate) {
+            update();
+        } else {
+            animationTimer_->stop();
+        }
+    });
+    
+    // Initialize default cards with theme colors
+    std::vector<QColor> cardColors = charts::ChartTheme::getSeriesColors(
+        ThemeManager::instance().currentTheme());
+    cards_ = {
+        {"Total Messages", "0", "", "message", cardColors[0], nullptr, QRectF(), false},
+        {"Tokens Used", "0", "", "token", cardColors[1], nullptr, QRectF(), false},
+        {"Tools Called", "0", "", "tool", cardColors[2], nullptr, QRectF(), false},
+        {"Avg Response", "0ms", "", "time", cardColors[3], nullptr, QRectF(), false}
+    };
+    
+    // Create sparklines for each card
+    for (auto& card : cards_) {
+        card.sparkline = new charts::SparklineWidget(this);
+        card.sparkline->setSparklineType(charts::SparklineWidget::Area);
+        card.sparkline->setLineColor(card.color);
+        card.sparkline->setFillColor(card.color);
+        card.sparkline->setShowMinMax(false);
+        card.sparkline->setShowLastValue(false);
+        card.sparkline->setMaxDataPoints(20);
+    }
 }
 
 void StatsSummaryWidget::updateStats(const QJsonObject& stats) {
-    stats_.clear();
+    // Update card values with animation
+    if (stats.contains("messages")) {
+        animateValueChange(cards_[0], QString::number(stats["messages"]["total"].toInt()));
+        cards_[0].subtitle = QString("%1/hour").arg(stats["messages"]["perHour"].toDouble(), 0, 'f', 1);
+    }
     
-    // Add standard stats
-    StatItem totalMessages;
-    totalMessages.name = tr("Total Messages");
-    totalMessages.value = QString::number(stats.value("totalMessages").toInt());
-    totalMessages.icon = "message";
-    totalMessages.tooltip = tr("Total number of messages in conversation");
-    stats_.append(totalMessages);
+    if (stats.contains("tokens")) {
+        animateValueChange(cards_[1], QString::number(stats["tokens"]["total"].toDouble(), 'f', 0));
+    }
     
-    StatItem activeTools;
-    activeTools.name = tr("Tools Used");
-    activeTools.value = QString::number(stats.value("toolsUsed").toInt());
-    activeTools.icon = "tools";
-    activeTools.tooltip = tr("Number of different tools executed");
-    stats_.append(activeTools);
+    if (stats.contains("tools")) {
+        int totalTools = 0;
+        QJsonObject usage = stats["tools"]["usage"].toObject();
+        for (auto it = usage.begin(); it != usage.end(); ++it) {
+            totalTools += it.value().toInt();
+        }
+        animateValueChange(cards_[2], QString::number(totalTools));
+    }
     
-    StatItem successRate;
-    successRate.name = tr("Success Rate");
-    successRate.value = QString("%1%").arg(stats.value("successRate").toDouble(), 0, 'f', 1);
-    successRate.icon = "check-circle";
-    successRate.tooltip = tr("Percentage of successful tool executions");
-    stats_.append(successRate);
+    if (stats.contains("performance")) {
+        double avgTime = stats["performance"]["avgResponseTime"].toDouble();
+        animateValueChange(cards_[3], QString("%1ms").arg(avgTime, 0, 'f', 0));
+    }
     
-    StatItem avgResponseTime;
-    avgResponseTime.name = tr("Avg Response Time");
-    avgResponseTime.value = QString("%1s").arg(stats.value("avgResponseTime").toDouble(), 0, 'f', 1);
-    avgResponseTime.icon = "clock";
-    avgResponseTime.tooltip = tr("Average time to generate response");
-    stats_.append(avgResponseTime);
+    // Add some dummy data to sparklines
+    for (auto& card : cards_) {
+        if (card.sparkline) {
+            card.sparkline->appendValue(QRandomGenerator::global()->bounded(100));
+        }
+    }
     
-    StatItem totalTokens;
-    totalTokens.name = tr("Total Tokens");
-    totalTokens.value = UIUtils::formatNumber(stats.value("totalTokens").toInt());
-    totalTokens.icon = "token";
-    totalTokens.tooltip = tr("Total tokens consumed");
-    stats_.append(totalTokens);
-    
-    StatItem memoryEntries;
-    memoryEntries.name = tr("Memory Entries");
-    memoryEntries.value = QString::number(stats.value("memoryEntries").toInt());
-    memoryEntries.icon = "memory";
-    memoryEntries.tooltip = tr("Number of analyzed memory locations");
-    stats_.append(memoryEntries);
-    
-    layoutStats();
+    layoutCards();
     update();
 }
 
 void StatsSummaryWidget::setTimeRange(const QDateTime& start, const QDateTime& end) {
-    Q_UNUSED(start);
-    Q_UNUSED(end);
-    layoutStats();
+    // Update time range display if needed
     update();
 }
 
 void StatsSummaryWidget::addCustomStat(const QString& name, const QString& value, const QString& icon) {
-    StatItem item;
-    item.name = name;
-    item.value = value;
-    item.icon = icon;
-    item.isCustom = true;
-    stats_.append(item);
+    StatCard card;
+    card.name = name;
+    card.value = value;
+    card.icon = icon;
+    card.color = charts::ChartTheme::getSeriesColor(ThemeManager::instance().currentTheme(), cards_.size() % 6);
+    card.isCustom = true;
+    card.sparkline = new charts::SparklineWidget(this);
+    card.sparkline->setSparklineType(charts::SparklineWidget::Line);
     
-    layoutStats();
+    cards_.append(card);
+    layoutCards();
     update();
 }
 
 void StatsSummaryWidget::clearCustomStats() {
-    stats_.erase(std::remove_if(stats_.begin(), stats_.end(),
-                               [](const StatItem& item) { return item.isCustom; }),
-                 stats_.end());
+    cards_.erase(
+        std::remove_if(cards_.begin(), cards_.end(),
+                      [](const StatCard& card) { return card.isCustom; }),
+        cards_.end()
+    );
     
-    layoutStats();
+    layoutCards();
     update();
 }
 
 void StatsSummaryWidget::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
+    BaseStyledWidget::paintEvent(event);
     
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     
-    for (int i = 0; i < stats_.size(); ++i) {
-        const StatItem& stat = stats_[i];
-        
-        // Background
-        QColor bgColor = ThemeManager::instance()->color(ThemeManager::SurfaceVariant);
-        if (i == hoveredStat_) {
-            bgColor = bgColor.lighter(110);
+    for (int i = 0; i < cards_.size(); ++i) {
+        if (i == hoveredCard_) {
+            // Draw hover effect
+            QRectF hoverRect = cards_[i].rect.adjusted(-2, -2, 2, 2);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(ThemeManager::adjustAlpha(ThemeManager::instance().colors().surfaceHover, 20));
+            painter.drawRoundedRect(hoverRect, 8, 8);
         }
         
-        painter.fillRect(stat.rect, bgColor);
-        
-        // Border
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::Outline));
-        painter.drawRect(stat.rect);
-        
-        // Icon
-        if (!stat.icon.isEmpty()) {
-            QRectF iconRect(stat.rect.x() + 16, stat.rect.y() + 16, 24, 24);
-            QIcon icon = UIUtils::icon(stat.icon);
-            icon.paint(&painter, iconRect.toRect());
-        }
-        
-        // Name
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
-        painter.setFont(QFont("Sans", 9));
-        QRectF nameRect(stat.rect.x() + 16, stat.rect.y() + 48, 
-                       stat.rect.width() - 32, 20);
-        painter.drawText(nameRect, Qt::AlignCenter, stat.name);
-        
-        // Value
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
-        QFont valueFont("Sans", 18);
-        valueFont.setWeight(QFont::DemiBold);
-        painter.setFont(valueFont);
-        QRectF valueRect(stat.rect.x() + 16, stat.rect.y() + 20,
-                        stat.rect.width() - 32, 40);
-        painter.drawText(valueRect, Qt::AlignCenter, stat.value);
-    }
-    
-    // Tooltip
-    if (hoveredStat_ >= 0 && hoveredStat_ < stats_.size()) {
-        const StatItem& stat = stats_[hoveredStat_];
-        if (!stat.tooltip.isEmpty()) {
-            QFontMetrics fm(painter.font());
-            QRect tooltipRect = fm.boundingRect(stat.tooltip);
-            tooltipRect.adjust(-5, -5, 5, 5);
-            tooltipRect.moveTopLeft(QCursor::pos() - mapToGlobal(QPoint(0, 0)) + QPoint(10, 10));
-            
-            painter.fillRect(tooltipRect, ThemeManager::instance()->color(ThemeManager::Surface));
-            painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
-            painter.setFont(QFont("Sans", 9));
-            painter.drawText(tooltipRect, Qt::AlignCenter, stat.tooltip);
-        }
+        drawCard(&painter, cards_[i]);
     }
 }
 
 void StatsSummaryWidget::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        for (int i = 0; i < stats_.size(); ++i) {
-            if (stats_[i].rect.contains(event->pos())) {
-                emit statClicked(stats_[i].name);
+        for (int i = 0; i < cards_.size(); ++i) {
+            if (cards_[i].rect.contains(event->pos())) {
+                emit statClicked(cards_[i].name);
                 break;
             }
         }
     }
+    
+    BaseStyledWidget::mousePressEvent(event);
 }
 
 void StatsSummaryWidget::resizeEvent(QResizeEvent* event) {
     BaseStyledWidget::resizeEvent(event);
-    layoutStats();
+    layoutCards();
 }
 
-void StatsSummaryWidget::layoutStats() {
-    if (stats_.isEmpty()) return;
+void StatsSummaryWidget::layoutCards() {
+    if (cards_.empty()) return;
     
-    // Calculate grid layout
-    int totalWidth = width() - spacing_ * 2;
-    int cardWidth = (totalWidth - spacing_ * (columns_ - 1)) / columns_;
+    // Calculate optimal grid layout
+    int totalCards = cards_.size();
+    columns_ = std::min(4, totalCards);
+    int rows = (totalCards + columns_ - 1) / columns_;
     
-    int row = 0;
-    int col = 0;
+    cardHeight_ = std::min(120, (height() - (rows + 1) * cardSpacing_) / rows);
     
-    for (int i = 0; i < stats_.size(); ++i) {
-        int x = spacing_ + col * (cardWidth + spacing_);
-        int y = spacing_ + row * (cardHeight_ + spacing_);
+    double cardWidth = (width() - (columns_ + 1) * cardSpacing_) / columns_;
+    
+    // Position cards
+    for (int i = 0; i < cards_.size(); ++i) {
+        int row = i / columns_;
+        int col = i % columns_;
         
-        stats_[i].rect = QRectF(x, y, cardWidth, cardHeight_);
+        cards_[i].rect = QRectF(
+            cardSpacing_ + col * (cardWidth + cardSpacing_),
+            cardSpacing_ + row * (cardHeight_ + cardSpacing_),
+            cardWidth,
+            cardHeight_
+        );
         
-        col++;
-        if (col >= columns_) {
-            col = 0;
-            row++;
+        // Position sparkline
+        if (cards_[i].sparkline) {
+            cards_[i].sparkline->setGeometry(
+                cards_[i].rect.left() + 10,
+                cards_[i].rect.bottom() - 30,
+                cards_[i].rect.width() - 20,
+                20
+            );
+        }
+    }
+}
+
+void StatsSummaryWidget::drawCard(QPainter* painter, const StatCard& card) {
+    painter->save();
+    
+    // Draw card background
+    QRectF cardRect = card.rect;
+    
+    // Glass morphism effect
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(ThemeManager::adjustAlpha(ThemeManager::instance().colors().surface, 10));
+    painter->drawRoundedRect(cardRect, 8, 8);
+    
+    // Draw border
+    QPen borderPen(ThemeManager::adjustAlpha(ThemeManager::instance().colors().border, 30), 1);
+    painter->setPen(borderPen);
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRoundedRect(cardRect, 8, 8);
+    
+    // Draw icon
+    QRectF iconRect(cardRect.left() + 15, cardRect.top() + 15, 24, 24);
+    painter->setPen(card.color);
+    painter->setFont(QFont("FontAwesome", 16));
+    painter->drawText(iconRect, Qt::AlignCenter, card.icon);
+    
+    // Draw name
+    painter->setPen(palette().text().color());
+    QFont nameFont = font();
+    nameFont.setPointSize(10);
+    painter->setFont(nameFont);
+    painter->drawText(QRectF(cardRect.left() + 50, cardRect.top() + 15,
+                            cardRect.width() - 60, 20),
+                     Qt::AlignLeft | Qt::AlignVCenter, card.name);
+    
+    // Draw value with animation
+    QString displayValue = card.value;
+    if (card.animationProgress < 1.0f && !card.previousValue.isEmpty()) {
+        // Interpolate numeric values if possible
+        bool ok1, ok2;
+        double prev = card.previousValue.toDouble(&ok1);
+        double curr = card.value.toDouble(&ok2);
+        
+        if (ok1 && ok2) {
+            double interpolated = prev + (curr - prev) * card.animationProgress;
+            displayValue = QString::number(interpolated, 'f', 0);
         }
     }
     
-    // Update widget height
-    int rows = (stats_.size() + columns_ - 1) / columns_;
-    setMinimumHeight(rows * (cardHeight_ + spacing_) + spacing_);
+    QFont valueFont = font();
+    valueFont.setPointSize(18);
+    valueFont.setBold(true);
+    painter->setFont(valueFont);
+    painter->setPen(card.color);
+    painter->drawText(QRectF(cardRect.left() + 15, cardRect.top() + 40,
+                            cardRect.width() - 30, 30),
+                     Qt::AlignLeft | Qt::AlignVCenter, displayValue);
+    
+    // Draw subtitle
+    if (!card.subtitle.isEmpty()) {
+        QFont subtitleFont = font();
+        subtitleFont.setPointSize(9);
+        painter->setFont(subtitleFont);
+        painter->setPen(palette().text().color());
+        painter->setOpacity(0.7);
+        painter->drawText(QRectF(cardRect.left() + 15, cardRect.top() + 70,
+                                cardRect.width() - 30, 20),
+                         Qt::AlignLeft | Qt::AlignVCenter, card.subtitle);
+        painter->setOpacity(1.0);
+    }
+    
+    painter->restore();
+}
+
+void StatsSummaryWidget::animateValueChange(StatCard& card, const QString& newValue) {
+    if (card.value != newValue) {
+        card.previousValue = card.value;
+        card.value = newValue;
+        card.animationProgress = 0.0f;
+        
+        if (!animationTimer_->isActive()) {
+            animationTimer_->start();
+        }
+    }
 }
 
 // RealtimeMetricsWidget implementation
-
 RealtimeMetricsWidget::RealtimeMetricsWidget(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
+    : BaseStyledWidget(parent) {
+    auto* mainLayout = new QVBoxLayout(this);
+    
+    // Create scroll area for metrics
+    auto* scrollArea = new QScrollArea(this);
+    auto* scrollWidget = new QWidget();
+    metricsLayout_ = new QGridLayout(scrollWidget);
+    metricsLayout_->setSpacing(16);
+    
+    scrollArea->setWidget(scrollWidget);
+    scrollArea->setWidgetResizable(true);
+    mainLayout->addWidget(scrollArea);
+    
+    // Setup update timer
     updateTimer_ = new QTimer(this);
-    connect(updateTimer_, &QTimer::timeout, this, &RealtimeMetricsWidget::updateDisplay);
+    connect(updateTimer_, &QTimer::timeout, [this]() {
+        for (auto& metric : metrics_) {
+            updateMetricDisplay(metric);
+        }
+    });
 }
 
 RealtimeMetricsWidget::~RealtimeMetricsWidget() {
@@ -1083,39 +1189,38 @@ void RealtimeMetricsWidget::addMetric(const QString& name, const QString& unit, 
     metric.min = min;
     metric.max = max;
     
-    // Assign color
-    static QList<QColor> colors = {
-        "#2196F3", "#4CAF50", "#FF9800", "#F44336", "#9C27B0",
-        "#00BCD4", "#8BC34A", "#FFC107", "#E91E63", "#3F51B5"
-    };
-    metric.color = colors[metrics_.size() % colors.size()];
-    
+    setupMetricUI(metric);
     metrics_[name] = metric;
-    update();
 }
 
 void RealtimeMetricsWidget::updateMetric(const QString& name, double value) {
     if (metrics_.contains(name)) {
-        Metric& metric = metrics_[name];
-        metric.value = value;
+        metrics_[name].value = value;
         
-        // Add to history
-        metric.history.append(value);
-        if (metric.history.size() > historySize_) {
-            metric.history.removeFirst();
+        if (metrics_[name].chart) {
+            metrics_[name].chart->appendDataPoint(0, charts::ChartDataPoint(
+                QDateTime::currentDateTime().toMSecsSinceEpoch(), value));
         }
         
+        if (metrics_[name].sparkline) {
+            metrics_[name].sparkline->appendValue(value);
+        }
+        
+        updateMetricDisplay(metrics_[name]);
         emit metricUpdated(name, value);
-        
-        if (!updateTimer_->isActive()) {
-            update();
-        }
     }
 }
 
 void RealtimeMetricsWidget::removeMetric(const QString& name) {
-    metrics_.remove(name);
-    update();
+    if (metrics_.contains(name)) {
+        auto& metric = metrics_[name];
+        
+        if (metric.chart) metric.chart->deleteLater();
+        if (metric.sparkline) metric.sparkline->deleteLater();
+        if (metric.valueLabel) metric.valueLabel->deleteLater();
+        
+        metrics_.remove(name);
+    }
 }
 
 void RealtimeMetricsWidget::setUpdateInterval(int ms) {
@@ -1128,10 +1233,9 @@ void RealtimeMetricsWidget::setUpdateInterval(int ms) {
 void RealtimeMetricsWidget::setHistorySize(int size) {
     historySize_ = size;
     
-    // Trim existing histories
     for (auto& metric : metrics_) {
-        while (metric.history.size() > historySize_) {
-            metric.history.removeFirst();
+        if (metric.sparkline) {
+            metric.sparkline->setMaxDataPoints(size);
         }
     }
 }
@@ -1150,877 +1254,268 @@ void RealtimeMetricsWidget::stop() {
     }
 }
 
-void RealtimeMetricsWidget::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
+void RealtimeMetricsWidget::setupMetricUI(Metric& metric) {
+    int row = metrics_.size();
     
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
+    // Create group box
+    auto* groupBox = new QGroupBox(metric.name, this);
+    auto* groupLayout = new QVBoxLayout(groupBox);
     
-    if (metrics_.isEmpty()) {
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
-        painter.drawText(rect(), Qt::AlignCenter, tr("No metrics configured"));
-        return;
-    }
-    
-    // Calculate layout
-    int metricHeight = height() / metrics_.size();
-    int y = 0;
-    
-    for (auto it = metrics_.begin(); it != metrics_.end(); ++it) {
-        QRectF metricRect(0, y, width(), metricHeight);
-        drawMetric(&painter, it.value(), metricRect);
-        y += metricHeight;
-    }
-}
-
-void RealtimeMetricsWidget::updateDisplay() {
-    update();
-}
-
-void RealtimeMetricsWidget::drawMetric(QPainter* painter, const Metric& metric, const QRectF& rect) {
-    // Background
-    painter->fillRect(rect, ThemeManager::instance()->color(ThemeManager::Surface));
-    
-    // Name and value
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
-    painter->setFont(QFont("Sans", 10, QFont::DemiBold));
-    
-    QString text = QString("%1: %2 %3").arg(metric.name)
-                                      .arg(metric.value, 0, 'f', 1)
-                                      .arg(metric.unit);
-    QRectF textRect(rect.x() + 10, rect.y(), rect.width() / 2, 30);
-    painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
-    
-    // Progress bar
-    QRectF barRect(rect.x() + 10, rect.y() + 30, rect.width() - 20, 10);
-    painter->fillRect(barRect, ThemeManager::instance()->color(ThemeManager::SurfaceVariant));
-    
-    double progress = (metric.value - metric.min) / (metric.max - metric.min);
-    progress = qBound(0.0, progress, 1.0);
-    
-    QRectF fillRect = barRect;
-    fillRect.setWidth(barRect.width() * progress);
-    painter->fillRect(fillRect, metric.color);
+    // Value display
+    metric.valueLabel = new QLabel("0", this);
+    QFont valueFont = font();
+    valueFont.setPointSize(24);
+    valueFont.setBold(true);
+    metric.valueLabel->setFont(valueFont);
+    metric.valueLabel->setAlignment(Qt::AlignCenter);
+    groupLayout->addWidget(metric.valueLabel);
     
     // Sparkline
-    if (!metric.history.isEmpty()) {
-        QRectF sparkRect(rect.x() + rect.width() / 2, rect.y() + 10, 
-                        rect.width() / 2 - 20, rect.height() - 20);
-        drawSparkline(painter, metric.history, sparkRect);
-    }
+    metric.sparkline = new charts::SparklineWidget(this);
+    metric.sparkline->setSparklineType(charts::SparklineWidget::Area);
+    metric.sparkline->setMaxDataPoints(historySize_);
+    metric.sparkline->setMinimumHeight(40);
+    metric.sparkline->setValueRange(metric.min, metric.max);
+    groupLayout->addWidget(metric.sparkline);
     
-    // Border
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::Outline));
-    painter->drawRect(rect);
+    // Full chart
+    metric.chart = new charts::LineChart(this);
+    metric.chart->setMinimumHeight(150);
+    // Axes and grid are shown by default
+    metric.chart->setTimeSeriesMode(true);
+    // Real-time mode and Y-axis range handled internally
+    
+    charts::ChartSeries series(metric.name);
+    series.color = charts::ChartTheme::getSeriesColor(ThemeManager::instance().currentTheme(), 0);
+    metric.chart->addSeries(series);
+    
+    groupLayout->addWidget(metric.chart);
+    
+    metricsLayout_->addWidget(groupBox, row / 2, row % 2);
 }
 
-void RealtimeMetricsWidget::drawSparkline(QPainter* painter, const QList<double>& values, const QRectF& rect) {
-    if (values.size() < 2) return;
-    
-    // Find min/max
-    double min = *std::min_element(values.begin(), values.end());
-    double max = *std::max_element(values.begin(), values.end());
-    double range = max - min;
-    if (range == 0) range = 1;
-    
-    // Draw line
-    QPainterPath path;
-    for (int i = 0; i < values.size(); ++i) {
-        double x = rect.x() + (rect.width() * i) / (values.size() - 1);
-        double y = rect.bottom() - (rect.height() * (values[i] - min)) / range;
+void RealtimeMetricsWidget::updateMetricDisplay(Metric& metric) {
+    if (metric.valueLabel) {
+        QString text = QString("%1 %2").arg(metric.value, 0, 'f', 1).arg(metric.unit);
+        metric.valueLabel->setText(text);
         
-        if (i == 0) {
-            path.moveTo(x, y);
+        // Color based on value range using theme colors
+        double normalized = (metric.value - metric.min) / (metric.max - metric.min);
+        
+        // Use theme colors directly for metric ranges
+        const auto& colors = ThemeManager::instance().colors();
+        QColor color;
+        if (normalized < 0.33) {
+            color = colors.success;
+        } else if (normalized < 0.66) {
+            color = colors.warning;
         } else {
-            path.lineTo(x, y);
+            color = colors.error;
         }
+        
+        metric.valueLabel->setStyleSheet(QString("color: %1;").arg(color.name()));
     }
-    
-    painter->setPen(QPen(ThemeManager::instance()->color(ThemeManager::Primary), 2));
-    painter->drawPath(path);
 }
 
 // HistoricalComparisonWidget implementation
-
 HistoricalComparisonWidget::HistoricalComparisonWidget(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
+    : BaseStyledWidget(parent) {
+    auto* mainLayout = new QVBoxLayout(this);
+    
+    // Controls
+    auto* controlsLayout = new QHBoxLayout();
+    
+    auto* typeCombo = new QComboBox(this);
+    typeCombo->addItems({"Previous Period", "Same Day Last Week", "Custom"});
+    connect(typeCombo, &QComboBox::currentTextChanged,
+            [this](const QString& text) {
+                if (text == "Previous Period") {
+                    setComparisonType("previous");
+                } else if (text == "Same Day Last Week") {
+                    setComparisonType("same_day_last_week");
+                } else {
+                    setComparisonType("custom");
+                }
+            });
+    
+    controlsLayout->addWidget(new QLabel("Compare with:", this));
+    controlsLayout->addWidget(typeCombo);
+    controlsLayout->addStretch();
+    
+    mainLayout->addLayout(controlsLayout);
+    
+    // Cards container
+    auto* scrollArea = new QScrollArea(this);
+    auto* scrollWidget = new QWidget();
+    cardsLayout_ = new QVBoxLayout(scrollWidget);
+    cardsLayout_->setSpacing(16);
+    
+    scrollArea->setWidget(scrollWidget);
+    scrollArea->setWidgetResizable(true);
+    mainLayout->addWidget(scrollArea);
 }
 
 void HistoricalComparisonWidget::setCurrentPeriod(const QDateTime& start, const QDateTime& end) {
     currentStart_ = start;
     currentEnd_ = end;
+    calculateChanges();
 }
 
 void HistoricalComparisonWidget::setComparisonPeriod(const QDateTime& start, const QDateTime& end) {
     comparisonStart_ = start;
     comparisonEnd_ = end;
+    calculateChanges();
 }
 
 void HistoricalComparisonWidget::setMetrics(const QStringList& metrics) {
-    metrics_.clear();
-    for (const QString& name : metrics) {
-        ComparisonMetric metric;
-        metric.name = name;
-        metrics_.append(metric);
+    // Clear existing cards
+    for (auto& card : cards_) {
+        if (card.comparisonChart) card.comparisonChart->deleteLater();
+        if (card.trendLine) card.trendLine->deleteLater();
+    }
+    cards_.clear();
+    
+    // Create new cards
+    for (const auto& metric : metrics) {
+        createComparisonCard(metric);
     }
 }
 
-void HistoricalComparisonWidget::updateData(const QJsonObject& currentData, const QJsonObject& comparisonData) {
-    for (ComparisonMetric& metric : metrics_) {
-        metric.currentValue = currentData.value(metric.name).toDouble();
-        metric.previousValue = comparisonData.value(metric.name).toDouble();
+void HistoricalComparisonWidget::updateData(const QJsonObject& currentData, 
+                                           const QJsonObject& comparisonData) {
+    for (auto& card : cards_) {
+        if (currentData.contains(card.metric)) {
+            card.currentValue = currentData[card.metric].toDouble();
+        }
+        
+        if (comparisonData.contains(card.metric)) {
+            card.previousValue = comparisonData[card.metric].toDouble();
+        }
+        
+        updateComparisonCard(card);
     }
     
     calculateChanges();
-    update();
 }
 
 void HistoricalComparisonWidget::setComparisonType(const QString& type) {
     comparisonType_ = type;
-}
-
-void HistoricalComparisonWidget::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
     
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    if (metrics_.isEmpty()) {
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
-        painter.drawText(rect(), Qt::AlignCenter, tr("No metrics to compare"));
-        return;
+    if (type == "previous") {
+        // Set comparison period to previous equivalent period
+        qint64 duration = currentStart_.secsTo(currentEnd_);
+        comparisonEnd_ = currentStart_;
+        comparisonStart_ = comparisonEnd_.addSecs(-duration);
+    } else if (type == "same_day_last_week") {
+        comparisonStart_ = currentStart_.addDays(-7);
+        comparisonEnd_ = currentEnd_.addDays(-7);
     }
     
-    // Draw period labels
-    painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
-    painter.setFont(QFont("Sans", 10, QFont::DemiBold));
+    calculateChanges();
+}
+
+void HistoricalComparisonWidget::createComparisonCard(const QString& metric) {
+    ComparisonCard card;
+    card.metric = metric;
     
-    QString currentLabel = QString("Current: %1 - %2")
-        .arg(currentStart_.toString("MMM dd"))
-        .arg(currentEnd_.toString("MMM dd"));
-    QString comparisonLabel = QString("Previous: %1 - %2")
-        .arg(comparisonStart_.toString("MMM dd"))
-        .arg(comparisonEnd_.toString("MMM dd"));
+    // Create card widget
+    auto* cardWidget = new QWidget(this);
+    auto* cardLayout = new QHBoxLayout(cardWidget);
+    // Use theme-aware colors for card styling
+    QColor bgColor = ThemeManager::adjustAlpha(ThemeManager::instance().colors().surface, 13); // 0.05 * 255 ≈ 13
+    cardWidget->setStyleSheet(QString("QWidget { background: rgba(%1,%2,%3,%4); "
+                             "border-radius: 8px; padding: 16px; }")
+                             .arg(bgColor.red())
+                             .arg(bgColor.green())
+                             .arg(bgColor.blue())
+                             .arg(bgColor.alpha()));
     
-    painter.drawText(QRect(10, 10, width() - 20, 20), Qt::AlignLeft, currentLabel);
-    painter.drawText(QRect(10, 30, width() - 20, 20), Qt::AlignLeft, comparisonLabel);
+    // Left side - metric info
+    auto* infoLayout = new QVBoxLayout();
     
-    // Draw metrics
-    int y = 60;
-    int cardHeight = 80;
-    int spacing = 10;
+    auto* nameLabel = new QLabel(metric, this);
+    QFont nameFont = font();
+    nameFont.setPointSize(14);
+    nameFont.setBold(true);
+    nameLabel->setFont(nameFont);
+    infoLayout->addWidget(nameLabel);
     
-    for (const ComparisonMetric& metric : metrics_) {
-        QRectF cardRect(10, y, width() - 20, cardHeight);
-        drawMetricCard(&painter, metric, cardRect);
-        y += cardHeight + spacing;
+    auto* currentLabel = new QLabel("Current: 0", this);
+    infoLayout->addWidget(currentLabel);
+    
+    auto* previousLabel = new QLabel("Previous: 0", this);
+    infoLayout->addWidget(previousLabel);
+    
+    auto* changeLabel = new QLabel("Change: 0%", this);
+    QFont changeFont = font();
+    changeFont.setPointSize(16);
+    changeFont.setBold(true);
+    changeLabel->setFont(changeFont);
+    infoLayout->addWidget(changeLabel);
+    
+    cardLayout->addLayout(infoLayout);
+    
+    // Middle - comparison chart
+    card.comparisonChart = new charts::BarChart(this);
+    card.comparisonChart->setMinimumSize(200, 100);
+    card.comparisonChart->setMaximumHeight(100);
+    // Axes visibility controlled by chart style
+    card.comparisonChart->setShowValues(true);
+    card.comparisonChart->setCategories({"Previous", "Current"});
+    cardLayout->addWidget(card.comparisonChart);
+    
+    // Right - trend sparkline
+    card.trendLine = new charts::SparklineWidget(this);
+    card.trendLine->setSparklineType(charts::SparklineWidget::Line);
+    card.trendLine->setMinimumSize(150, 50);
+    card.trendLine->setMaximumSize(150, 50);
+    cardLayout->addWidget(card.trendLine);
+    
+    cardsLayout_->addWidget(cardWidget);
+    cards_.append(card);
+}
+
+void HistoricalComparisonWidget::updateComparisonCard(ComparisonCard& card) {
+    // Update bar chart
+    if (card.comparisonChart) {
+        card.comparisonChart->clearSeries();
+        std::vector<double> values = {card.previousValue, card.currentValue};
+        card.comparisonChart->addSeries(card.metric, values);
+    }
+    
+    // Update trend line with dummy data
+    if (card.trendLine) {
+        for (int i = 0; i < 10; ++i) {
+            double value = card.previousValue + 
+                          (card.currentValue - card.previousValue) * i / 9.0;
+            card.trendLine->appendValue(value);
+        }
     }
 }
 
 void HistoricalComparisonWidget::calculateChanges() {
-    for (ComparisonMetric& metric : metrics_) {
-        if (metric.previousValue != 0) {
-            metric.change = metric.currentValue - metric.previousValue;
-            metric.changePercent = (metric.change / metric.previousValue) * 100;
+    for (auto& card : cards_) {
+        if (card.previousValue != 0) {
+            card.change = card.currentValue - card.previousValue;
+            card.changePercent = (card.change / card.previousValue) * 100;
             
-            if (metric.changePercent > 5) {
-                metric.trend = "up";
-            } else if (metric.changePercent < -5) {
-                metric.trend = "down";
+            if (card.changePercent > 0) {
+                card.trend = "up";
+            } else if (card.changePercent < 0) {
+                card.trend = "down";
             } else {
-                metric.trend = "stable";
-            }
-        } else {
-            metric.change = metric.currentValue;
-            metric.changePercent = 100;
-            metric.trend = "up";
-        }
-    }
-}
-
-void HistoricalComparisonWidget::drawMetricCard(QPainter* painter, const ComparisonMetric& metric, const QRectF& rect) {
-    // Background
-    painter->fillRect(rect, ThemeManager::instance()->color(ThemeManager::SurfaceVariant));
-    
-    // Metric name
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
-    painter->setFont(QFont("Sans", 9));
-    painter->drawText(QRectF(rect.x() + 10, rect.y() + 5, rect.width() - 20, 20),
-                     Qt::AlignLeft | Qt::AlignVCenter, metric.name);
-    
-    // Current value
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
-    painter->setFont(QFont("Sans", 16, QFont::DemiBold));
-    painter->drawText(QRectF(rect.x() + 10, rect.y() + 25, rect.width() / 2 - 20, 30),
-                     Qt::AlignLeft | Qt::AlignVCenter, QString::number(metric.currentValue, 'f', 0));
-    
-    // Change indicator
-    QColor changeColor;
-    QString changeIcon;
-    if (metric.trend == "up") {
-        changeColor = QColor("#4CAF50");
-        changeIcon = "↑";
-    } else if (metric.trend == "down") {
-        changeColor = QColor("#F44336");
-        changeIcon = "↓";
-    } else {
-        changeColor = ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant);
-        changeIcon = "→";
-    }
-    
-    painter->setPen(changeColor);
-    painter->setFont(QFont("Sans", 12));
-    
-    QString changeText = QString("%1 %2 (%3%4%)")
-        .arg(changeIcon)
-        .arg(qAbs(metric.change), 0, 'f', 0)
-        .arg(metric.changePercent > 0 ? "+" : "")
-        .arg(metric.changePercent, 0, 'f', 1);
-    
-    painter->drawText(QRectF(rect.x() + rect.width() / 2, rect.y() + 25, rect.width() / 2 - 10, 30),
-                     Qt::AlignRight | Qt::AlignVCenter, changeText);
-    
-    // Previous value
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
-    painter->setFont(QFont("Sans", 9));
-    painter->drawText(QRectF(rect.x() + 10, rect.y() + 55, rect.width() - 20, 20),
-                     Qt::AlignLeft | Qt::AlignVCenter, 
-                     QString("Previous: %1").arg(metric.previousValue, 0, 'f', 0));
-    
-    // Border
-    painter->setPen(ThemeManager::instance()->color(ThemeManager::Outline));
-    painter->drawRect(rect);
-}
-
-// StatisticsDock implementation
-
-StatisticsDock::StatisticsDock(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
-    setupUI();
-    connectSignals();
-    loadSettings();
-    
-    // Setup timers
-    refreshTimer_ = new QTimer(this);
-    connect(refreshTimer_, &QTimer::timeout, this, &StatisticsDock::updateStatistics);
-    
-    realtimeTimer_ = new QTimer(this);
-    realtimeTimer_->setInterval(1000);
-    connect(realtimeTimer_, &QTimer::timeout, this, &StatisticsDock::updateRealtimeMetrics);
-}
-
-StatisticsDock::~StatisticsDock() {
-    saveSettings();
-}
-
-void StatisticsDock::setupUI() {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-    
-    createToolBar();
-    layout->addWidget(toolBar_);
-    
-    createViews();
-    layout->addWidget(viewTabs_);
-}
-
-void StatisticsDock::createToolBar() {
-    toolBar_ = new QToolBar(this);
-    toolBar_->setIconSize(QSize(16, 16));
-    
-    // Time range controls
-    auto* timeLabel = new QLabel(tr("Time Range:"), this);
-    toolBar_->addWidget(timeLabel);
-    
-    startDateEdit_ = new QDateTimeEdit(this);
-    startDateEdit_->setCalendarPopup(true);
-    startDateEdit_->setDateTime(QDateTime::currentDateTime().addDays(-7));
-    toolBar_->addWidget(startDateEdit_);
-    
-    toolBar_->addWidget(new QLabel(" - ", this));
-    
-    endDateEdit_ = new QDateTimeEdit(this);
-    endDateEdit_->setCalendarPopup(true);
-    endDateEdit_->setDateTime(QDateTime::currentDateTime());
-    toolBar_->addWidget(endDateEdit_);
-    
-    // Presets
-    presetCombo_ = new QComboBox(this);
-    presetCombo_->addItems({tr("Last Hour"), tr("Last 24 Hours"), tr("Last 7 Days"), 
-                           tr("Last 30 Days"), tr("Custom")});
-    presetCombo_->setCurrentIndex(2); // Last 7 Days
-    toolBar_->addWidget(presetCombo_);
-    
-    toolBar_->addSeparator();
-    
-    // Auto-refresh
-    autoRefreshCheck_ = new QCheckBox(tr("Auto Refresh"), this);
-    toolBar_->addWidget(autoRefreshCheck_);
-    
-    refreshIntervalSpin_ = new QSpinBox(this);
-    refreshIntervalSpin_->setRange(5, 300);
-    refreshIntervalSpin_->setValue(30);
-    refreshIntervalSpin_->setSuffix(tr(" sec"));
-    refreshIntervalSpin_->setEnabled(false);
-    toolBar_->addWidget(refreshIntervalSpin_);
-    
-    toolBar_->addSeparator();
-    
-    // Actions
-    refreshAction_ = toolBar_->addAction(UIUtils::icon("view-refresh"), tr("Refresh"));
-    refreshAction_->setShortcut(QKeySequence::Refresh);
-    
-    realtimeAction_ = toolBar_->addAction(UIUtils::icon("media-playback-start"), tr("Real-time"));
-    realtimeAction_->setCheckable(true);
-    
-    
-    settingsAction_ = toolBar_->addAction(UIUtils::icon("configure"), tr("Settings"));
-}
-
-void StatisticsDock::createViews() {
-    viewTabs_ = new QTabWidget(this);
-    
-    // Summary view
-    auto* summaryTab = new QWidget();
-    auto* summaryLayout = new QVBoxLayout(summaryTab);
-    
-    summaryWidget_ = new StatsSummaryWidget(this);
-    summaryLayout->addWidget(summaryWidget_);
-    
-    detailsTable_ = new QTableWidget(this);
-    detailsTable_->setAlternatingRowColors(true);
-    detailsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    summaryLayout->addWidget(detailsTable_);
-    
-    viewTabs_->addTab(summaryTab, tr("Summary"));
-    
-    // Message stats
-    messageChart_ = new MessageStatsChart(this);
-    viewTabs_->addTab(messageChart_, tr("Messages"));
-    
-    // Tool usage
-    toolChart_ = new ToolUsageChart(this);
-    viewTabs_->addTab(toolChart_, tr("Tool Usage"));
-    
-    // Performance
-    performanceChart_ = new PerformanceChart(this);
-    performanceChart_->addMetric("Response Time", "ms");
-    performanceChart_->addMetric("CPU Usage", "%");
-    performanceChart_->addMetric("Memory Usage", "MB");
-    viewTabs_->addTab(performanceChart_, tr("Performance"));
-    
-    // Token usage
-    tokenChart_ = new TokenUsageChart(this);
-    viewTabs_->addTab(tokenChart_, tr("Tokens"));
-    
-    // Memory analysis
-    memoryChart_ = new MemoryAnalysisChart(this);
-    viewTabs_->addTab(memoryChart_, tr("Memory"));
-    
-    // Real-time metrics
-    realtimeWidget_ = new RealtimeMetricsWidget(this);
-    realtimeWidget_->addMetric("Messages/min", "msg", 0, 10);
-    realtimeWidget_->addMetric("Tokens/min", "tok", 0, 1000);
-    realtimeWidget_->addMetric("CPU Usage", "%", 0, 100);
-    realtimeWidget_->addMetric("Memory", "MB", 0, 1000);
-    viewTabs_->addTab(realtimeWidget_, tr("Real-time"));
-    
-    // Historical comparison
-    comparisonWidget_ = new HistoricalComparisonWidget(this);
-    comparisonWidget_->setMetrics({
-        "Total Messages", "Tool Executions", "Success Rate",
-        "Avg Response Time", "Total Tokens", "Memory Entries"
-    });
-    viewTabs_->addTab(comparisonWidget_, tr("Comparison"));
-}
-
-void StatisticsDock::connectSignals() {
-    // Time range
-    connect(startDateEdit_, &QDateTimeEdit::dateTimeChanged,
-            this, &StatisticsDock::onTimeRangeChanged);
-    connect(endDateEdit_, &QDateTimeEdit::dateTimeChanged,
-            this, &StatisticsDock::onTimeRangeChanged);
-    
-    connect(presetCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            [this](int index) {
-        QDateTime now = QDateTime::currentDateTime();
-        switch (index) {
-        case 0: // Last Hour
-            startDateEdit_->setDateTime(now.addSecs(-3600));
-            endDateEdit_->setDateTime(now);
-            break;
-        case 1: // Last 24 Hours
-            startDateEdit_->setDateTime(now.addDays(-1));
-            endDateEdit_->setDateTime(now);
-            break;
-        case 2: // Last 7 Days
-            startDateEdit_->setDateTime(now.addDays(-7));
-            endDateEdit_->setDateTime(now);
-            break;
-        case 3: // Last 30 Days
-            startDateEdit_->setDateTime(now.addDays(-30));
-            endDateEdit_->setDateTime(now);
-            break;
-        }
-    });
-    
-    // Auto-refresh
-    connect(autoRefreshCheck_, &QCheckBox::toggled, [this](bool checked) {
-        refreshIntervalSpin_->setEnabled(checked);
-        if (checked) {
-            refreshTimer_->start(refreshIntervalSpin_->value() * 1000);
-        } else {
-            refreshTimer_->stop();
-        }
-    });
-    
-    connect(refreshIntervalSpin_, QOverload<int>::of(&QSpinBox::valueChanged),
-            [this](int value) {
-        if (refreshTimer_->isActive()) {
-            refreshTimer_->setInterval(value * 1000);
-        }
-    });
-    
-    // Actions
-    connect(refreshAction_, &QAction::triggered,
-            this, &StatisticsDock::updateStatistics);
-    
-    connect(realtimeAction_, &QAction::toggled,
-            this, &StatisticsDock::setRealtimeEnabled);
-    
-    
-    connect(settingsAction_, &QAction::triggered,
-            this, &StatisticsDock::onSettingsClicked);
-    
-    // View tabs
-    connect(viewTabs_, &QTabWidget::currentChanged,
-            this, &StatisticsDock::onViewTabChanged);
-    
-    // Chart signals
-    connect(messageChart_, &BaseChartWidget::dataPointClicked,
-            this, &StatisticsDock::onChartDataPointClicked);
-    connect(toolChart_, &BaseChartWidget::dataPointClicked,
-            this, &StatisticsDock::onChartDataPointClicked);
-    
-    // Summary widget
-    connect(summaryWidget_, &StatsSummaryWidget::statClicked,
-            [this](const QString& name) {
-        // Navigate to relevant tab based on stat
-        if (name.contains("Message")) {
-            viewTabs_->setCurrentIndex(1); // Messages tab
-        } else if (name.contains("Tool")) {
-            viewTabs_->setCurrentIndex(2); // Tool usage tab
-        } else if (name.contains("Token")) {
-            viewTabs_->setCurrentIndex(4); // Tokens tab
-        }
-    });
-}
-
-void StatisticsDock::addDataPoint(const StatDataPoint& point) {
-    dataPoints_.append(point);
-    
-    // Update real-time metrics if enabled
-    if (realtimeEnabled_ && point.timestamp.secsTo(QDateTime::currentDateTime()) < 60) {
-        if (point.category == "message") {
-            realtimeWidget_->updateMetric("Messages/min", 
-                realtimeWidget_->property("messagesPerMin").toDouble() + 1);
-        } else if (point.category == "tokens") {
-            realtimeWidget_->updateMetric("Tokens/min",
-                realtimeWidget_->property("tokensPerMin").toDouble() + point.value);
-        }
-    }
-}
-
-void StatisticsDock::addDataPoints(const QList<StatDataPoint>& points) {
-    dataPoints_.append(points);
-}
-
-void StatisticsDock::clearData() {
-    dataPoints_.clear();
-    updateAllCharts();
-}
-
-void StatisticsDock::setTimeRange(const QDateTime& start, const QDateTime& end) {
-    startTime_ = start;
-    endTime_ = end;
-    
-    startDateEdit_->setDateTime(start);
-    endDateEdit_->setDateTime(end);
-    
-    emit timeRangeChanged(start, end);
-}
-
-void StatisticsDock::setCurrentView(const QString& view) {
-    int index = 0;
-    if (view == "messages") index = 1;
-    else if (view == "tools") index = 2;
-    else if (view == "performance") index = 3;
-    else if (view == "tokens") index = 4;
-    else if (view == "memory") index = 5;
-    else if (view == "realtime") index = 6;
-    else if (view == "comparison") index = 7;
-    
-    viewTabs_->setCurrentIndex(index);
-}
-
-void StatisticsDock::refreshAll() {
-    updateStatistics();
-    updateAllCharts();
-}
-
-
-
-void StatisticsDock::registerCustomMetric(const QString& name, const QString& unit) {
-    customMetrics_[name] = 0;
-    
-    // Add to real-time widget
-    if (realtimeWidget_) {
-        realtimeWidget_->addMetric(name, unit);
-    }
-}
-
-void StatisticsDock::updateCustomMetric(const QString& name, double value) {
-    if (customMetrics_.contains(name)) {
-        customMetrics_[name] = value;
-        
-        // Update real-time widget
-        if (realtimeWidget_) {
-            realtimeWidget_->updateMetric(name, value);
-        }
-        
-        // Add as data point
-        StatDataPoint point;
-        point.timestamp = QDateTime::currentDateTime();
-        point.category = "custom";
-        point.subcategory = name;
-        point.value = value;
-        addDataPoint(point);
-        
-        emit customMetricUpdated(name, value);
-    }
-}
-
-void StatisticsDock::setRealtimeEnabled(bool enabled) {
-    realtimeEnabled_ = enabled;
-    
-    if (enabled) {
-        realtimeTimer_->start();
-        realtimeWidget_->start();
-    } else {
-        realtimeTimer_->stop();
-        realtimeWidget_->stop();
-    }
-}
-
-void StatisticsDock::updateStatistics() {
-    calculateStatistics();
-    updateAllCharts();
-    
-    // Update summary
-    summaryWidget_->updateStats(cachedStats_);
-    
-    // Update details table
-    detailsTable_->clear();
-    detailsTable_->setColumnCount(2);
-    detailsTable_->setHorizontalHeaderLabels({tr("Metric"), tr("Value")});
-    
-    int row = 0;
-    for (auto it = cachedStats_.begin(); it != cachedStats_.end(); ++it) {
-        detailsTable_->insertRow(row);
-        detailsTable_->setItem(row, 0, new QTableWidgetItem(it.key()));
-        detailsTable_->setItem(row, 1, new QTableWidgetItem(it.value().toString()));
-        row++;
-    }
-    
-    lastUpdate_ = QDateTime::currentDateTime();
-}
-
-void StatisticsDock::resetTimeRange() {
-    setTimeRange(QDateTime::currentDateTime().addDays(-7), QDateTime::currentDateTime());
-}
-
-void StatisticsDock::onThemeChanged() {
-    // Update chart themes
-    QString theme = ThemeManager::instance()->currentTheme() == ThemeManager::Dark ? "dark" : "light";
-    
-    messageChart_->setTheme(theme);
-    toolChart_->setTheme(theme);
-    performanceChart_->setTheme(theme);
-    tokenChart_->setTheme(theme);
-    memoryChart_->setTheme(theme);
-}
-
-void StatisticsDock::onTimeRangeChanged() {
-    startTime_ = startDateEdit_->dateTime();
-    endTime_ = endDateEdit_->dateTime();
-    
-    updateStatistics();
-    emit timeRangeChanged(startTime_, endTime_);
-}
-
-void StatisticsDock::onViewTabChanged(int index) {
-    Q_UNUSED(index);
-    
-    // Update relevant chart when tab changes
-    if (viewTabs_->currentWidget() == messageChart_) {
-        messageChart_->refresh();
-    } else if (viewTabs_->currentWidget() == toolChart_) {
-        toolChart_->refresh();
-    }
-    
-    emit viewChanged(viewTabs_->tabText(index));
-}
-
-void StatisticsDock::onRefreshClicked() {
-    refreshAll();
-}
-
-
-void StatisticsDock::onSettingsClicked() {
-    auto* dialog = new StatsSettingsDialog(this);
-    
-    dialog->setAutoRefreshEnabled(autoRefreshCheck_->isChecked());
-    dialog->setRefreshInterval(refreshIntervalSpin_->value());
-    dialog->setChartAnimationsEnabled(messageChart_->property("animated").toBool());
-    
-    if (dialog->exec() == QDialog::Accepted) {
-        autoRefreshCheck_->setChecked(dialog->isAutoRefreshEnabled());
-        refreshIntervalSpin_->setValue(dialog->refreshInterval());
-        
-        bool animated = dialog->chartAnimationsEnabled();
-        messageChart_->setAnimated(animated);
-        toolChart_->setAnimated(animated);
-        performanceChart_->setAnimated(animated);
-        tokenChart_->setAnimated(animated);
-        memoryChart_->setAnimated(animated);
-        
-        saveSettings();
-    }
-    
-    dialog->deleteLater();
-}
-
-void StatisticsDock::onChartDataPointClicked(const StatDataPoint& point) {
-    emit dataPointClicked(point);
-}
-
-void StatisticsDock::updateRealtimeMetrics() {
-    // Calculate real-time metrics
-    QDateTime now = QDateTime::currentDateTime();
-    QDateTime oneMinuteAgo = now.addSecs(-60);
-    
-    int messageCount = 0;
-    double tokenCount = 0;
-    
-    for (const StatDataPoint& point : dataPoints_) {
-        if (point.timestamp >= oneMinuteAgo) {
-            if (point.category == "message") {
-                messageCount++;
-            } else if (point.category == "tokens" && point.subcategory == "total") {
-                tokenCount += point.value;
+                card.trend = "stable";
             }
         }
-    }
-    
-    realtimeWidget_->setProperty("messagesPerMin", messageCount);
-    realtimeWidget_->setProperty("tokensPerMin", tokenCount);
-    
-    // Update real-time display
-    realtimeWidget_->updateMetric("Messages/min", messageCount);
-    realtimeWidget_->updateMetric("Tokens/min", tokenCount);
-}
-
-void StatisticsDock::loadSettings() {
-    QSettings settings;
-    settings.beginGroup("StatisticsDock");
-    
-    autoRefreshCheck_->setChecked(settings.value("autoRefresh", false).toBool());
-    refreshIntervalSpin_->setValue(settings.value("refreshInterval", 30).toInt());
-    presetCombo_->setCurrentIndex(settings.value("timePreset", 2).toInt());
-    
-    settings.endGroup();
-}
-
-void StatisticsDock::saveSettings() {
-    QSettings settings;
-    settings.beginGroup("StatisticsDock");
-    
-    settings.setValue("autoRefresh", autoRefreshCheck_->isChecked());
-    settings.setValue("refreshInterval", refreshIntervalSpin_->value());
-    settings.setValue("timePreset", presetCombo_->currentIndex());
-    
-    settings.endGroup();
-}
-
-void StatisticsDock::calculateStatistics() {
-    cachedStats_.clear();
-    
-    // Filter data by time range
-    QList<StatDataPoint> filteredData;
-    for (const StatDataPoint& point : dataPoints_) {
-        if (point.timestamp >= startTime_ && point.timestamp <= endTime_) {
-            filteredData.append(point);
-        }
-    }
-    
-    // Calculate metrics
-    int totalMessages = 0;
-    int toolsUsed = 0;
-    int successfulTools = 0;
-    int totalTools = 0;
-    double totalResponseTime = 0;
-    int responseCount = 0;
-    double totalTokens = 0;
-    QSet<QString> uniqueTools;
-    
-    for (const StatDataPoint& point : filteredData) {
-        if (point.category == "message") {
-            totalMessages++;
-        } else if (point.category == "tool") {
-            totalTools++;
-            uniqueTools.insert(point.subcategory);
-            if (point.metadata.value("success").toBool()) {
-                successfulTools++;
-            }
-        } else if (point.category == "performance" && point.subcategory == "response_time") {
-            totalResponseTime += point.value;
-            responseCount++;
-        } else if (point.category == "tokens" && point.subcategory == "total") {
-            totalTokens += point.value;
-        }
-    }
-    
-    cachedStats_["totalMessages"] = totalMessages;
-    cachedStats_["toolsUsed"] = uniqueTools.size();
-    cachedStats_["successRate"] = totalTools > 0 ? (successfulTools * 100.0 / totalTools) : 100.0;
-    cachedStats_["avgResponseTime"] = responseCount > 0 ? (totalResponseTime / responseCount / 1000.0) : 0.0;
-    cachedStats_["totalTokens"] = static_cast<int>(totalTokens);
-    cachedStats_["memoryEntries"] = 0; // Would be calculated from memory data
-}
-
-void StatisticsDock::updateAllCharts() {
-    // Filter data by time range
-    QList<StatDataPoint> filteredData;
-    for (const StatDataPoint& point : dataPoints_) {
-        if (point.timestamp >= startTime_ && point.timestamp <= endTime_) {
-            filteredData.append(point);
-        }
-    }
-    
-    // Update all charts
-    messageChart_->setData(filteredData);
-    toolChart_->setData(filteredData);
-    performanceChart_->setData(filteredData);
-    tokenChart_->setData(filteredData);
-    memoryChart_->setData(filteredData);
-    
-    // Update comparison
-    if (viewTabs_->currentWidget() == comparisonWidget_) {
-        // Calculate comparison period
-        qint64 duration = startTime_.msecsTo(endTime_);
-        QDateTime compStart = startTime_.addMSecs(-duration);
-        QDateTime compEnd = startTime_;
-        
-        comparisonWidget_->setCurrentPeriod(startTime_, endTime_);
-        comparisonWidget_->setComparisonPeriod(compStart, compEnd);
-        
-        // Calculate stats for both periods
-        QJsonObject currentStats = cachedStats_;
-        
-        // Calculate previous period stats
-        QJsonObject previousStats;
-        // ... calculation logic ...
-        
-        comparisonWidget_->updateData(currentStats, previousStats);
     }
 }
 
 // StatsSettingsDialog implementation
-
 StatsSettingsDialog::StatsSettingsDialog(QWidget* parent)
-    : QDialog(parent)
-{
-    setWindowTitle(tr("Statistics Settings"));
+    : QDialog(parent) {
+    setWindowTitle("Statistics Settings");
     setModal(true);
-    resize(400, 300);
-    
     setupUI();
-}
-
-void StatsSettingsDialog::setupUI() {
-    auto* layout = new QVBoxLayout(this);
-    
-    // Auto-refresh group
-    auto* refreshGroup = new QGroupBox(tr("Auto Refresh"), this);
-    auto* refreshLayout = new QFormLayout(refreshGroup);
-    
-    autoRefreshCheck_ = new QCheckBox(tr("Enable auto refresh"), this);
-    refreshLayout->addRow(autoRefreshCheck_);
-    
-    refreshIntervalSpin_ = new QSpinBox(this);
-    refreshIntervalSpin_->setRange(5, 300);
-    refreshIntervalSpin_->setSuffix(tr(" seconds"));
-    refreshLayout->addRow(tr("Refresh interval:"), refreshIntervalSpin_);
-    
-    layout->addWidget(refreshGroup);
-    
-    // Display group
-    auto* displayGroup = new QGroupBox(tr("Display"), this);
-    auto* displayLayout = new QFormLayout(displayGroup);
-    
-    timeRangeCombo_ = new QComboBox(this);
-    timeRangeCombo_->addItems({tr("Last Hour"), tr("Last 24 Hours"), 
-                              tr("Last 7 Days"), tr("Last 30 Days")});
-    displayLayout->addRow(tr("Default time range:"), timeRangeCombo_);
-    
-    animationsCheck_ = new QCheckBox(tr("Enable chart animations"), this);
-    displayLayout->addRow(animationsCheck_);
-    
-    layout->addWidget(displayGroup);
-    
-    // Export group
-    auto* exportGroup = new QGroupBox(tr("Export"), this);
-    auto* exportLayout = new QVBoxLayout(exportGroup);
-    
-    exportFormatsList_ = new QListWidget(this);
-    exportFormatsList_->setSelectionMode(QAbstractItemView::MultiSelection);
-    
-    auto* csvItem = new QListWidgetItem(tr("CSV"), exportFormatsList_);
-    csvItem->setCheckState(Qt::Checked);
-    
-    auto* jsonItem = new QListWidgetItem(tr("JSON"), exportFormatsList_);
-    jsonItem->setCheckState(Qt::Checked);
-    
-    auto* pngItem = new QListWidgetItem(tr("PNG"), exportFormatsList_);
-    pngItem->setCheckState(Qt::Checked);
-    
-    auto* svgItem = new QListWidgetItem(tr("SVG"), exportFormatsList_);
-    svgItem->setCheckState(Qt::Unchecked);
-    
-    auto* pdfItem = new QListWidgetItem(tr("PDF"), exportFormatsList_);
-    pdfItem->setCheckState(Qt::Checked);
-    
-    exportLayout->addWidget(new QLabel(tr("Enabled export formats:"), this));
-    exportLayout->addWidget(exportFormatsList_);
-    
-    layout->addWidget(exportGroup);
-    
-    // Buttons
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        this
-    );
-    layout->addWidget(buttonBox);
-    
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    
-    // Connect enable/disable logic
-    connect(autoRefreshCheck_, &QCheckBox::toggled,
-            refreshIntervalSpin_, &QSpinBox::setEnabled);
 }
 
 void StatsSettingsDialog::setAutoRefreshEnabled(bool enabled) {
@@ -2040,10 +1535,7 @@ int StatsSettingsDialog::refreshInterval() const {
 }
 
 void StatsSettingsDialog::setDefaultTimeRange(const QString& range) {
-    int index = timeRangeCombo_->findText(range);
-    if (index >= 0) {
-        timeRangeCombo_->setCurrentIndex(index);
-    }
+    timeRangeCombo_->setCurrentText(range);
 }
 
 QString StatsSettingsDialog::defaultTimeRange() const {
@@ -2058,22 +1550,62 @@ bool StatsSettingsDialog::chartAnimationsEnabled() const {
     return animationsCheck_->isChecked();
 }
 
-void StatsSettingsDialog::setExportFormats(const QStringList& formats) {
-    for (int i = 0; i < exportFormatsList_->count(); ++i) {
-        QListWidgetItem* item = exportFormatsList_->item(i);
-        item->setCheckState(formats.contains(item->text()) ? Qt::Checked : Qt::Unchecked);
-    }
-}
-
-QStringList StatsSettingsDialog::exportFormats() const {
-    QStringList formats;
-    for (int i = 0; i < exportFormatsList_->count(); ++i) {
-        QListWidgetItem* item = exportFormatsList_->item(i);
-        if (item->checkState() == Qt::Checked) {
-            formats.append(item->text());
-        }
-    }
-    return formats;
+void StatsSettingsDialog::setupUI() {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Auto refresh section
+    auto* refreshGroup = new QGroupBox("Auto Refresh", this);
+    auto* refreshLayout = new QVBoxLayout(refreshGroup);
+    
+    autoRefreshCheck_ = new QCheckBox("Enable auto refresh", this);
+    refreshLayout->addWidget(autoRefreshCheck_);
+    
+    auto* intervalLayout = new QHBoxLayout();
+    intervalLayout->addWidget(new QLabel("Refresh interval:", this));
+    
+    refreshIntervalSpin_ = new QSpinBox(this);
+    refreshIntervalSpin_->setRange(1, 60);
+    refreshIntervalSpin_->setSuffix(" seconds");
+    intervalLayout->addWidget(refreshIntervalSpin_);
+    intervalLayout->addStretch();
+    
+    refreshLayout->addLayout(intervalLayout);
+    layout->addWidget(refreshGroup);
+    
+    // Display section
+    auto* displayGroup = new QGroupBox("Display Options", this);
+    auto* displayLayout = new QVBoxLayout(displayGroup);
+    
+    auto* timeRangeLayout = new QHBoxLayout();
+    timeRangeLayout->addWidget(new QLabel("Default time range:", this));
+    
+    timeRangeCombo_ = new QComboBox(this);
+    timeRangeCombo_->addItems({"Last Hour", "Last 24 Hours", "Last Week", "Last Month"});
+    timeRangeLayout->addWidget(timeRangeCombo_);
+    timeRangeLayout->addStretch();
+    
+    displayLayout->addLayout(timeRangeLayout);
+    
+    animationsCheck_ = new QCheckBox("Enable chart animations", this);
+    displayLayout->addWidget(animationsCheck_);
+    
+    layout->addWidget(displayGroup);
+    
+    // Buttons
+    auto* buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+    
+    auto* okButton = new QPushButton("OK", this);
+    connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
+    buttonLayout->addWidget(okButton);
+    
+    auto* cancelButton = new QPushButton("Cancel", this);
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    buttonLayout->addWidget(cancelButton);
+    
+    layout->addLayout(buttonLayout);
+    
+    resize(400, 300);
 }
 
 } // namespace llm_re::ui_v2

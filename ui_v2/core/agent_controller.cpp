@@ -1,12 +1,11 @@
+#include "ui_v2_common.h"
 #include "agent_controller.h"
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
 #include "../views/statistics_dock.h"
+#include "../models/tool_execution.h"
 #include "core/ida_utils.h"
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <sstream>
 
 namespace llm_re::ui_v2 {
 
@@ -71,7 +70,7 @@ void AgentController::executeTask(const std::string& task) {
     
     // Clear conversation model if connected
     if (conversationModel_) {
-        conversationModel_->clear();
+        conversationModel_->clearMessages();
     }
     
     // Add user message to conversation
@@ -308,7 +307,12 @@ void AgentController::handleToolStarted(const json& data) {
     auto toolExec = std::make_unique<ToolExecution>();
     toolExec->toolId = toolId;
     toolExec->toolName = toolName;
-    toolExec->parameters = QJsonObject::fromVariantMap(input.get<QVariantMap>());
+    
+    // Convert json to QJsonObject
+    QString jsonStr = QString::fromStdString(input.dump());
+    QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+    toolExec->parameters = doc.object();
+    
     toolExec->state = ToolExecutionState::Running;
     toolExec->startTime = QDateTime::currentDateTime();
     
@@ -319,10 +323,11 @@ void AgentController::handleToolStarted(const json& data) {
     
     addMessageToConversation(std::move(toolMsg));
     
-    // Update tool dock if connected
+    // Update tool dock if connected - use the correct API
     if (toolDock_) {
-        toolDock_->addToolExecution(toolId, toolName, 
-            QJsonDocument(QJsonObject::fromVariantMap(input.get<QVariantMap>())).toJson());
+        QUuid execId = toolDock_->startExecution(toolName, doc.object());
+        // Store the execution ID for later updates
+        toolIdToExecId_[toolId] = execId;
     }
 }
 
@@ -337,7 +342,7 @@ void AgentController::handleToolExecuted(const json& data) {
         
         // Find and update the message
         for (int i = 0; i < conversationModel_->rowCount(); ++i) {
-            auto msg = conversationModel_->messageAt(i);
+            auto msg = conversationModel_->getMessageAt(i);
             if (msg && msg->id().toString() == messageId) {
                 if (auto toolExec = msg->toolExecution()) {
                     toolExec->state = ToolExecutionState::Completed;
@@ -346,10 +351,10 @@ void AgentController::handleToolExecuted(const json& data) {
                     toolExec->output = QString::fromStdString(result.dump());
                     
                     // Update content with result summary
-                    msg->setContent(QString("Executed %1 successfully").arg(toolName));
+                    QString newContent = QString("Executed %1 successfully").arg(toolName);
                     
-                    // Notify model of update
-                    conversationModel_->updateMessage(i);
+                    // Notify model of update - updateMessage takes QUuid and QString
+                    conversationModel_->updateMessage(msg->id(), newContent);
                 }
                 break;
             }
@@ -357,9 +362,10 @@ void AgentController::handleToolExecuted(const json& data) {
     }
     
     // Update tool dock
-    if (toolDock_) {
-        toolDock_->updateToolResult(toolId, 
-            QJsonDocument(QJsonObject::fromVariantMap(result.get<QVariantMap>())).toJson());
+    if (toolDock_ && toolIdToExecId_.contains(toolId)) {
+        QUuid execId = toolIdToExecId_[toolId];
+        QString output = QString::fromStdString(result.dump());
+        toolDock_->completeExecution(execId, true, output);
     }
     
     updateMemoryView();
@@ -499,14 +505,35 @@ void AgentController::updateMemoryView() {
         // Get memory snapshot and update dock
         json snapshot = memory->export_memory_snapshot();
         
-        // Convert to format expected by memory dock
-        QJsonObject memoryData;
-        if (snapshot.contains("analysis_entries")) {
-            memoryData["entries"] = QJsonArray::fromVariantList(
-                snapshot["analysis_entries"].get<QVariantList>());
-        }
+        // Convert analysis entries to MemoryEntry objects
+        memoryDock_->clearEntries();
         
-        memoryDock_->updateMemoryData(memoryData);
+        if (snapshot.contains("analysis_entries") && snapshot["analysis_entries"].is_array()) {
+            for (const auto& entry : snapshot["analysis_entries"]) {
+                MemoryEntry memEntry;
+                memEntry.id = QUuid::createUuid();
+                memEntry.address = QString::fromStdString(entry.value("address", ""));
+                memEntry.function = QString::fromStdString(entry.value("function", ""));
+                memEntry.module = QString::fromStdString(entry.value("module", ""));
+                memEntry.analysis = QString::fromStdString(entry.value("content", "")); // Map content to analysis
+                memEntry.timestamp = QDateTime::currentDateTime();
+                
+                // Extract tags if present
+                if (entry.contains("tags") && entry["tags"].is_array()) {
+                    for (const auto& tag : entry["tags"]) {
+                        memEntry.tags.append(QString::fromStdString(tag));
+                    }
+                }
+                
+                // Extract metadata
+                if (entry.contains("metadata")) {
+                    QString metadataStr = QString::fromStdString(entry["metadata"].dump());
+                    memEntry.metadata = QJsonDocument::fromJson(metadataStr.toUtf8()).object();
+                }
+                
+                memoryDock_->addEntry(memEntry);
+            }
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../core/ui_v2_common.h"
 #include "chart_types.h"
 #include "../../core/theme_manager.h"
 
@@ -9,24 +10,24 @@ namespace llm_re::ui_v2::charts {
 class ChartTheme {
 public:
     // Get theme for specific chart type
-    static void applyTheme(const Theme& theme, AxisConfig& xAxis, AxisConfig& yAxis,
+    static void applyTheme(ThemeManager::Theme theme, AxisConfig& xAxis, AxisConfig& yAxis,
                           LegendConfig& legend, TooltipConfig& tooltip, EffectsConfig& effects);
     
     // Get themed colors
-    static QColor getBackgroundColor(const Theme& theme);
-    static QColor getGridColor(const Theme& theme);
-    static QColor getAxisColor(const Theme& theme);
-    static QColor getTextColor(const Theme& theme);
-    static QColor getTextSecondaryColor(const Theme& theme);
-    static QColor getBorderColor(const Theme& theme);
+    static QColor getBackgroundColor(ThemeManager::Theme theme);
+    static QColor getGridColor(ThemeManager::Theme theme);
+    static QColor getAxisColor(ThemeManager::Theme theme);
+    static QColor getTextColor(ThemeManager::Theme theme);
+    static QColor getTextSecondaryColor(ThemeManager::Theme theme);
+    static QColor getBorderColor(ThemeManager::Theme theme);
     
     // Get series colors based on theme
-    static std::vector<QColor> getSeriesColors(const Theme& theme);
-    static QColor getSeriesColor(const Theme& theme, int index);
+    static std::vector<QColor> getSeriesColors(ThemeManager::Theme theme);
+    static QColor getSeriesColor(ThemeManager::Theme theme, int index);
     
     // Get gradient colors
-    static QLinearGradient getBackgroundGradient(const Theme& theme, const QRectF& rect);
-    static QLinearGradient getSeriesGradient(const Theme& theme, int index, const QRectF& rect);
+    static QLinearGradient getBackgroundGradient(ThemeManager::Theme theme, const QRectF& rect);
+    static QLinearGradient getSeriesGradient(ThemeManager::Theme theme, int index, const QRectF& rect);
     
     // Theme-specific effects
     static EffectsConfig getDarkThemeEffects();
@@ -60,6 +61,7 @@ struct LineChartTheme {
     // Animation
     bool animateDrawing = true;
     int drawingDuration = 1000;
+    bool animateOnUpdate = true;
     
     // Hover effects
     bool glowOnHover = true;
@@ -101,6 +103,28 @@ struct BarChartTheme {
     bool gradient = true;
     bool shadow = true;
     float shadowOffset = 3.0f;
+    
+    // Additional display options
+    bool showLegend = true;
+    bool showAxes = true;
+    bool rotateLabels = false;
+    float barBorderWidth = 0.0f;
+    float valueFontSize = 10.0f;
+    float labelFontSize = 10.0f;
+    
+    // Value position
+    enum ValuePosition {
+        Inside,
+        Outside,
+        Center
+    };
+    ValuePosition valuePosition = Center;
+    
+    // Colors (will be set based on theme)
+    QColor positiveColor;
+    QColor negativeColor;
+    QColor connectorColor;
+    QColor valueFontColor;
 };
 
 struct HeatmapTheme {

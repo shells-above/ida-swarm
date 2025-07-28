@@ -1,19 +1,17 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
 #include "../models/conversation_model.h"
 #include "../widgets/message_bubble.h"
-#include <QScrollArea>
-#include <QTimer>
-#include <memory>
-
-class QToolBar;
-class QLineEdit;
-class QTextEdit;
-class QSplitter;
-class QDockWidget;
 
 namespace llm_re::ui_v2 {
+
+// Forward declarations
+class ConversationInputArea;
+class ConversationSearchBar;
+class TypingIndicator;
+class MessageBubbleContainer;
 
 // Main conversation view that combines model, bubbles, and input
 class ConversationView : public BaseStyledWidget {
@@ -153,7 +151,7 @@ private:
     ConversationInputArea* inputArea_ = nullptr;
     QPushButton* sendButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
-    QWidget* searchBar_ = nullptr;
+    ConversationSearchBar* searchBar_ = nullptr;
     QLineEdit* searchInput_ = nullptr;
     QLabel* searchStatusLabel_ = nullptr;
     QWidget* statusBar_ = nullptr;

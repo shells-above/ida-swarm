@@ -1,11 +1,5 @@
+#include "../../core/ui_v2_common.h"
 #include "heatmap_widget.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <QWheelEvent>
-#include <QToolTip>
-#include <algorithm>
-#include <cmath>
 
 namespace llm_re::ui_v2::charts {
 
@@ -15,7 +9,7 @@ HeatmapWidget::HeatmapWidget(QWidget* parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     
     // Set default theme
-    theme_ = ChartTheme::getHeatmapTheme(ChartTheme::Style::Modern);
+    theme_ = HeatmapTheme();  // Use default initialization
     
     // Enable mouse tracking for hover effects
     setMouseTracking(true);
@@ -26,6 +20,9 @@ HeatmapWidget::HeatmapWidget(QWidget* parent)
     // Enable interaction by default
     setAcceptDrops(false);
     setFocusPolicy(Qt::StrongFocus);
+    
+    // Initialize text color from theme
+    textColor_ = ThemeManager::instance().colors().textPrimary;
 }
 
 HeatmapWidget::~HeatmapWidget() = default;
@@ -43,7 +40,7 @@ void HeatmapWidget::setData(const HeatmapData& data) {
         
         for (size_t j = 0; j < data.values[i].size(); ++j) {
             targetValues_[i][j] = data.values[i][j];
-            animatedValues_[i][j] = isAnimationEnabled() ? 0.0 : data.values[i][j];
+            animatedValues_[i][j] = effects_.animationEnabled ? 0.0 : data.values[i][j];
         }
     }
     
@@ -66,7 +63,7 @@ void HeatmapWidget::setData(const HeatmapData& data) {
     heatmapCacheDirty_ = true;
     calculateCellLayout();
     
-    if (isAnimationEnabled()) {
+    if (effects_.animationEnabled) {
         startAnimation();
     }
     
@@ -286,33 +283,6 @@ void HeatmapWidget::highlightCluster(int clusterIndex) {
     update();
 }
 
-QImage HeatmapWidget::toImage(const QSize& size) {
-    QSize targetSize = size.isValid() ? size : this->size();
-    QImage image(targetSize, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::white);
-    
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    // Temporarily disable animations
-    bool wasAnimated = isAnimationEnabled();
-    setAnimationEnabled(false);
-    
-    // Draw the heatmap
-    QRectF oldChartRect = chartRect();
-    setChartRect(QRectF(10, 10, targetSize.width() - 20, targetSize.height() - 20));
-    
-    drawBackground(&painter);
-    drawData(&painter);
-    drawAxes(&painter);
-    
-    // Restore settings
-    setChartRect(oldChartRect);
-    setAnimationEnabled(wasAnimated);
-    
-    return image;
-}
-
 void HeatmapWidget::updateData() {
     calculateCellLayout();
     heatmapCacheDirty_ = true;
@@ -349,13 +319,13 @@ void HeatmapWidget::drawData(QPainter* painter) {
     if (data_.values.empty()) return;
     
     // Use cached heatmap if available
-    if (!heatmapCacheDirty_ && !cachedHeatmap_.isNull() && !isAnimationEnabled()) {
+    if (!heatmapCacheDirty_ && !cachedHeatmap_.isNull() && !effects_.animationEnabled) {
         painter->drawPixmap(layout_.dataRect.toRect(), cachedHeatmap_);
     } else {
         drawCells(painter);
         
         // Cache the result if not animating
-        if (!isAnimationEnabled()) {
+        if (!effects_.animationEnabled) {
             cachedHeatmap_ = QPixmap(layout_.dataRect.size().toSize());
             cachedHeatmap_.fill(Qt::transparent);
             
@@ -386,7 +356,7 @@ void HeatmapWidget::drawData(QPainter* painter) {
 }
 
 void HeatmapWidget::drawAxes(QPainter* painter) {
-    if (!theme_.showAxes) return;
+    if (!showAxes_) return;
     
     painter->save();
     
@@ -429,7 +399,7 @@ void HeatmapWidget::drawCells(QPainter* painter) {
                 cellRect.translate(-layout_.startCol * layout_.cellSize.width(),
                                  -layout_.startRow * layout_.cellSize.height());
                 
-                double value = isAnimationEnabled() ? 
+                double value = effects_.animationEnabled ? 
                               animatedValues_[row][col] : data_.values[row][col];
                 
                 drawCell(painter, cellRect, value, row, col);
@@ -478,15 +448,15 @@ void HeatmapWidget::drawCell(QPainter* painter, const QRectF& rect, double value
     }
     
     // Apply effects
-    if (theme_.effects.enabled && isHovered && theme_.effects.glow) {
-        GlowEffects::drawGlowPath(painter, cellPath, cellColor.lighter(150), 3);
+    if (effects_.glowEnabled && isHovered && theme_.highlightOnHover) {
+        ChartUtils::drawGlowEffect(painter, cellPath, cellColor.lighter(150), effects_.glowRadius);
     }
     
     painter->fillPath(cellPath, cellColor);
     
     // Draw grid
     if (theme_.showGrid) {
-        painter->setPen(QPen(theme_.gridColor, theme_.gridWidth));
+        painter->setPen(QPen(gridColor_, gridWidth_));
         painter->drawPath(cellPath);
     }
     
@@ -497,10 +467,10 @@ void HeatmapWidget::drawCell(QPainter* painter, const QRectF& rect, double value
 }
 
 void HeatmapWidget::drawCellValue(QPainter* painter, const QRectF& rect, double value) {
-    QString text = QString::number(value, 'f', theme_.valuePrecision);
+    QString text = QString::number(value, 'f', valuePrecision_);
     
     QFont valueFont = font();
-    valueFont.setPointSize(theme_.valueFontSize);
+    valueFont.setPointSize(static_cast<int>(valueFontSize_));
     painter->setFont(valueFont);
     
     // Choose text color based on cell brightness
@@ -515,9 +485,9 @@ void HeatmapWidget::drawRowLabels(QPainter* painter) {
     if (data_.rowLabels.isEmpty()) return;
     
     QFont labelFont = font();
-    labelFont.setPointSize(theme_.labelFontSize);
+    labelFont.setPointSize(static_cast<int>(labelFontSize_));
     painter->setFont(labelFont);
-    painter->setPen(theme_.textColor);
+    painter->setPen(textColor_);
     
     double y = layout_.dataRect.top() + layout_.cellSize.height() / 2;
     
@@ -542,9 +512,9 @@ void HeatmapWidget::drawColumnLabels(QPainter* painter) {
     if (data_.columnLabels.isEmpty()) return;
     
     QFont labelFont = font();
-    labelFont.setPointSize(theme_.labelFontSize);
+    labelFont.setPointSize(static_cast<int>(labelFontSize_));
     painter->setFont(labelFont);
-    painter->setPen(theme_.textColor);
+    painter->setPen(textColor_);
     
     double x = layout_.dataRect.left() + layout_.cellSize.width() / 2;
     
@@ -557,7 +527,7 @@ void HeatmapWidget::drawColumnLabels(QPainter* painter) {
             painter->save();
             painter->translate(x, layout_.dataRect.bottom() + 5);
             
-            if (theme_.rotateLabels) {
+            if (rotateLabels_) {
                 painter->rotate(45);
                 painter->drawText(QPointF(0, 0), data_.columnLabels[i]);
             } else {
@@ -574,7 +544,7 @@ void HeatmapWidget::drawColumnLabels(QPainter* painter) {
 }
 
 void HeatmapWidget::drawColorScale(QPainter* painter) {
-    if (!theme_.showColorScale) return;
+    if (!showColorScale_) return;
     
     const int scaleHeight = 200;
     const int scaleWidth = 20;
@@ -600,12 +570,12 @@ void HeatmapWidget::drawColorScale(QPainter* painter) {
     }
     
     painter->fillRect(scaleRect, gradient);
-    painter->setPen(QPen(theme_.textColor, 1));
+    painter->setPen(QPen(textColor_, 1));
     painter->drawRect(scaleRect);
     
     // Draw scale labels
     QFont labelFont = font();
-    labelFont.setPointSize(theme_.labelFontSize - 2);
+    labelFont.setPointSize(static_cast<int>(labelFontSize_) - 2);
     painter->setFont(labelFont);
     
     const int numLabels = 5;
@@ -613,7 +583,7 @@ void HeatmapWidget::drawColorScale(QPainter* painter) {
         double value = data_.minValue + (data_.maxValue - data_.minValue) * i / (numLabels - 1);
         double y = scaleRect.bottom() - scaleRect.height() * i / (numLabels - 1);
         
-        QString label = QString::number(value, 'f', theme_.valuePrecision);
+        QString label = QString::number(value, 'f', valuePrecision_);
         painter->drawText(QPointF(scaleRect.right() + 5, y + 5), label);
     }
 }
@@ -638,14 +608,14 @@ void HeatmapWidget::drawSelection(QPainter* painter) {
     }
     
     // Draw selection border
-    QPen selectionPen(theme_.selectionColor, 2);
+    QPen selectionPen(selectionColor_, 2);
     selectionPen.setStyle(Qt::DashLine);
     painter->setPen(selectionPen);
     painter->setBrush(Qt::NoBrush);
     painter->drawRect(selectionRect);
     
     // Draw selection overlay
-    QColor overlayColor = theme_.selectionColor;
+    QColor overlayColor = selectionColor_;
     overlayColor.setAlpha(30);
     painter->fillRect(selectionRect, overlayColor);
     
@@ -659,28 +629,28 @@ void HeatmapWidget::drawHighlight(QPainter* painter) {
     painter->setClipRect(layout_.dataRect);
     
     // Highlight row
-    if (theme_.highlightRow) {
+    if (highlightRow_) {
         QRectF rowRect = cellToPixel(hoveredCell_.y(), 0);
         rowRect.setWidth(layout_.dataRect.width());
         
-        QColor highlightColor = theme_.highlightColor;
+        QColor highlightColor = highlightColor_;
         highlightColor.setAlpha(50);
         painter->fillRect(rowRect, highlightColor);
     }
     
     // Highlight column
-    if (theme_.highlightColumn) {
+    if (highlightColumn_) {
         QRectF colRect = cellToPixel(0, hoveredCell_.x());
         colRect.setHeight(layout_.dataRect.height());
         
-        QColor highlightColor = theme_.highlightColor;
+        QColor highlightColor = highlightColor_;
         highlightColor.setAlpha(50);
         painter->fillRect(colRect, highlightColor);
     }
     
     // Highlight cell
     QRectF cellRect = cellToPixel(hoveredCell_.y(), hoveredCell_.x());
-    QPen highlightPen(theme_.highlightColor, 2);
+    QPen highlightPen(highlightColor_, 2);
     painter->setPen(highlightPen);
     painter->setBrush(Qt::NoBrush);
     painter->drawRect(cellRect);
@@ -696,9 +666,9 @@ void HeatmapWidget::drawMemoryOverlay(QPainter* painter) {
     // Draw address labels
     QFont addressFont = font();
     addressFont.setFamily("Monospace");
-    addressFont.setPointSize(theme_.labelFontSize - 2);
+    addressFont.setPointSize(static_cast<int>(labelFontSize_) - 2);
     painter->setFont(addressFont);
-    painter->setPen(theme_.textColor);
+    painter->setPen(textColor_);
     
     // Draw start address
     QString startAddr = formatAddress(memoryStartAddress_);
@@ -726,8 +696,8 @@ QColor HeatmapWidget::valueToColor(double value) const {
                 double t = (normalized - customColorStops_[i-1].first) / 
                           (customColorStops_[i].first - customColorStops_[i-1].first);
                 
-                return ChartUtils::interpolateColor(customColorStops_[i-1].second,
-                                                  customColorStops_[i].second, t);
+                return ChartUtils::lerp(customColorStops_[i-1].second,
+                                      customColorStops_[i].second, t);
             }
         }
         
@@ -751,8 +721,8 @@ QColor HeatmapWidget::interpolateColor(double value, double min, double max) con
     
     double t = scaledValue - lowerIndex;
     
-    return ChartUtils::interpolateColor(colorScale_[lowerIndex], 
-                                      colorScale_[upperIndex], t);
+    return ChartUtils::lerp(colorScale_[lowerIndex], 
+                          colorScale_[upperIndex], t);
 }
 
 std::vector<QColor> HeatmapWidget::generateColorScale() const {
@@ -795,7 +765,7 @@ std::vector<QColor> HeatmapWidget::generateColorScale() const {
             };
             break;
             
-        case HeatmapTheme::ColorScale::Cool:
+        case HeatmapTheme::ColorScale::Turbo:
             colors = {
                 QColor(59, 76, 192), QColor(68, 90, 204), QColor(77, 104, 215),
                 QColor(87, 117, 225), QColor(98, 130, 234), QColor(108, 142, 241),
@@ -806,34 +776,21 @@ std::vector<QColor> HeatmapWidget::generateColorScale() const {
             };
             break;
             
-        case HeatmapTheme::ColorScale::Hot:
-            colors = {
-                QColor(10, 0, 0), QColor(51, 0, 0), QColor(102, 0, 0),
-                QColor(153, 0, 0), QColor(204, 0, 0), QColor(255, 0, 0),
-                QColor(255, 51, 0), QColor(255, 102, 0), QColor(255, 153, 0),
-                QColor(255, 204, 0), QColor(255, 255, 0), QColor(255, 255, 51),
-                QColor(255, 255, 102), QColor(255, 255, 153), QColor(255, 255, 204),
-                QColor(255, 255, 255)
-            };
-            break;
-            
-        case HeatmapTheme::ColorScale::Turbo:
-            colors = {
-                QColor(48, 18, 59), QColor(50, 58, 129), QColor(33, 102, 172),
-                QColor(41, 142, 187), QColor(65, 182, 179), QColor(107, 211, 153),
-                QColor(160, 229, 116), QColor(218, 236, 84), QColor(255, 233, 73),
-                QColor(255, 203, 88), QColor(255, 164, 101), QColor(255, 124, 109),
-                QColor(255, 82, 108), QColor(241, 54, 91), QColor(213, 40, 57),
-                QColor(168, 34, 30), QColor(122, 4, 2)
-            };
-            break;
-            
-        case HeatmapTheme::ColorScale::RdBu:
+        case HeatmapTheme::ColorScale::RedBlue:
             colors = {
                 QColor(5, 48, 97), QColor(33, 102, 172), QColor(67, 147, 195),
                 QColor(146, 197, 222), QColor(209, 229, 240), QColor(247, 247, 247),
                 QColor(253, 219, 199), QColor(244, 165, 130), QColor(214, 96, 77),
                 QColor(178, 24, 43), QColor(103, 0, 31)
+            };
+            break;
+            
+        case HeatmapTheme::ColorScale::GreenRed:
+            colors = {
+                QColor(0, 104, 55), QColor(26, 152, 80), QColor(102, 189, 99),
+                QColor(166, 217, 106), QColor(217, 239, 139), QColor(254, 224, 139),
+                QColor(253, 174, 97), QColor(244, 109, 67), QColor(215, 48, 39),
+                QColor(165, 0, 38)
             };
             break;
             
@@ -846,6 +803,16 @@ std::vector<QColor> HeatmapWidget::generateColorScale() const {
                 colors = {Qt::blue, Qt::cyan, Qt::green, Qt::yellow, Qt::red};
             }
             break;
+            
+        default:
+            // Default to Viridis
+            colors = {
+                QColor(68, 1, 84), QColor(72, 35, 116), QColor(64, 67, 135),
+                QColor(52, 94, 141), QColor(41, 120, 142), QColor(32, 144, 140),
+                QColor(34, 167, 132), QColor(68, 190, 112), QColor(121, 209, 81),
+                QColor(189, 222, 38), QColor(253, 231, 36)
+            };
+            break;
     }
     
     return colors;
@@ -857,7 +824,7 @@ void HeatmapWidget::calculateCellLayout() {
     // Calculate available space
     layout_.labelWidth = 80;
     layout_.labelHeight = 50;
-    layout_.colorScaleWidth = theme_.showColorScale ? 60 : 0;
+    layout_.colorScaleWidth = showColorScale_ ? 60 : 0;
     
     layout_.dataRect = QRectF(
         layout_.labelWidth,
@@ -1043,7 +1010,7 @@ void HeatmapWidget::mouseMoveEvent(QMouseEvent* event) {
             double value = data_.values[cell.y()][cell.x()];
             QString tooltip = QString("%1\nValue: %2")
                 .arg(labelAt(cell.y(), cell.x()))
-                .arg(value, 0, 'f', theme_.valuePrecision);
+                .arg(value, 0, 'f', valuePrecision_);
             
             if (memoryMode_) {
                 quint64 address = memoryStartAddress_ + 

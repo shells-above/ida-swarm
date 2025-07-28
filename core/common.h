@@ -24,7 +24,6 @@
 #include <strlist.hpp>
 #include <diskio.hpp>
 
-
 #undef fopen
 #undef fclose
 #undef fread
@@ -55,63 +54,6 @@
 #include <cmath>
 #include <optional>
 #include <unordered_map>
-
-// Qt
-#include <QMainWindow>
-#include <QThread>
-#include <QMenuBar>
-#include <QMenu>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QDockWidget>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QTextEdit>
-#include <QPushButton>
-#include <QComboBox>
-#include <QListWidget>
-#include <QTreeWidget>
-#include <QProgressBar>
-#include <QLabel>
-#include <QMessageBox>
-#include <QFileDialog>
-#include <QCloseEvent>
-#include <QTimer>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QSettings>
-#include <QListWidgetItem>
-#include <QTreeWidgetItem>
-#include <QPainter>
-#include <QMouseEvent>
-#include <QTextBlock>
-#include <QDateEdit>
-#include <QGraphicsView>
-#include <QTextCursor>
-#include <QSyntaxHighlighter>
-#include <QRegularExpression>
-#include <QJsonArray>
-#include <QGridLayout>
-#include <QDialogButtonBox>
-#include <QDoubleSpinBox>
-#include <QWidget>
-#include <QDialog>
-#include <QFormLayout>
-#include <QTabWidget>
-#include <QTextBrowser>
-#include <QLineEdit>
-#include <QSpinBox>
-#include <QCheckBox>
-#include <QAction>
-#include <QGroupBox>
-#include <QDateTime>
-#include <QHeaderView>
-#include <QTime>
-#include <QGraphicsTextItem>
-#include <QTableWidget>
-#include <QApplication>
-#include <QClipboard>
 
 #define fopen dont_use_fopen
 #define fclose dont_use_fclose

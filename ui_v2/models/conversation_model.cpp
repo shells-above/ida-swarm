@@ -1,17 +1,6 @@
 #include "conversation_model.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include <QPainter>
-#include <QApplication>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QTextDocument>
-#include <QUndoStack>
-#include <QMouseEvent>
-#include <QToolTip>
-#include <algorithm>
-#include <QDebug>
 
 namespace llm_re::ui_v2 {
 
@@ -117,7 +106,7 @@ QJsonObject Message::toJson() const {
         tool["parameters"] = toolExecution_->parameters;
         tool["state"] = static_cast<int>(toolExecution_->state);
         tool["output"] = toolExecution_->output;
-        tool["error"] = toolExecution_->error;
+        tool["error"] = toolExecution_->errorMessage;
         tool["startTime"] = toolExecution_->startTime.toString(Qt::ISODate);
         tool["endTime"] = toolExecution_->endTime.toString(Qt::ISODate);
         tool["exitCode"] = toolExecution_->exitCode;
@@ -179,7 +168,10 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         QJsonObject meta = json["metadata"].toObject();
         msg->metadata_.timestamp = QDateTime::fromString(meta["timestamp"].toString(), Qt::ISODate);
         msg->metadata_.author = meta["author"].toString();
-        msg->metadata_.tags = meta["tags"].toArray().toVariantList().toStringList();
+        msg->metadata_.tags.clear();
+        for (const auto& val : meta["tags"].toArray()) {
+            msg->metadata_.tags.append(val.toString());
+        }
         msg->metadata_.isEdited = meta["isEdited"].toBool();
         msg->metadata_.editedAt = QDateTime::fromString(meta["editedAt"].toString(), Qt::ISODate);
         msg->metadata_.isPinned = meta["isPinned"].toBool();
@@ -198,12 +190,15 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         exec->parameters = tool["parameters"].toObject();
         exec->state = static_cast<ToolExecutionState>(tool["state"].toInt());
         exec->output = tool["output"].toString();
-        exec->error = tool["error"].toString();
+        exec->errorMessage = tool["error"].toString();
         exec->startTime = QDateTime::fromString(tool["startTime"].toString(), Qt::ISODate);
         exec->endTime = QDateTime::fromString(tool["endTime"].toString(), Qt::ISODate);
         exec->exitCode = tool["exitCode"].toInt();
         exec->duration = tool["duration"].toVariant().toLongLong();
-        exec->affectedFiles = tool["affectedFiles"].toArray().toVariantList().toStringList();
+        exec->affectedFiles.clear();
+        for (const auto& val : tool["affectedFiles"].toArray()) {
+            exec->affectedFiles.append(val.toString());
+        }
         msg->toolExecution_ = std::move(exec);
     }
     
@@ -218,8 +213,14 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
             entry.functionName = analysis["functionName"].toString();
             entry.address = analysis["address"].toString().toULongLong(nullptr, 16);
             entry.confidence = analysis["confidence"].toInt();
-            entry.relatedFunctions = analysis["relatedFunctions"].toArray().toVariantList().toStringList();
-            entry.references = analysis["references"].toArray().toVariantList().toStringList();
+            entry.relatedFunctions.clear();
+            for (const auto& val : analysis["relatedFunctions"].toArray()) {
+                entry.relatedFunctions.append(val.toString());
+            }
+            entry.references.clear();
+            for (const auto& val : analysis["references"].toArray()) {
+                entry.references.append(val.toString());
+            }
             entry.customData = analysis["customData"].toObject();
             msg->analysisEntries_.push_back(entry);
         }
@@ -387,7 +388,7 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
             }
             break;
             
-        case MessageRole:
+        case MessageRoleDataRole:
             return QVariant::fromValue(static_cast<int>(msg->role()));
             
         case MessageTypeRole:
@@ -427,7 +428,7 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
             
         case ProgressRole:
             if (msg->hasToolExecution()) {
-                return msg->toolExecution()->progressValue;
+                return msg->toolExecution()->progress;
             }
             break;
     }
@@ -589,7 +590,7 @@ void ConversationModel::clearMessages() {
     nodes_.clear();
     nodeMap_.clear();
     visibleNodes_.clear();
-    roots_.clear();
+    // roots_.clear(); // TODO: roots_ not defined
     searchMatches_.clear();
     
     endResetModel();
@@ -684,9 +685,9 @@ void ConversationModel::setToolExecutionState(const QUuid& messageId, ToolExecut
 
 void ConversationModel::setToolExecutionProgress(const QUuid& messageId, int value, const QString& text) {
     updateToolExecution(messageId, [value, text](ToolExecution* exec) {
-        exec->progressValue = value;
+        exec->progress = value;
         if (!text.isEmpty()) {
-            exec->progressText = text;
+            exec->progressMessage = text;
         }
     });
     emit toolExecutionProgress(messageId, value);
@@ -876,7 +877,6 @@ void ConversationModel::endBatchUpdate() {
     if (batchUpdateCount_ > 0) {
         batchUpdateCount_--;
         if (batchUpdateCount_ == 0) {
-            buildThreadTree();
             applyFilters();
             endResetModel();
             emit statisticsChanged();
@@ -1137,7 +1137,7 @@ bool ConversationDelegate::editorEvent(QEvent* event, QAbstractItemModel* model,
             
             QString anchor = doc.documentLayout()->anchorAt(mouseEvent->pos());
             if (!anchor.isEmpty()) {
-                QToolTip::showText(mouseEvent->globalPosition().toPoint(), anchor);
+                QToolTip::showText(mouseEvent->globalPos(), anchor);
             }
         }
     }
@@ -1184,7 +1184,7 @@ void ConversationDelegate::drawMessageBubble(QPainter* painter, const QStyleOpti
     
     // Draw metadata
     if (showTimestamps_) {
-        QString timeStr = UIUtils::formatRelativeTime(message->metadata().timestamp);
+        QString timeStr = message->metadata().timestamp.toString("hh:mm");
         QRect timeRect = bubbleRect.adjusted(
             Design::SPACING_MD, -Design::SPACING_MD - option.fontMetrics.height(),
             -Design::SPACING_MD, -Design::SPACING_MD
@@ -1241,7 +1241,7 @@ void ConversationDelegate::drawToolExecution(QPainter* painter, const QRect& rec
     headerRect.setHeight(20);
     
     painter->setPen(colors.textPrimary);
-    painter->setFont(theme.typography().subtitle);
+    painter->setFont(theme.typography().bodySmall);
     painter->drawText(headerRect, Qt::AlignLeft, execution->toolName);
     
     // Draw status
@@ -1285,7 +1285,7 @@ void ConversationDelegate::drawToolExecution(QPainter* painter, const QRect& rec
         painter->setBrush(colors.border);
         painter->drawRoundedRect(progressRect, 2, 2);
         
-        int progress = execution->progressValue;
+        int progress = execution->progress;
         if (progress > 0) {
             QRect fillRect = progressRect;
             fillRect.setWidth(progressRect.width() * progress / 100);
@@ -1294,11 +1294,11 @@ void ConversationDelegate::drawToolExecution(QPainter* painter, const QRect& rec
         }
         
         // Draw progress text
-        if (!execution->progressText.isEmpty()) {
+        if (!execution->progressMessage.isEmpty()) {
             QRect textRect = progressRect.adjusted(0, 6, 0, 20);
             painter->setPen(colors.textSecondary);
             painter->setFont(theme.typography().caption);
-            painter->drawText(textRect, Qt::AlignLeft, execution->progressText);
+            painter->drawText(textRect, Qt::AlignLeft, execution->progressMessage);
         }
     }
     

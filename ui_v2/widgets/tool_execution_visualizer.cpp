@@ -1,16 +1,8 @@
+#include "../core/ui_v2_common.h"
 #include "tool_execution_visualizer.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
-#include <QGraphicsScene>
-#include <QGraphicsView>
-#include <QVBoxLayout>
-#include <QPainter>
-#include <QGraphicsSceneMouseEvent>
-#include <QGraphicsDropShadowEffect>
-#include <QEasingCurve>
-#include <QtMath>
-#include <algorithm>
 
 namespace llm_re::ui_v2 {
 
@@ -204,7 +196,7 @@ void ToolExecutionVisualizer::onThemeChanged() {
     
     // Update view background
     view_->setStyleSheet(QString("QGraphicsView { background-color: %1; border: none; }")
-        .arg(ThemeManager::instance()->color("background").name()));
+        .arg(ThemeManager::instance().color("background").name()));
     
     // Update all nodes
     for (auto& [id, node] : nodes_) {
@@ -222,7 +214,7 @@ void ToolExecutionVisualizer::updateAnimation() {
     
     // Update running nodes
     for (auto& [id, node] : nodes_) {
-        if (node->execution().status == ToolExecution::Running) {
+        if (node->execution().state == ToolExecutionState::Running) {
             node->update();
         }
     }
@@ -297,7 +289,7 @@ void ToolExecutionVisualizer::updateConnections() {
     
     // Create connections based on dependencies
     for (auto& [id, node] : nodes_) {
-        for (const QUuid& depId : node->execution().dependencies) {
+        for (const QUuid& depId : node->execution().dependencyIds) {
             auto depIt = nodes_.find(depId);
             if (depIt != nodes_.end()) {
                 auto* connection = new ConnectionLine(depIt->second, node);
@@ -321,16 +313,16 @@ void ToolExecutionVisualizer::calculateGlobalProgress() {
     for (const auto& [id, node] : nodes_) {
         const ToolExecution& exec = node->execution();
         
-        switch (exec.status) {
-            case ToolExecution::Success:
+        switch (exec.state) {
+            case ToolExecutionState::Completed:
                 totalProgress += 100.0;
                 completedCount++;
                 break;
-            case ToolExecution::Failed:
-            case ToolExecution::Cancelled:
+            case ToolExecutionState::Failed:
+            case ToolExecutionState::Cancelled:
                 completedCount++;
                 break;
-            case ToolExecution::Running:
+            case ToolExecutionState::Running:
                 totalProgress += exec.progress;
                 break;
             default:
@@ -373,7 +365,7 @@ void ToolExecutionVisualizer::arrangeFlow() {
     // Calculate levels based on dependencies
     for (auto& [id, node] : nodes_) {
         int level = 0;
-        for (const QUuid& depId : node->execution().dependencies) {
+        for (const QUuid& depId : node->execution().dependencyIds) {
             auto it = nodeLevel.find(depId);
             if (it != nodeLevel.end()) {
                 level = std::max(level, it->second + 1);
@@ -442,7 +434,7 @@ void ToolExecutionVisualizer::arrangeRadial() {
     // Find root nodes (no dependencies)
     std::vector<ToolExecutionNode*> roots;
     for (auto& [id, node] : nodes_) {
-        if (node->execution().dependencies.isEmpty()) {
+        if (node->execution().dependencyIds.isEmpty()) {
             roots.push_back(node);
         }
     }
@@ -483,7 +475,7 @@ void ToolExecutionVisualizer::arrangeRadial() {
             
             // Check if all dependencies are positioned
             bool canPosition = true;
-            for (const QUuid& depId : node->execution().dependencies) {
+            for (const QUuid& depId : node->execution().dependencyIds) {
                 if (positioned.find(depId) == positioned.end()) {
                     canPosition = false;
                     break;
@@ -587,7 +579,7 @@ void ToolExecutionVisualizer::animateNodeRemoval(ToolExecutionNode* node) {
 }
 
 void ToolExecutionVisualizer::animateNodeUpdate(ToolExecutionNode* node) {
-    if (node->execution().status == ToolExecution::Running) {
+    if (node->execution().state == ToolExecutionState::Running) {
         node->startPulseAnimation();
     } else {
         node->stopPulseAnimation();
@@ -611,7 +603,7 @@ ToolExecutionNode::ToolExecutionNode(const ToolExecution& execution)
     
     updateColors();
     
-    if (execution.status == ToolExecution::Running) {
+    if (execution.state == ToolExecutionState::Running) {
         startPulseAnimation();
     }
 }
@@ -704,7 +696,7 @@ void ToolExecutionNode::paint(QPainter* painter, const QStyleOptionGraphicsItem*
     QRectF rect = boundingRect();
     
     // Draw glow effect for running/highlighted nodes
-    if (execution_.status == ToolExecution::Running || highlighted_ || hovered_) {
+    if (execution_.state == ToolExecutionState::Running || highlighted_ || hovered_) {
         drawGlow(painter, rect);
     }
     
@@ -764,25 +756,25 @@ void ToolExecutionNode::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
 void ToolExecutionNode::updateColors() {
     auto& theme = ThemeManager::instance();
     
-    switch (execution_.status) {
-        case ToolExecution::Pending:
+    switch (execution_.state) {
+        case ToolExecutionState::Pending:
             primaryColor_ = theme.color("textTertiary");
             secondaryColor_ = theme.color("surface");
             break;
-        case ToolExecution::Running:
+        case ToolExecutionState::Running:
             primaryColor_ = theme.color("info");
             secondaryColor_ = theme.color("primary");
             glowColor_ = theme.color("primary").lighter(150);
             break;
-        case ToolExecution::Success:
+        case ToolExecutionState::Completed:
             primaryColor_ = theme.color("success");
             secondaryColor_ = theme.color("success").darker(150);
             break;
-        case ToolExecution::Failed:
+        case ToolExecutionState::Failed:
             primaryColor_ = theme.color("error");
             secondaryColor_ = theme.color("error").darker(150);
             break;
-        case ToolExecution::Cancelled:
+        case ToolExecutionState::Cancelled:
             primaryColor_ = theme.color("warning");
             secondaryColor_ = theme.color("warning").darker(150);
             break;
@@ -800,8 +792,8 @@ void ToolExecutionNode::updateColors() {
 
 void ToolExecutionNode::drawCircularProgress(QPainter* painter, const QRectF& rect) {
     // Background circle
-    painter->setPen(QPen(ThemeManager::instance()->color("border"), 2));
-    painter->setBrush(ThemeManager::instance()->color("surface"));
+    painter->setPen(QPen(ThemeManager::instance().color("border"), 2));
+    painter->setBrush(ThemeManager::instance().color("surface"));
     painter->drawEllipse(rect);
     
     // Progress arc
@@ -825,18 +817,18 @@ void ToolExecutionNode::drawCircularProgress(QPainter* painter, const QRectF& re
 void ToolExecutionNode::drawStatusIcon(QPainter* painter, const QRectF& rect) {
     QRectF iconRect = rect.adjusted(20, 20, -20, -20);
     
-    painter->setPen(QPen(ThemeManager::instance()->color("textPrimary"), 2));
+    painter->setPen(QPen(ThemeManager::instance().color("textPrimary"), 2));
     painter->setBrush(Qt::NoBrush);
     
-    switch (execution_.status) {
-        case ToolExecution::Pending:
+    switch (execution_.state) {
+        case ToolExecutionState::Pending:
             // Draw clock icon
             painter->drawEllipse(iconRect);
             painter->drawLine(iconRect.center(), iconRect.center() + QPointF(0, -iconRect.height()/4));
             painter->drawLine(iconRect.center(), iconRect.center() + QPointF(iconRect.width()/4, 0));
             break;
             
-        case ToolExecution::Running:
+        case ToolExecutionState::Running:
             // Draw play icon (animated)
             {
                 QPolygonF triangle;
@@ -845,12 +837,12 @@ void ToolExecutionNode::drawStatusIcon(QPainter* painter, const QRectF& rect) {
                 triangle << center + QPointF(-size/2, -size/2)
                         << center + QPointF(-size/2, size/2)
                         << center + QPointF(size/2, 0);
-                painter->setBrush(ThemeManager::instance()->color("textPrimary"));
+                painter->setBrush(ThemeManager::instance().color("textPrimary"));
                 painter->drawPolygon(triangle);
             }
             break;
             
-        case ToolExecution::Success:
+        case ToolExecutionState::Completed:
             // Draw checkmark
             {
                 QPainterPath checkPath;
@@ -859,27 +851,27 @@ void ToolExecutionNode::drawStatusIcon(QPainter* painter, const QRectF& rect) {
                 checkPath.moveTo(center + QPointF(-size/2, 0));
                 checkPath.lineTo(center + QPointF(-size/4, size/3));
                 checkPath.lineTo(center + QPointF(size/2, -size/3));
-                painter->setPen(QPen(ThemeManager::instance()->color("textPrimary"), 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                painter->setPen(QPen(ThemeManager::instance().color("textPrimary"), 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 painter->drawPath(checkPath);
             }
             break;
             
-        case ToolExecution::Failed:
+        case ToolExecutionState::Failed:
             // Draw X
             {
                 QPointF center = iconRect.center();
                 qreal size = iconRect.width() / 4;
-                painter->setPen(QPen(ThemeManager::instance()->color("textPrimary"), 3));
+                painter->setPen(QPen(ThemeManager::instance().color("textPrimary"), 3));
                 painter->drawLine(center + QPointF(-size, -size), center + QPointF(size, size));
                 painter->drawLine(center + QPointF(-size, size), center + QPointF(size, -size));
             }
             break;
             
-        case ToolExecution::Cancelled:
+        case ToolExecutionState::Cancelled:
             // Draw stop square
             {
                 QRectF stopRect = iconRect.adjusted(15, 15, -15, -15);
-                painter->setBrush(ThemeManager::instance()->color("textPrimary"));
+                painter->setBrush(ThemeManager::instance().color("textPrimary"));
                 painter->drawRect(stopRect);
             }
             break;
@@ -895,13 +887,13 @@ void ToolExecutionNode::drawToolIcon(QPainter* painter, const QRectF& rect) {
     painter->setBrush(primaryColor_.darker(120));
     painter->drawEllipse(textRect);
     
-    painter->setPen(ThemeManager::instance()->color("textInverse"));
+    painter->setPen(ThemeManager::instance().color("textInverse"));
     painter->setFont(QFont("Sans", 10, QFont::Bold));
     painter->drawText(textRect, Qt::AlignCenter, abbrev);
 }
 
 void ToolExecutionNode::drawLabels(QPainter* painter, const QRectF& rect) {
-    painter->setPen(ThemeManager::instance()->color("textPrimary"));
+    painter->setPen(ThemeManager::instance().color("textPrimary"));
     painter->setFont(QFont("Sans", 10));
     
     // Tool name below
@@ -909,9 +901,9 @@ void ToolExecutionNode::drawLabels(QPainter* painter, const QRectF& rect) {
     painter->drawText(nameRect, Qt::AlignCenter, execution_.toolName);
     
     // Progress percentage for running tasks
-    if (execution_.status == ToolExecution::Running) {
+    if (execution_.state == ToolExecutionState::Running) {
         painter->setFont(QFont("Sans", 8));
-        painter->setPen(ThemeManager::instance()->color("textSecondary"));
+        painter->setPen(ThemeManager::instance().color("textSecondary"));
         QRectF progressRect(rect.left() - 50, rect.bottom() + 25, rect.width() + 100, 20);
         painter->drawText(progressRect, Qt::AlignCenter, QString("%1%").arg(execution_.progress));
     }
@@ -964,7 +956,7 @@ void ConnectionLine::paint(QPainter* painter, const QStyleOptionGraphicsItem* op
     painter->setRenderHint(QPainter::Antialiasing);
     
     // Draw line
-    QColor lineColor = ThemeManager::instance()->color("border");
+    QColor lineColor = ThemeManager::instance().color("border");
     painter->setPen(QPen(lineColor, 2, Qt::DashLine));
     
     if (animated_) {

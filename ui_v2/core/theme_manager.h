@@ -1,11 +1,7 @@
 #pragma once
 
+#include "ui_v2_common.h"
 #include "ui_constants.h"
-#include <QObject>
-#include <QJsonObject>
-#include <QFileSystemWatcher>
-#include <memory>
-#include <map>
 
 namespace llm_re::ui_v2 {
 

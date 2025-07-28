@@ -1,10 +1,8 @@
 #pragma once
 
+#include "../../core/ui_v2_common.h"
 #include "../../core/base_styled_widget.h"
 #include "chart_types.h"
-#include <QPropertyAnimation>
-#include <QTimer>
-#include <memory>
 
 namespace llm_re::ui_v2::charts {
 
@@ -54,12 +52,8 @@ public:
     bool isAnimating() const { return animationState_.isAnimating; }
     
     // Data update
-    virtual void updateData() = 0;
+    virtual void updateData();
     virtual void clearData();
-    
-    // Export
-    QPixmap toPixmap(const QSize& size = QSize());
-    bool saveToFile(const QString& filename, const QSize& size = QSize());
     
 signals:
     void chartClicked(const QPointF& point);
@@ -83,7 +77,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
-    void enterEvent(QEnterEvent* event) override;
+    void enterEvent(QEvent* event) override;
     void leaveEvent(QEvent* event) override;
     
     // Drawing methods (to be implemented by derived classes)

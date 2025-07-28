@@ -1,12 +1,6 @@
 #pragma once
 
-#include <QColor>
-#include <QPointF>
-#include <QString>
-#include <QDateTime>
-#include <QJsonObject>
-#include <vector>
-#include <memory>
+#include "../../core/ui_v2_common.h"
 
 namespace llm_re::ui_v2::charts {
 

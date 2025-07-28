@@ -1,11 +1,5 @@
+#include "ui_v2_common.h"
 #include "theme_manager.h"
-#include <QApplication>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QPalette>
-#include <QStyle>
-#include <QDebug>
 
 namespace llm_re::ui_v2 {
 
@@ -134,7 +128,7 @@ void ThemeManager::loadDefaultDarkTheme() {
     colors_.textPrimary = QColor(0xFFFFFF);
     colors_.textSecondary = QColor(0xB0B0B0);
     colors_.textTertiary = QColor(0x808080);
-    colors_.textInverse = QColor(0x000000);
+    colors_.textInverse = QColor(0, 0, 0);
     colors_.textLink = QColor(0x4A9EFF);
     
     colors_.codeBackground = QColor(0x252525);

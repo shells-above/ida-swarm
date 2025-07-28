@@ -1,44 +1,8 @@
+#include "../core/ui_v2_common.h"
 #include "memory_dock.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
-#include <QToolBar>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QSplitter>
-#include <QTreeView>
-#include <QTableView>
-#include <QHeaderView>
-#include <QStackedWidget>
-#include <QLineEdit>
-#include <QComboBox>
-#include <QPushButton>
-#include <QLabel>
-#include <QMenu>
-#include <QAction>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QGraphicsScene>
-#include <QGraphicsView>
-#include <QGraphicsItem>
-#include <QPainter>
-#include <QWheelEvent>
-#include <QTimer>
-#include <QPropertyAnimation>
-#include <QParallelAnimationGroup>
-#include <QtMath>
-#include <QDateTimeEdit>
-#include <QListWidget>
-#include <QCheckBox>
-#include <QDialogButtonBox>
-#include <QFormLayout>
-#include <QSettings>
-#include <QClipboard>
-#include <algorithm>
-#include <cmath>
 
 namespace llm_re::ui_v2 {
 
@@ -48,8 +12,8 @@ MemoryGraphNode::MemoryGraphNode(const MemoryEntry& entry)
     : entry_(entry)
 {
     setAcceptHoverEvents(true);
-    setFlag(ItemIsSelectable);
-    setFlag(ItemIsMovable);
+    setFlag(QGraphicsItem::ItemIsSelectable);
+    setFlag(QGraphicsItem::ItemIsMovable);
 }
 
 QRectF MemoryGraphNode::boundingRect() const {
@@ -105,7 +69,7 @@ void MemoryGraphNode::paint(QPainter* painter, const QStyleOptionGraphicsItem* o
     
     // Label
     if (isSelected() || hovered_) {
-        painter->setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
+        painter->setPen(ThemeManager::instance().colors().textPrimary);
         painter->setFont(QFont("Sans", 9));
         QString label = entry_.function.isEmpty() ? entry_.address : entry_.function;
         QRectF textRect = painter->fontMetrics().boundingRect(label);
@@ -156,7 +120,7 @@ MemoryGraphEdge::MemoryGraphEdge(MemoryGraphNode* source, MemoryGraphNode* targe
     : source_(source)
     , target_(target)
 {
-    setFlag(ItemIsSelectable, false);
+    setFlag(QGraphicsItem::ItemIsSelectable, false);
     setZValue(-1); // Behind nodes
 }
 
@@ -193,7 +157,7 @@ void MemoryGraphEdge::paint(QPainter* painter, const QStyleOptionGraphicsItem* o
     QPointF targetEdge = targetPoint - QPointF(30 * cos(angle), 30 * sin(angle));
     
     // Draw edge
-    QPen pen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant), 2);
+    QPen pen(ThemeManager::instance().colors().textSecondary, 2);
     pen.setStyle(Qt::SolidLine);
     painter->setPen(pen);
     
@@ -232,15 +196,15 @@ MemoryGraphView::MemoryGraphView(QWidget* parent)
     : QGraphicsView(parent)
 {
     scene_ = new QGraphicsScene(this);
-    setScene(scene_);
+    this->setScene(scene_);
     
-    setRenderHint(QPainter::Antialiasing);
-    setViewportUpdateMode(BoundingRectViewportUpdate);
-    setTransformationAnchor(AnchorUnderMouse);
-    setResizeAnchor(AnchorViewCenter);
+    this->setRenderHint(QPainter::Antialiasing);
+    this->setViewportUpdateMode(QGraphicsView::BoundingRectViewportUpdate);
+    this->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    this->setResizeAnchor(QGraphicsView::AnchorViewCenter);
     
     // Enable dragging
-    setDragMode(RubberBandDrag);
+    this->setDragMode(QGraphicsView::RubberBandDrag);
 }
 
 void MemoryGraphView::setEntries(const QList<MemoryEntry>& entries) {
@@ -293,20 +257,11 @@ void MemoryGraphView::centerOnEntry(const QUuid& id) {
             // Smooth animation to center
             QPointF targetPos = nodes_[id]->pos();
             
-            auto* animation = new QPropertyAnimation(this, "");
-            animation->setDuration(300);
-            animation->setStartValue(mapToScene(viewport()->rect().center()));
-            animation->setEndValue(targetPos);
-            animation->setEasingCurve(QEasingCurve::InOutQuad);
-            
-            connect(animation, &QPropertyAnimation::valueChanged,
-                    [this](const QVariant& value) {
-                centerOn(value.toPointF());
-            });
-            
-            animation->start(QAbstractAnimation::DeleteWhenStopped);
+            // QPropertyAnimation not directly usable with QGraphicsView
+            // Just center directly
+            this->centerOn(targetPos);
         } else {
-            centerOn(nodes_[id]);
+            this->centerOn(nodes_[id]);
         }
     }
 }
@@ -332,12 +287,12 @@ void MemoryGraphView::setAnimated(bool animated) {
 
 
 void MemoryGraphView::zoomIn() {
-    scale(1.2, 1.2);
+    this->scale(1.2, 1.2);
     currentScale_ *= 1.2;
 }
 
 void MemoryGraphView::zoomOut() {
-    scale(0.8, 0.8);
+    this->scale(0.8, 0.8);
     currentScale_ *= 0.8;
 }
 
@@ -347,7 +302,7 @@ void MemoryGraphView::fitInView() {
 }
 
 void MemoryGraphView::resetZoom() {
-    resetTransform();
+    this->resetTransform();
     currentScale_ = 1.0;
 }
 
@@ -356,10 +311,10 @@ void MemoryGraphView::wheelEvent(QWheelEvent* event) {
     const qreal scaleFactor = 1.15;
     
     if (event->angleDelta().y() > 0) {
-        scale(scaleFactor, scaleFactor);
+        this->scale(scaleFactor, scaleFactor);
         currentScale_ *= scaleFactor;
     } else {
-        scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+        this->scale(1.0 / scaleFactor, 1.0 / scaleFactor);
         currentScale_ /= scaleFactor;
     }
 }
@@ -368,13 +323,13 @@ void MemoryGraphView::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton) {
         isPanning_ = true;
         lastMousePos_ = event->pos();
-        setCursor(Qt::ClosedHandCursor);
+        this->setCursor(Qt::ClosedHandCursor);
         event->accept();
     } else {
         QGraphicsView::mousePressEvent(event);
         
         // Check for node click
-        QGraphicsItem* item = itemAt(event->pos());
+        QGraphicsItem* item = this->itemAt(event->pos());
         if (auto* node = dynamic_cast<MemoryGraphNode*>(item)) {
             emit entryClicked(node->entry().id);
         }
@@ -386,8 +341,8 @@ void MemoryGraphView::mouseMoveEvent(QMouseEvent* event) {
         QPoint delta = event->pos() - lastMousePos_;
         lastMousePos_ = event->pos();
         
-        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
-        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+        this->horizontalScrollBar()->setValue(this->horizontalScrollBar()->value() - delta.x());
+        this->verticalScrollBar()->setValue(this->verticalScrollBar()->value() - delta.y());
         
         event->accept();
     } else {
@@ -398,7 +353,7 @@ void MemoryGraphView::mouseMoveEvent(QMouseEvent* event) {
 void MemoryGraphView::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton) {
         isPanning_ = false;
-        setCursor(Qt::ArrowCursor);
+        this->setCursor(Qt::ArrowCursor);
         event->accept();
     } else {
         QGraphicsView::mouseReleaseEvent(event);
@@ -407,10 +362,10 @@ void MemoryGraphView::mouseReleaseEvent(QMouseEvent* event) {
 
 void MemoryGraphView::drawBackground(QPainter* painter, const QRectF& rect) {
     // Grid background
-    painter->fillRect(rect, ThemeManager::instance()->color(ThemeManager::Surface));
+    painter->fillRect(rect, ThemeManager::instance().colors().surface);
     
     if (currentScale_ > 0.5) {
-        QPen gridPen(ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant));
+        QPen gridPen(ThemeManager::instance().colors().textSecondary);
         gridPen.setStyle(Qt::DotLine);
         gridPen.setWidthF(0.5);
         painter->setPen(gridPen);
@@ -453,8 +408,8 @@ void MemoryGraphView::performForceDirectedLayout() {
     QList<MemoryGraphNode*> nodeList = nodes_.values();
     for (auto* node : nodeList) {
         node->setPos(
-            (qrand() % 1000) - 500,
-            (qrand() % 1000) - 500
+            (QRandomGenerator::global()->bounded(1000)) - 500,
+            (QRandomGenerator::global()->bounded(1000)) - 500
         );
     }
     
@@ -507,12 +462,10 @@ void MemoryGraphView::performForceDirectedLayout() {
                 // Animate to new position
                 QPointF newPos = node->pos() + velocity;
                 
-                auto* animation = new QPropertyAnimation(node, "pos");
-                animation->setDuration(50);
-                animation->setEndValue(newPos);
-                animation->start(QAbstractAnimation::DeleteWhenStopped);
+                // Direct position update for graphics items
+                node->setPos(newPos);
             } else {
-                node->setPos(node->pos() + velocity);
+                node->moveBy(velocity.x(), velocity.y());
             }
         }
     }
@@ -564,7 +517,11 @@ void MemoryGraphView::performHierarchicalLayout() {
         maxLevel = std::max(maxLevel, level);
     }
     
-    levelNodes.resize(maxLevel + 1);
+    // Pre-allocate lists for each level
+    for (int i = 0; i <= maxLevel; ++i) {
+        levelNodes.append(QList<MemoryGraphNode*>());
+    }
+    
     for (auto it = levels.begin(); it != levels.end(); ++it) {
         levelNodes[it.value()].append(it.key());
     }
@@ -580,11 +537,8 @@ void MemoryGraphView::performHierarchicalLayout() {
         
         for (auto* node : levelNodes[level]) {
             if (animated_) {
-                auto* animation = new QPropertyAnimation(node, "pos");
-                animation->setDuration(500);
-                animation->setEndValue(QPointF(x, y));
-                animation->setEasingCurve(QEasingCurve::InOutQuad);
-                animation->start(QAbstractAnimation::DeleteWhenStopped);
+                // Direct position update for graphics items
+                node->setPos(x, y);
             } else {
                 node->setPos(x, y);
             }
@@ -606,11 +560,8 @@ void MemoryGraphView::performCircularLayout() {
         qreal y = radius * sin(angle);
         
         if (animated_) {
-            auto* animation = new QPropertyAnimation(nodeList[i], "pos");
-            animation->setDuration(500);
-            animation->setEndValue(QPointF(x, y));
-            animation->setEasingCurve(QEasingCurve::InOutQuad);
-            animation->start(QAbstractAnimation::DeleteWhenStopped);
+            // Direct position update for graphics items
+            nodeList[i]->setPos(x, y);
         } else {
             nodeList[i]->setPos(x, y);
         }
@@ -656,7 +607,7 @@ void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
     painter.setRenderHint(QPainter::Antialiasing);
     
     // Background
-    painter.fillRect(rect(), ThemeManager::instance()->color(ThemeManager::Surface));
+    painter.fillRect(rect(), ThemeManager::instance().colors().surface);
     
     // Draw cells
     for (int i = 0; i < cells_.size(); ++i) {
@@ -674,7 +625,7 @@ void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
         painter.fillRect(cell.rect, cellColor);
         
         // Cell border
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::Surface));
+        painter.setPen(ThemeManager::instance().colors().surface);
         painter.drawRect(cell.rect);
     }
     
@@ -682,7 +633,7 @@ void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
     QFont font = painter.font();
     font.setPointSize(9);
     painter.setFont(font);
-    painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
+    painter.setPen(ThemeManager::instance().colors().textPrimary);
     
     // Y-axis labels (groups)
     QStringList groups;
@@ -712,8 +663,8 @@ void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
         tooltipRect.adjust(-5, -5, 5, 5);
         tooltipRect.moveTopLeft(QCursor::pos() - mapToGlobal(QPoint(0, 0)) + QPoint(10, 10));
         
-        painter.fillRect(tooltipRect, ThemeManager::instance()->color(ThemeManager::SurfaceVariant));
-        painter.setPen(ThemeManager::instance()->color(ThemeManager::OnSurface));
+        painter.fillRect(tooltipRect, ThemeManager::instance().colors().surface);
+        painter.setPen(ThemeManager::instance().colors().textPrimary);
         painter.drawText(tooltipRect, Qt::AlignCenter, tooltip);
     }
 }
@@ -955,22 +906,22 @@ void MemoryDock::createToolBar() {
     // Actions
     toolBar_->addSeparator();
     
-    refreshAction_ = toolBar_->addAction(UIUtils::icon("view-refresh"), tr("Refresh"));
+    refreshAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("view-refresh"), tr("Refresh"));
     refreshAction_->setShortcut(QKeySequence::Refresh);
     
-    filterAction_ = toolBar_->addAction(UIUtils::icon("view-filter"), tr("Advanced Filter"));
+    filterAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("view-filter"), tr("Advanced Filter"));
     
     toolBar_->addSeparator();
     
-    bookmarkAction_ = toolBar_->addAction(UIUtils::icon("bookmark"), tr("Bookmark"));
+    bookmarkAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("bookmark"), tr("Bookmark"));
     bookmarkAction_->setCheckable(true);
     
-    deleteAction_ = toolBar_->addAction(UIUtils::icon("edit-delete"), tr("Delete"));
+    deleteAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("edit-delete"), tr("Delete"));
     deleteAction_->setShortcut(QKeySequence::Delete);
     
     toolBar_->addSeparator();
     
-    importAction_ = toolBar_->addAction(UIUtils::icon("document-import"), tr("Import"));
+    importAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("document-import"), tr("Import"));
 }
 
 void MemoryDock::createViews() {
@@ -1108,14 +1059,14 @@ void MemoryDock::connectSignals() {
 void MemoryDock::createContextMenu() {
     contextMenu_ = new QMenu(this);
     
-    contextMenu_->addAction(UIUtils::icon("go-jump"), tr("Navigate to Address"),
+    contextMenu_->addAction(ThemeManager::instance().themedIcon("go-jump"), tr("Navigate to Address"),
                            [this]() {
         if (!selectedEntries_.isEmpty()) {
             emit navigateToAddress(entry(selectedEntries_.first()).address);
         }
     });
     
-    contextMenu_->addAction(UIUtils::icon("view-refresh"), tr("Re-analyze"),
+    contextMenu_->addAction(ThemeManager::instance().themedIcon("view-refresh"), tr("Re-analyze"),
                            [this]() {
         if (!selectedEntries_.isEmpty()) {
             emit analyzeRequested(selectedEntries_.first());
@@ -1124,14 +1075,14 @@ void MemoryDock::createContextMenu() {
     
     contextMenu_->addSeparator();
     
-    auto* bookmarkAction = contextMenu_->addAction(UIUtils::icon("bookmark"), tr("Bookmark"));
+    auto* bookmarkAction = contextMenu_->addAction(ThemeManager::instance().themedIcon("bookmark"), tr("Bookmark"));
     bookmarkAction->setCheckable(true);
     connect(bookmarkAction, &QAction::triggered,
             [this, bookmarkAction]() { bookmarkSelection(bookmarkAction->isChecked()); });
     
     contextMenu_->addSeparator();
     
-    auto* tagMenu = contextMenu_->addMenu(UIUtils::icon("tag"), tr("Tags"));
+    auto* tagMenu = contextMenu_->addMenu(ThemeManager::instance().themedIcon("tag"), tr("Tags"));
     
     // Add tag actions dynamically
     connect(tagMenu, &QMenu::aboutToShow, [this, tagMenu]() {
@@ -1176,14 +1127,14 @@ void MemoryDock::createContextMenu() {
     
     contextMenu_->addSeparator();
     
-    contextMenu_->addAction(UIUtils::icon("edit-copy"), tr("Copy Address"),
+    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-copy"), tr("Copy Address"),
                            [this]() {
         if (!selectedEntries_.isEmpty()) {
             QApplication::clipboard()->setText(entry(selectedEntries_.first()).address);
         }
     });
     
-    contextMenu_->addAction(UIUtils::icon("edit-copy"), tr("Copy Analysis"),
+    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-copy"), tr("Copy Analysis"),
                            [this]() {
         if (!selectedEntries_.isEmpty()) {
             QApplication::clipboard()->setText(entry(selectedEntries_.first()).analysis);
@@ -1192,7 +1143,7 @@ void MemoryDock::createContextMenu() {
     
     contextMenu_->addSeparator();
     
-    contextMenu_->addAction(UIUtils::icon("edit-delete"), tr("Delete"),
+    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-delete"), tr("Delete"),
                            [this]() { deleteSelection(); });
 }
 
@@ -1538,12 +1489,12 @@ void MemoryDock::onAdvancedFilterClicked() {
         applyFilters();
     }
     
-    dialog->deleteLater();
+    delete dialog;
 }
 
 
 void MemoryDock::onImportClicked() {
-    importData();
+    importData(QString());
 }
 
 void MemoryDock::onEntryActivated(const QModelIndex& index) {
@@ -1625,11 +1576,12 @@ void MemoryDock::onHeatmapCellClicked(const QString& group, const QString& subgr
     for (const MemoryEntry& entry : model_->entries()) {
         QString entryGroup;
         
-        if (groupBy_ == "function") {
+        QString groupBy = heatmapView_->groupBy();
+        if (groupBy == "function") {
             entryGroup = entry.function.isEmpty() ? "Unknown" : entry.function;
-        } else if (groupBy_ == "module") {
+        } else if (groupBy == "module") {
             entryGroup = entry.module.isEmpty() ? "Unknown" : entry.module;
-        } else if (groupBy_ == "tag") {
+        } else if (groupBy == "tag") {
             entryGroup = entry.tags.isEmpty() ? "Untagged" : entry.tags.first();
         }
         
@@ -1714,9 +1666,9 @@ void MemoryDock::loadSettings() {
 MemoryFilterDialog::MemoryFilterDialog(QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle(tr("Advanced Filter"));
-    setModal(true);
-    resize(400, 500);
+    this->setWindowTitle(tr("Advanced Filter"));
+    this->setModal(true);
+    this->resize(400, 500);
     
     setupUI();
 }
@@ -1776,6 +1728,7 @@ void MemoryFilterDialog::setupUI() {
     // Buttons
     auto* buttonBox = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        Qt::Horizontal,
         this
     );
     layout->addWidget(buttonBox);
@@ -1943,7 +1896,7 @@ QVariant MemoryModel::data(const QModelIndex& index, int role) const {
         }
     } else if (role == Qt::DecorationRole && index.column() == 0) {
         if (entry.isBookmarked) {
-            return UIUtils::icon("bookmark");
+            return ThemeManager::instance().themedIcon("bookmark");
         }
     } else if (role == Qt::ForegroundRole) {
         if (entry.confidence < 50) {

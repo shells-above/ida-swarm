@@ -1,11 +1,6 @@
+#include "../../core/ui_v2_common.h"
 #include "sparkline_widget.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <QToolTip>
-#include <algorithm>
-#include <numeric>
-#include <cmath>
+#include "../../core/theme_manager.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -30,25 +25,37 @@ SparklineWidget::SparklineWidget(QWidget* parent)
       needsRecalculation_(true) {
     
     // Set default theme
-    theme_ = ChartTheme::getSparklineTheme(ChartTheme::Style::Modern);
+    theme_ = SparklineTheme(); // Use default initialization
     
-    // Set default colors
-    lineColor_ = theme_.lineColor;
-    fillColor_ = theme_.fillColor;
-    positiveColor_ = theme_.positiveColor;
-    negativeColor_ = theme_.negativeColor;
+    // Set default colors from ThemeManager
+    auto& colors = ThemeManager::instance().colors();
+    lineColor_ = colors.primary;
+    fillColor_ = colors.primary;
+    fillColor_.setAlphaF(theme_.areaOpacity);
+    positiveColor_ = colors.success;
+    negativeColor_ = colors.error;
+    neutralColor_ = colors.textSecondary;
+    targetColor_ = colors.warning;
+    referenceLineColor_ = colors.border;
     
     // Sparklines are typically small
     setMinimumSize(60, 20);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
     // Less margins for sparklines
-    setMargins(2, 2, 2, 2);
+    ChartMargins margins;
+    margins.left = 2;
+    margins.top = 2;
+    margins.right = 2;
+    margins.bottom = 2;
+    setMargins(margins);
     
     // Disable most decorations by default
-    setShowAxes(false);
-    setShowGrid(false);
-    setShowLegend(false);
+    xAxis_.visible = false;
+    yAxis_.visible = false;
+    xAxis_.showGrid = false;
+    yAxis_.showGrid = false;
+    legend_.visible = false;
 }
 
 SparklineWidget::~SparklineWidget() = default;
@@ -76,7 +83,7 @@ void SparklineWidget::setData(const std::vector<double>& values) {
     needsRecalculation_ = true;
     updateValueRange();
     
-    if (isAnimationEnabled() && theme_.animateOnUpdate) {
+    if (effects_.animationEnabled && theme_.animateOnUpdate) {
         dataAnimationProgress_ = 0.0f;
         startAnimation();
     }
@@ -96,7 +103,7 @@ void SparklineWidget::appendValue(double value) {
     needsRecalculation_ = true;
     updateValueRange();
     
-    if (isAnimationEnabled() && theme_.animateOnUpdate) {
+    if (effects_.animationEnabled && theme_.animateOnUpdate) {
         dataAnimationProgress_ = 0.0f;
         startAnimation();
     }
@@ -117,7 +124,7 @@ void SparklineWidget::prependValue(double value) {
     needsRecalculation_ = true;
     updateValueRange();
     
-    if (isAnimationEnabled() && theme_.animateOnUpdate) {
+    if (effects_.animationEnabled && theme_.animateOnUpdate) {
         dataAnimationProgress_ = 0.0f;
         startAnimation();
     }
@@ -410,7 +417,7 @@ int SparklineWidget::findNearestDataPoint(const QPointF& pos, int& seriesIndex) 
 
 void SparklineWidget::paintEvent(QPaintEvent* event) {
     // Update animation
-    if (isAnimationEnabled() && dataAnimationProgress_ < 1.0f) {
+    if (effects_.animationEnabled && dataAnimationProgress_ < 1.0f) {
         dataAnimationProgress_ = std::min(1.0f, dataAnimationProgress_ + 0.05f);
         QTimer::singleShot(16, this, QOverload<>::of(&SparklineWidget::update));
     }
@@ -446,13 +453,13 @@ void SparklineWidget::drawLineSparkline(QPainter* painter) {
     // Draw area fill if enabled
     if (theme_.fillArea) {
         QPainterPath areaPath;
-        areaPath.moveTo(points[0].x(), chartRect().bottom());
+        areaPath.moveTo(points[0].x(), chartRect_.bottom());
         
         for (const auto& point : points) {
             areaPath.lineTo(point);
         }
         
-        areaPath.lineTo(points.back().x(), chartRect().bottom());
+        areaPath.lineTo(points.back().x(), chartRect_.bottom());
         areaPath.closeSubpath();
         
         QColor areaColor = fillColor_;
@@ -465,7 +472,7 @@ void SparklineWidget::drawLineSparkline(QPainter* painter) {
     linePen.setCapStyle(Qt::RoundCap);
     linePen.setJoinStyle(Qt::RoundJoin);
     
-    if (theme_.effects.enabled && theme_.effects.glow) {
+    if (effects_.glowEnabled) {
         // Draw glow effect
         for (int i = 3; i > 0; --i) {
             QPen glowPen = linePen;
@@ -496,13 +503,13 @@ void SparklineWidget::drawBarSparkline(QPainter* painter) {
     if (data_.empty()) return;
     
     std::vector<double> animatedValues = getAnimatedValues();
-    double barWidth = chartRect().width() / animatedValues.size();
+    double barWidth = chartRect_.width() / animatedValues.size();
     
     painter->save();
     
     double min, max;
     getValueRange(min, max);
-    double zeroY = chartRect().bottom() - normalizeValue(0) * chartRect().height();
+    double zeroY = chartRect_.bottom() - normalizeValue(0) * chartRect_.height();
     
     for (size_t i = 0; i < animatedValues.size(); ++i) {
         double value = animatedValues[i];
@@ -543,9 +550,9 @@ void SparklineWidget::drawBarSparkline(QPainter* painter) {
 void SparklineWidget::drawWinLossSparkline(QPainter* painter) {
     if (data_.empty()) return;
     
-    double barWidth = chartRect().width() / data_.size();
-    double midY = chartRect().center().y();
-    double barHeight = chartRect().height() * 0.4;
+    double barWidth = chartRect_.width() / data_.size();
+    double midY = chartRect_.center().y();
+    double barHeight = chartRect_.height() * 0.4;
     
     painter->save();
     
@@ -557,7 +564,7 @@ void SparklineWidget::drawWinLossSparkline(QPainter* painter) {
         
         if (value > 0) {
             barRect = QRectF(
-                chartRect().left() + i * barWidth + barWidth * 0.1,
+                chartRect_.left() + i * barWidth + barWidth * 0.1,
                 midY - barHeight,
                 barWidth * 0.8,
                 barHeight
@@ -565,7 +572,7 @@ void SparklineWidget::drawWinLossSparkline(QPainter* painter) {
             barColor = positiveColor_;
         } else if (value < 0) {
             barRect = QRectF(
-                chartRect().left() + i * barWidth + barWidth * 0.1,
+                chartRect_.left() + i * barWidth + barWidth * 0.1,
                 midY,
                 barWidth * 0.8,
                 barHeight
@@ -574,12 +581,12 @@ void SparklineWidget::drawWinLossSparkline(QPainter* painter) {
         } else {
             // Draw neutral line for zero values
             barRect = QRectF(
-                chartRect().left() + i * barWidth + barWidth * 0.1,
+                chartRect_.left() + i * barWidth + barWidth * 0.1,
                 midY - 1,
                 barWidth * 0.8,
                 2
             );
-            barColor = theme_.neutralColor;
+            barColor = neutralColor_;
         }
         
         painter->fillRect(barRect, barColor);
@@ -623,7 +630,7 @@ void SparklineWidget::drawDiscreteSparkline(QPainter* painter) {
 void SparklineWidget::drawBulletChart(QPainter* painter) {
     painter->save();
     
-    QRectF bulletRect = chartRect();
+    QRectF bulletRect = chartRect_;
     double bulletHeight = bulletRect.height() * 0.6;
     bulletRect.setTop(bulletRect.center().y() - bulletHeight / 2);
     bulletRect.setHeight(bulletHeight);
@@ -652,7 +659,7 @@ void SparklineWidget::drawBulletChart(QPainter* painter) {
     
     // Draw target line
     double targetX = bulletRect.left() + (bulletTarget_ / maxValue_) * bulletRect.width();
-    painter->setPen(QPen(theme_.targetColor, 3));
+    painter->setPen(QPen(targetColor_, 3));
     painter->drawLine(QPointF(targetX, bulletRect.top() - 5),
                      QPointF(targetX, bulletRect.bottom() + 5));
     
@@ -678,7 +685,7 @@ void SparklineWidget::drawMinMaxMarkers(QPainter* painter) {
         painter->setBrush(negativeColor_);
         painter->drawEllipse(points[minIndex_], 3, 3);
         
-        if (chartRect().height() > 40) {
+        if (chartRect_.height() > 40) {
             QFont smallFont = font();
             smallFont.setPointSize(8);
             painter->setFont(smallFont);
@@ -693,7 +700,7 @@ void SparklineWidget::drawMinMaxMarkers(QPainter* painter) {
         painter->setBrush(positiveColor_);
         painter->drawEllipse(points[maxIndex_], 3, 3);
         
-        if (chartRect().height() > 40) {
+        if (chartRect_.height() > 40) {
             QFont smallFont = font();
             smallFont.setPointSize(8);
             painter->setFont(smallFont);
@@ -711,10 +718,10 @@ void SparklineWidget::drawLastValueLabel(QPainter* painter) {
     painter->save();
     
     double lastVal = data_.back();
-    QString label = QString::number(lastVal, 'f', theme_.valuePrecision);
+    QString label = QString::number(lastVal, 'f', valuePrecision_);
     
     QFont labelFont = font();
-    labelFont.setPointSize(theme_.valueFontSize);
+    labelFont.setPointSize(valueFontSize_);
     labelFont.setBold(true);
     painter->setFont(labelFont);
     
@@ -723,7 +730,7 @@ void SparklineWidget::drawLastValueLabel(QPainter* painter) {
     
     // Position at the end of the sparkline
     QPointF lastPoint = calculatePoints().back();
-    QPointF textPos(chartRect().right() + 5, 
+    QPointF textPos(chartRect_.right() + 5, 
                    lastPoint.y() + textRect.height() / 2);
     
     // Draw background for readability
@@ -743,19 +750,19 @@ void SparklineWidget::drawThresholds(QPainter* painter) {
     for (const auto& threshold : thresholds_) {
         double y = valueToPoint(0, threshold.value).y();
         
-        if (y >= chartRect().top() && y <= chartRect().bottom()) {
+        if (y >= chartRect_.top() && y <= chartRect_.bottom()) {
             QPen thresholdPen(threshold.color, 1, Qt::DashLine);
             painter->setPen(thresholdPen);
-            painter->drawLine(QPointF(chartRect().left(), y),
-                            QPointF(chartRect().right(), y));
+            painter->drawLine(QPointF(chartRect_.left(), y),
+                            QPointF(chartRect_.right(), y));
             
             // Draw label if there's space
-            if (!threshold.label.isEmpty() && chartRect().height() > 30) {
+            if (!threshold.label.isEmpty() && chartRect_.height() > 30) {
                 QFont smallFont = font();
                 smallFont.setPointSize(8);
                 painter->setFont(smallFont);
                 painter->setPen(threshold.color);
-                painter->drawText(QPointF(chartRect().left(), y - 2), threshold.label);
+                painter->drawText(QPointF(chartRect_.left(), y - 2), threshold.label);
             }
         }
     }
@@ -770,8 +777,8 @@ void SparklineWidget::drawBands(QPainter* painter) {
         double topY = valueToPoint(0, band.max).y();
         double bottomY = valueToPoint(0, band.min).y();
         
-        QRectF bandRect(chartRect().left(), topY,
-                       chartRect().width(), bottomY - topY);
+        QRectF bandRect(chartRect_.left(), topY,
+                       chartRect_.width(), bottomY - topY);
         
         QColor bandColor = band.color;
         bandColor.setAlpha(30);
@@ -784,13 +791,13 @@ void SparklineWidget::drawBands(QPainter* painter) {
 void SparklineWidget::drawReferenceLine(QPainter* painter) {
     double y = valueToPoint(0, referenceLineValue_).y();
     
-    if (y >= chartRect().top() && y <= chartRect().bottom()) {
+    if (y >= chartRect_.top() && y <= chartRect_.bottom()) {
         painter->save();
         
-        QPen refPen(theme_.referenceLineColor, 1, Qt::DotLine);
+        QPen refPen(referenceLineColor_, 1, Qt::DotLine);
         painter->setPen(refPen);
-        painter->drawLine(QPointF(chartRect().left(), y),
-                        QPointF(chartRect().right(), y));
+        painter->drawLine(QPointF(chartRect_.left(), y),
+                        QPointF(chartRect_.right(), y));
         
         painter->restore();
     }
@@ -845,14 +852,14 @@ std::vector<QPointF> SparklineWidget::calculatePoints() const {
 }
 
 QPointF SparklineWidget::valueToPoint(int index, double value) const {
-    double x = chartRect().left() + 
-               (index * chartRect().width() / std::max(1, static_cast<int>(data_.size()) - 1));
+    double x = chartRect_.left() + 
+               (index * chartRect_.width() / std::max(1, static_cast<int>(data_.size()) - 1));
     
     if (data_.size() == 1) {
-        x = chartRect().center().x();
+        x = chartRect_.center().x();
     }
     
-    double y = chartRect().bottom() - normalizeValue(value) * chartRect().height();
+    double y = chartRect_.bottom() - normalizeValue(value) * chartRect_.height();
     
     return QPointF(x, y);
 }
@@ -867,7 +874,7 @@ double SparklineWidget::normalizeValue(double value) const {
 }
 
 std::vector<double> SparklineWidget::getAnimatedValues() const {
-    if (!isAnimationEnabled() || dataAnimationProgress_ >= 1.0f) {
+    if (!effects_.animationEnabled || dataAnimationProgress_ >= 1.0f) {
         return std::vector<double>(data_.begin(), data_.end());
     }
     
@@ -896,13 +903,23 @@ void InlineSparkline::setCompactMode(bool compact) {
     compactMode_ = compact;
     
     if (compact) {
-        setMargins(1, 1, 1, 1);
+        ChartMargins compactMargins;
+        compactMargins.left = 1;
+        compactMargins.top = 1;
+        compactMargins.right = 1;
+        compactMargins.bottom = 1;
+        setMargins(compactMargins);
         setShowMinMax(false);
         setShowLastValue(false);
         setMinimumSize(40, 16);
         setMaximumHeight(20);
     } else {
-        setMargins(2, 2, 2, 2);
+        ChartMargins normalMargins;
+        normalMargins.left = 2;
+        normalMargins.top = 2;
+        normalMargins.right = 2;
+        normalMargins.bottom = 2;
+        setMargins(normalMargins);
         setMinimumSize(60, 20);
         setMaximumHeight(30);
     }
@@ -942,7 +959,7 @@ void InlineSparkline::paintEvent(QPaintEvent* event) {
         painter.setPen(palette().text().color());
         painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, label_);
         
-        if (!suffix_.isEmpty() && !data_.empty()) {
+        if (!suffix_.isEmpty() && dataPointCount() > 0) {
             QString value = QString::number(lastValue(), 'f', 1) + suffix_;
             painter.drawText(rect(), Qt::AlignRight | Qt::AlignVCenter, value);
         }

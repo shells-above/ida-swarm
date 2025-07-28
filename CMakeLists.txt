@@ -82,10 +82,10 @@ endif()
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
         set(IDA_LIBDIR "${IDASDK_PATH}/lib/arm64_mac_clang_64")
-        add_definitions(-D__MAC__ -D__EA64__ -D__ARM__)
+        add_definitions(-D__MAC__ -D__EA64__ -D__ARM__ -D__QT__)
     else()
         set(IDA_LIBDIR "${IDASDK_PATH}/lib/x64_mac_clang_64")
-        add_definitions(-D__MAC__ -D__EA64__)
+        add_definitions(-D__MAC__ -D__EA64__ -D__QT__)
     endif()
     set(PLUGIN_EXT ".dylib")
 
@@ -147,6 +147,7 @@ include(cmake/BuildKeystone.cmake)
 set(SOURCES
         core/plugin.cpp
         core/ida_utils.cpp
+        core/config.cpp
         api/anthropic_api.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
@@ -158,6 +159,7 @@ set(SOURCES
         ui_v2/core/focus_manager.cpp
         ui_v2/core/ui_utils.cpp
         ui_v2/core/agent_controller.cpp
+        ui_v2/core/settings_manager.cpp
         # ui_v2 models
         ui_v2/models/conversation_model.cpp
         # ui_v2 views
@@ -167,12 +169,14 @@ set(SOURCES
         ui_v2/views/tool_execution_dock.cpp
         ui_v2/views/statistics_dock.cpp
         ui_v2/views/floating_inspector.cpp
+        ui_v2/views/settings_dialog.cpp
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.cpp
         ui_v2/widgets/markdown_viewer.cpp
         ui_v2/widgets/command_palette.cpp
         ui_v2/widgets/tool_execution_visualizer.cpp
         # ui_v2 custom charts
+        ui_v2/widgets/charts/chart_types.cpp
         ui_v2/widgets/charts/custom_chart_base.cpp
         ui_v2/widgets/charts/chart_theme.cpp
         ui_v2/widgets/charts/line_chart.cpp
@@ -187,6 +191,8 @@ set(HEADERS
         core/common.h
         core/ida_utils.h
         core/ida_validators.h
+        core/config.h
+        core/types.h
         api/anthropic_api.h
         api/message_types.h
         analysis/actions.h
@@ -202,8 +208,11 @@ set(HEADERS
         ui_v2/core/ui_constants.h
         ui_v2/core/ui_utils.h
         ui_v2/core/agent_controller.h
+        ui_v2/core/settings_manager.h
+        ui_v2/core/ui_v2_common.h
         # ui_v2 models
         ui_v2/models/conversation_model.h
+        ui_v2/models/tool_execution.h
         # ui_v2 views
         ui_v2/views/main_window.h
         ui_v2/views/conversation_view.h
@@ -211,6 +220,7 @@ set(HEADERS
         ui_v2/views/tool_execution_dock.h
         ui_v2/views/statistics_dock.h
         ui_v2/views/floating_inspector.h
+        ui_v2/views/settings_dialog.h
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.h
         ui_v2/widgets/markdown_viewer.h

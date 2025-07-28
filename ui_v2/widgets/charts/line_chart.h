@@ -1,8 +1,8 @@
 #pragma once
 
+#include "../../core/ui_v2_common.h"
 #include "custom_chart_base.h"
 #include "chart_theme.h"
-#include <memory>
 
 namespace llm_re::ui_v2::charts {
 

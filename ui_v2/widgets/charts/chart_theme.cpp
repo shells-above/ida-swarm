@@ -1,8 +1,10 @@
+#include "../../core/ui_v2_common.h"
 #include "chart_theme.h"
+#include "../../core/theme_manager.h"
 
 namespace llm_re::ui_v2::charts {
 
-void ChartTheme::applyTheme(const Theme& theme, AxisConfig& xAxis, AxisConfig& yAxis,
+void ChartTheme::applyTheme(ThemeManager::Theme theme, AxisConfig& xAxis, AxisConfig& yAxis,
                            LegendConfig& legend, TooltipConfig& tooltip, EffectsConfig& effects) {
     // Apply colors based on theme
     xAxis.lineColor = getAxisColor(theme);
@@ -17,46 +19,52 @@ void ChartTheme::applyTheme(const Theme& theme, AxisConfig& xAxis, AxisConfig& y
     legend.borderColor = getBorderColor(theme);
     legend.textColor = getTextColor(theme);
     
-    tooltip.backgroundColor = theme.backgroundElevated;
-    tooltip.borderColor = theme.border;
-    tooltip.textColor = theme.text;
+    tooltip.backgroundColor = ThemeManager::instance().colors().surface;
+    tooltip.borderColor = ThemeManager::instance().colors().border;
+    tooltip.textColor = ThemeManager::instance().colors().textPrimary;
     
     // Apply theme-specific effects
-    if (theme.isDark) {
+    if (theme == ThemeManager::Theme::Dark) {
         effects = getDarkThemeEffects();
     } else {
         effects = getLightThemeEffects();
     }
 }
 
-QColor ChartTheme::getBackgroundColor(const Theme& theme) {
-    return theme.background;
+QColor ChartTheme::getBackgroundColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    return ThemeManager::instance().colors().background;
 }
 
-QColor ChartTheme::getGridColor(const Theme& theme) {
-    QColor gridColor = theme.border;
+QColor ChartTheme::getGridColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    QColor gridColor = ThemeManager::instance().colors().border;
     gridColor.setAlpha(50);
     return gridColor;
 }
 
-QColor ChartTheme::getAxisColor(const Theme& theme) {
-    return theme.text;
+QColor ChartTheme::getAxisColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    return ThemeManager::instance().colors().textPrimary;
 }
 
-QColor ChartTheme::getTextColor(const Theme& theme) {
-    return theme.text;
+QColor ChartTheme::getTextColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    return ThemeManager::instance().colors().textPrimary;
 }
 
-QColor ChartTheme::getTextSecondaryColor(const Theme& theme) {
-    return theme.textSecondary;
+QColor ChartTheme::getTextSecondaryColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    return ThemeManager::instance().colors().textSecondary;
 }
 
-QColor ChartTheme::getBorderColor(const Theme& theme) {
-    return theme.border;
+QColor ChartTheme::getBorderColor(ThemeManager::Theme theme) {
+    Q_UNUSED(theme);
+    return ThemeManager::instance().colors().border;
 }
 
-std::vector<QColor> ChartTheme::getSeriesColors(const Theme& theme) {
-    if (theme.isDark) {
+std::vector<QColor> ChartTheme::getSeriesColors(ThemeManager::Theme theme) {
+    if (theme == ThemeManager::Theme::Dark) {
         // Neon-inspired colors for dark theme
         return {
             QColor(0, 255, 255),      // Cyan
@@ -87,15 +95,15 @@ std::vector<QColor> ChartTheme::getSeriesColors(const Theme& theme) {
     }
 }
 
-QColor ChartTheme::getSeriesColor(const Theme& theme, int index) {
+QColor ChartTheme::getSeriesColor(ThemeManager::Theme theme, int index) {
     auto colors = getSeriesColors(theme);
     return colors[index % colors.size()];
 }
 
-QLinearGradient ChartTheme::getBackgroundGradient(const Theme& theme, const QRectF& rect) {
+QLinearGradient ChartTheme::getBackgroundGradient(ThemeManager::Theme theme, const QRectF& rect) {
     QLinearGradient gradient(rect.topLeft(), rect.bottomRight());
     
-    if (theme.isDark) {
+    if (theme == ThemeManager::Theme::Dark) {
         gradient.setColorAt(0, QColor(20, 20, 30));
         gradient.setColorAt(1, QColor(10, 10, 20));
     } else {
@@ -106,13 +114,13 @@ QLinearGradient ChartTheme::getBackgroundGradient(const Theme& theme, const QRec
     return gradient;
 }
 
-QLinearGradient ChartTheme::getSeriesGradient(const Theme& theme, int index, const QRectF& rect) {
+QLinearGradient ChartTheme::getSeriesGradient(ThemeManager::Theme theme, int index, const QRectF& rect) {
     QColor baseColor = getSeriesColor(theme, index);
     QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
     
     gradient.setColorAt(0, baseColor);
     QColor endColor = baseColor;
-    endColor.setAlpha(theme.isDark ? 50 : 100);
+    endColor.setAlpha(theme == ThemeManager::Theme::Dark ? 50 : 100);
     gradient.setColorAt(1, endColor);
     
     return gradient;

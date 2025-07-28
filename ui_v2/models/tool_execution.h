@@ -1,11 +1,6 @@
 #pragma once
 
-#include <QUuid>
-#include <QString>
-#include <QJsonObject>
-#include <QDateTime>
-#include <QMap>
-#include <QList>
+#include "../core/ui_v2_common.h"
 
 namespace llm_re::ui_v2 {
 
@@ -76,3 +71,7 @@ struct ToolExecution {
 };
 
 } // namespace llm_re::ui_v2
+
+// Register ToolExecution with Qt's meta-type system
+Q_DECLARE_METATYPE(llm_re::ui_v2::ToolExecution)
+Q_DECLARE_METATYPE(const llm_re::ui_v2::ToolExecution*)

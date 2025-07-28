@@ -1,16 +1,7 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
-#include <QLineEdit>
-#include <QListView>
-#include <QStandardItemModel>
-#include <QSortFilterProxyModel>
-#include <QKeyEvent>
-#include <functional>
-#include <memory>
-
-class QLabel;
-class QShortcut;
 
 namespace llm_re::ui_v2 {
 

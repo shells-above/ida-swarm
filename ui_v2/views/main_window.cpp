@@ -1,56 +1,15 @@
+#include "../core/ui_v2_common.h"
 #include "main_window.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
+#include "../core/settings_manager.h"
 #include "../widgets/command_palette.h"
 #include "memory_dock.h"
 #include "tool_execution_dock.h"
 #include "statistics_dock.h"
 #include "floating_inspector.h"
-#include <QApplication>
-#include <QMenuBar>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QDockWidget>
-#include <QSplitter>
-#include <QStackedWidget>
-#include <QSettings>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QCloseEvent>
-#include <QTimer>
-#include <QDesktopWidget>
-#include <QScreen>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QInputDialog>
-#include <QDesktopServices>
-#include <QUrl>
-#include <QMimeData>
-#include <QStandardPaths>
-#include <QSound>
-#include <QPropertyAnimation>
-#include <QGraphicsDropShadowEffect>
-#include <QFontComboBox>
-#include <QSpinBox>
-#include <QComboBox>
-#include <QCheckBox>
-#include <QGroupBox>
-#include <QFormLayout>
-#include <QDialogButtonBox>
-#include <QTabWidget>
-#include <QTreeWidget>
-#include <QListWidget>
-#include <QToolButton>
-#include <QPushButton>
-#include <QLabel>
-#include <QLineEdit>
-#include <QTextEdit>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QPainter>
-#include <QStyleOption>
+#include "settings_dialog.h"
 
 namespace llm_re::ui_v2 {
 
@@ -152,7 +111,7 @@ protected:
         painter.setOpacity(opacity_);
         
         // Background
-        QColor bgColor = ThemeManager::instance()->color(ThemeManager::Surface);
+        QColor bgColor = ThemeManager::instance().colors().surface;
         bgColor.setAlphaF(0.95);
         
         painter.setPen(Qt::NoPen);
@@ -176,7 +135,7 @@ protected:
             iconName = "error";
             break;
         default:
-            typeColor = ThemeManager::instance()->color(ThemeManager::Primary);
+            typeColor = ThemeManager::instance().colors().primary;
             iconName = "info";
             break;
         }
@@ -187,7 +146,7 @@ protected:
         
         // Icon
         QRect iconRect(12, (height() - 24) / 2, 24, 24);
-        QIcon icon = UIUtils::icon(iconName);
+        QIcon icon = ThemeManager::instance().themedIcon(iconName);
         icon.paint(&painter, iconRect);
         
         // Close button
@@ -235,7 +194,7 @@ private:
             font.setWeight(QFont::DemiBold);
             titleLabel->setFont(font);
             titleLabel->setStyleSheet(QString("color: %1;").arg(
-                ThemeManager::instance()->color(ThemeManager::OnSurface).name()
+                ThemeManager::instance().colors().textPrimary.name()
             ));
             textLayout->addWidget(titleLabel);
         }
@@ -243,7 +202,7 @@ private:
         auto* messageLabel = new QLabel(message_, this);
         messageLabel->setWordWrap(true);
         messageLabel->setStyleSheet(QString("color: %1;").arg(
-            ThemeManager::instance()->color(ThemeManager::OnSurfaceVariant).name()
+            ThemeManager::instance().colors().textSecondary.name()
         ));
         textLayout->addWidget(messageLabel);
         textLayout->addStretch();
@@ -252,7 +211,7 @@ private:
         
         // Close button
         closeButton_ = new QToolButton(this);
-        closeButton_->setIcon(UIUtils::icon("close"));
+        closeButton_->setIcon(ThemeManager::instance().themedIcon("close"));
         closeButton_->setIconSize(QSize(16, 16));
         closeButton_->setAutoRaise(true);
         closeButton_->hide();
@@ -291,7 +250,7 @@ MainWindow::MainWindow(QWidget* parent)
     setInstance(this);
     
     // Apply initial theme
-    connect(ThemeManager::instance(), &ThemeManager::themeChanged,
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &MainWindow::onThemeChanged);
     onThemeChanged();
     
@@ -346,65 +305,65 @@ void MainWindow::setupUI() {
 
 void MainWindow::createActions() {
     // File actions
-    newAction_ = new QAction(UIUtils::icon("document-new"), tr("&New Session"), this);
+    newAction_ = new QAction(ThemeManager::instance().themedIcon("document-new"), tr("&New Session"), this);
     newAction_->setShortcut(QKeySequence::New);
     newAction_->setStatusTip(tr("Start a new conversation session"));
     connect(newAction_, &QAction::triggered, this, &MainWindow::onFileNew);
     
-    openAction_ = new QAction(UIUtils::icon("document-open"), tr("&Open Session..."), this);
+    openAction_ = new QAction(ThemeManager::instance().themedIcon("document-open"), tr("&Open Session..."), this);
     openAction_->setShortcut(QKeySequence::Open);
     openAction_->setStatusTip(tr("Open an existing session"));
     connect(openAction_, &QAction::triggered, this, &MainWindow::onFileOpen);
     
-    saveAction_ = new QAction(UIUtils::icon("document-save"), tr("&Save Session"), this);
+    saveAction_ = new QAction(ThemeManager::instance().themedIcon("document-save"), tr("&Save Session"), this);
     saveAction_->setShortcut(QKeySequence::Save);
     saveAction_->setStatusTip(tr("Save the current session"));
     connect(saveAction_, &QAction::triggered, this, &MainWindow::onFileSave);
     
-    saveAsAction_ = new QAction(UIUtils::icon("document-save-as"), tr("Save Session &As..."), this);
+    saveAsAction_ = new QAction(ThemeManager::instance().themedIcon("document-save-as"), tr("Save Session &As..."), this);
     saveAsAction_->setShortcut(QKeySequence::SaveAs);
     saveAsAction_->setStatusTip(tr("Save the session with a new name"));
     connect(saveAsAction_, &QAction::triggered, this, &MainWindow::onFileSaveAs);
     
-    exitAction_ = new QAction(UIUtils::icon("application-exit"), tr("E&xit"), this);
+    exitAction_ = new QAction(ThemeManager::instance().themedIcon("application-exit"), tr("E&xit"), this);
     exitAction_->setShortcut(QKeySequence::Quit);
     exitAction_->setStatusTip(tr("Exit the application"));
     connect(exitAction_, &QAction::triggered, this, &MainWindow::onFileExit);
     
     // Edit actions
-    undoAction_ = new QAction(UIUtils::icon("edit-undo"), tr("&Undo"), this);
+    undoAction_ = new QAction(ThemeManager::instance().themedIcon("edit-undo"), tr("&Undo"), this);
     undoAction_->setShortcut(QKeySequence::Undo);
     connect(undoAction_, &QAction::triggered, this, &MainWindow::onEditUndo);
     
-    redoAction_ = new QAction(UIUtils::icon("edit-redo"), tr("&Redo"), this);
+    redoAction_ = new QAction(ThemeManager::instance().themedIcon("edit-redo"), tr("&Redo"), this);
     redoAction_->setShortcut(QKeySequence::Redo);
     connect(redoAction_, &QAction::triggered, this, &MainWindow::onEditRedo);
     
-    cutAction_ = new QAction(UIUtils::icon("edit-cut"), tr("Cu&t"), this);
+    cutAction_ = new QAction(ThemeManager::instance().themedIcon("edit-cut"), tr("Cu&t"), this);
     cutAction_->setShortcut(QKeySequence::Cut);
     connect(cutAction_, &QAction::triggered, this, &MainWindow::onEditCut);
     
-    copyAction_ = new QAction(UIUtils::icon("edit-copy"), tr("&Copy"), this);
+    copyAction_ = new QAction(ThemeManager::instance().themedIcon("edit-copy"), tr("&Copy"), this);
     copyAction_->setShortcut(QKeySequence::Copy);
     connect(copyAction_, &QAction::triggered, this, &MainWindow::onEditCopy);
     
-    pasteAction_ = new QAction(UIUtils::icon("edit-paste"), tr("&Paste"), this);
+    pasteAction_ = new QAction(ThemeManager::instance().themedIcon("edit-paste"), tr("&Paste"), this);
     pasteAction_->setShortcut(QKeySequence::Paste);
     connect(pasteAction_, &QAction::triggered, this, &MainWindow::onEditPaste);
     
-    selectAllAction_ = new QAction(UIUtils::icon("edit-select-all"), tr("Select &All"), this);
+    selectAllAction_ = new QAction(ThemeManager::instance().themedIcon("edit-select-all"), tr("Select &All"), this);
     selectAllAction_->setShortcut(QKeySequence::SelectAll);
     connect(selectAllAction_, &QAction::triggered, this, &MainWindow::onEditSelectAll);
     
-    findAction_ = new QAction(UIUtils::icon("edit-find"), tr("&Find..."), this);
+    findAction_ = new QAction(ThemeManager::instance().themedIcon("edit-find"), tr("&Find..."), this);
     findAction_->setShortcut(QKeySequence::Find);
     connect(findAction_, &QAction::triggered, this, &MainWindow::onEditFind);
     
-    replaceAction_ = new QAction(UIUtils::icon("edit-find-replace"), tr("&Replace..."), this);
+    replaceAction_ = new QAction(ThemeManager::instance().themedIcon("edit-find-replace"), tr("&Replace..."), this);
     replaceAction_->setShortcut(QKeySequence(tr("Ctrl+H")));
     connect(replaceAction_, &QAction::triggered, this, &MainWindow::onEditReplace);
     
-    preferencesAction_ = new QAction(UIUtils::icon("preferences-system"), tr("&Preferences..."), this);
+    preferencesAction_ = new QAction(ThemeManager::instance().themedIcon("preferences-system"), tr("&Preferences..."), this);
     preferencesAction_->setShortcut(QKeySequence::Preferences);
     connect(preferencesAction_, &QAction::triggered, this, &MainWindow::onEditPreferences);
     
@@ -425,7 +384,7 @@ void MainWindow::createActions() {
     toggleStatusBarAction_->setChecked(true);
     connect(toggleStatusBarAction_, &QAction::triggered, this, &MainWindow::onViewToggleStatusBar);
     
-    toggleFullScreenAction_ = new QAction(UIUtils::icon("view-fullscreen"), tr("&Full Screen"), this);
+    toggleFullScreenAction_ = new QAction(ThemeManager::instance().themedIcon("view-fullscreen"), tr("&Full Screen"), this);
     toggleFullScreenAction_->setCheckable(true);
     toggleFullScreenAction_->setShortcut(QKeySequence::FullScreen);
     connect(toggleFullScreenAction_, &QAction::triggered, this, &MainWindow::onViewToggleFullScreen);
@@ -437,7 +396,7 @@ void MainWindow::createActions() {
     connect(saveLayoutAction_, &QAction::triggered, this, &MainWindow::onViewSaveLayout);
     
     // Tools actions
-    commandPaletteAction_ = new QAction(UIUtils::icon("command-palette"), tr("&Command Palette"), this);
+    commandPaletteAction_ = new QAction(ThemeManager::instance().themedIcon("command-palette"), tr("&Command Palette"), this);
     commandPaletteAction_->setShortcut(QKeySequence(tr("Ctrl+K")));
     connect(commandPaletteAction_, &QAction::triggered, this, &MainWindow::onToolsCommandPalette);
     
@@ -446,20 +405,20 @@ void MainWindow::createActions() {
     floatingInspectorAction_->setShortcut(QKeySequence(tr("Ctrl+I")));
     connect(floatingInspectorAction_, &QAction::triggered, this, &MainWindow::onToolsFloatingInspector);
     
-    statisticsAction_ = new QAction(UIUtils::icon("view-statistics"), tr("&Statistics"), this);
+    statisticsAction_ = new QAction(ThemeManager::instance().themedIcon("view-statistics"), tr("&Statistics"), this);
     statisticsAction_->setCheckable(true);
     connect(statisticsAction_, &QAction::triggered, this, &MainWindow::onToolsStatistics);
     
-    memoryAnalysisAction_ = new QAction(UIUtils::icon("memory-analysis"), tr("&Memory Analysis"), this);
+    memoryAnalysisAction_ = new QAction(ThemeManager::instance().themedIcon("memory-analysis"), tr("&Memory Analysis"), this);
     memoryAnalysisAction_->setCheckable(true);
     connect(memoryAnalysisAction_, &QAction::triggered, this, &MainWindow::onToolsMemoryAnalysis);
     
-    executionHistoryAction_ = new QAction(UIUtils::icon("execution-history"), tr("&Execution History"), this);
+    executionHistoryAction_ = new QAction(ThemeManager::instance().themedIcon("execution-history"), tr("&Execution History"), this);
     executionHistoryAction_->setCheckable(true);
     connect(executionHistoryAction_, &QAction::triggered, this, &MainWindow::onToolsExecutionHistory);
     
     // Help actions
-    documentationAction_ = new QAction(UIUtils::icon("help-contents"), tr("&Documentation"), this);
+    documentationAction_ = new QAction(ThemeManager::instance().themedIcon("help-contents"), tr("&Documentation"), this);
     documentationAction_->setShortcut(QKeySequence::HelpContents);
     connect(documentationAction_, &QAction::triggered, this, &MainWindow::onHelpDocumentation);
     
@@ -535,14 +494,14 @@ void MainWindow::createMenus() {
     themeGroup->addAction(lightThemeAction);
     
     connect(darkThemeAction, &QAction::triggered, [this]() {
-        ThemeManager::instance()->setTheme(ThemeManager::Dark);
+        ThemeManager::instance().setTheme(ThemeManager::Theme::Dark);
     });
     connect(lightThemeAction, &QAction::triggered, [this]() {
-        ThemeManager::instance()->setTheme(ThemeManager::Light);
+        ThemeManager::instance().setTheme(ThemeManager::Theme::Light);
     });
     
     // Set initial theme check
-    if (ThemeManager::instance()->currentTheme() == ThemeManager::Dark) {
+    if (ThemeManager::instance().currentTheme() == ThemeManager::Theme::Dark) {
         darkThemeAction->setChecked(true);
     } else {
         lightThemeAction->setChecked(true);
@@ -744,7 +703,7 @@ void MainWindow::createTrayIcon() {
     
     trayIcon_ = new QSystemTrayIcon(this);
     trayIcon_->setContextMenu(trayIconMenu_);
-    trayIcon_->setIcon(UIUtils::icon("application-icon"));
+    trayIcon_->setIcon(ThemeManager::instance().themedIcon("application-icon"));
     trayIcon_->setToolTip(tr("LLM RE Agent"));
     
     connect(trayIcon_, &QSystemTrayIcon::activated,
@@ -779,7 +738,8 @@ void MainWindow::connectSignals() {
     connect(conversationView_, &ConversationView::linkClicked,
             [this](const QUrl& url) {
                 if (floatingInspector_ && floatingInspectorAction_->isChecked()) {
-                    floatingInspector_->showContent(url.toString(), QCursor::pos());
+                    floatingInspector_->setPosition(FloatingInspector::FollowCursor);
+                    floatingInspector_->showMessage("Link", url.toString());
                 }
             });
 }
@@ -788,64 +748,64 @@ void MainWindow::registerCommandProviders() {
     // File commands
     commandPalette_->registerCommand({
         "file.new", tr("New Session"), tr("Start a new conversation session"),
-        "File", UIUtils::icon("document-new"), QKeySequence::New,
+        "File", ThemeManager::instance().themedIcon("document-new"), QKeySequence::New,
         [this]() { newSession(); }
     });
     
     commandPalette_->registerCommand({
         "file.open", tr("Open Session"), tr("Open an existing session"),
-        "File", UIUtils::icon("document-open"), QKeySequence::Open,
+        "File", ThemeManager::instance().themedIcon("document-open"), QKeySequence::Open,
         [this]() { openSession(); }
     });
     
     commandPalette_->registerCommand({
         "file.save", tr("Save Session"), tr("Save the current session"),
-        "File", UIUtils::icon("document-save"), QKeySequence::Save,
+        "File", ThemeManager::instance().themedIcon("document-save"), QKeySequence::Save,
         [this]() { saveSession(); }
     });
     
     // View commands
     commandPalette_->registerCommand({
         "view.theme.dark", tr("Dark Theme"), tr("Switch to dark theme"),
-        "View", UIUtils::icon("theme-dark"), QKeySequence(),
-        [this]() { ThemeManager::instance()->setTheme(ThemeManager::Dark); }
+        "View", ThemeManager::instance().themedIcon("theme-dark"), QKeySequence(),
+        [this]() { ThemeManager::instance().setTheme(ThemeManager::Theme::Dark); }
     });
     
     commandPalette_->registerCommand({
         "view.theme.light", tr("Light Theme"), tr("Switch to light theme"),
-        "View", UIUtils::icon("theme-light"), QKeySequence(),
-        [this]() { ThemeManager::instance()->setTheme(ThemeManager::Light); }
+        "View", ThemeManager::instance().themedIcon("theme-light"), QKeySequence(),
+        [this]() { ThemeManager::instance().setTheme(ThemeManager::Theme::Light); }
     });
     
     // Window commands
     commandPalette_->registerCommand({
         "window.split.horizontal", tr("Split Horizontally"), tr("Split view horizontally"),
-        "Window", UIUtils::icon("view-split-horizontal"), QKeySequence(),
+        "Window", ThemeManager::instance().themedIcon("view-split-horizontal"), QKeySequence(),
         [this]() { splitHorizontally(); }
     });
     
     commandPalette_->registerCommand({
         "window.split.vertical", tr("Split Vertically"), tr("Split view vertically"),
-        "Window", UIUtils::icon("view-split-vertical"), QKeySequence(),
+        "Window", ThemeManager::instance().themedIcon("view-split-vertical"), QKeySequence(),
         [this]() { splitVertically(); }
     });
     
     // Tools commands
     commandPalette_->registerCommand({
         "tools.memory", tr("Memory Analysis"), tr("Show memory analysis panel"),
-        "Tools", UIUtils::icon("memory-analysis"), QKeySequence(),
+        "Tools", ThemeManager::instance().themedIcon("memory-analysis"), QKeySequence(),
         [this]() { memoryDockWidget_->setVisible(!memoryDockWidget_->isVisible()); }
     });
     
     commandPalette_->registerCommand({
         "tools.execution", tr("Tool Execution"), tr("Show tool execution history"),
-        "Tools", UIUtils::icon("execution-history"), QKeySequence(),
+        "Tools", ThemeManager::instance().themedIcon("execution-history"), QKeySequence(),
         [this]() { toolDockWidget_->setVisible(!toolDockWidget_->isVisible()); }
     });
     
     commandPalette_->registerCommand({
         "tools.statistics", tr("Statistics"), tr("Show statistics dashboard"),
-        "Tools", UIUtils::icon("view-statistics"), QKeySequence(),
+        "Tools", ThemeManager::instance().themedIcon("view-statistics"), QKeySequence(),
         [this]() { statsDockWidget_->setVisible(!statsDockWidget_->isVisible()); }
     });
 }
@@ -1005,9 +965,9 @@ void MainWindow::deleteLayout(const QString& name) {
 
 void MainWindow::applyTheme(const QString& theme) {
     if (theme == "dark") {
-        ThemeManager::instance()->setTheme(ThemeManager::Dark);
+        ThemeManager::instance().setTheme(ThemeManager::Theme::Dark);
     } else if (theme == "light") {
-        ThemeManager::instance()->setTheme(ThemeManager::Light);
+        ThemeManager::instance().setTheme(ThemeManager::Theme::Light);
     }
     emit themeChanged(theme);
 }
@@ -1255,140 +1215,7 @@ bool MainWindow::hasUnsavedChanges() const {
 
 
 void MainWindow::showSettings() {
-    auto* dialog = new QDialog(this);
-    dialog->setWindowTitle(tr("Preferences"));
-    dialog->setModal(true);
-    dialog->resize(600, 400);
-    
-    auto* layout = new QVBoxLayout(dialog);
-    
-    auto* tabWidget = new QTabWidget(dialog);
-    
-    // General tab
-    auto* generalTab = new QWidget();
-    auto* generalLayout = new QFormLayout(generalTab);
-    
-    auto* themeCombo = new QComboBox(generalTab);
-    themeCombo->addItems({tr("Dark"), tr("Light")});
-    themeCombo->setCurrentIndex(ThemeManager::instance()->currentTheme() == ThemeManager::Dark ? 0 : 1);
-    generalLayout->addRow(tr("Theme:"), themeCombo);
-    
-    auto* autoSaveCheck = new QCheckBox(tr("Enable auto-save"), generalTab);
-    autoSaveCheck->setChecked(conversationView_->isAutoSaveEnabled());
-    generalLayout->addRow(autoSaveCheck);
-    
-    auto* autoSaveIntervalSpin = new QSpinBox(generalTab);
-    autoSaveIntervalSpin->setRange(10, 600);
-    autoSaveIntervalSpin->setSuffix(tr(" seconds"));
-    autoSaveIntervalSpin->setValue(60);
-    generalLayout->addRow(tr("Auto-save interval:"), autoSaveIntervalSpin);
-    
-    tabWidget->addTab(generalTab, tr("General"));
-    
-    // Appearance tab
-    auto* appearanceTab = new QWidget();
-    auto* appearanceLayout = new QFormLayout(appearanceTab);
-    
-    auto* fontCombo = new QFontComboBox(appearanceTab);
-    fontCombo->setCurrentFont(font());
-    appearanceLayout->addRow(tr("Font:"), fontCombo);
-    
-    auto* fontSizeSpin = new QSpinBox(appearanceTab);
-    fontSizeSpin->setRange(8, 24);
-    fontSizeSpin->setValue(font().pointSize());
-    appearanceLayout->addRow(tr("Font size:"), fontSizeSpin);
-    
-    auto* compactModeCheck = new QCheckBox(tr("Compact mode"), appearanceTab);
-    compactModeCheck->setChecked(conversationView_->property("compactMode").toBool());
-    appearanceLayout->addRow(compactModeCheck);
-    
-    auto* showTimestampsCheck = new QCheckBox(tr("Show timestamps"), appearanceTab);
-    showTimestampsCheck->setChecked(true);
-    appearanceLayout->addRow(showTimestampsCheck);
-    
-    tabWidget->addTab(appearanceTab, tr("Appearance"));
-    
-    // System tab
-    auto* systemTab = new QWidget();
-    auto* systemLayout = new QFormLayout(systemTab);
-    
-    auto* trayIconCheck = new QCheckBox(tr("Show system tray icon"), systemTab);
-    trayIconCheck->setChecked(showTrayIcon_);
-    systemLayout->addRow(trayIconCheck);
-    
-    auto* minimizeToTrayCheck = new QCheckBox(tr("Minimize to tray"), systemTab);
-    minimizeToTrayCheck->setChecked(minimizeToTray_);
-    systemLayout->addRow(minimizeToTrayCheck);
-    
-    auto* closeToTrayCheck = new QCheckBox(tr("Close to tray"), systemTab);
-    closeToTrayCheck->setChecked(closeToTray_);
-    systemLayout->addRow(closeToTrayCheck);
-    
-    auto* startMinimizedCheck = new QCheckBox(tr("Start minimized"), systemTab);
-    startMinimizedCheck->setChecked(startMinimized_);
-    systemLayout->addRow(startMinimizedCheck);
-    
-    tabWidget->addTab(systemTab, tr("System"));
-    
-    // Keyboard tab
-    auto* keyboardTab = new QWidget();
-    auto* keyboardLayout = new QVBoxLayout(keyboardTab);
-    
-    auto* shortcutsList = new QListWidget(keyboardTab);
-    for (const auto& shortcut : shortcutManager_->allShortcuts()) {
-        auto* item = new QListWidgetItem(
-            tr("%1 - %2").arg(shortcut.first).arg(shortcut.second),
-            shortcutsList
-        );
-        shortcutsList->addItem(item);
-    }
-    keyboardLayout->addWidget(shortcutsList);
-    
-    auto* resetShortcutsButton = new QPushButton(tr("Reset to Defaults"), keyboardTab);
-    connect(resetShortcutsButton, &QPushButton::clicked,
-            shortcutManager_, &ShortcutManager::resetToDefaults);
-    keyboardLayout->addWidget(resetShortcutsButton);
-    
-    tabWidget->addTab(keyboardTab, tr("Keyboard"));
-    
-    layout->addWidget(tabWidget);
-    
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        dialog
-    );
-    layout->addWidget(buttonBox);
-    
-    connect(buttonBox, &QDialogButtonBox::accepted, [=]() {
-        // Apply settings
-        ThemeManager::instance()->setTheme(
-            themeCombo->currentIndex() == 0 ? ThemeManager::Dark : ThemeManager::Light
-        );
-        
-        conversationView_->setAutoSaveEnabled(autoSaveCheck->isChecked());
-        conversationView_->setAutoSaveInterval(autoSaveIntervalSpin->value());
-        conversationView_->setCompactMode(compactModeCheck->isChecked());
-        conversationView_->setShowTimestamps(showTimestampsCheck->isChecked());
-        
-        showTrayIcon_ = trayIconCheck->isChecked();
-        minimizeToTray_ = minimizeToTrayCheck->isChecked();
-        closeToTray_ = closeToTrayCheck->isChecked();
-        startMinimized_ = startMinimizedCheck->isChecked();
-        
-        if (trayIcon_) {
-            trayIcon_->setVisible(showTrayIcon_);
-        }
-        
-        QFont newFont = fontCombo->currentFont();
-        newFont.setPointSize(fontSizeSpin->value());
-        QApplication::setFont(newFont);
-        
-        saveSettings();
-        dialog->accept();
-    });
-    
-    connect(buttonBox, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    
+    auto* dialog = new SettingsDialog(this);
     dialog->exec();
     dialog->deleteLater();
 }
@@ -1401,7 +1228,7 @@ void MainWindow::showAbout() {
     auto* layout = new QVBoxLayout(dialog);
     
     auto* iconLabel = new QLabel(dialog);
-    iconLabel->setPixmap(UIUtils::icon("application-icon").pixmap(64, 64));
+    iconLabel->setPixmap(ThemeManager::instance().themedIcon("application-icon").pixmap(64, 64));
     iconLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(iconLabel);
     
@@ -1469,30 +1296,29 @@ void MainWindow::showKeyboardShortcuts() {
     
     // File shortcuts
     categorizedShortcuts["File"] = {
-        {tr("New Session"), QKeySequence::New.toString()},
-        {tr("Open Session"), QKeySequence::Open.toString()},
-        {tr("Save Session"), QKeySequence::Save.toString()},
-        {tr("Save As"), QKeySequence::SaveAs.toString()},
-        {tr("Export"), tr("Ctrl+E")},
-        {tr("Quit"), QKeySequence::Quit.toString()}
+        {tr("New Session"), QKeySequence(QKeySequence::New).toString()},
+        {tr("Open Session"), QKeySequence(QKeySequence::Open).toString()},
+        {tr("Save Session"), QKeySequence(QKeySequence::Save).toString()},
+        {tr("Save As"), QKeySequence(QKeySequence::SaveAs).toString()},
+        {tr("Quit"), QKeySequence(QKeySequence::Quit).toString()}
     };
     
     // Edit shortcuts
     categorizedShortcuts["Edit"] = {
-        {tr("Undo"), QKeySequence::Undo.toString()},
-        {tr("Redo"), QKeySequence::Redo.toString()},
-        {tr("Cut"), QKeySequence::Cut.toString()},
-        {tr("Copy"), QKeySequence::Copy.toString()},
-        {tr("Paste"), QKeySequence::Paste.toString()},
-        {tr("Select All"), QKeySequence::SelectAll.toString()},
-        {tr("Find"), QKeySequence::Find.toString()},
+        {tr("Undo"), QKeySequence(QKeySequence::Undo).toString()},
+        {tr("Redo"), QKeySequence(QKeySequence::Redo).toString()},
+        {tr("Cut"), QKeySequence(QKeySequence::Cut).toString()},
+        {tr("Copy"), QKeySequence(QKeySequence::Copy).toString()},
+        {tr("Paste"), QKeySequence(QKeySequence::Paste).toString()},
+        {tr("Select All"), QKeySequence(QKeySequence::SelectAll).toString()},
+        {tr("Find"), QKeySequence(QKeySequence::Find).toString()},
         {tr("Replace"), tr("Ctrl+H")}
     };
     
     // View shortcuts
     categorizedShortcuts["View"] = {
         {tr("Toggle Sidebar"), tr("Ctrl+B")},
-        {tr("Full Screen"), QKeySequence::FullScreen.toString()},
+        {tr("Full Screen"), QKeySequence(QKeySequence::FullScreen).toString()},
         {tr("Command Palette"), tr("Ctrl+K")},
         {tr("Floating Inspector"), tr("Ctrl+I")}
     };
@@ -1686,10 +1512,10 @@ void MainWindow::dropEvent(QDropEvent* event) {
                 if (filePath.endsWith(".llmre")) {
                     openSession(filePath);
                 } else {
-                    // Pass to conversation view for handling
-                    if (conversationView_) {
-                        conversationView_->handleFileDropped(filePath);
-                    }
+                    // Let conversation view handle other file types through its drop event
+                    // by not accepting the event here
+                    event->ignore();
+                    return;
                 }
             }
         }
@@ -1927,12 +1753,12 @@ void MainWindow::onHelpAbout() {
 
 void MainWindow::onThemeChanged() {
     // Apply theme-specific window styling
-    setStyleSheet(ThemeManager::instance()->generateQss());
+    setStyleSheet(ThemeManager::instance().generateQss());
     
     // Update action states
     for (auto* action : findChildren<QAction*>()) {
         if (action->property("themeIcon").isValid()) {
-            action->setIcon(UIUtils::icon(action->property("themeIcon").toString()));
+            action->setIcon(ThemeManager::instance().themedIcon(action->property("themeIcon").toString()));
         }
     }
 }
@@ -1996,11 +1822,32 @@ void MainWindow::onSessionModified() {
 
 void MainWindow::onFloatingInspectorRequested(const QPoint& pos, const QString& context) {
     if (floatingInspector_ && floatingInspectorAction_->isChecked()) {
-        floatingInspector_->showContent(context, pos);
+        floatingInspector_->move(pos);
+        floatingInspector_->showMessage("Context", context);
     }
 }
 
 void MainWindow::loadSettings() {
+    // Load configuration from SettingsManager
+    SettingsManager::instance().loadSettings();
+    const Config& config = SettingsManager::instance().config();
+    
+    // Apply window management settings
+    showTrayIcon_ = config.ui.show_tray_icon;
+    minimizeToTray_ = config.ui.minimize_to_tray;
+    closeToTray_ = config.ui.close_to_tray;
+    startMinimized_ = config.ui.start_minimized;
+    rememberWindowState_ = config.ui.remember_window_state;
+    autoSaveLayout_ = config.ui.auto_save_layout;
+    
+    // Apply conversation view settings
+    if (conversationView_) {
+        conversationView_->setAutoSaveEnabled(config.ui.auto_save_conversations);
+        conversationView_->setAutoSaveInterval(config.ui.auto_save_interval);
+        conversationView_->setCompactMode(config.ui.compact_mode);
+        conversationView_->setShowTimestamps(config.ui.show_timestamps);
+    }
+    
     QSettings settings;
     
     settings.beginGroup("MainWindow");
@@ -2239,8 +2086,11 @@ void UiController::focusConversation() {
 
 void UiController::focusMemory() {
     if (mainWindow_->memoryDock()) {
-        mainWindow_->memoryDockWidget()->show();
-        mainWindow_->memoryDockWidget()->raise();
+        // Show memory dock through its parent dock widget
+        if (auto dockWidget = qobject_cast<QDockWidget*>(mainWindow_->memoryDock()->parent())) {
+            dockWidget->show();
+            dockWidget->raise();
+        }
         mainWindow_->memoryDock()->setFocus();
         emit focusChanged("memory");
     }
@@ -2248,8 +2098,11 @@ void UiController::focusMemory() {
 
 void UiController::focusTools() {
     if (mainWindow_->toolDock()) {
-        mainWindow_->toolDockWidget()->show();
-        mainWindow_->toolDockWidget()->raise();
+        // Show tool dock through its parent dock widget
+        if (auto dockWidget = qobject_cast<QDockWidget*>(mainWindow_->toolDock()->parent())) {
+            dockWidget->show();
+            dockWidget->raise();
+        }
         mainWindow_->toolDock()->setFocus();
         emit focusChanged("tools");
     }
@@ -2257,8 +2110,11 @@ void UiController::focusTools() {
 
 void UiController::focusStats() {
     if (mainWindow_->statsDock()) {
-        mainWindow_->statsDockWidget()->show();
-        mainWindow_->statsDockWidget()->raise();
+        // Show stats dock through its parent dock widget
+        if (auto dockWidget = qobject_cast<QDockWidget*>(mainWindow_->statsDock()->parent())) {
+            dockWidget->show();
+            dockWidget->raise();
+        }
         mainWindow_->statsDock()->setFocus();
         emit focusChanged("stats");
     }
@@ -2416,7 +2272,9 @@ void NotificationManager::playSound(NotificationType type) {
         break;
     }
     
-    QSound::play(":sounds/" + soundFile + ".wav");
+    // QSound requires QtMultimedia module
+    // QSound::play(":sounds/" + soundFile + ".wav");
+    Q_UNUSED(soundFile);
 }
 
 // LayoutManager implementation

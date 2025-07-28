@@ -1,11 +1,7 @@
 #pragma once
 
-#include <QAbstractItemModel>
-#include <QDateTime>
-#include <QUuid>
-#include <memory>
-#include <vector>
-#include <unordered_map>
+#include "../core/ui_v2_common.h"
+#include "tool_execution.h"
 
 namespace llm_re::ui_v2 {
 
@@ -28,14 +24,14 @@ enum class MessageType {
     Warning
 };
 
-// Tool execution state
-enum class ToolExecutionState {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Cancelled
-};
+// Hash functions for enum classes
+inline uint qHash(MessageRole role, uint seed = 0) {
+    return ::qHash(static_cast<int>(role), seed);
+}
+
+inline uint qHash(MessageType type, uint seed = 0) {
+    return ::qHash(static_cast<int>(type), seed);
+}
 
 // Message metadata
 struct MessageMetadata {
@@ -49,36 +45,6 @@ struct MessageMetadata {
     QString language; // For code blocks
     QString fileName; // Associated file
     int lineNumber = -1; // Associated line
-};
-
-// Tool execution info
-struct ToolExecution {
-    QString toolName;
-    QString toolId;
-    QJsonObject parameters;
-    ToolExecutionState state = ToolExecutionState::Pending;
-    QString output;
-    QString error;
-    QDateTime startTime;
-    QDateTime endTime;
-    int exitCode = 0;
-    qint64 duration = 0; // milliseconds
-    QStringList affectedFiles;
-    
-    // Progress tracking
-    int progressMin = 0;
-    int progressMax = 100;
-    int progressValue = 0;
-    QString progressText;
-    
-    // Sub-tasks
-    struct SubTask {
-        QString id;
-        QString description;
-        bool completed = false;
-        QDateTime completedAt;
-    };
-    std::vector<SubTask> subTasks;
 };
 
 // Analysis entry
@@ -192,7 +158,7 @@ public:
     };
     
     enum DataRole {
-        MessageRole = Qt::UserRole + 1,
+        MessageRoleDataRole = Qt::UserRole + 1,
         MessageTypeRole,
         MessageIdRole,
         MessageObjectRole,
@@ -394,3 +360,9 @@ private:
 };
 
 } // namespace llm_re::ui_v2
+
+// Register types with Qt's meta-type system
+Q_DECLARE_METATYPE(llm_re::ui_v2::Message*)
+Q_DECLARE_METATYPE(const std::vector<llm_re::ui_v2::AnalysisEntry>*)
+Q_DECLARE_METATYPE(const std::vector<llm_re::ui_v2::MessageAttachment>*)
+Q_DECLARE_METATYPE(const llm_re::ui_v2::MessageMetadata*)

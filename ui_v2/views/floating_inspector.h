@@ -1,19 +1,7 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
-#include <QPropertyAnimation>
-#include <QGraphicsOpacityEffect>
-#include <memory>
-
-class QTimer;
-class QTextEdit;
-class QLabel;
-class QToolButton;
-class QListWidget;
-class QStackedWidget;
-class QScrollArea;
-class QJsonObject;
-class QJsonArray;
 
 namespace llm_re::ui_v2 {
 
@@ -128,7 +116,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
-    void enterEvent(QEnterEvent* event) override;
+    void enterEvent(QEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -145,7 +133,7 @@ private slots:
     void onAnimationFinished();
     void updateOpacity();
     
-private:
+protected:
     void setupUI();
     void createHeader();
     void createContent();
@@ -175,7 +163,7 @@ private:
     // Content widgets
     QWidget* messageWidget_ = nullptr;
     QLabel* roleLabel_ = nullptr;
-    QTextEdit* messageEdit_ = nullptr;
+    QTextBrowser* messageEdit_ = nullptr;
     QListWidget* metadataList_ = nullptr;
     
     QWidget* memoryWidget_ = nullptr;
@@ -207,8 +195,7 @@ private:
     QToolButton* forwardButton_ = nullptr;
     QLineEdit* searchEdit_ = nullptr;
     QLabel* searchResultLabel_ = nullptr;
-    QToolButton* exportButton_ = nullptr;
-    
+
     // State
     InspectorMode mode_ = CompactMode;
     ContentType currentType_ = NoContent;

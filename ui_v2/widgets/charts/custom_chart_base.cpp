@@ -1,9 +1,5 @@
+#include "../../core/ui_v2_common.h"
 #include "custom_chart_base.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <QGraphicsBlurEffect>
-#include <cmath>
 
 namespace llm_re::ui_v2::charts {
 
@@ -402,9 +398,6 @@ CustomChartBase::CustomChartBase(QWidget* parent)
     
     // Initialize animation
     initializeAnimation();
-    
-    // Set default colors based on theme
-    updateThemeColors();
 }
 
 CustomChartBase::~CustomChartBase() {
@@ -492,40 +485,14 @@ void CustomChartBase::stopAnimation() {
     animationState_.isAnimating = false;
 }
 
-void CustomChartBase::clearData() {
+void CustomChartBase::updateData() {
     backgroundCacheDirty_ = true;
     update();
 }
 
-QPixmap CustomChartBase::toPixmap(const QSize& size) {
-    QSize pixmapSize = size.isValid() ? size : this->size();
-    QPixmap pixmap(pixmapSize);
-    pixmap.fill(Qt::transparent);
-    
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    // Temporarily disable animation for export
-    float savedProgress = animationState_.progress;
-    animationState_.progress = 1.0f;
-    
-    // Scale if needed
-    if (size.isValid() && size != this->size()) {
-        painter.scale(static_cast<double>(size.width()) / width(),
-                     static_cast<double>(size.height()) / height());
-    }
-    
-    // Draw everything
-    paintEvent(nullptr);
-    
-    // Restore animation state
-    animationState_.progress = savedProgress;
-    
-    return pixmap;
-}
-
-bool CustomChartBase::saveToFile(const QString& filename, const QSize& size) {
-    return toPixmap(size).save(filename);
+void CustomChartBase::clearData() {
+    backgroundCacheDirty_ = true;
+    update();
 }
 
 void CustomChartBase::refresh() {
@@ -610,27 +577,27 @@ void CustomChartBase::resizeEvent(QResizeEvent* event) {
 void CustomChartBase::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         interaction_.isDragging = true;
-        interaction_.dragStartPoint = event->position();
+        interaction_.dragStartPoint = event->pos();
         
         // Check if clicking on data point
         int seriesIndex, pointIndex;
-        pointIndex = findNearestDataPoint(event->position(), seriesIndex);
+        pointIndex = findNearestDataPoint(event->pos(), seriesIndex);
         if (pointIndex >= 0) {
             emit dataPointClicked(seriesIndex, pointIndex);
         } else {
-            emit chartClicked(mapFromChart(event->position()));
+            emit chartClicked(mapFromChart(event->pos()));
         }
     } else if (event->button() == Qt::RightButton) {
         interaction_.isSelecting = true;
-        interaction_.selectionRect.setTopLeft(event->position());
-        interaction_.selectionRect.setBottomRight(event->position());
+        interaction_.selectionRect.setTopLeft(event->pos());
+        interaction_.selectionRect.setBottomRight(event->pos());
     }
     
     update();
 }
 
 void CustomChartBase::mouseMoveEvent(QMouseEvent* event) {
-    QPointF pos = event->position();
+    QPointF pos = event->pos();
     
     // Update hover state
     int seriesIndex, pointIndex;
@@ -697,7 +664,7 @@ void CustomChartBase::wheelEvent(QWheelEvent* event) {
     update();
 }
 
-void CustomChartBase::enterEvent(QEnterEvent* event) {
+void CustomChartBase::enterEvent(QEvent* event) {
     Q_UNUSED(event)
     interaction_.isHovering = true;
     update();
@@ -724,11 +691,11 @@ void CustomChartBase::drawBackground(QPainter* painter) {
             ChartUtils::drawGlassMorphism(&cachePainter, rect(), effects_);
         } else {
             // Draw solid background
-            cachePainter.fillRect(rect(), themeColor(ThemeColor::Background));
+            cachePainter.fillRect(rect(), ThemeManager::instance().colors().background);
         }
         
         // Draw border
-        QPen borderPen(themeColor(ThemeColor::Border));
+        QPen borderPen(ThemeManager::instance().colors().border);
         borderPen.setWidth(1);
         cachePainter.setPen(borderPen);
         cachePainter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 8, 8);
@@ -742,7 +709,7 @@ void CustomChartBase::drawBackground(QPainter* painter) {
 void CustomChartBase::drawAxes(QPainter* painter) {
     painter->save();
     
-    QPen axisPen(xAxis_.lineColor.isValid() ? xAxis_.lineColor : themeColor(ThemeColor::Text));
+    QPen axisPen(xAxis_.lineColor.isValid() ? xAxis_.lineColor : ThemeManager::instance().colors().textPrimary);
     axisPen.setWidth(2);
     painter->setPen(axisPen);
     
@@ -844,7 +811,7 @@ void CustomChartBase::drawGrid(QPainter* painter) {
     painter->save();
     
     // Set grid pen
-    QPen gridPen(xAxis_.gridColor.isValid() ? xAxis_.gridColor : themeColor(ThemeColor::Border));
+    QPen gridPen(xAxis_.gridColor.isValid() ? xAxis_.gridColor : ThemeManager::instance().colors().border);
     gridPen.setStyle(Qt::DotLine);
     gridPen.setWidth(1);
     gridPen.setColor(gridPen.color().lighter(150));
@@ -883,6 +850,11 @@ void CustomChartBase::drawGrid(QPainter* painter) {
     painter->restore();
 }
 
+void CustomChartBase::drawLegend(QPainter* painter) {
+    // Default implementation - derived classes can override
+    Q_UNUSED(painter)
+}
+
 void CustomChartBase::drawTitle(QPainter* painter) {
     if (title_.isEmpty() && subtitle_.isEmpty()) return;
     
@@ -896,10 +868,10 @@ void CustomChartBase::drawTitle(QPainter* painter) {
         titleFont.setPointSize(16);
         titleFont.setBold(true);
         painter->setFont(titleFont);
-        painter->setPen(themeColor(ThemeColor::Text));
+        painter->setPen(ThemeManager::instance().colors().textPrimary);
         
         QRectF textRect = painter->fontMetrics().boundingRect(title_);
-        painter->drawText(QPointF(width() / 2 - textRect.width() / 2, y), title_);
+        painter->drawText(QPointF(width() / 2.0 - textRect.width() / 2.0, y), title_);
         
         y += textRect.height() + 5;
     }
@@ -909,10 +881,10 @@ void CustomChartBase::drawTitle(QPainter* painter) {
         QFont subtitleFont = font();
         subtitleFont.setPointSize(12);
         painter->setFont(subtitleFont);
-        painter->setPen(themeColor(ThemeColor::TextSecondary));
+        painter->setPen(ThemeManager::instance().colors().textSecondary);
         
         QRectF textRect = painter->fontMetrics().boundingRect(subtitle_);
-        painter->drawText(QPointF(width() / 2 - textRect.width() / 2, y), subtitle_);
+        painter->drawText(QPointF(width() / 2.0 - textRect.width() / 2.0, y), subtitle_);
     }
     
     painter->restore();
@@ -952,20 +924,20 @@ void CustomChartBase::drawTooltip(QPainter* painter) {
     
     // Draw tooltip background
     QColor bgColor = tooltip_.backgroundColor.isValid() ? 
-                    tooltip_.backgroundColor : themeColor(ThemeColor::BackgroundElevated);
+                    tooltip_.backgroundColor : ThemeManager::instance().colors().surface;
     bgColor.setAlphaF(tooltip_.backgroundOpacity);
     painter->fillRect(textRect, bgColor);
     
     // Draw tooltip border
     QPen borderPen(tooltip_.borderColor.isValid() ? 
-                  tooltip_.borderColor : themeColor(ThemeColor::Border));
+                  tooltip_.borderColor : ThemeManager::instance().colors().border);
     borderPen.setWidthF(tooltip_.borderWidth);
     painter->setPen(borderPen);
     painter->drawRoundedRect(textRect, tooltip_.borderRadius, tooltip_.borderRadius);
     
     // Draw tooltip text
     painter->setPen(tooltip_.textColor.isValid() ? 
-                   tooltip_.textColor : themeColor(ThemeColor::Text));
+                   tooltip_.textColor : ThemeManager::instance().colors().textPrimary);
     painter->drawText(textRect, Qt::AlignCenter, tooltipText_);
     
     painter->restore();
@@ -975,11 +947,11 @@ void CustomChartBase::drawSelection(QPainter* painter) {
     painter->save();
     
     // Draw selection rectangle
-    QColor selectionColor = themeColor(ThemeColor::Primary);
+    QColor selectionColor = ThemeManager::instance().colors().primary;
     selectionColor.setAlpha(30);
     painter->fillRect(interaction_.selectionRect.normalized(), selectionColor);
     
-    QPen selectionPen(themeColor(ThemeColor::Primary));
+    QPen selectionPen(ThemeManager::instance().colors().primary);
     selectionPen.setStyle(Qt::DashLine);
     painter->setPen(selectionPen);
     painter->drawRect(interaction_.selectionRect.normalized());

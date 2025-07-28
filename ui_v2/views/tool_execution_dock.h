@@ -1,70 +1,10 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
-#include <QAbstractItemModel>
-#include <QDateTime>
-#include <QJsonObject>
-#include <QUuid>
-#include <memory>
-
-class QTreeView;
-class QTableView;
-class QTextEdit;
-class QProgressBar;
-class QLabel;
-class QToolBar;
-class QSplitter;
-class QTimer;
-class QMenu;
-class QAction;
+#include "../models/tool_execution.h"
 
 namespace llm_re::ui_v2 {
-
-// Tool execution entry
-struct ToolExecution {
-    QUuid id;
-    QString toolName;
-    QString description;
-    QJsonObject parameters;
-    QDateTime startTime;
-    QDateTime endTime;
-    qint64 duration = 0; // milliseconds
-    
-    enum Status {
-        Pending,
-        Running,
-        Success,
-        Failed,
-        Cancelled
-    };
-    Status status = Pending;
-    
-    int progress = 0;
-    QString progressMessage;
-    QString output;
-    QString errorMessage;
-    
-    // Sub-tasks
-    struct SubTask {
-        QString name;
-        int progress = 0;
-        bool completed = false;
-        qint64 duration = 0;
-    };
-    QList<SubTask> subTasks;
-    
-    // Dependencies
-    QList<QUuid> dependencies;
-    QList<QUuid> dependents;
-    
-    // Metrics
-    QJsonObject metrics;
-    
-    // Retry info
-    int retryCount = 0;
-    int maxRetries = 3;
-    bool canRetry = true;
-};
 
 // Execution timeline widget
 class ExecutionTimelineWidget : public BaseStyledWidget {
@@ -103,7 +43,7 @@ private:
     };
     
     void calculateLayout();
-    QColor statusColor(ToolExecution::Status status) const;
+    QColor statusColor(ToolExecutionState state) const;
     QString formatDuration(qint64 ms) const;
     
     QList<TimelineItem> items_;
@@ -153,9 +93,7 @@ public:
     void setMetric(Metric metric) { metric_ = metric; update(); }
     void setTimeRange(const QDateTime& start, const QDateTime& end);
     void setGroupBy(const QString& field) { groupBy_ = field; update(); }
-    
-    void exportChart(const QString& format);
-    
+
 signals:
     void dataPointClicked(const QString& label, double value);
     
@@ -180,7 +118,7 @@ private:
     void drawScatterPlot(QPainter* painter);
     void drawAxes(QPainter* painter);
     void drawLegend(QPainter* painter);
-    
+
     QList<ToolExecution> executions_;
     QList<DataPoint> dataPoints_;
     ChartType chartType_ = LineChart;
@@ -223,7 +161,7 @@ public:
     
     // Filtering
     void setToolFilter(const QStringList& tools);
-    void setStatusFilter(const QList<ToolExecution::Status>& statuses);
+    void setStatusFilter(const QList<ToolExecutionState>& states);
     void clearFilters();
     
     
@@ -265,7 +203,6 @@ private slots:
     void onTimelineExecutionClicked(const QUuid& id);
     void onChartDataPointClicked(const QString& label, double value);
     void onFilterChanged();
-    void onExportClicked();
     void updateRunningExecutions();
     void autoSave();
     
@@ -309,7 +246,6 @@ private:
     QComboBox* toolFilterCombo_ = nullptr;
     QComboBox* statusFilterCombo_ = nullptr;
     QAction* clearHistoryAction_ = nullptr;
-    QAction* exportAction_ = nullptr;
     QAction* autoScrollAction_ = nullptr;
     
     // Context menu
@@ -320,7 +256,7 @@ private:
     QHash<QUuid, ToolExecution*> executionMap_;
     QUuid selectedExecution_;
     QStringList toolFilter_;
-    QList<ToolExecution::Status> statusFilter_;
+    QList<ToolExecutionState> statusFilter_;
     bool autoScroll_ = true;
     
     // Timers

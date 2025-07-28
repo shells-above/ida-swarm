@@ -5,6 +5,7 @@
 #include "ui_v2/views/main_window.h"
 #include "ui_v2/core/agent_controller.h"
 #include "core/ida_utils.h"
+#include "core/config.h"
 
 namespace llm_re {
 
@@ -461,9 +462,7 @@ This will take hundreds of iterations. Begin your first pass now.)";
 void llm_plugin_t::load_config() {
     config_ = std::make_unique<Config>();
     
-    // Try to load from file
-    char config_path[QMAXPATH];
-    get_user_idadir(config_path, sizeof(config_path));
+    char* config_path = const_cast<char*>(get_user_idadir());
     qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
     
     if (!config_->load_from_file(config_path)) {

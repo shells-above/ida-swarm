@@ -1,10 +1,6 @@
+#include "../../core/ui_v2_common.h"
 #include "bar_chart.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <QMouseEvent>
-#include <QToolTip>
-#include <cmath>
-#include <algorithm>
+#include "../../core/theme_manager.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -13,8 +9,15 @@ BarChart::BarChart(QWidget* parent)
     setMinimumSize(300, 200);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     
-    // Set default theme
-    theme_ = ChartTheme::getBarChartTheme(ChartTheme::Style::Modern);
+    // Set default theme with theme-aware colors
+    theme_ = BarChartTheme();
+    
+    // Initialize theme colors based on current theme
+    auto currentTheme = ThemeManager::instance().currentTheme();
+    theme_.positiveColor = ChartTheme::getSeriesColor(currentTheme, 0);
+    theme_.negativeColor = ChartTheme::getSeriesColor(currentTheme, 1);
+    theme_.connectorColor = ChartTheme::getAxisColor(currentTheme);
+    theme_.valueFontColor = ChartTheme::getTextColor(currentTheme);
     
     // Enable mouse tracking for hover effects
     setMouseTracking(true);
@@ -60,7 +63,7 @@ void BarChart::addSeries(const ChartSeries& series) {
 void BarChart::addSeries(const QString& name, const std::vector<double>& values) {
     ChartSeries series(name);
     for (size_t i = 0; i < values.size() && i < static_cast<size_t>(categories_.size()); ++i) {
-        series.addDataPoint(i, values[i], categories_[i]);
+        series.points.push_back(ChartDataPoint(static_cast<double>(i), values[i], categories_[i]));
         setData(categories_[i], name, values[i]);
     }
     addSeries(series);
@@ -110,7 +113,7 @@ void BarChart::setData(const QString& category, const QString& series, double va
         }
     }
     
-    if (isAnimationEnabled()) {
+    if (effects_.animationEnabled) {
         startAnimation();
     } else {
         animatedHeights_ = targetHeights_;
@@ -249,14 +252,15 @@ void BarChart::drawLegend(QPainter* painter) {
     const int colorBoxSize = 12;
     const int textOffset = 20;
     
-    QPointF legendPos(chartRect().right() + 20, chartRect().top());
+    QPointF legendPos(chartRect_.right() + 20, chartRect_.top());
     
     for (size_t i = 0; i < series_.size(); ++i) {
         if (!series_[i].visible) continue;
         
         // Color box
         QRectF colorBox(legendPos.x(), legendPos.y() + 4, colorBoxSize, colorBoxSize);
-        QColor color = series_[i].color.isValid() ? series_[i].color : theme_.colors[i % theme_.colors.size()];
+        auto seriesColors = ChartTheme::getSeriesColors(ThemeManager::instance().currentTheme());
+        QColor color = series_[i].color.isValid() ? series_[i].color : seriesColors[i % seriesColors.size()];
         
         if (theme_.gradient) {
             QLinearGradient gradient(colorBox.topLeft(), colorBox.bottomRight());
@@ -268,7 +272,7 @@ void BarChart::drawLegend(QPainter* painter) {
         }
         
         // Text
-        painter->setPen(theme_.textColor);
+        painter->setPen(ChartTheme::getTextColor(ThemeManager::instance().currentTheme()));
         painter->drawText(QPointF(legendPos.x() + textOffset, legendPos.y() + 14), series_[i].name);
         
         legendPos.setY(legendPos.y() + legendItemHeight + legendItemSpacing);
@@ -278,11 +282,11 @@ void BarChart::drawLegend(QPainter* painter) {
 void BarChart::drawAxes(QPainter* painter) {
     if (!theme_.showAxes) return;
     
-    painter->setPen(QPen(theme_.axisColor, 1));
+    painter->setPen(QPen(ChartTheme::getAxisColor(ThemeManager::instance().currentTheme()), 1));
     
     // Draw axes lines
-    painter->drawLine(chartRect().bottomLeft(), chartRect().bottomRight());
-    painter->drawLine(chartRect().bottomLeft(), chartRect().topLeft());
+    painter->drawLine(chartRect_.bottomLeft(), chartRect_.bottomRight());
+    painter->drawLine(chartRect_.bottomLeft(), chartRect_.topLeft());
     
     // Draw category labels
     if (!categories_.empty()) {
@@ -292,19 +296,19 @@ void BarChart::drawAxes(QPainter* painter) {
         
         if (theme_.horizontal) {
             // Draw on Y axis
-            double categoryHeight = chartRect().height() / categories_.size();
+            double categoryHeight = chartRect_.height() / categories_.size();
             for (int i = 0; i < categories_.size(); ++i) {
-                QPointF pos(chartRect().left() - 10, 
-                           chartRect().bottom() - (i + 0.5) * categoryHeight);
+                QPointF pos(chartRect_.left() - 10, 
+                           chartRect_.bottom() - (i + 0.5) * categoryHeight);
                 painter->drawText(pos - QPointF(painter->fontMetrics().horizontalAdvance(categories_[i]), -5), 
                                 categories_[i]);
             }
         } else {
             // Draw on X axis
-            double categoryWidth = chartRect().width() / categories_.size();
+            double categoryWidth = chartRect_.width() / categories_.size();
             for (int i = 0; i < categories_.size(); ++i) {
-                QPointF pos(chartRect().left() + (i + 0.5) * categoryWidth, 
-                           chartRect().bottom() + 20);
+                QPointF pos(chartRect_.left() + (i + 0.5) * categoryWidth, 
+                           chartRect_.bottom() + 20);
                 
                 if (theme_.rotateLabels) {
                     painter->save();
@@ -323,7 +327,7 @@ void BarChart::drawAxes(QPainter* painter) {
     // Draw value axis labels
     double minVal = 0, maxVal = 0;
     for (const auto& series : series_) {
-        for (const auto& point : series.dataPoints) {
+        for (const auto& point : series.points) {
             maxVal = std::max(maxVal, point.y);
             minVal = std::min(minVal, point.y);
         }
@@ -337,12 +341,12 @@ void BarChart::drawAxes(QPainter* painter) {
         if (!valueSuffix_.isEmpty()) label.append(valueSuffix_);
         
         if (theme_.horizontal) {
-            double x = chartRect().left() + chartRect().width() * i / numTicks;
+            double x = chartRect_.left() + chartRect_.width() * i / numTicks;
             painter->drawText(QPointF(x - painter->fontMetrics().horizontalAdvance(label)/2, 
-                                    chartRect().bottom() + 20), label);
+                                    chartRect_.bottom() + 20), label);
         } else {
-            double y = chartRect().bottom() - chartRect().height() * i / numTicks;
-            painter->drawText(QPointF(chartRect().left() - painter->fontMetrics().horizontalAdvance(label) - 10, 
+            double y = chartRect_.bottom() - chartRect_.height() * i / numTicks;
+            painter->drawText(QPointF(chartRect_.left() - painter->fontMetrics().horizontalAdvance(label) - 10, 
                                     y + 5), label);
         }
     }
@@ -357,12 +361,12 @@ int BarChart::findNearestDataPoint(const QPointF& pos, int& seriesIndex) {
 void BarChart::drawVerticalBars(QPainter* painter) {
     if (categories_.empty() || series_.empty()) return;
     
-    const double categoryWidth = chartRect().width() / categories_.size();
+    const double categoryWidth = chartRect_.width() / categories_.size();
     const double barGroupWidth = categoryWidth * (1.0 - theme_.barSpacing);
     const double barWidth = barGroupWidth / series_.size();
     
     for (int catIdx = 0; catIdx < categories_.size(); ++catIdx) {
-        double groupX = chartRect().left() + catIdx * categoryWidth + 
+        double groupX = chartRect_.left() + catIdx * categoryWidth + 
                        categoryWidth * theme_.barSpacing / 2;
         
         for (size_t seriesIdx = 0; seriesIdx < series_.size(); ++seriesIdx) {
@@ -373,7 +377,7 @@ void BarChart::drawVerticalBars(QPainter* painter) {
             double barHeight = calculateBarHeight(animatedValue);
             
             QRectF barRect(groupX + seriesIdx * barWidth, 
-                          chartRect().bottom() - barHeight,
+                          chartRect_.bottom() - barHeight,
                           barWidth * 0.8,
                           barHeight);
             
@@ -386,12 +390,12 @@ void BarChart::drawVerticalBars(QPainter* painter) {
 void BarChart::drawHorizontalBars(QPainter* painter) {
     if (categories_.empty() || series_.empty()) return;
     
-    const double categoryHeight = chartRect().height() / categories_.size();
+    const double categoryHeight = chartRect_.height() / categories_.size();
     const double barGroupHeight = categoryHeight * (1.0 - theme_.barSpacing);
     const double barHeight = barGroupHeight / series_.size();
     
     for (int catIdx = 0; catIdx < categories_.size(); ++catIdx) {
-        double groupY = chartRect().top() + catIdx * categoryHeight + 
+        double groupY = chartRect_.top() + catIdx * categoryHeight + 
                        categoryHeight * theme_.barSpacing / 2;
         
         for (size_t seriesIdx = 0; seriesIdx < series_.size(); ++seriesIdx) {
@@ -401,7 +405,7 @@ void BarChart::drawHorizontalBars(QPainter* painter) {
             double animatedValue = getAnimatedHeight(value, catIdx, seriesIdx);
             double barWidth = calculateBarHeight(animatedValue);
             
-            QRectF barRect(chartRect().left(), 
+            QRectF barRect(chartRect_.left(), 
                           groupY + seriesIdx * barHeight,
                           barWidth,
                           barHeight * 0.8);
@@ -420,13 +424,13 @@ void BarChart::drawGroupedBars(QPainter* painter) {
 void BarChart::drawStackedBars(QPainter* painter) {
     if (categories_.empty() || series_.empty()) return;
     
-    const double categoryWidth = chartRect().width() / categories_.size();
+    const double categoryWidth = chartRect_.width() / categories_.size();
     const double barWidth = categoryWidth * (1.0 - theme_.barSpacing);
     
     for (int catIdx = 0; catIdx < categories_.size(); ++catIdx) {
-        double barX = chartRect().left() + catIdx * categoryWidth + 
+        double barX = chartRect_.left() + catIdx * categoryWidth + 
                      categoryWidth * theme_.barSpacing / 2;
-        double currentY = chartRect().bottom();
+        double currentY = chartRect_.bottom();
         
         for (size_t seriesIdx = 0; seriesIdx < series_.size(); ++seriesIdx) {
             if (!series_[seriesIdx].visible) continue;
@@ -448,7 +452,7 @@ void BarChart::drawStackedBars(QPainter* painter) {
 void BarChart::drawWaterfallChart(QPainter* painter) {
     if (categories_.empty() || series_.empty()) return;
     
-    const double categoryWidth = chartRect().width() / categories_.size();
+    const double categoryWidth = chartRect_.width() / categories_.size();
     const double barWidth = categoryWidth * (1.0 - theme_.barSpacing);
     
     double runningTotal = 0;
@@ -456,7 +460,7 @@ void BarChart::drawWaterfallChart(QPainter* painter) {
     waterfallIncreases_.clear();
     
     for (int catIdx = 0; catIdx < categories_.size(); ++catIdx) {
-        double barX = chartRect().left() + catIdx * categoryWidth + 
+        double barX = chartRect_.left() + catIdx * categoryWidth + 
                      categoryWidth * theme_.barSpacing / 2;
         
         double value = 0;
@@ -470,8 +474,8 @@ void BarChart::drawWaterfallChart(QPainter* painter) {
         waterfallTotals_.push_back(runningTotal);
         waterfallIncreases_.push_back(value >= 0);
         
-        double barBottom = chartRect().bottom() - calculateBarHeight(previousTotal);
-        double barTop = chartRect().bottom() - calculateBarHeight(runningTotal);
+        double barBottom = chartRect_.bottom() - calculateBarHeight(previousTotal);
+        double barTop = chartRect_.bottom() - calculateBarHeight(runningTotal);
         
         QRectF barRect(barX, std::min(barTop, barBottom), 
                       barWidth, std::abs(barTop - barBottom));
@@ -482,7 +486,7 @@ void BarChart::drawWaterfallChart(QPainter* painter) {
         // Draw connector line
         if (catIdx > 0) {
             painter->setPen(QPen(theme_.connectorColor, 1, Qt::DashLine));
-            double prevX = chartRect().left() + (catIdx - 1) * categoryWidth + 
+            double prevX = chartRect_.left() + (catIdx - 1) * categoryWidth + 
                           categoryWidth * theme_.barSpacing / 2 + barWidth;
             painter->drawLine(QPointF(prevX, barBottom), QPointF(barX, barBottom));
         }
@@ -492,11 +496,11 @@ void BarChart::drawWaterfallChart(QPainter* painter) {
 void BarChart::drawRangeChart(QPainter* painter) {
     if (categories_.empty() || series_.empty()) return;
     
-    const double categoryWidth = chartRect().width() / categories_.size();
+    const double categoryWidth = chartRect_.width() / categories_.size();
     const double barWidth = categoryWidth * (1.0 - theme_.barSpacing);
     
     for (int catIdx = 0; catIdx < categories_.size(); ++catIdx) {
-        double barX = chartRect().left() + catIdx * categoryWidth + 
+        double barX = chartRect_.left() + catIdx * categoryWidth + 
                      categoryWidth * theme_.barSpacing / 2;
         
         for (size_t seriesIdx = 0; seriesIdx < series_.size(); ++seriesIdx) {
@@ -509,7 +513,7 @@ void BarChart::drawRangeChart(QPainter* painter) {
             double maxHeight = calculateBarHeight(it->second.max);
             
             QRectF barRect(barX + seriesIdx * (barWidth / series_.size()), 
-                          chartRect().bottom() - maxHeight,
+                          chartRect_.bottom() - maxHeight,
                           barWidth / series_.size() * 0.8,
                           maxHeight - minHeight);
             
@@ -545,7 +549,7 @@ void BarChart::drawBar(QPainter* painter, const QRectF& rect, double value,
             barPath.addRoundedRect(rect, theme_.cornerRadius, theme_.cornerRadius);
         } else {
             QRectF fullRect = rect;
-            fullRect.setBottom(chartRect().bottom());
+            fullRect.setBottom(chartRect_.bottom());
             barPath.addRoundedRect(fullRect, theme_.cornerRadius, theme_.cornerRadius);
             
             // Clip bottom part to make it flat
@@ -559,9 +563,9 @@ void BarChart::drawBar(QPainter* painter, const QRectF& rect, double value,
     }
     
     // Apply effects
-    if (theme_.effects.enabled) {
+    if (effects_.shadowEnabled) {
         // Shadow
-        if (theme_.effects.dropShadow) {
+        if (effects_.shadowEnabled) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(0, 0, 0, 30));
             painter->translate(2, 2);
@@ -570,8 +574,11 @@ void BarChart::drawBar(QPainter* painter, const QRectF& rect, double value,
         }
         
         // Glow for hovered bars
-        if (isHovered && theme_.effects.glow) {
-            GlowEffects::drawGlowPath(painter, barPath, fillColor.lighter(150), 5);
+        if (isHovered && effects_.glowEnabled) {
+            // Draw glow using base class method
+            QPainterPath glowPath;
+            glowPath.addRect(rect);
+            ChartUtils::drawGlowEffect(painter, glowPath, fillColor.lighter(150), 5);
         }
     }
     
@@ -638,7 +645,7 @@ void BarChart::drawBarValue(QPainter* painter, const QRectF& barRect, double val
     }
     
     // Draw text background for better readability
-    if (theme_.effects.enabled) {
+    if (theme_.showValues) {
         QRectF bgRect = textRect.translated(textPos - QPointF(0, textRect.height()));
         bgRect.adjust(-2, -1, 2, 1);
         painter->fillRect(bgRect, QColor(255, 255, 255, 200));
@@ -673,12 +680,12 @@ void BarChart::calculateBarLayout() {
     
     // Calculate total dimensions
     if (theme_.horizontal) {
-        layout_.totalWidth = chartRect().width();
-        layout_.totalHeight = chartRect().height();
+        layout_.totalWidth = chartRect_.width();
+        layout_.totalHeight = chartRect_.height();
         layout_.categoryWidth = layout_.totalHeight / categories_.size();
     } else {
-        layout_.totalWidth = chartRect().width();
-        layout_.totalHeight = chartRect().height();
+        layout_.totalWidth = chartRect_.width();
+        layout_.totalHeight = chartRect_.height();
         layout_.categoryWidth = layout_.totalWidth / categories_.size();
     }
     
@@ -695,21 +702,21 @@ QRectF BarChart::calculateBarRect(int categoryIndex, int seriesIndex, double val
     double height = calculateBarHeight(value);
     
     if (theme_.horizontal) {
-        double y = chartRect().top() + categoryIndex * layout_.categoryWidth + 
+        double y = chartRect_.top() + categoryIndex * layout_.categoryWidth + 
                   layout_.categoryWidth * theme_.barSpacing / 2;
         double barHeight = layout_.barWidth / series_.size();
         
-        return QRectF(chartRect().left(), 
+        return QRectF(chartRect_.left(), 
                      y + seriesIndex * barHeight,
                      height,
                      barHeight * 0.8);
     } else {
-        double x = chartRect().left() + categoryIndex * layout_.categoryWidth + 
+        double x = chartRect_.left() + categoryIndex * layout_.categoryWidth + 
                   layout_.categoryWidth * theme_.barSpacing / 2;
         double barWidth = layout_.barWidth / series_.size();
         
         return QRectF(x + seriesIndex * barWidth, 
-                     chartRect().bottom() - height,
+                     chartRect_.bottom() - height,
                      barWidth * 0.8,
                      height);
     }
@@ -720,7 +727,7 @@ double BarChart::calculateBarHeight(double value) const {
     
     // Find data range
     for (const auto& series : series_) {
-        for (const auto& point : series.dataPoints) {
+        for (const auto& point : series.points) {
             maxVal = std::max(maxVal, point.y);
             minVal = std::min(minVal, point.y);
         }
@@ -731,7 +738,7 @@ double BarChart::calculateBarHeight(double value) const {
     if (range == 0) range = 1;
     maxVal += range * 0.1;
     
-    double availableHeight = theme_.horizontal ? chartRect().width() : chartRect().height();
+    double availableHeight = theme_.horizontal ? chartRect_.width() : chartRect_.height();
     return (value - minVal) / (maxVal - minVal) * availableHeight;
 }
 
@@ -750,16 +757,17 @@ QColor BarChart::getBarColor(int seriesIndex, int categoryIndex) const {
         return series_[seriesIndex].color;
     }
     
-    if (seriesIndex < theme_.colors.size()) {
-        return theme_.colors[seriesIndex];
+    auto seriesColors = ChartTheme::getSeriesColors(ThemeManager::instance().currentTheme());
+    if (seriesIndex < static_cast<int>(seriesColors.size())) {
+        return seriesColors[seriesIndex];
     }
     
-    // Generate color based on index
-    return ChartUtils::generateColorPalette(series_.size())[seriesIndex];
+    // Fall back to generating a color
+    return QColor::fromHsv((seriesIndex * 360) / std::max(1, static_cast<int>(series_.size())), 200, 200);
 }
 
 double BarChart::getAnimatedHeight(double targetHeight, int categoryIndex, int seriesIndex) {
-    if (!isAnimationEnabled() || !theme_.animateGrowth) {
+    if (!effects_.animationEnabled || !theme_.animateGrowth) {
         return targetHeight;
     }
     
@@ -789,66 +797,7 @@ bool BarChart::isPointInBar(const QPointF& point, const BarInfo& bar) const {
     return bar.rect.contains(point);
 }
 
-void BarChart::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        int category = barAt(event->pos());
-        int series = seriesAt(event->pos());
-        
-        if (category >= 0) {
-            selectedCategory_ = category;
-            selectedSeries_ = series;
-            
-            if (series >= 0) {
-                emit barClicked(categories_[category], series);
-            }
-            emit categoryClicked(categories_[category]);
-            
-            update();
-        }
-    }
-    
-    CustomChartBase::mousePressEvent(event);
-}
-
-void BarChart::mouseMoveEvent(QMouseEvent* event) {
-    int category = barAt(event->pos());
-    int series = seriesAt(event->pos());
-    
-    if (category != hoveredCategory_ || series != hoveredSeries_) {
-        hoveredCategory_ = category;
-        hoveredSeries_ = series;
-        
-        if (category >= 0 && series >= 0) {
-            double value = getData(categories_[category], series_[series].name);
-            QString tooltip = QString("%1\n%2: %3%4%5")
-                .arg(categories_[category])
-                .arg(series_[series].name)
-                .arg(valuePrefix_)
-                .arg(value, 0, 'f', 2)
-                .arg(valueSuffix_);
-            
-            QToolTip::showText(event->globalPos(), tooltip, this);
-            emit barHovered(categories_[category], series);
-        } else {
-            QToolTip::hideText();
-        }
-        
-        update();
-    }
-    
-    CustomChartBase::mouseMoveEvent(event);
-}
-
-void BarChart::mouseReleaseEvent(QMouseEvent* event) {
-    CustomChartBase::mouseReleaseEvent(event);
-}
-
-void BarChart::mouseDoubleClickEvent(QMouseEvent* event) {
-    CustomChartBase::mouseDoubleClickEvent(event);
-}
-
-void BarChart::wheelEvent(QWheelEvent* event) {
-    CustomChartBase::wheelEvent(event);
-}
+// Mouse event handling is done through base class findNearestDataPoint
+// The base class will emit appropriate signals and handle tooltips
 
 } // namespace llm_re::ui_v2::charts

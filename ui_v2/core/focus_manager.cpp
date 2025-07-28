@@ -1,15 +1,5 @@
+#include "ui_v2_common.h"
 #include "focus_manager.h"
-#include <QScrollArea>
-#include <QAbstractScrollArea>
-#include <QScrollBar>
-#include <QTimer>
-#include <QFocusEvent>
-#include <QKeyEvent>
-#include <QPainter>
-#include <QPainterPath>
-#include <QApplication>
-#include <QGraphicsOpacityEffect>
-#include <algorithm>
 
 namespace llm_re::ui_v2 {
 
@@ -61,9 +51,12 @@ void FocusManager::unregisterWidget(QWidget* widget)
     
     // Remove from maps and lists
     widgetMap_.remove(widget);
-    focusItems_.removeIf([widget](const FocusItem& item) {
-        return item.widget == widget;
-    });
+    focusItems_.erase(
+        std::remove_if(focusItems_.begin(), focusItems_.end(),
+                       [widget](const FocusItem& item) {
+                           return item.widget == widget;
+                       }),
+        focusItems_.end());
     
     // Remove from focus chain
     focusChain_.removeAll(widget);
@@ -398,7 +391,7 @@ void FocusManager::onScrollAnimationFinished()
     // Find and remove animation
     for (auto it = scrollAnimations_.begin(); it != scrollAnimations_.end(); ++it) {
         if (it.value() == animation) {
-            emit scrollFinished(it.key()->parent());
+            emit scrollFinished(qobject_cast<QWidget*>(it.key()->parent()));
             scrollAnimations_.erase(it);
             animation->deleteLater();
             break;
@@ -467,7 +460,7 @@ void FocusManager::animateScroll(QAbstractScrollArea* scrollArea, const QPoint& 
     scrollAnimations_[scrollArea] = animation;
     animation->start(QAbstractAnimation::DeleteWhenStopped);
     
-    emit scrollStarted(scrollArea->parent());
+    emit scrollStarted(qobject_cast<QWidget*>(scrollArea->parent()));
 }
 
 void FocusManager::installEventFilters(QWidget* widget)

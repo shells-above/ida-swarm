@@ -1,41 +1,8 @@
+#include "../core/ui_v2_common.h"
 #include "conversation_view.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
 #include "../widgets/command_palette.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QToolBar>
-#include <QToolButton>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QLineEdit>
-#include <QLabel>
-#include <QSplitter>
-#include <QScrollBar>
-#include <QMenu>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QMimeData>
-#include <QPdfWriter>
-#include <QPainter>
-#include <QTextDocument>
-#include <QDragEnterEvent>
-#include <QClipboard>
-#include <QShortcut>
-#include <QUuid>
-#include <QDateTime>
-#include <QStackedWidget>
-#include <QListWidget>
-#include <QComboBox>
-#include <QSlider>
-#include <QCheckBox>
-#include <QSpinBox>
-#include <QGroupBox>
-#include <QTime>
-#include <QRegularExpression>
 
 namespace llm_re::ui_v2 {
 
@@ -668,7 +635,6 @@ void ConversationView::saveSession(const QString& path) {
     session["id"] = sessionId_;
     session["version"] = 1;
     session["created"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    // Note: export functionality has been removed
     // Session saving now only stores settings, not messages
     
     // Settings

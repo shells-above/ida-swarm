@@ -1,20 +1,7 @@
+#include "../core/ui_v2_common.h"
 #include "command_palette.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QPainter>
-#include <QKeyEvent>
-#include <QApplication>
-#include <QDesktopWidget>
-#include <QGraphicsDropShadowEffect>
-#include <QPropertyAnimation>
-#include <QShortcut>
-#include <QTimer>
-#include <QSettings>
-#include <QDebug>
-#include <algorithm>
 
 namespace llm_re::ui_v2 {
 
@@ -31,7 +18,7 @@ CommandPaletteInput::CommandPaletteInput(QWidget* parent)
     
     // Apply custom styling
     const auto& theme = ThemeManager::instance();
-    setFont(theme.typography().subtitle);
+    setFont(theme.typography().body);
     
     setStyleSheet(QString(
         "QLineEdit {"
@@ -42,7 +29,7 @@ CommandPaletteInput::CommandPaletteInput(QWidget* parent)
         "}"
     ).arg(theme.colors().textPrimary.name())
      .arg(Design::SPACING_MD)
-     .arg(theme.typography().subtitle.pointSize()));
+     .arg(theme.typography().body.pointSize()));
 }
 
 void CommandPaletteInput::setPlaceholderTextWithShortcut(const QString& text, const QKeySequence& shortcut) {
@@ -77,6 +64,9 @@ void CommandPaletteInput::keyPressEvent(QKeyEvent* event) {
             emit tabPressed();
             event->accept();
             return;
+            
+        default:
+            break;
     }
     
     QLineEdit::keyPressEvent(event);
@@ -100,7 +90,7 @@ void CommandPaletteInput::paintEvent(QPaintEvent* event) {
 // CommandItemDelegate implementation
 
 CommandItemDelegate::CommandItemDelegate(QObject* parent)
-    : QStyledItemDelegate(parent) {
+    : QT::QStyledItemDelegate(parent) {
 }
 
 void CommandItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -146,7 +136,7 @@ void CommandItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
     
     // Draw name with highlighting
     painter->setPen(colors.textPrimary);
-    painter->setFont(theme.typography().subtitle);
+    painter->setFont(theme.typography().body);
     
     if (!highlightPositions_.isEmpty()) {
         // Draw with fuzzy match highlighting
@@ -157,12 +147,12 @@ void CommandItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
         for (int i = 0; i < name.length(); ++i) {
             if (highlightPositions_.contains(i)) {
                 painter->setPen(colors.primary);
-                painter->setFont(QFont(theme.typography().subtitle.family(),
-                                     theme.typography().subtitle.pointSize(),
+                painter->setFont(QFont(theme.typography().body.family(),
+                                     theme.typography().body.pointSize(),
                                      QFont::Bold));
             } else {
                 painter->setPen(colors.textPrimary);
-                painter->setFont(theme.typography().subtitle);
+                painter->setFont(theme.typography().body);
             }
             
             QString ch = name.mid(i, 1);
@@ -477,7 +467,7 @@ void CommandPalette::resizeEvent(QResizeEvent* event) {
     BaseStyledWidget::resizeEvent(event);
     
     // Keep centered if was centered
-    if (geometry().center() == QApplication::desktop()->availableGeometry().center()) {
+    if (geometry().center() == QGuiApplication::primaryScreen()->availableGeometry().center()) {
         centerOnScreen();
     }
 }
@@ -924,7 +914,7 @@ QList<Command> FileCommandProvider::commands() const {
     newFile.category = "File";
     newFile.icon = ThemeManager::instance().themedIcon("file-new");
     newFile.shortcut = QKeySequence::New;
-    newFile.keywords = {"create", "add"};
+    newFile.keywords = QStringList{"create", "add"};
     cmds.append(newFile);
     
     Command openFile;
@@ -1012,7 +1002,7 @@ QList<Command> EditCommandProvider::commands() const {
     find.category = "Edit";
     find.icon = ThemeManager::instance().themedIcon("search");
     find.shortcut = QKeySequence::Find;
-    find.keywords = {"search", "locate"};
+    find.keywords = QStringList{"search", "locate"};
     cmds.append(find);
     
     Command replace;
@@ -1036,7 +1026,7 @@ QList<Command> ViewCommandProvider::commands() const {
     toggleTheme.description = "Switch between dark and light theme";
     toggleTheme.category = "View";
     toggleTheme.icon = ThemeManager::instance().themedIcon("theme");
-    toggleTheme.keywords = {"dark", "light", "mode"};
+    toggleTheme.keywords = QStringList{"dark", "light", "mode"};
     toggleTheme.action = []() {
         auto& theme = ThemeManager::instance();
         theme.setTheme(theme.currentTheme() == ThemeManager::Theme::Dark ?
@@ -1093,7 +1083,7 @@ QList<Command> ToolsCommandProvider::commands() const {
     settings.category = "Tools";
     settings.icon = ThemeManager::instance().themedIcon("settings");
     settings.shortcut = QKeySequence::Preferences;
-    settings.keywords = {"preferences", "options", "configure"};
+    settings.keywords = QStringList{"preferences", "options", "configure"};
     cmds.append(settings);
     
     Command showCommandPalette;
@@ -1135,7 +1125,7 @@ QList<Command> HelpCommandProvider::commands() const {
     shortcuts.description = "Show all keyboard shortcuts";
     shortcuts.category = "Help";
     shortcuts.icon = ThemeManager::instance().themedIcon("keyboard");
-    shortcuts.keywords = {"keys", "hotkeys", "keybindings"};
+    shortcuts.keywords = QStringList{"keys", "hotkeys", "keybindings"};
     cmds.append(shortcuts);
     
     return cmds;

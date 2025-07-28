@@ -1,17 +1,14 @@
 #pragma once
 
+#include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
 #include "../models/conversation_model.h"
 #include "markdown_viewer.h"
-#include <QPropertyAnimation>
-#include <memory>
-
-class QLabel;
-class QToolButton;
-class QProgressBar;
-class QMenu;
 
 namespace llm_re::ui_v2 {
+
+// Forward declarations
+class TypingIndicator;
 
 // Modern message bubble widget with animations and rich content support
 class MessageBubble : public CardWidget {

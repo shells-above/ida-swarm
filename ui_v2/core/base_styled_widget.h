@@ -1,10 +1,7 @@
 #pragma once
 
+#include "ui_v2_common.h"
 #include "theme_manager.h"
-#include <QWidget>
-#include <QPropertyAnimation>
-#include <QGraphicsDropShadowEffect>
-#include <memory>
 
 namespace llm_re::ui_v2 {
 

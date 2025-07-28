@@ -1,8 +1,6 @@
+#include "../../core/ui_v2_common.h"
 #include "line_chart.h"
-#include <QPainter>
-#include <QPainterPath>
-#include <algorithm>
-#include <limits>
+#include "../../core/theme_manager.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -359,7 +357,7 @@ void LineChart::drawLegend(QPainter* painter) {
     if (legend_.backgroundColor.isValid()) {
         painter->fillRect(legendRect, legend_.backgroundColor);
     } else {
-        QColor bgColor = themeColor(ThemeColor::BackgroundElevated);
+        QColor bgColor = ThemeManager::instance().colors().surface;
         bgColor.setAlpha(200);
         painter->fillRect(legendRect, bgColor);
     }
@@ -367,7 +365,7 @@ void LineChart::drawLegend(QPainter* painter) {
     // Draw legend border
     if (legend_.borderWidth > 0) {
         QPen borderPen(legend_.borderColor.isValid() ? 
-                      legend_.borderColor : themeColor(ThemeColor::Border));
+                      legend_.borderColor : ThemeManager::instance().colors().border);
         borderPen.setWidthF(legend_.borderWidth);
         painter->setPen(borderPen);
         painter->drawRect(legendRect);
@@ -497,8 +495,14 @@ void LineChart::drawSmoothLine(QPainter* painter, const std::vector<QPointF>& po
     pen.setJoinStyle(Qt::RoundJoin);
     
     // Hover effect
-    if (interaction_.hoveredSeriesIndex == static_cast<int>(std::distance(
-            &series_[0], &series))) {
+    int seriesIndex = -1;
+    for (size_t i = 0; i < series_.size(); ++i) {
+        if (&series_[i] == &series) {
+            seriesIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (interaction_.hoveredSeriesIndex == seriesIndex) {
         pen.setWidthF(theme_.hoverLineWidth);
         if (theme_.glowOnHover) {
             QColor hoverGlow = series.color;
@@ -526,8 +530,14 @@ void LineChart::drawStraightLine(QPainter* painter, const std::vector<QPointF>& 
     pen.setJoinStyle(Qt::RoundJoin);
     
     // Hover effect
-    if (interaction_.hoveredSeriesIndex == static_cast<int>(std::distance(
-            &series_[0], &series))) {
+    int seriesIndex = -1;
+    for (size_t i = 0; i < series_.size(); ++i) {
+        if (&series_[i] == &series) {
+            seriesIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (interaction_.hoveredSeriesIndex == seriesIndex) {
         pen.setWidthF(theme_.hoverLineWidth);
     }
     
@@ -634,14 +644,14 @@ void LineChart::drawLegendItem(QPainter* painter, const QRectF& rect, const Char
     
     // Draw series name
     painter->setPen(legend_.textColor.isValid() ? 
-                   legend_.textColor : themeColor(ThemeColor::Text));
+                   legend_.textColor : ThemeManager::instance().colors().textPrimary);
     QRectF textRect(iconRect.right() + legend_.spacing, rect.top(),
                    rect.width() - iconRect.width() - legend_.spacing, rect.height());
     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, series.name);
     
     // Draw visibility indicator if series is hidden
     if (!series.visible) {
-        painter->setPen(QPen(themeColor(ThemeColor::TextSecondary), 1, Qt::DashLine));
+        painter->setPen(QPen(ThemeManager::instance().colors().textSecondary, 1, Qt::DashLine));
         painter->drawLine(rect.topLeft(), rect.bottomRight());
     }
     
