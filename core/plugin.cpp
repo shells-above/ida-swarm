@@ -2,19 +2,22 @@
 // Created by user on 6/30/25.
 //
 
-#include "ui/main_form.h"
+#include "ui_v2/views/main_window.h"
+#include "ui_v2/core/agent_controller.h"
 #include "core/ida_utils.h"
 
 namespace llm_re {
 
 // Plugin module
 class llm_plugin_t : public plugmod_t, public event_listener_t {
-    MainForm* main_form = nullptr;
+    ui_v2::MainWindow* main_window = nullptr;
+    ui_v2::AgentController* agent_controller = nullptr;
     std::vector<qstring> registered_actions;
     std::map<qstring, qstring> action_menupaths;
     qstring idb_path_;
     bool shutting_down = false;
-    bool form_closed = false;
+    bool window_closed = false;
+    std::unique_ptr<Config> config_;
 
     // Action handler that checks if plugin is still valid
     struct llm_action_handler_t : public action_handler_t {
@@ -44,7 +47,7 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
     struct show_ui_ah_t : public llm_action_handler_t {
         using llm_action_handler_t::llm_action_handler_t;
         virtual int do_activate(action_activation_ctx_t* ctx) override {
-            plugin->show_main_form();
+            plugin->show_main_window();
             return 1;
         }
     };
@@ -73,11 +76,12 @@ public:
 
     void register_actions();
     void unregister_actions();
-    void cleanup_form();
+    void cleanup_window();
     void prepare_for_shutdown();
+    void load_config();
 
     // actions
-    void show_main_form();
+    void show_main_window();
     void comprehensive_reverse_engineering();
 };
 
@@ -124,6 +128,9 @@ llm_plugin_t::llm_plugin_t() {
 
     msg("LLM RE: Plugin initialized for IDB: %s\n", idb_path_.c_str());
 
+    // Load configuration
+    load_config();
+
     // Register this instance
     PluginInstanceManager::register_instance(idb_path_, this);
 
@@ -150,8 +157,8 @@ llm_plugin_t::~llm_plugin_t() {
     // Unhook events first
     unhook_event_listener(HT_UI, this);
 
-    // Clean up form
-    cleanup_form();
+    // Clean up window and controller
+    cleanup_window();
 
     // Unregister actions before deleting handlers
     unregister_actions();
@@ -175,8 +182,8 @@ llm_plugin_t::~llm_plugin_t() {
 void llm_plugin_t::prepare_for_shutdown() {
     shutting_down = true;
 
-    // Clean up form if it exists
-    cleanup_form();
+    // Clean up window if it exists
+    cleanup_window();
 }
 
 ssize_t idaapi llm_plugin_t::on_event(ssize_t code, va_list va) {
@@ -331,58 +338,85 @@ void llm_plugin_t::unregister_actions() {
     action_menupaths.clear();
 }
 
-void llm_plugin_t::cleanup_form() {
-    if (main_form && !form_closed) {
-        msg("LLM RE: Cleaning up form\n");
+void llm_plugin_t::cleanup_window() {
+    if (agent_controller) {
+        msg("LLM RE: Cleaning up agent controller\n");
+        agent_controller->shutdown();
+        delete agent_controller;
+        agent_controller = nullptr;
+    }
+
+    if (main_window && !window_closed) {
+        msg("LLM RE: Cleaning up main window\n");
 
         // Mark as closed to prevent double cleanup
-        form_closed = true;
+        window_closed = true;
 
         // Disconnect all signals first
-        main_form->disconnect();
+        main_window->disconnect();
 
-        // Close the form
-        main_form->close();
+        // Close the window
+        main_window->close();
 
-        // Delete the form
-        delete main_form;
-        main_form = nullptr;
+        // Delete the window
+        delete main_window;
+        main_window = nullptr;
     }
 }
 
 bool llm_plugin_t::run(size_t arg) {
     if (!shutting_down) {
-        show_main_form();
+        show_main_window();
     }
     return true;
 }
 
-    void llm_plugin_t::show_main_form() {
+void llm_plugin_t::show_main_window() {
     if (shutting_down) {
         return;
     }
 
-    if (!main_form || form_closed) {
-        // Create form with proper parent - use nullptr for independent window
-        main_form = new MainForm(nullptr);
-        form_closed = false;
+    if (!config_) {
+        msg("LLM RE: Cannot show window - configuration not loaded\n");
+        warning("LLM RE Plugin: Configuration file required.\n\n"
+                "Please create llm_re_config.json in your IDA user directory\n"
+                "with your Anthropic API key and other settings.\n\n"
+                "See llm_re_config.json.example for the required format.");
+        return;
+    }
 
-        Qt::WindowFlags flags = Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
-                                Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint;
+    if (!main_window || window_closed) {
+        // Create window with proper parent - use nullptr for independent window
+        main_window = new ui_v2::MainWindow(nullptr);
+        window_closed = false;
 
-        main_form->setWindowFlags(flags);
+        // Create and initialize agent controller
+        if (!agent_controller) {
+            agent_controller = new ui_v2::AgentController(main_window);
+            if (!agent_controller->initialize(*config_)) {
+                msg("LLM RE: Failed to initialize agent controller\n");
+                delete agent_controller;
+                agent_controller = nullptr;
+                return;
+            }
 
-        // Connect destroyed signal to mark form as closed
-        QObject::connect(main_form, &QObject::destroyed, [this]() {
-            form_closed = true;
-            main_form = nullptr;
+            // Connect controller to UI components
+            agent_controller->connectConversationView(main_window->conversationView());
+            agent_controller->connectMemoryDock(main_window->memoryDock());
+            agent_controller->connectToolDock(main_window->toolDock());
+            agent_controller->connectStatsDock(main_window->statsDock());
+        }
+
+        // Connect destroyed signal to mark window as closed
+        QObject::connect(main_window, &QObject::destroyed, [this]() {
+            window_closed = true;
+            main_window = nullptr;
         });
     }
 
-    if (main_form) {
-        main_form->show();
-        main_form->raise();
-        main_form->activateWindow();
+    if (main_window) {
+        main_window->showWindow();
+        main_window->bringToFront();
     }
 }
 
@@ -391,9 +425,9 @@ void llm_plugin_t::comprehensive_reverse_engineering() {
         return;
     }
 
-    show_main_form();
+    show_main_window();
 
-    if (!main_form) {
+    if (!main_window || !agent_controller) {
         return;
     }
 
@@ -421,7 +455,23 @@ Remember: Define structures immediately when you see patterns (with gaps if need
 
 This will take hundreds of iterations. Begin your first pass now.)";
 
-    main_form->execute_task(task);
+    agent_controller->executeTask(task);
+}
+
+void llm_plugin_t::load_config() {
+    config_ = std::make_unique<Config>();
+    
+    // Try to load from file
+    char config_path[QMAXPATH];
+    get_user_idadir(config_path, sizeof(config_path));
+    qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
+    
+    if (!config_->load_from_file(config_path)) {
+        msg("LLM RE: ERROR - Configuration file not found at: %s\n", config_path);
+        msg("LLM RE: Please create a configuration file with your API key and settings.\n");
+        msg("LLM RE: See llm_re_config.json.example for the required format.\n");
+        config_.reset();  // Clear config to indicate failure
+    }
 }
 
 // Plugin interface functions

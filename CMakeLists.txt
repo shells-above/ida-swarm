@@ -52,6 +52,7 @@ find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+find_library(QT_CHARTS_FRAMEWORK QtCharts PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
 
 # Create IMPORTED targets for Qt tools so AUTOMOC/AUTOUIC/AUTORCC can find them
 add_executable(Qt5::moc IMPORTED)
@@ -123,6 +124,7 @@ include_directories(
         "${QTDIR}/lib/QtSql.framework/Headers"
         "${QTDIR}/lib/QtXml.framework/Headers"
         "${QTDIR}/lib/QtOpenGL.framework/Headers"
+        "${QTDIR}/lib/QtCharts.framework/Headers"
 )
 
 # Find IDA libraries
@@ -152,9 +154,26 @@ set(SOURCES
         analysis/deep_analysis.cpp
         analysis/memory.cpp
         patching/patch_manager.cpp
-        ui/main_form.cpp
-        ui/qt_widgets.cpp
-        ui/stats_aggregator.cpp
+        # ui_v2 core
+        ui_v2/core/base_styled_widget.cpp
+        ui_v2/core/theme_manager.cpp
+        ui_v2/core/focus_manager.cpp
+        ui_v2/core/ui_utils.cpp
+        ui_v2/core/agent_controller.cpp
+        # ui_v2 models
+        ui_v2/models/conversation_model.cpp
+        # ui_v2 views
+        ui_v2/views/main_window.cpp
+        ui_v2/views/conversation_view.cpp
+        ui_v2/views/memory_dock.cpp
+        ui_v2/views/tool_execution_dock.cpp
+        ui_v2/views/statistics_dock.cpp
+        ui_v2/views/floating_inspector.cpp
+        # ui_v2 widgets
+        ui_v2/widgets/message_bubble.cpp
+        ui_v2/widgets/markdown_viewer.cpp
+        ui_v2/widgets/command_palette.cpp
+        ui_v2/widgets/tool_execution_visualizer.cpp
 )
 
 # Header files
@@ -170,9 +189,27 @@ set(HEADERS
         patching/patch_manager.h
         agent/agent.h
         agent/tool_system.h
-        ui/main_form.h
-        ui/qt_widgets.h
-        ui/stats_aggregator.h
+        # ui_v2 core
+        ui_v2/core/base_styled_widget.h
+        ui_v2/core/theme_manager.h
+        ui_v2/core/focus_manager.h
+        ui_v2/core/ui_constants.h
+        ui_v2/core/ui_utils.h
+        ui_v2/core/agent_controller.h
+        # ui_v2 models
+        ui_v2/models/conversation_model.h
+        # ui_v2 views
+        ui_v2/views/main_window.h
+        ui_v2/views/conversation_view.h
+        ui_v2/views/memory_dock.h
+        ui_v2/views/tool_execution_dock.h
+        ui_v2/views/statistics_dock.h
+        ui_v2/views/floating_inspector.h
+        # ui_v2 widgets
+        ui_v2/widgets/message_bubble.h
+        ui_v2/widgets/markdown_viewer.h
+        ui_v2/widgets/command_palette.h
+        ui_v2/widgets/tool_execution_visualizer.h
 )
 
 # Create shared library (end in "64", won't be loaded if it doesn't)
@@ -205,6 +242,7 @@ target_link_libraries(ida_llm_agent64
         ${QT_SQL_FRAMEWORK}
         ${QT_XML_FRAMEWORK}
         ${QT_OPENGL_FRAMEWORK}
+        ${QT_CHARTS_FRAMEWORK}
 )
 
 # Post-build: Copy plugin to IDA plugins directory
