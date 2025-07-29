@@ -1006,6 +1006,11 @@ void ConversationView::submitInput() {
     
     // Emit signal for processing
     emit messageSubmitted(text);
+    
+    // Debug to confirm signal emission
+    if (auto* mainWindow = qobject_cast<MainWindow*>(window())) {
+        mainWindow->showStatusMessage(QString("DEBUG: ConversationView emitted messageSubmitted: %1").arg(text), 5000);
+    }
 }
 
 void ConversationView::cancelInput() {

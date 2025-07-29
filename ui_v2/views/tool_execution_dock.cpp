@@ -883,6 +883,11 @@ void ToolExecutionDock::setupUI() {
     // Create views
     createViews();
     
+    // Connect tab change signal to update detail panel visibility
+    connect(viewTabs_, &QTabWidget::currentChanged, [this](int index) {
+        detailPanel_->setVisible(index < 2); // Only show for list/table views
+    });
+    
     // Create detail panel
     createDetailPanel();
     
@@ -900,16 +905,6 @@ void ToolExecutionDock::setupUI() {
 void ToolExecutionDock::createToolBar() {
     toolBar_ = new QToolBar(this);
     toolBar_->setIconSize(QSize(16, 16));
-    
-    // View mode
-    auto* viewLabel = new QLabel(tr("View:"), this);
-    toolBar_->addWidget(viewLabel);
-    
-    viewModeCombo_ = new QComboBox(this);
-    viewModeCombo_->addItems({tr("List"), tr("Table"), tr("Timeline"), tr("Performance")});
-    toolBar_->addWidget(viewModeCombo_);
-    
-    toolBar_->addSeparator();
     
     // Filters
     auto* toolLabel = new QLabel(tr("Tool:"), this);
@@ -1103,10 +1098,6 @@ void ToolExecutionDock::createContextMenu() {
 }
 
 void ToolExecutionDock::connectSignals() {
-    // View mode
-    connect(viewModeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ToolExecutionDock::onViewModeChanged);
-    
     // Filters
     connect(toolFilterCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ToolExecutionDock::onFilterChanged);
@@ -1373,12 +1364,13 @@ void ToolExecutionDock::showExecution(const QUuid& id) {
         cancelButton_->setEnabled(exec.state == ToolExecutionState::Running);
         
         // Show in current view
-        if (viewModeCombo_->currentIndex() < 2) {
+        int currentTabIndex = viewTabs_->currentIndex();
+        if (currentTabIndex < 2) {
             // Tree or table view
             QModelIndex index = model_->indexForId(id);
             if (index.isValid()) {
                 QModelIndex proxyIndex = proxyModel_->mapFromSource(index);
-                if (viewModeCombo_->currentIndex() == 0) {
+                if (currentTabIndex == 0) {
                     treeView_->scrollTo(proxyIndex);
                     treeView_->setCurrentIndex(proxyIndex);
                 } else {
@@ -1386,7 +1378,7 @@ void ToolExecutionDock::showExecution(const QUuid& id) {
                     tableView_->setCurrentIndex(proxyIndex);
                 }
             }
-        } else if (viewModeCombo_->currentIndex() == 2) {
+        } else if (currentTabIndex == 2) {
             // Timeline view
             timelineWidget_->highlightExecution(id);
         }
@@ -1399,7 +1391,7 @@ void ToolExecutionDock::setViewMode(const QString& mode) {
     else if (mode == "timeline") index = 2;
     else if (mode == "performance") index = 3;
     
-    viewModeCombo_->setCurrentIndex(index);
+    viewTabs_->setCurrentIndex(index);
 }
 
 void ToolExecutionDock::setTimeRange(const QDateTime& start, const QDateTime& end) {
@@ -1517,7 +1509,9 @@ QJsonObject ToolExecutionDock::exportState() const {
     state["executions"] = executionsArray;
     
     // Export view state
-    state["viewMode"] = viewModeCombo_->currentText().toLower();
+    const QStringList viewModes = {"list", "table", "timeline", "performance"};
+    int currentTab = viewTabs_->currentIndex();
+    state["viewMode"] = (currentTab >= 0 && currentTab < viewModes.size()) ? viewModes[currentTab] : "list";
     state["autoScroll"] = autoScroll_;
     
     // Export filters
@@ -1744,10 +1738,9 @@ void ToolExecutionDock::onThemeChanged() {
 }
 
 void ToolExecutionDock::onViewModeChanged(int index) {
-    viewTabs_->setCurrentIndex(index);
-    
-    // Update detail panel visibility
-    detailPanel_->setVisible(index < 2); // Only for list/table views
+    // This function is no longer used since we removed the view mode combo
+    // Users can click the tabs directly
+    Q_UNUSED(index);
 }
 
 void ToolExecutionDock::onExecutionClicked(const QModelIndex& index) {
@@ -1767,9 +1760,10 @@ void ToolExecutionDock::onExecutionDoubleClicked(const QModelIndex& index) {
 void ToolExecutionDock::onSelectionChanged() {
     // Update context menu state
     QItemSelectionModel* selModel = nullptr;
-    if (viewModeCombo_->currentIndex() == 0) {
+    int currentTabIndex = viewTabs_->currentIndex();
+    if (currentTabIndex == 0) {
         selModel = treeView_->selectionModel();
-    } else if (viewModeCombo_->currentIndex() == 1) {
+    } else if (currentTabIndex == 1) {
         selModel = tableView_->selectionModel();
     }
     
@@ -1891,7 +1885,10 @@ void ToolExecutionDock::saveSettings() {
     QSettings settings;
     settings.beginGroup("ToolExecutionDock");
     
-    settings.setValue("viewMode", viewModeCombo_->currentText().toLower());
+    const QStringList viewModes = {"list", "table", "timeline", "performance"};
+    int currentTab = viewTabs_->currentIndex();
+    QString viewMode = (currentTab >= 0 && currentTab < viewModes.size()) ? viewModes[currentTab] : "list";
+    settings.setValue("viewMode", viewMode);
     settings.setValue("autoScroll", autoScroll_);
     settings.setValue("splitterState", mainSplitter_->saveState());
     

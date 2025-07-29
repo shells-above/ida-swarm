@@ -422,6 +422,14 @@ void llm_plugin_t::show_main_window() {
             if (main_window->controller()) {
                 main_window->controller()->setAgentController(agent_controller);
             }
+            
+            // Connect agent controller error messages to status bar
+            QObject::connect(agent_controller, &ui_v2::AgentController::errorOccurred,
+                           [this](const QString& message) {
+                               if (main_window) {
+                                   main_window->showStatusMessage(message, 5000); // 5 second timeout for debug messages
+                               }
+                           });
         }
 
         // Connect destroyed signal to mark window as closed

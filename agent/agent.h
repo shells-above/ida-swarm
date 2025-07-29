@@ -253,6 +253,10 @@ private:
     std::queue<AgentTask> task_queue_;
     mutable qmutex_t queue_mutex_;
     qsemaphore_t task_semaphore_ = nullptr;  // tells us when a task is available
+    
+    // User message injection
+    std::queue<std::string> pending_user_messages_;
+    mutable qmutex_t pending_messages_mutex_;
 
     // Saved state for resume
     struct SavedState {
@@ -406,6 +410,7 @@ public:
 
         queue_mutex_ = qmutex_create();
         task_semaphore_ = qsem_create(nullptr, 0);
+        pending_messages_mutex_ = qmutex_create();
 
         // Register all tools
         // Initialize patch manager
@@ -432,6 +437,9 @@ public:
         }
         if (queue_mutex_) {
             qmutex_free(queue_mutex_);
+        }
+        if (pending_messages_mutex_) {
+            qmutex_free(pending_messages_mutex_);
         }
     }
 
@@ -523,6 +531,12 @@ public:
 
     std::string get_last_error() const { return last_error_; }
     void clear_last_error() { last_error_.clear(); }
+    
+    // User message injection (thread-safe)
+    void inject_user_message(const std::string& message) {
+        qmutex_locker_t lock(pending_messages_mutex_);
+        pending_user_messages_.push(message);
+    }
 
     // Single callback setter
     void set_message_callback(std::function<void(AgentMessageType, const json&)> callback) {
@@ -664,6 +678,7 @@ private:
 
     // Worker thread main loop
     void worker_loop() {
+        send_log(LogLevel::INFO, "Agent worker thread started");
         while (!stop_requested_) {
             AgentTask task;
             // Get next task
@@ -710,6 +725,8 @@ private:
 
     // Process new task
     void process_new_task(const std::string& task) {
+        send_log(LogLevel::INFO, "Starting new task: " + task);
+        
         // Clear conversation for new task
         conversation_.clear();
         api_client_.set_iteration(0);
@@ -720,7 +737,7 @@ private:
                .with_system_prompt(SYSTEM_PROMPT)
                .with_max_tokens(config_.api.max_tokens)
                .with_max_thinking_tokens(config_.api.max_thinking_tokens)
-               .with_temperature(config_.api.temperature)
+               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.api.temperature)
                .enable_thinking(config_.agent.enable_thinking)
                .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
 
@@ -914,7 +931,7 @@ private:
                .with_system_prompt(SYSTEM_PROMPT)
                .with_max_tokens(config_.api.max_tokens)
                .with_max_thinking_tokens(config_.api.max_thinking_tokens)
-               .with_temperature(config_.api.temperature)
+               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.api.temperature)
                .enable_thinking(config_.agent.enable_thinking)
                .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
 
@@ -1120,6 +1137,42 @@ private:
 
                 saved_state_.request.messages.push_back(combined_results);
                 conversation_.add_message(combined_results);
+            }
+            
+            // Check for pending user messages to inject
+            {
+                qmutex_locker_t lock(pending_messages_mutex_);
+                if (!pending_user_messages_.empty()) {
+                    // Process all pending messages
+                    while (!pending_user_messages_.empty()) {
+                        std::string user_msg = pending_user_messages_.front();
+                        pending_user_messages_.pop();
+                        
+                        send_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
+                        
+                        // If we just added tool results, append the user message to them
+                        if (!tool_results.empty() && !saved_state_.request.messages.empty()) {
+                            // Get the last message (should be the combined tool results)
+                            messages::Message& last_msg = saved_state_.request.messages.back();
+                            if (last_msg.role() == messages::Role::User) {
+                                // Add user text to the existing user message with tool results
+                                last_msg.add_content(std::make_unique<messages::TextContent>(user_msg));
+                                
+                                // Note: The conversation will be updated with the complete message on the next API call
+                            } else {
+                                // Create new user message if last wasn't user role
+                                messages::Message user_guidance = messages::Message::user_text(user_msg);
+                                saved_state_.request.messages.push_back(user_guidance);
+                                conversation_.add_message(user_guidance);
+                            }
+                        } else {
+                            // No recent tool results, create standalone user message
+                            messages::Message user_guidance = messages::Message::user_text(user_msg);
+                            saved_state_.request.messages.push_back(user_guidance);
+                            conversation_.add_message(user_guidance);
+                        }
+                    }
+                }
             }
 
             // Check if task is complete

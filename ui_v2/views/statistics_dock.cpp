@@ -76,7 +76,6 @@ void StatisticsDock::clearData() {
     if (tokenUsageChart_) tokenUsageChart_->clearData();
     if (toolUsageChart_) toolUsageChart_->clearSeries();
     if (performanceChart_) performanceChart_->clearSeries();
-    if (memoryAnalysisChart_) memoryAnalysisChart_->clearData();
     
     // Clear sparklines
     if (cpuSparkline_) cpuSparkline_->clearData();
@@ -568,15 +567,6 @@ void StatisticsDock::createViews() {
     
     viewTabs_->addTab(perfTab, "Performance");
     
-    // Memory Analysis tab
-    auto* memoryTab = new QWidget();
-    auto* memoryLayout = new QVBoxLayout(memoryTab);
-    
-    createMemoryAnalysisChart();
-    memoryLayout->addWidget(memoryAnalysisChart_);
-    
-    viewTabs_->addTab(memoryTab, "Memory Analysis");
-    
     // Real-time tab
     auto* realtimeTab = new QWidget();
     auto* realtimeLayout = new QVBoxLayout(realtimeTab);
@@ -708,7 +698,6 @@ void StatisticsDock::calculateStatistics() {
     processTokenUsage();
     processToolUsage();
     processPerformance();
-    processMemoryAnalysis();
     
     // Add summary stats
     cachedStats_["totalDataPoints"] = dataPoints_.size();
@@ -734,10 +723,6 @@ void StatisticsDock::updateAllCharts() {
     
     if (performanceChart_) {
         performanceChart_->updateData();
-    }
-    
-    if (memoryAnalysisChart_) {
-        memoryAnalysisChart_->updateData();
     }
 }
 
@@ -798,17 +783,6 @@ void StatisticsDock::createPerformanceChart() {
     performanceChart_->addSeries(throughput);
 }
 
-void StatisticsDock::createMemoryAnalysisChart() {
-    memoryAnalysisChart_ = new charts::HeatmapWidget(this);
-    memoryAnalysisChart_->setTitle("Memory Access Patterns");
-    memoryAnalysisChart_->setColorScale(charts::HeatmapTheme::ColorScale::Turbo);
-    memoryAnalysisChart_->setShowValues(false);
-    memoryAnalysisChart_->setMemoryMode(true);
-    
-    // Set initial data
-    std::vector<std::vector<double>> dummyData(16, std::vector<double>(32, 0.0));
-    memoryAnalysisChart_->setData(dummyData);
-}
 
 void StatisticsDock::processMessageStats() {
     // Count messages by type over time
@@ -981,46 +955,6 @@ void StatisticsDock::processPerformance() {
     };
 }
 
-void StatisticsDock::processMemoryAnalysis() {
-    // Create memory access heatmap data
-    const int rows = 16;
-    const int cols = 32;
-    std::vector<std::vector<double>> heatmapData(rows, std::vector<double>(cols, 0.0));
-    
-    // Process memory access patterns from data points
-    for (const auto& point : dataPoints_) {
-        if (point.category == "memory" && point.metadata.contains("address")) {
-            quint64 address = point.metadata["address"].toString().toULongLong(nullptr, 16);
-            int row = (address / 32) % rows;
-            int col = address % cols;
-            
-            if (row < rows && col < cols) {
-                heatmapData[row][col] += point.value;
-            }
-        }
-    }
-    
-    // Normalize data
-    double maxValue = 0;
-    for (const auto& row : heatmapData) {
-        for (double val : row) {
-            maxValue = std::max(maxValue, val);
-        }
-    }
-    
-    if (maxValue > 0) {
-        for (auto& row : heatmapData) {
-            for (double& val : row) {
-                val /= maxValue;
-            }
-        }
-    }
-    
-    // Update chart
-    if (memoryAnalysisChart_) {
-        memoryAnalysisChart_->setData(heatmapData);
-    }
-}
 
 // Theme helper methods
 QList<QColor> StatisticsDock::getChartSeriesColors() const {

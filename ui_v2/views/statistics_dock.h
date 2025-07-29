@@ -5,7 +5,6 @@
 #include "../widgets/charts/line_chart.h"
 #include "../widgets/charts/circular_chart.h"
 #include "../widgets/charts/bar_chart.h"
-#include "../widgets/charts/heatmap_widget.h"
 #include "../widgets/charts/sparkline_widget.h"
 
 namespace llm_re::ui_v2 {
@@ -94,14 +93,12 @@ private:
     void createTokenUsageChart();
     void createToolUsageChart();
     void createPerformanceChart();
-    void createMemoryAnalysisChart();
     
     // Data processing
     void processMessageStats();
     void processTokenUsage();
     void processToolUsage();
     void processPerformance();
-    void processMemoryAnalysis();
     
     // Theme helpers
     QList<QColor> getChartSeriesColors() const;
@@ -130,7 +127,6 @@ private:
     charts::CircularChart* tokenUsageChart_ = nullptr;
     charts::BarChart* toolUsageChart_ = nullptr;
     charts::LineChart* performanceChart_ = nullptr;
-    charts::HeatmapWidget* memoryAnalysisChart_ = nullptr;
     
     // Sparklines for quick stats
     charts::SparklineWidget* cpuSparkline_ = nullptr;

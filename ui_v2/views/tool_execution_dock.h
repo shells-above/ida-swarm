@@ -246,7 +246,6 @@ private:
     
     // Toolbar
     QToolBar* toolBar_ = nullptr;
-    QComboBox* viewModeCombo_ = nullptr;
     QComboBox* toolFilterCombo_ = nullptr;
     QComboBox* statusFilterCombo_ = nullptr;
     QAction* clearHistoryAction_ = nullptr;

@@ -43,6 +43,7 @@ public:
     void stopExecution();
     void resumeExecution();
     void continueWithTask(const std::string& additional);
+    void injectUserMessage(const std::string& message);
     
     // State queries
     bool isRunning() const;

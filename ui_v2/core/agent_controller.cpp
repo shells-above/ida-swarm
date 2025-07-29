@@ -27,6 +27,13 @@ bool AgentController::initialize(const Config& config) {
     
     try {
         config_ = std::make_unique<Config>(config);
+        
+        // Check if API key is configured
+        if (config_->api.api_key.empty()) {
+            emit errorOccurred("ERROR: No API key configured! Please set your Anthropic API key in the configuration.");
+            return false;
+        }
+        
         agent_ = std::make_unique<REAgent>(*config_);
         
         // Set up the unified message callback
@@ -44,6 +51,7 @@ bool AgentController::initialize(const Config& config) {
         agent_->start();
         
         isInitialized_ = true;
+        emit errorOccurred("DEBUG: Agent initialized and started successfully");
         return true;
         
     } catch (const std::exception& e) {
@@ -62,6 +70,8 @@ void AgentController::shutdown() {
 }
 
 void AgentController::executeTask(const std::string& task) {
+    emit errorOccurred(QString("DEBUG: executeTask called with: %1").arg(QString::fromStdString(task)));
+    
     if (!agent_) {
         emit errorOccurred("Agent not initialized");
         return;
@@ -135,6 +145,21 @@ std::string AgentController::getLastError() const {
     return agent_ ? agent_->get_last_error() : "";
 }
 
+void AgentController::injectUserMessage(const std::string& message) {
+    if (!agent_ || !isRunning()) {
+        emit errorOccurred("Cannot inject message - agent not running");
+        return;
+    }
+    
+    // Add to UI immediately
+    auto userMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::User);
+    userMsg->metadata().timestamp = QDateTime::currentDateTime();
+    addMessageToConversation(std::move(userMsg));
+    
+    // Inject into agent's pending queue
+    agent_->inject_user_message(message);
+}
+
 void AgentController::connectConversationView(ConversationView* view) {
     conversationView_ = view;
     if (view) {
@@ -183,6 +208,8 @@ json AgentController::getAgentState() const {
 }
 
 void AgentController::onAgentMessage(int messageType, const QString& dataStr) {
+    emit errorOccurred(QString("DEBUG: Received agent message type: %1").arg(messageType));
+    
     try {
         json data = json::parse(dataStr.toStdString());
         
@@ -215,7 +242,7 @@ void AgentController::handleLogMessage(const json& data) {
     LogLevel level = static_cast<LogLevel>(data["level"].get<int>());
     std::string message = data["message"];
     
-    // Create log message for conversation
+    // Create log message for conversation - make INFO logs visible for debugging
     auto logMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::System);
     logMsg->metadata().timestamp = QDateTime::currentDateTime();
     
