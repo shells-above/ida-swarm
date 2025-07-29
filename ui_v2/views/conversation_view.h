@@ -171,6 +171,7 @@ private:
     // State
     QString sessionId_;
     QString sessionPath_;
+    QDateTime sessionCreatedTime_;
     bool hasUnsavedChanges_ = false;
     bool autoSaveEnabled_ = true;
     QTimer* autoSaveTimer_ = nullptr;
@@ -260,6 +261,16 @@ public:
     void focusSearch();
     
     void showMessage(const QString& message, int timeout = 3000);
+    
+    // Search options getters
+    bool isCaseSensitive() const { return caseSensitive_; }
+    bool isWholeWords() const { return wholeWord_; }
+    bool isRegex() const { return useRegex_; }
+    
+    // Search options setters
+    void setCaseSensitive(bool enabled);
+    void setWholeWords(bool enabled);
+    void setRegex(bool enabled);
     
 signals:
     void searchTextChanged(const QString& text);

@@ -1493,6 +1493,197 @@ void ToolExecutionDock::executeFavorite(const QString& name) {
     }
 }
 
+QJsonObject ToolExecutionDock::exportState() const {
+    QJsonObject state;
+    
+    // Export all executions
+    QJsonArray executionsArray;
+    for (const auto& exec : executions_) {
+        QJsonObject execObj;
+        execObj["id"] = exec.id.toString();
+        execObj["toolName"] = exec.toolName;
+        execObj["parameters"] = exec.parameters;
+        execObj["state"] = static_cast<int>(exec.state);
+        execObj["progress"] = exec.progress;
+        execObj["output"] = exec.output;
+        execObj["error"] = exec.errorMessage;
+        execObj["startTime"] = exec.startTime.toString(Qt::ISODate);
+        if (exec.endTime.isValid()) {
+            execObj["endTime"] = exec.endTime.toString(Qt::ISODate);
+        }
+        execObj["duration"] = exec.duration;
+        executionsArray.append(execObj);
+    }
+    state["executions"] = executionsArray;
+    
+    // Export view state
+    state["viewMode"] = viewModeCombo_->currentText().toLower();
+    state["autoScroll"] = autoScroll_;
+    
+    // Export filters
+    QJsonObject filters;
+    QJsonArray toolFilters;
+    for (const QString& tool : toolFilter_) {
+        toolFilters.append(tool);
+    }
+    filters["tools"] = toolFilters;
+    
+    QJsonArray statusFilters;
+    for (const ToolExecutionState& status : statusFilter_) {
+        statusFilters.append(static_cast<int>(status));
+    }
+    filters["statuses"] = statusFilters;
+    
+    if (timeRangeStart_.isValid()) {
+        filters["startTime"] = timeRangeStart_.toString(Qt::ISODate);
+    }
+    if (timeRangeEnd_.isValid()) {
+        filters["endTime"] = timeRangeEnd_.toString(Qt::ISODate);
+    }
+    state["filters"] = filters;
+    
+    // Export favorites
+    QJsonArray favoritesArray;
+    for (const auto& fav : favorites_) {
+        QJsonObject favObj;
+        favObj["name"] = fav.name;
+        favObj["toolName"] = fav.toolName;
+        favObj["parameters"] = fav.parameters;
+        favoritesArray.append(favObj);
+    }
+    state["favorites"] = favoritesArray;
+    
+    // Export tool registry
+    QJsonObject toolsObj;
+    for (auto it = tools_.begin(); it != tools_.end(); ++it) {
+        QJsonObject toolObj;
+        toolObj["description"] = it.value().description;
+        toolObj["enabled"] = it.value().enabled;
+        toolsObj[it.key()] = toolObj;
+    }
+    state["tools"] = toolsObj;
+    
+    // Export statistics
+    state["completedCount"] = completedCount_;
+    state["failedCount"] = failedCount_;
+    
+    return state;
+}
+
+void ToolExecutionDock::importState(const QJsonObject& state) {
+    // Clear existing executions
+    clearHistory();
+    
+    // Import executions
+    if (state.contains("executions")) {
+        QJsonArray executionsArray = state["executions"].toArray();
+        for (const QJsonValue& val : executionsArray) {
+            QJsonObject execObj = val.toObject();
+            
+            ToolExecution exec;
+            exec.id = QUuid(execObj["id"].toString());
+            exec.toolName = execObj["toolName"].toString();
+            exec.parameters = execObj["parameters"].toObject();
+            exec.state = static_cast<ToolExecutionState>(execObj["state"].toInt());
+            exec.progress = execObj["progress"].toInt();
+            exec.output = execObj["output"].toString();
+            exec.errorMessage = execObj["error"].toString();
+            exec.startTime = QDateTime::fromString(execObj["startTime"].toString(), Qt::ISODate);
+            if (execObj.contains("endTime")) {
+                exec.endTime = QDateTime::fromString(execObj["endTime"].toString(), Qt::ISODate);
+            }
+            exec.duration = execObj["duration"].toInt();
+            
+            executions_.append(exec);
+            executionMap_[exec.id] = &executions_.last();
+            model_->addExecution(exec);
+        }
+    }
+    
+    // Import view state
+    if (state.contains("viewMode")) {
+        setViewMode(state["viewMode"].toString());
+    }
+    
+    if (state.contains("autoScroll")) {
+        autoScroll_ = state["autoScroll"].toBool();
+    }
+    
+    // Import filters
+    if (state.contains("filters")) {
+        QJsonObject filters = state["filters"].toObject();
+        
+        if (filters.contains("tools")) {
+            QJsonArray toolFilters = filters["tools"].toArray();
+            QStringList tools;
+            for (const QJsonValue& tool : toolFilters) {
+                tools.append(tool.toString());
+            }
+            setToolFilter(tools);
+        }
+        
+        if (filters.contains("statuses")) {
+            QJsonArray statusFilters = filters["statuses"].toArray();
+            QList<ToolExecutionState> statuses;
+            for (const QJsonValue& status : statusFilters) {
+                statuses.append(static_cast<ToolExecutionState>(status.toInt()));
+            }
+            setStatusFilter(statuses);
+        }
+        
+        QDateTime startTime, endTime;
+        if (filters.contains("startTime")) {
+            startTime = QDateTime::fromString(filters["startTime"].toString(), Qt::ISODate);
+        }
+        if (filters.contains("endTime")) {
+            endTime = QDateTime::fromString(filters["endTime"].toString(), Qt::ISODate);
+        }
+        if (startTime.isValid() || endTime.isValid()) {
+            setTimeRange(startTime, endTime);
+        }
+    }
+    
+    // Import favorites
+    if (state.contains("favorites")) {
+        favorites_.clear();
+        QJsonArray favoritesArray = state["favorites"].toArray();
+        for (const QJsonValue& val : favoritesArray) {
+            QJsonObject favObj = val.toObject();
+            FavoriteExecution fav;
+            fav.name = favObj["name"].toString();
+            fav.toolName = favObj["toolName"].toString();
+            fav.parameters = favObj["parameters"].toObject();
+            favorites_.append(fav);
+        }
+    }
+    
+    // Import tool registry
+    if (state.contains("tools")) {
+        QJsonObject toolsObj = state["tools"].toObject();
+        for (auto it = toolsObj.begin(); it != toolsObj.end(); ++it) {
+            QJsonObject toolObj = it.value().toObject();
+            if (tools_.contains(it.key())) {
+                tools_[it.key()].enabled = toolObj["enabled"].toBool();
+            } else {
+                ToolInfo info;
+                info.description = toolObj["description"].toString();
+                info.enabled = toolObj["enabled"].toBool();
+                tools_[it.key()] = info;
+            }
+        }
+    }
+    
+    // Import statistics
+    if (state.contains("completedCount")) {
+        completedCount_ = state["completedCount"].toInt();
+    }
+    if (state.contains("failedCount")) {
+        failedCount_ = state["failedCount"].toInt();
+    }
+    
+    updateMetrics();
+}
+
 void ToolExecutionDock::retryExecution(const QUuid& id) {
     if (executionMap_.contains(id)) {
         ToolExecution& exec = *executionMap_[id];

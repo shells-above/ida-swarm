@@ -289,14 +289,14 @@ void MainWindow::setupUI() {
     // Register command providers
     registerCommandProviders();
     
-    // Setup shortcuts
-    setupShortcuts();
-    
     // Setup managers
     layoutManager_ = new LayoutManager(this);
     shortcutManager_ = new ShortcutManager(this);
     notificationManager_ = new NotificationManager(this);
     floatingInspector_ = new FloatingInspector(this);
+    
+    // Setup shortcuts
+    setupShortcuts();
     
     // Update initial state
     updateActions();

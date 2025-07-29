@@ -149,6 +149,181 @@ void StatisticsDock::setRealtimeEnabled(bool enabled) {
     }
 }
 
+QJsonObject StatisticsDock::exportState() const {
+    QJsonObject state;
+    
+    // Export current stats
+    state["totalMessages"] = totalMessages_;
+    state["userMessages"] = userMessages_;
+    state["assistantMessages"] = assistantMessages_;
+    state["toolExecutions"] = toolExecutions_;
+    state["successfulTools"] = successfulTools_;
+    state["failedTools"] = failedTools_;
+    state["totalTokens"] = totalTokens_;
+    state["totalCost"] = totalCost_;
+    
+    // Export series data
+    QJsonArray messagesOverTimeArray;
+    for (const QPointF& point : messagesOverTime_) {
+        QJsonObject pointObj;
+        pointObj["x"] = point.x();
+        pointObj["y"] = point.y();
+        messagesOverTimeArray.append(pointObj);
+    }
+    state["messagesOverTime"] = messagesOverTimeArray;
+    
+    QJsonArray tokensOverTimeArray;
+    for (const QPointF& point : tokensOverTime_) {
+        QJsonObject pointObj;
+        pointObj["x"] = point.x();
+        pointObj["y"] = point.y();
+        tokensOverTimeArray.append(pointObj);
+    }
+    state["tokensOverTime"] = tokensOverTimeArray;
+    
+    QJsonArray costOverTimeArray;
+    for (const QPointF& point : costOverTime_) {
+        QJsonObject pointObj;
+        pointObj["x"] = point.x();
+        pointObj["y"] = point.y();
+        costOverTimeArray.append(pointObj);
+    }
+    state["costOverTime"] = costOverTimeArray;
+    
+    // Export tool stats
+    QJsonObject toolStatsObj;
+    for (auto it = toolStats_.begin(); it != toolStats_.end(); ++it) {
+        QJsonObject toolObj;
+        toolObj["count"] = it.value().count;
+        toolObj["successCount"] = it.value().successCount;
+        toolObj["failureCount"] = it.value().failureCount;
+        toolObj["totalDuration"] = it.value().totalDuration;
+        toolStatsObj[it.key()] = toolObj;
+    }
+    state["toolStats"] = toolStatsObj;
+    
+    // Export custom metrics
+    QJsonObject customMetricsObj;
+    for (auto it = customMetrics_.begin(); it != customMetrics_.end(); ++it) {
+        customMetricsObj[it.key()] = it.value();
+    }
+    state["customMetrics"] = customMetricsObj;
+    
+    // Export view state
+    state["currentViewTab"] = viewTabs_->currentIndex();
+    state["realtimeEnabled"] = realtimeEnabled_;
+    
+    // Export time range
+    if (timeRangeStart_.isValid()) {
+        state["timeRangeStart"] = timeRangeStart_.toString(Qt::ISODate);
+    }
+    if (timeRangeEnd_.isValid()) {
+        state["timeRangeEnd"] = timeRangeEnd_.toString(Qt::ISODate);
+    }
+    
+    return state;
+}
+
+void StatisticsDock::importState(const QJsonObject& state) {
+    // Import stats
+    if (state.contains("totalMessages")) {
+        totalMessages_ = state["totalMessages"].toInt();
+    }
+    if (state.contains("userMessages")) {
+        userMessages_ = state["userMessages"].toInt();
+    }
+    if (state.contains("assistantMessages")) {
+        assistantMessages_ = state["assistantMessages"].toInt();
+    }
+    if (state.contains("toolExecutions")) {
+        toolExecutions_ = state["toolExecutions"].toInt();
+    }
+    if (state.contains("successfulTools")) {
+        successfulTools_ = state["successfulTools"].toInt();
+    }
+    if (state.contains("failedTools")) {
+        failedTools_ = state["failedTools"].toInt();
+    }
+    if (state.contains("totalTokens")) {
+        totalTokens_ = state["totalTokens"].toInt();
+    }
+    if (state.contains("totalCost")) {
+        totalCost_ = state["totalCost"].toDouble();
+    }
+    
+    // Import series data
+    if (state.contains("messagesOverTime")) {
+        messagesOverTime_.clear();
+        QJsonArray messagesArray = state["messagesOverTime"].toArray();
+        for (const QJsonValue& val : messagesArray) {
+            QJsonObject pointObj = val.toObject();
+            messagesOverTime_.append(QPointF(pointObj["x"].toDouble(), pointObj["y"].toDouble()));
+        }
+    }
+    
+    if (state.contains("tokensOverTime")) {
+        tokensOverTime_.clear();
+        QJsonArray tokensArray = state["tokensOverTime"].toArray();
+        for (const QJsonValue& val : tokensArray) {
+            QJsonObject pointObj = val.toObject();
+            tokensOverTime_.append(QPointF(pointObj["x"].toDouble(), pointObj["y"].toDouble()));
+        }
+    }
+    
+    if (state.contains("costOverTime")) {
+        costOverTime_.clear();
+        QJsonArray costArray = state["costOverTime"].toArray();
+        for (const QJsonValue& val : costArray) {
+            QJsonObject pointObj = val.toObject();
+            costOverTime_.append(QPointF(pointObj["x"].toDouble(), pointObj["y"].toDouble()));
+        }
+    }
+    
+    // Import tool stats
+    if (state.contains("toolStats")) {
+        toolStats_.clear();
+        QJsonObject toolStatsObj = state["toolStats"].toObject();
+        for (auto it = toolStatsObj.begin(); it != toolStatsObj.end(); ++it) {
+            QJsonObject toolObj = it.value().toObject();
+            ToolStats stats;
+            stats.count = toolObj["count"].toInt();
+            stats.successCount = toolObj["successCount"].toInt();
+            stats.failureCount = toolObj["failureCount"].toInt();
+            stats.totalDuration = toolObj["totalDuration"].toInt();
+            toolStats_[it.key()] = stats;
+        }
+    }
+    
+    // Import custom metrics
+    if (state.contains("customMetrics")) {
+        customMetrics_.clear();
+        QJsonObject customMetricsObj = state["customMetrics"].toObject();
+        for (auto it = customMetricsObj.begin(); it != customMetricsObj.end(); ++it) {
+            customMetrics_[it.key()] = it.value().toDouble();
+        }
+    }
+    
+    // Import view state
+    if (state.contains("currentViewTab")) {
+        viewTabs_->setCurrentIndex(state["currentViewTab"].toInt());
+    }
+    
+    if (state.contains("realtimeEnabled")) {
+        setRealtimeEnabled(state["realtimeEnabled"].toBool());
+    }
+    
+    // Import time range
+    if (state.contains("timeRangeStart")) {
+        timeRangeStart_ = QDateTime::fromString(state["timeRangeStart"].toString(), Qt::ISODate);
+    }
+    if (state.contains("timeRangeEnd")) {
+        timeRangeEnd_ = QDateTime::fromString(state["timeRangeEnd"].toString(), Qt::ISODate);
+    }
+    
+    // Update displays
+    updateStatistics();
+}
+
 void StatisticsDock::updateStatistics() {
     calculateStatistics();
     updateAllCharts();
@@ -263,9 +438,9 @@ void StatisticsDock::setupUI() {
     auto* contentWidget = new QWidget(this);
     mainLayout->addWidget(contentWidget);
     
-    auto* contentLayout = new QVBoxLayout(contentWidget);
-    contentLayout->setContentsMargins(8, 8, 8, 8);
-    contentLayout->setSpacing(8);
+    contentLayout_ = new QVBoxLayout(contentWidget);
+    contentLayout_->setContentsMargins(8, 8, 8, 8);
+    contentLayout_->setSpacing(8);
 }
 
 void StatisticsDock::createToolBar() {
@@ -332,8 +507,8 @@ void StatisticsDock::createToolBar() {
     tokenRateSparkline_->setMaximumSize(100, 20);
     toolBar_->addWidget(tokenRateSparkline_);
     
-    // Add toolbar to main layout
-    qobject_cast<QVBoxLayout*>(layout())->insertWidget(0, toolBar_);
+    // Add toolbar to content layout
+    contentLayout_->insertWidget(0, toolBar_);
 }
 
 void StatisticsDock::createViews() {
@@ -427,8 +602,8 @@ void StatisticsDock::createViews() {
     
     viewTabs_->addTab(comparisonTab, "Comparison");
     
-    // Add tabs to main layout
-    qobject_cast<QVBoxLayout*>(layout()->itemAt(0)->widget()->layout())->addWidget(viewTabs_);
+    // Add tabs to content layout
+    contentLayout_->addWidget(viewTabs_);
 }
 
 void StatisticsDock::connectSignals() {

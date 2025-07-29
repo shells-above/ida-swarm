@@ -803,6 +803,29 @@ void ConversationModel::importFromJson(const QJsonDocument& doc, bool append) {
     endBatchUpdate();
 }
 
+QJsonDocument ConversationModel::exportToJson() const {
+    QJsonObject root;
+    QJsonArray messagesArray;
+    
+    // Export all messages with complete data
+    for (const auto& node : nodes_) {
+        if (node && node->message) {
+            messagesArray.append(node->message->toJson());
+        }
+    }
+    
+    root["messages"] = messagesArray;
+    
+    // Export metadata
+    QJsonObject metadata;
+    metadata["exportedAt"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+    metadata["messageCount"] = static_cast<int>(nodes_.size());
+    metadata["visibleCount"] = static_cast<int>(visibleNodes_.size());
+    root["metadata"] = metadata;
+    
+    return QJsonDocument(root);
+}
+
 ConversationModel::ConversationStats ConversationModel::getStatistics() const {
     if (!statsCacheDirty_ && statsCache_.contains(QUuid())) {
         return statsCache_[QUuid()];

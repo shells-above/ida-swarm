@@ -132,10 +132,6 @@ void SettingsDialog::createAgentTab() {
     connect(enable_deep_analysis_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
     layout->addRow(enable_deep_analysis_check_);
     
-    verbose_logging_check_ = new QCheckBox("Verbose Logging");
-    connect(verbose_logging_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    layout->addRow(verbose_logging_check_);
-    
     tab_widget_->addTab(tab, "Agent");
 }
 
@@ -327,8 +323,7 @@ void SettingsDialog::loadSettings() {
     enable_thinking_check_->setChecked(config.agent.enable_thinking);
     enable_interleaved_thinking_check_->setChecked(config.agent.enable_interleaved_thinking);
     enable_deep_analysis_check_->setChecked(config.agent.enable_deep_analysis);
-    verbose_logging_check_->setChecked(config.agent.verbose_logging);
-    
+
     // UI settings
     log_buffer_spin_->setValue(config.ui.log_buffer_size);
     auto_scroll_check_->setChecked(config.ui.auto_scroll);
@@ -393,8 +388,7 @@ void SettingsDialog::applySettings() {
     config.agent.enable_thinking = enable_thinking_check_->isChecked();
     config.agent.enable_interleaved_thinking = enable_interleaved_thinking_check_->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check_->isChecked();
-    config.agent.verbose_logging = verbose_logging_check_->isChecked();
-    
+
     // UI settings
     config.ui.log_buffer_size = log_buffer_spin_->value();
     config.ui.auto_scroll = auto_scroll_check_->isChecked();

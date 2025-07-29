@@ -1,8 +1,15 @@
 #include "../core/ui_v2_common.h"
 #include "conversation_view.h"
+
+#include "main_window.h"
+#include "memory_dock.h"
+#include "statistics_dock.h"
+#include "tool_execution_dock.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
 #include "../widgets/command_palette.h"
+#include "api/anthropic_api.h"
+#include "ui_v2/core/agent_controller.h"
 
 namespace llm_re::ui_v2 {
 
@@ -633,24 +640,130 @@ void ConversationView::saveSession(const QString& path) {
     // Create session data
     QJsonObject session;
     session["id"] = sessionId_;
-    session["version"] = 1;
-    session["created"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    // Session saving now only stores settings, not messages
+    session["version"] = 2;  // Version 2 with complete state
+    session["created"] = sessionCreatedTime_.toString(Qt::ISODate);
+    session["modified"] = QDateTime::currentDateTime().toString(Qt::ISODate);
     
-    // Settings
-    QJsonObject settings;
-    settings["bubbleStyle"] = bubbleStyle_;
-    settings["compactMode"] = compactMode_;
-    settings["showTimestamps"] = showTimestamps_;
-    settings["maxBubbleWidth"] = maxBubbleWidth_;
-    settings["inputMode"] = inputMode_;
-    session["settings"] = settings;
+    // Metadata
+    QJsonObject metadata;
+    metadata["idbPath"] = QString::fromStdString(get_path(PATH_TYPE_IDB));
+    session["metadata"] = metadata;
+    
+    // Conversation data
+    QJsonObject conversation;
+    QJsonDocument messagesDoc = model_->exportToJson();
+    conversation["messages"] = messagesDoc.object()["messages"];
+    
+    // ConversationView settings
+    QJsonObject convSettings;
+    convSettings["bubbleStyle"] = bubbleStyle_;
+    convSettings["compactMode"] = compactMode_;
+    convSettings["showTimestamps"] = showTimestamps_;
+    convSettings["maxBubbleWidth"] = maxBubbleWidth_;
+    convSettings["inputMode"] = inputMode_;
+    conversation["settings"] = convSettings;
+    
+    session["conversation"] = conversation;
+    
+    // Agent state (if agent controller is connected)
+    // TODO: Need to implement agent state saving once AgentController is accessible
+    // Currently UiController doesn't have isRunning(), isPaused(), getAgentState(), getTokenUsage() methods
+    /*
+    if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+        if (AgentController *controller = mainWindow->agentController()) {
+            QJsonObject agentState;
+            agentState["active"] = controller->isRunning() || controller->isPaused();
+            
+            if (controller->isRunning() || controller->isPaused()) {
+                // Get full agent state
+                json state = controller->getAgentState();
+                agentState["state"] = QJsonDocument::fromJson(
+                    QString::fromStdString(state.dump()).toUtf8()).object();
+                
+                // Get token usage
+                api::TokenUsage usage = controller->getTokenUsage();
+                QJsonObject tokenUsage;
+                tokenUsage["inputTokens"] = usage.input_tokens;
+                tokenUsage["outputTokens"] = usage.output_tokens;
+                tokenUsage["cacheCreationTokens"] = usage.cache_creation_tokens;
+                tokenUsage["cacheReadTokens"] = usage.cache_read_tokens;
+                tokenUsage["model"] = QString::fromStdString(api::model_to_string(usage.model));
+                tokenUsage["estimatedCost"] = usage.estimated_cost();
+                agentState["tokenUsage"] = tokenUsage;
+            }
+            
+            session["agent"] = agentState;
+        }
+    }
+    */
+    
+    // UI state
+    QJsonObject uiState;
+    
+    // Main window state
+    if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+        QJsonObject mainWindowState;
+        mainWindowState["geometry"] = QString::fromUtf8(mainWindow->saveGeometry().toBase64());
+        mainWindowState["state"] = QString::fromUtf8(mainWindow->saveState().toBase64());
+        mainWindowState["maximized"] = mainWindow->isMaximized();
+        mainWindowState["fullscreen"] = mainWindow->isFullScreen();
+        uiState["mainWindow"] = mainWindowState;
+        
+        // Dock states
+        QJsonObject dockStates;
+        
+        if (auto memoryDock = mainWindow->memoryDock()) {
+            dockStates["memory"] = memoryDock->exportState();
+        }
+        
+        if (auto toolDock = mainWindow->toolDock()) {
+            dockStates["toolExecution"] = toolDock->exportState();
+        }
+        
+        if (auto statsDock = mainWindow->statsDock()) {
+            dockStates["statistics"] = statsDock->exportState();
+        }
+        
+        uiState["docks"] = dockStates;
+    }
+    
+    // View states
+    QJsonObject viewStates;
+    
+    // Scroll position
+    if (scrollArea_) {
+        QJsonObject scrollPos;
+        scrollPos["vertical"] = scrollArea_->verticalScrollBar()->value();
+        scrollPos["horizontal"] = scrollArea_->horizontalScrollBar()->value();
+        viewStates["scrollPosition"] = scrollPos;
+    }
+    
+    // Search state
+    if (searchBar_ && searchBar_->isVisible()) {
+        QJsonObject searchState;
+        searchState["visible"] = true;
+        searchState["text"] = searchBar_->searchText();
+        searchState["caseSensitive"] = searchBar_->isCaseSensitive();
+        searchState["wholeWords"] = searchBar_->isWholeWords();
+        searchState["regex"] = searchBar_->isRegex();
+        viewStates["search"] = searchState;
+    }
+    
+    // Filter state
+    if (model_->isFiltered()) {
+        QJsonObject filterState;
+        // Add filter state from model if available
+        viewStates["filters"] = filterState;
+    }
+    
+    uiState["viewStates"] = viewStates;
+    session["ui"] = uiState;
     
     // Write file
     QFile file(savePath);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QJsonDocument doc(session);
-        file.write(doc.toJson());
+        file.write(doc.toJson(QJsonDocument::Indented));
         
         clearUnsavedChanges();
         statusLabel_->setText(tr("Session saved"));
@@ -679,8 +792,9 @@ void ConversationView::loadSession(const QString& path) {
     
     QJsonObject session = doc.object();
     
-    // Check version
-    if (session["version"].toInt() != 1) {
+    // Check version and handle migration
+    int version = session["version"].toInt();
+    if (version < 1 || version > 2) {
         QMessageBox::warning(this, tr("Load Failed"),
                            tr("Unsupported session file version."));
         return;
@@ -693,26 +807,149 @@ void ConversationView::loadSession(const QString& path) {
     sessionId_ = session["id"].toString();
     sessionPath_ = path;
     
-    // Load messages
-    QJsonDocument messagesDoc;
-    QJsonObject messagesObj;
-    messagesObj["messages"] = session["messages"];
-    messagesDoc.setObject(messagesObj);
-    model_->importFromJson(messagesDoc);
-    
-    // Load settings
-    if (session.contains("settings")) {
-        QJsonObject settings = session["settings"].toObject();
-        setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
-            settings["bubbleStyle"].toInt()));
-        setCompactMode(settings["compactMode"].toBool());
-        setShowTimestamps(settings["showTimestamps"].toBool());
-        setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
-        setInputMode(settings["inputMode"].toString());
+    // Handle version differences
+    if (version == 1) {
+        // Version 1 format - convert to version 2 structure
+        // Load messages directly
+        QJsonDocument messagesDoc;
+        QJsonObject messagesObj;
+        messagesObj["messages"] = session["messages"];
+        messagesDoc.setObject(messagesObj);
+        model_->importFromJson(messagesDoc);
+        
+        // Load settings
+        if (session.contains("settings")) {
+            QJsonObject settings = session["settings"].toObject();
+            setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
+                settings["bubbleStyle"].toInt()));
+            setCompactMode(settings["compactMode"].toBool());
+            setShowTimestamps(settings["showTimestamps"].toBool());
+            setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
+            setInputMode(settings["inputMode"].toString());
+        }
+    } else {
+        // Version 2 format - complete state restoration
+        // Load creation time
+        if (session.contains("created")) {
+            sessionCreatedTime_ = QDateTime::fromString(session["created"].toString(), Qt::ISODate);
+        }
+        
+        // Load conversation data
+        if (session.contains("conversation")) {
+            QJsonObject conversation = session["conversation"].toObject();
+            
+            // Load messages
+            if (conversation.contains("messages")) {
+                QJsonDocument messagesDoc;
+                QJsonObject messagesObj;
+                messagesObj["messages"] = conversation["messages"];
+                messagesDoc.setObject(messagesObj);
+                model_->importFromJson(messagesDoc);
+            }
+            
+            // Load ConversationView settings
+            if (conversation.contains("settings")) {
+                QJsonObject settings = conversation["settings"].toObject();
+                setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
+                    settings["bubbleStyle"].toInt()));
+                setCompactMode(settings["compactMode"].toBool());
+                setShowTimestamps(settings["showTimestamps"].toBool());
+                setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
+                setInputMode(settings["inputMode"].toString());
+            }
+        }
+        
+        // Restore UI state
+        if (session.contains("ui")) {
+            QJsonObject uiState = session["ui"].toObject();
+            
+            // Restore main window state
+            if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+                if (uiState.contains("mainWindow")) {
+                    QJsonObject mainWindowState = uiState["mainWindow"].toObject();
+                    
+                    if (mainWindowState.contains("geometry")) {
+                        mainWindow->restoreGeometry(QByteArray::fromBase64(
+                            mainWindowState["geometry"].toString().toUtf8()));
+                    }
+                    if (mainWindowState.contains("state")) {
+                        mainWindow->restoreState(QByteArray::fromBase64(
+                            mainWindowState["state"].toString().toUtf8()));
+                    }
+                    
+                    // Restore window state after geometry
+                    if (mainWindowState["fullscreen"].toBool()) {
+                        mainWindow->showFullScreen();
+                    } else if (mainWindowState["maximized"].toBool()) {
+                        mainWindow->showMaximized();
+                    }
+                }
+                
+                // Restore dock states
+                if (uiState.contains("docks")) {
+                    QJsonObject dockStates = uiState["docks"].toObject();
+                    
+                    if (dockStates.contains("memory") && mainWindow->memoryDock()) {
+                        mainWindow->memoryDock()->importState(dockStates["memory"].toObject());
+                    }
+                    
+                    if (dockStates.contains("toolExecution") && mainWindow->toolDock()) {
+                        mainWindow->toolDock()->importState(dockStates["toolExecution"].toObject());
+                    }
+                    
+                    if (dockStates.contains("statistics") && mainWindow->statsDock()) {
+                        mainWindow->statsDock()->importState(dockStates["statistics"].toObject());
+                    }
+                }
+            }
+            
+            // Restore view states
+            if (uiState.contains("viewStates")) {
+                QJsonObject viewStates = uiState["viewStates"].toObject();
+                
+                // Restore scroll position (deferred)
+                if (viewStates.contains("scrollPosition") && scrollArea_) {
+                    QJsonObject scrollPos = viewStates["scrollPosition"].toObject();
+                    int vPos = scrollPos["vertical"].toInt();
+                    int hPos = scrollPos["horizontal"].toInt();
+                    
+                    // Defer scroll restoration until layout is complete
+                    QTimer::singleShot(100, [this, vPos, hPos]() {
+                        if (scrollArea_) {
+                            scrollArea_->verticalScrollBar()->setValue(vPos);
+                            scrollArea_->horizontalScrollBar()->setValue(hPos);
+                        }
+                    });
+                }
+                
+                // Restore search state
+                if (viewStates.contains("search")) {
+                    QJsonObject searchState = viewStates["search"].toObject();
+                    if (searchState["visible"].toBool() && searchBar_) {
+                        searchBar_->setSearchText(searchState["text"].toString());
+                        searchBar_->setCaseSensitive(searchState["caseSensitive"].toBool());
+                        searchBar_->setWholeWords(searchState["wholeWords"].toBool());
+                        searchBar_->setRegex(searchState["regex"].toBool());
+                        searchBar_->show();
+                    }
+                }
+            }
+        }
+        
+        // Note: Agent state restoration would require coordination with AgentController
+        // This is left as a future enhancement to avoid starting agent tasks automatically
+        if (session.contains("agent")) {
+            QJsonObject agentState = session["agent"].toObject();
+            if (agentState["active"].toBool()) {
+                statusLabel_->setText(tr("Session loaded (agent state not restored)"));
+            }
+        }
     }
     
     clearUnsavedChanges();
-    statusLabel_->setText(tr("Session loaded"));
+    if (statusLabel_->text().isEmpty()) {
+        statusLabel_->setText(tr("Session loaded"));
+    }
     emit sessionChanged(sessionId_);
 }
 
@@ -1093,6 +1330,7 @@ void ConversationView::clearUnsavedChanges() {
 
 void ConversationView::generateSessionId() {
     sessionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    sessionCreatedTime_ = QDateTime::currentDateTime();
 }
 
 // ConversationSearchBar implementation
@@ -1237,6 +1475,24 @@ void ConversationSearchBar::keyPressEvent(QKeyEvent* event) {
     }
     
     BaseStyledWidget::keyPressEvent(event);
+}
+
+void ConversationSearchBar::setCaseSensitive(bool enabled) {
+    caseSensitive_ = enabled;
+    caseSensitiveButton_->setChecked(enabled);
+    emit caseSensitivityChanged(enabled);
+}
+
+void ConversationSearchBar::setWholeWords(bool enabled) {
+    wholeWord_ = enabled;
+    wholeWordButton_->setChecked(enabled);
+    emit wholeWordChanged(enabled);
+}
+
+void ConversationSearchBar::setRegex(bool enabled) {
+    useRegex_ = enabled;
+    regexButton_->setChecked(enabled);
+    emit regexChanged(enabled);
 }
 
 // ConversationInputArea implementation

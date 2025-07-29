@@ -54,6 +54,10 @@ public:
     void setRealtimeEnabled(bool enabled);
     bool isRealtimeEnabled() const { return realtimeEnabled_; }
     
+    // State export/import
+    QJsonObject exportState() const;
+    void importState(const QJsonObject& state);
+    
 signals:
     void dataPointClicked(const StatDataPoint& point);
     void timeRangeChanged(const QDateTime& start, const QDateTime& end);
@@ -108,9 +112,12 @@ private:
     QList<StatDataPoint> dataPoints_;
     QDateTime startTime_;
     QDateTime endTime_;
+    QDateTime timeRangeStart_;
+    QDateTime timeRangeEnd_;
     bool realtimeEnabled_ = false;
     
     // UI elements
+    QVBoxLayout* contentLayout_ = nullptr;
     QToolBar* toolBar_ = nullptr;
     QTabWidget* viewTabs_ = nullptr;
     
@@ -158,6 +165,30 @@ private:
     
     // Custom metrics
     QHash<QString, double> customMetrics_;
+    
+    // Statistics data
+    int totalMessages_ = 0;
+    int userMessages_ = 0;
+    int assistantMessages_ = 0;
+    int toolExecutions_ = 0;
+    int successfulTools_ = 0;
+    int failedTools_ = 0;
+    int totalTokens_ = 0;
+    double totalCost_ = 0.0;
+    
+    // Time series data
+    QVector<QPointF> messagesOverTime_;
+    QVector<QPointF> tokensOverTime_;
+    QVector<QPointF> costOverTime_;
+    
+    // Tool statistics
+    struct ToolStats {
+        int count = 0;
+        int successCount = 0;
+        int failureCount = 0;
+        qint64 totalDuration = 0;
+    };
+    QHash<QString, ToolStats> toolStats_;
 };
 
 // Summary widget with custom visualization

@@ -415,9 +415,7 @@ void MemoryGraphView::performForceDirectedLayout() {
     
     // Force-directed simulation
     const int iterations = 100;
-    const qreal k = 100.0; // Ideal spring length
     const qreal c_rep = 10000.0; // Repulsion constant
-    const qreal c_spring = 0.1; // Spring constant
     const qreal damping = 0.9;
     
     QHash<MemoryGraphNode*, QPointF> velocities;
@@ -448,9 +446,7 @@ void MemoryGraphView::performForceDirectedLayout() {
         }
         
         // Spring forces for connected nodes
-        for (auto* edge : edges_) {
-            // This is simplified - would need access to edge endpoints
-        }
+        // TODO: Implement spring forces when edge endpoints are accessible
         
         // Apply forces
         for (auto* node : nodeList) {
@@ -1287,11 +1283,12 @@ void MemoryDock::clearFilters() {
 }
 
 void MemoryDock::saveQuery(const QString& name) {
-    QJsonObject query;
-    query["search"] = searchText_;
-    query["tags"] = QJsonArray::fromStringList(tagFilters_);
-    query["startDate"] = startDateFilter_.toString(Qt::ISODate);
-    query["endDate"] = endDateFilter_.toString(Qt::ISODate);
+    SavedQuery query;
+    query.name = name;
+    query.searchText = searchText_;
+    query.tags = tagFilters_;
+    query.startDate = startDateFilter_;
+    query.endDate = endDateFilter_;
     
     savedQueries_[name] = query;
     saveSettings();
@@ -1299,17 +1296,14 @@ void MemoryDock::saveQuery(const QString& name) {
 
 void MemoryDock::loadQuery(const QString& name) {
     if (savedQueries_.contains(name)) {
-        QJsonObject query = savedQueries_[name];
+        const SavedQuery& query = savedQueries_[name];
         
-        searchEdit_->setText(query["search"].toString());
+        searchEdit_->setText(query.searchText);
         
-        tagFilters_.clear();
-        for (const QJsonValue& tag : query["tags"].toArray()) {
-            tagFilters_.append(tag.toString());
-        }
+        tagFilters_ = query.tags;
         
-        startDateFilter_ = QDateTime::fromString(query["startDate"].toString(), Qt::ISODate);
-        endDateFilter_ = QDateTime::fromString(query["endDate"].toString(), Qt::ISODate);
+        startDateFilter_ = query.startDate;
+        endDateFilter_ = query.endDate;
         
         applyFilters();
     }
@@ -1368,6 +1362,206 @@ void MemoryDock::bookmarkSelection(bool bookmark) {
         MemoryEntry e = entry(id);
         e.isBookmarked = bookmark;
         updateEntry(id, e);
+    }
+}
+
+QJsonObject MemoryDock::exportState() const {
+    QJsonObject state;
+    
+    // Export all entries
+    QJsonArray entriesArray;
+    for (const MemoryEntry& entry : entries()) {
+        QJsonObject entryObj;
+        entryObj["id"] = entry.id.toString();
+        entryObj["timestamp"] = entry.timestamp.toString(Qt::ISODate);
+        entryObj["type"] = entry.type;
+        entryObj["category"] = entry.category;
+        entryObj["title"] = entry.title;
+        entryObj["content"] = entry.content;
+        entryObj["functionName"] = entry.functionName;
+        entryObj["address"] = entry.address;
+        entryObj["confidence"] = entry.confidence;
+        
+        QJsonArray tagsArray;
+        for (const QString& tag : entry.tags) {
+            tagsArray.append(tag);
+        }
+        entryObj["tags"] = tagsArray;
+        
+        entryObj["isBookmarked"] = entry.isBookmarked;
+        entryObj["isPinned"] = entry.isPinned;
+        
+        QJsonArray referencesArray;
+        for (const QUuid& ref : entry.references) {
+            referencesArray.append(ref.toString());
+        }
+        entryObj["references"] = referencesArray;
+        
+        entryObj["customData"] = entry.customData;
+        
+        entriesArray.append(entryObj);
+    }
+    state["entries"] = entriesArray;
+    
+    // Export current view state
+    state["viewMode"] = currentViewMode_;
+    state["searchText"] = searchEdit_->text();
+    
+    // Export filters
+    QJsonObject filters;
+    QJsonArray tagFilters;
+    for (const QString& tag : tagFilters_) {
+        tagFilters.append(tag);
+    }
+    filters["tags"] = tagFilters;
+    if (startDateFilter_.isValid()) {
+        filters["startDate"] = startDateFilter_.toString(Qt::ISODate);
+    }
+    if (endDateFilter_.isValid()) {
+        filters["endDate"] = endDateFilter_.toString(Qt::ISODate);
+    }
+    state["filters"] = filters;
+    
+    // Export selection
+    QJsonArray selectedArray;
+    for (const QUuid& id : selectedEntries_) {
+        selectedArray.append(id.toString());
+    }
+    state["selection"] = selectedArray;
+    
+    // Export saved queries
+    QJsonArray queriesArray;
+    for (auto it = savedQueries_.constBegin(); it != savedQueries_.constEnd(); ++it) {
+        const SavedQuery& query = it.value();
+        QJsonObject queryObj;
+        queryObj["name"] = query.name;
+        queryObj["searchText"] = query.searchText;
+        QJsonArray queryTags;
+        for (const QString& tag : query.tags) {
+            queryTags.append(tag);
+        }
+        queryObj["tags"] = queryTags;
+        if (query.startDate.isValid()) {
+            queryObj["startDate"] = query.startDate.toString(Qt::ISODate);
+        }
+        if (query.endDate.isValid()) {
+            queryObj["endDate"] = query.endDate.toString(Qt::ISODate);
+        }
+        queriesArray.append(queryObj);
+    }
+    state["savedQueries"] = queriesArray;
+    
+    return state;
+}
+
+void MemoryDock::importState(const QJsonObject& state) {
+    // Clear existing entries
+    clearEntries();
+    
+    // Import entries
+    if (state.contains("entries")) {
+        QJsonArray entriesArray = state["entries"].toArray();
+        for (const QJsonValue& val : entriesArray) {
+            QJsonObject entryObj = val.toObject();
+            MemoryEntry entry;
+            
+            entry.id = QUuid(entryObj["id"].toString());
+            entry.timestamp = QDateTime::fromString(entryObj["timestamp"].toString(), Qt::ISODate);
+            entry.type = entryObj["type"].toString();
+            entry.category = entryObj["category"].toString();
+            entry.title = entryObj["title"].toString();
+            entry.content = entryObj["content"].toString();
+            entry.functionName = entryObj["functionName"].toString();
+            entry.address = entryObj["address"].toString().toULongLong(nullptr, 16);
+            entry.confidence = entryObj["confidence"].toInt();
+            
+            QJsonArray tagsArray = entryObj["tags"].toArray();
+            for (const QJsonValue& tag : tagsArray) {
+                entry.tags.append(tag.toString());
+            }
+            
+            entry.isBookmarked = entryObj["isBookmarked"].toBool();
+            entry.isPinned = entryObj["isPinned"].toBool();
+            
+            QJsonArray referencesArray = entryObj["references"].toArray();
+            for (const QJsonValue& ref : referencesArray) {
+                entry.references.append(ref.toString());
+            }
+            
+            entry.customData = entryObj["customData"].toObject();
+            
+            addEntry(entry);
+        }
+    }
+    
+    // Import view state
+    if (state.contains("viewMode")) {
+        setViewMode(state["viewMode"].toString());
+    }
+    
+    if (state.contains("searchText")) {
+        searchEdit_->setText(state["searchText"].toString());
+    }
+    
+    // Import filters
+    if (state.contains("filters")) {
+        QJsonObject filters = state["filters"].toObject();
+        
+        if (filters.contains("tags")) {
+            QJsonArray tagFilters = filters["tags"].toArray();
+            QStringList tags;
+            for (const QJsonValue& tag : tagFilters) {
+                tags.append(tag.toString());
+            }
+            setTagFilter(tags);
+        }
+        
+        QDateTime startDate, endDate;
+        if (filters.contains("startDate")) {
+            startDate = QDateTime::fromString(filters["startDate"].toString(), Qt::ISODate);
+        }
+        if (filters.contains("endDate")) {
+            endDate = QDateTime::fromString(filters["endDate"].toString(), Qt::ISODate);
+        }
+        if (startDate.isValid() || endDate.isValid()) {
+            setDateRangeFilter(startDate, endDate);
+        }
+    }
+    
+    // Import selection
+    if (state.contains("selection")) {
+        QJsonArray selectedArray = state["selection"].toArray();
+        QList<QUuid> selectedIds;
+        for (const QJsonValue& val : selectedArray) {
+            selectedIds.append(QUuid(val.toString()));
+        }
+        selectEntries(selectedIds);
+    }
+    
+    // Import saved queries
+    if (state.contains("savedQueries")) {
+        savedQueries_.clear();
+        QJsonArray queriesArray = state["savedQueries"].toArray();
+        for (const QJsonValue& val : queriesArray) {
+            QJsonObject queryObj = val.toObject();
+            SavedQuery query;
+            query.name = queryObj["name"].toString();
+            query.searchText = queryObj["searchText"].toString();
+            
+            QJsonArray queryTags = queryObj["tags"].toArray();
+            for (const QJsonValue& tag : queryTags) {
+                query.tags.append(tag.toString());
+            }
+            
+            if (queryObj.contains("startDate")) {
+                query.startDate = QDateTime::fromString(queryObj["startDate"].toString(), Qt::ISODate);
+            }
+            if (queryObj.contains("endDate")) {
+                query.endDate = QDateTime::fromString(queryObj["endDate"].toString(), Qt::ISODate);
+            }
+            
+            savedQueries_[query.name] = query;
+        }
     }
 }
 
@@ -1628,7 +1822,22 @@ void MemoryDock::saveSettings() {
     // Save queries
     QJsonObject queries;
     for (auto it = savedQueries_.begin(); it != savedQueries_.end(); ++it) {
-        queries[it.key()] = it.value();
+        const SavedQuery& query = it.value();
+        QJsonObject queryObj;
+        queryObj["name"] = query.name;
+        queryObj["searchText"] = query.searchText;
+        QJsonArray queryTags;
+        for (const QString& tag : query.tags) {
+            queryTags.append(tag);
+        }
+        queryObj["tags"] = queryTags;
+        if (query.startDate.isValid()) {
+            queryObj["startDate"] = query.startDate.toString(Qt::ISODate);
+        }
+        if (query.endDate.isValid()) {
+            queryObj["endDate"] = query.endDate.toString(Qt::ISODate);
+        }
+        queries[it.key()] = queryObj;
     }
     settings.setValue("savedQueries", QJsonDocument(queries).toJson());
     
@@ -1654,7 +1863,24 @@ void MemoryDock::loadSettings() {
     if (doc.isObject()) {
         QJsonObject queries = doc.object();
         for (auto it = queries.begin(); it != queries.end(); ++it) {
-            savedQueries_[it.key()] = it.value().toObject();
+            QJsonObject queryObj = it.value().toObject();
+            SavedQuery query;
+            query.name = queryObj["name"].toString();
+            query.searchText = queryObj["searchText"].toString();
+            
+            QJsonArray queryTags = queryObj["tags"].toArray();
+            for (const QJsonValue& tag : queryTags) {
+                query.tags.append(tag.toString());
+            }
+            
+            if (queryObj.contains("startDate")) {
+                query.startDate = QDateTime::fromString(queryObj["startDate"].toString(), Qt::ISODate);
+            }
+            if (queryObj.contains("endDate")) {
+                query.endDate = QDateTime::fromString(queryObj["endDate"].toString(), Qt::ISODate);
+            }
+            
+            savedQueries_[it.key()] = query;
         }
     }
     

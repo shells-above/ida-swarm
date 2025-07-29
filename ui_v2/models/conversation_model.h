@@ -231,6 +231,7 @@ public:
     
     
     void importFromJson(const QJsonDocument& doc, bool append = false);
+    QJsonDocument exportToJson() const;
     
     // Statistics
     struct ConversationStats {

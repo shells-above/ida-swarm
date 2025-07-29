@@ -44,8 +44,7 @@ private:
     QCheckBox* enable_thinking_check_ = nullptr;
     QCheckBox* enable_interleaved_thinking_check_ = nullptr;
     QCheckBox* enable_deep_analysis_check_ = nullptr;
-    QCheckBox* verbose_logging_check_ = nullptr;
-    
+
     // UI settings widgets
     QSpinBox* log_buffer_spin_ = nullptr;
     QCheckBox* auto_scroll_check_ = nullptr;

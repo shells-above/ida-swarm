@@ -19,7 +19,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["enable_thinking"] = agent.enable_thinking;
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
-        j["agent"]["verbose_logging"] = agent.verbose_logging;
 
         // UI settings
         j["ui"]["log_buffer_size"] = ui.log_buffer_size;
@@ -89,7 +88,6 @@ bool Config::load_from_file(const std::string& path) {
             agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
             agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
-            agent.verbose_logging = j["agent"].value("verbose_logging", agent.verbose_logging);
         }
 
         // UI settings

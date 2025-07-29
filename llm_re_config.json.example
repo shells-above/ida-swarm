@@ -11,8 +11,7 @@
     "max_iterations": 1000,
     "enable_thinking": true,
     "enable_interleaved_thinking": false,
-    "enable_deep_analysis": false,
-    "verbose_logging": false
+    "enable_deep_analysis": false
   },
   "ui": {
     "log_buffer_size": 1000,

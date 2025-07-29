@@ -21,7 +21,6 @@ struct Config {
         bool enable_thinking = true;
         bool enable_interleaved_thinking = false;
         bool enable_deep_analysis = false;
-        bool verbose_logging = false;
     } agent;
 
     struct UISettings {

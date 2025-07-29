@@ -18,6 +18,15 @@ struct MemoryEntry {
     bool isBookmarked = false;
     QJsonObject metadata;
     
+    // Additional fields for complete state
+    QString type;
+    QString category;
+    QString title;
+    QString content;
+    QString functionName;
+    bool isPinned = false;
+    QJsonObject customData;
+    
     // Relationships
     QList<QUuid> references;
     QList<QUuid> referencedBy;
@@ -26,6 +35,15 @@ struct MemoryEntry {
     bool operator==(const MemoryEntry& other) const {
         return id == other.id;
     }
+};
+
+// Saved query structure
+struct SavedQuery {
+    QString name;
+    QString searchText;
+    QStringList tags;
+    QDateTime startDate;
+    QDateTime endDate;
 };
 
 // Graph node for visualization
@@ -311,6 +329,10 @@ public:
     void deleteSelection();
     void bookmarkSelection(bool bookmark);
     
+    // State export/import
+    QJsonObject exportState() const;
+    void importState(const QJsonObject& state);
+    
 signals:
     void entryClicked(const QUuid& id);
     void entryDoubleClicked(const QUuid& id);
@@ -387,7 +409,7 @@ private:
     
     // Settings
     QStringList recentImports_;
-    QHash<QString, QJsonObject> savedQueries_;
+    QHash<QString, SavedQuery> savedQueries_;
 };
 
 // Advanced filter dialog

@@ -177,6 +177,10 @@ public:
     QStringList favorites() const;
     void executeFavorite(const QString& name);
     
+    // State export/import
+    QJsonObject exportState() const;
+    void importState(const QJsonObject& state);
+    
 signals:
     void executionStarted(const QUuid& id);
     void executionProgress(const QUuid& id, int progress);
@@ -282,6 +286,14 @@ private:
         QJsonObject parameters;
     };
     QList<FavoriteExecution> favorites_;
+    
+    // Time range filters
+    QDateTime timeRangeStart_;
+    QDateTime timeRangeEnd_;
+    
+    // Statistics
+    int completedCount_ = 0;
+    int failedCount_ = 0;
 };
 
 // Execution model
