@@ -230,6 +230,13 @@ CommandPalette::CommandPalette(QWidget* parent)
 CommandPalette::~CommandPalette() {
     saveRecentCommands();
     qApp->removeEventFilter(this);
+    
+    // Clean up animation
+    if (showAnimation_) {
+        showAnimation_->stop();
+        showAnimation_->deleteLater();
+        showAnimation_ = nullptr;
+    }
 }
 
 void CommandPalette::setupUI() {
@@ -860,7 +867,8 @@ void CommandPalette::updateListSelection() {
 void CommandPalette::animateShow() {
     if (showAnimation_) {
         showAnimation_->stop();
-        delete showAnimation_;
+        showAnimation_->deleteLater();
+        showAnimation_ = nullptr;
     }
     
     show();
@@ -874,13 +882,20 @@ void CommandPalette::animateShow() {
     showAnimation_->setStartValue(0.0);
     showAnimation_->setEndValue(1.0);
     showAnimation_->setEasingCurve(QEasingCurve::OutCubic);
+    
+    // Clean up pointer when animation finishes
+    connect(showAnimation_, &QPropertyAnimation::finished, this, [this]() {
+        showAnimation_ = nullptr;
+    });
+    
     showAnimation_->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void CommandPalette::animateHide() {
     if (showAnimation_) {
         showAnimation_->stop();
-        delete showAnimation_;
+        showAnimation_->deleteLater();
+        showAnimation_ = nullptr;
     }
     
     showAnimation_ = new QPropertyAnimation(this, "showProgress", this);
