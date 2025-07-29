@@ -123,8 +123,8 @@ void BaseStyledWidget::updateShadow() {
         shadowEffect_->setOffset(shadowOffset_);
         setGraphicsEffect(shadowEffect_.get());
     } else if (!shadowEnabled_ && shadowEffect_) {
-        setGraphicsEffect(nullptr);
-        shadowEffect_.reset();
+        shadowEffect_.reset();  // Reset the unique_ptr first to delete the effect
+        setGraphicsEffect(nullptr);  // Then clear the graphics effect
     }
 }
 

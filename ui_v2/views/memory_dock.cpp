@@ -1582,7 +1582,7 @@ void MemoryDock::importData(const QString& path) {
         fileName = QFileDialog::getOpenFileName(
             this, tr("Import Memory Data"),
             "",
-            tr("JSON Files (*.json);;CSV Files (*.csv);;All Files (*)")
+            tr("Session Files (*.llmre);;JSON Files (*.json);;CSV Files (*.csv);;All Files (*)")
         );
     }
     
@@ -1598,7 +1598,83 @@ void MemoryDock::importData(const QString& path) {
         QString content = stream.readAll();
         file.close();
         
-        if (fileName.endsWith(".json")) {
+        if (fileName.endsWith(".llmre")) {
+            // Import from session file
+            QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
+            if (!doc.isObject()) {
+                QMessageBox::warning(this, tr("Import Failed"),
+                                   tr("Invalid session file format."));
+                return;
+            }
+            
+            QJsonObject session = doc.object();
+            
+            // Validate IDB path
+            QString sessionIdbPath;
+            if (session.contains("metadata")) {
+                sessionIdbPath = session["metadata"].toObject()["idbPath"].toString();
+            }
+            
+            QString currentIdbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
+            
+            if (!sessionIdbPath.isEmpty() && sessionIdbPath != currentIdbPath) {
+                int ret = QMessageBox::warning(this, tr("IDB Mismatch"),
+                    tr("This memory data is from a different IDA database:\n%1\n\nImport anyway?")
+                    .arg(sessionIdbPath),
+                    QMessageBox::Yes | QMessageBox::No);
+                
+                if (ret != QMessageBox::Yes) {
+                    return;
+                }
+            }
+            
+            // Extract memory entries from dock states
+            if (session.contains("ui")) {
+                QJsonObject ui = session["ui"].toObject();
+                if (ui.contains("docks")) {
+                    QJsonObject docks = ui["docks"].toObject();
+                    if (docks.contains("memory")) {
+                        QJsonObject memoryState = docks["memory"].toObject();
+                        if (memoryState.contains("entries")) {
+                            QJsonArray entriesArray = memoryState["entries"].toArray();
+                            
+                            for (const QJsonValue& val : entriesArray) {
+                                QJsonObject obj = val.toObject();
+                                
+                                MemoryEntry entry;
+                                entry.id = QUuid(obj["id"].toString());
+                                if (entry.id.isNull()) {
+                                    entry.id = QUuid::createUuid();
+                                }
+                                entry.timestamp = QDateTime::fromString(obj["timestamp"].toString(), Qt::ISODate);
+                                entry.type = obj["type"].toString();
+                                entry.category = obj["category"].toString();
+                                entry.title = obj["title"].toString();
+                                entry.content = obj["content"].toString();
+                                entry.functionName = obj["functionName"].toString();
+                                entry.address = obj["address"].toString();
+                                entry.confidence = obj["confidence"].toInt();
+                                
+                                for (const QJsonValue& tag : obj["tags"].toArray()) {
+                                    entry.tags.append(tag.toString());
+                                }
+                                
+                                entry.isBookmarked = obj["isBookmarked"].toBool();
+                                entry.isPinned = obj["isPinned"].toBool();
+                                
+                                for (const QJsonValue& ref : obj["references"].toArray()) {
+                                    entry.references.append(QUuid(ref.toString()));
+                                }
+                                
+                                entry.metadata = obj["metadata"].toObject();
+                                
+                                addEntry(entry);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (fileName.endsWith(".json")) {
             QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
             if (doc.isArray()) {
                 for (const QJsonValue& val : doc.array()) {

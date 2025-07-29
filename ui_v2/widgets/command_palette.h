@@ -95,6 +95,10 @@ public:
     void unregisterProvider(const QString& providerId);
     void clearProviders();
     
+    // MainWindow connection
+    void setMainWindow(QWidget* mainWindow) { mainWindow_ = mainWindow; }
+    QWidget* mainWindow() const { return mainWindow_; }
+    
     // Command management
     void registerCommand(const Command& command);
     void registerCommands(const QList<Command>& commands);
@@ -212,6 +216,9 @@ private:
     // Animation
     QPropertyAnimation* showAnimation_ = nullptr;
     
+    // MainWindow reference
+    QWidget* mainWindow_ = nullptr;
+    
     // Global instance
     static CommandPalette* instance_;
 };
@@ -220,37 +227,52 @@ private:
 
 class FileCommandProvider : public ICommandProvider {
 public:
+    explicit FileCommandProvider(QWidget* mainWindow) : mainWindow_(mainWindow) {}
     QString providerId() const override { return "file"; }
     QString providerName() const override { return "File"; }
     QList<Command> commands() const override;
+private:
+    QWidget* mainWindow_;
 };
 
 class EditCommandProvider : public ICommandProvider {
 public:
+    explicit EditCommandProvider(QWidget* mainWindow) : mainWindow_(mainWindow) {}
     QString providerId() const override { return "edit"; }
     QString providerName() const override { return "Edit"; }
     QList<Command> commands() const override;
+private:
+    QWidget* mainWindow_;
 };
 
 class ViewCommandProvider : public ICommandProvider {
 public:
+    explicit ViewCommandProvider(QWidget* mainWindow) : mainWindow_(mainWindow) {}
     QString providerId() const override { return "view"; }
     QString providerName() const override { return "View"; }
     QList<Command> commands() const override;
+private:
+    QWidget* mainWindow_;
 };
 
 class ToolsCommandProvider : public ICommandProvider {
 public:
+    explicit ToolsCommandProvider(QWidget* mainWindow) : mainWindow_(mainWindow) {}
     QString providerId() const override { return "tools"; }
     QString providerName() const override { return "Tools"; }
     QList<Command> commands() const override;
+private:
+    QWidget* mainWindow_;
 };
 
 class HelpCommandProvider : public ICommandProvider {
 public:
+    explicit HelpCommandProvider(QWidget* mainWindow) : mainWindow_(mainWindow) {}
     QString providerId() const override { return "help"; }
     QString providerName() const override { return "Help"; }
     QList<Command> commands() const override;
+private:
+    QWidget* mainWindow_;
 };
 
 // Quick access widget that shows in a corner

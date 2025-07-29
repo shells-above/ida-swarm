@@ -327,7 +327,7 @@ public:
                      const QModelIndex& index) override;
     
     // Customization
-    void setCompactMode(bool compact) { compactMode_ = compact; }
+    void setDensityMode(int mode) { densityMode_ = mode; }  // 0=Compact, 1=Cozy, 2=Spacious
     void setShowTimestamps(bool show) { showTimestamps_ = show; }
     void setMaxBubbleWidth(int width) { maxBubbleWidth_ = width; }
     void setAnimateMessages(bool animate) { animateMessages_ = animate; }
@@ -350,7 +350,7 @@ private:
     QRect hitTest(const QPoint& pos, const QStyleOptionViewItem& option,
                   const QModelIndex& index) const;
     
-    bool compactMode_ = false;
+    int densityMode_ = 1;  // 0=Compact, 1=Cozy, 2=Spacious
     bool showTimestamps_ = true;
     int maxBubbleWidth_ = 600;
     bool animateMessages_ = true;

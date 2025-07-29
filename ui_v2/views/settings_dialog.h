@@ -59,12 +59,11 @@ private:
     QCheckBox* close_to_tray_check_ = nullptr;
     QCheckBox* start_minimized_check_ = nullptr;
     QCheckBox* remember_window_state_check_ = nullptr;
-    QCheckBox* auto_save_layout_check_ = nullptr;
     
     // Conversation view widgets
     QCheckBox* auto_save_conversations_check_ = nullptr;
     QSpinBox* auto_save_interval_spin_ = nullptr;
-    QCheckBox* compact_mode_check_ = nullptr;
+    QComboBox* density_mode_combo_ = nullptr;
     
     // Inspector widgets
     QCheckBox* inspector_follow_cursor_check_ = nullptr;

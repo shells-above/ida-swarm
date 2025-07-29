@@ -172,6 +172,7 @@ set(SOURCES
         ui_v2/views/settings_dialog.cpp
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.cpp
+        ui_v2/widgets/message_group.cpp
         ui_v2/widgets/markdown_viewer.cpp
         ui_v2/widgets/command_palette.cpp
         ui_v2/widgets/tool_execution_visualizer.cpp
@@ -224,6 +225,7 @@ set(HEADERS
         ui_v2/views/settings_dialog.h
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.h
+        ui_v2/widgets/message_group.h
         ui_v2/widgets/markdown_viewer.h
         ui_v2/widgets/command_palette.h
         ui_v2/widgets/tool_execution_visualizer.h

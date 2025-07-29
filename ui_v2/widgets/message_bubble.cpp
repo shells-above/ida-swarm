@@ -1,5 +1,6 @@
 #include "../core/ui_v2_common.h"
 #include "message_bubble.h"
+#include "message_group.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
 
@@ -15,13 +16,14 @@ MessageBubble::MessageBubble(Message* message, QWidget* parent)
     applyBubbleStyle();
     
     // Set initial properties
-    setFocusPolicy(Qt::ClickFocus);
-    setAttribute(Qt::WA_Hover);
+    setFocusPolicy(Qt::NoFocus);
     setContextMenuPolicy(Qt::DefaultContextMenu);
     
-    // Enable animations
-    setHoverEnabled(true);
-    setHoverScale(1.01);
+    // Disable hover effects to prevent resizing
+    setHoverEnabled(false);
+    
+    // Remove border to prevent focus highlight
+    setBorderWidth(0);
 }
 
 MessageBubble::~MessageBubble() {
@@ -60,21 +62,11 @@ void MessageBubble::createHeader() {
                               Design::SPACING_MD, Design::SPACING_SM);
     
     
-    // Name and role
-    auto* nameLayout = new QVBoxLayout();
-    nameLayout->setSpacing(0);
-    
+    // Author name
     nameLabel_ = new QLabel(this);
     nameLabel_->setFont(ThemeManager::instance().typography().body);
-    nameLayout->addWidget(nameLabel_);
+    layout->addWidget(nameLabel_);
     
-    roleLabel_ = new QLabel(this);
-    roleLabel_->setFont(ThemeManager::instance().typography().caption);
-    roleLabel_->setStyleSheet(QString("color: %1;").arg(
-        ThemeManager::instance().colors().textSecondary.name()));
-    nameLayout->addWidget(roleLabel_);
-    
-    layout->addLayout(nameLayout);
     layout->addStretch();
     
     // Timestamp
@@ -278,14 +270,9 @@ void MessageBubble::updateMessage() {
     sizeCacheDirty_ = true;
     
     // Update header
-    
     if (nameLabel_) {
         nameLabel_->setText(message_->metadata().author.isEmpty() ? 
                            message_->roleString() : message_->metadata().author);
-    }
-    
-    if (roleLabel_) {
-        roleLabel_->setText(message_->roleString());
     }
     
     if (timestampLabel_) {
@@ -294,6 +281,23 @@ void MessageBubble::updateMessage() {
             message_->metadata().timestamp.toSecsSinceEpoch());
         timestampLabel_->setText(UIUtils::formatRelativeTime(timestamp));
         timestampLabel_->setVisible(showTimestamp_);
+    }
+    
+    // Apply role-specific styling
+    const auto& colors = ThemeManager::instance().colors();
+    switch (message_->role()) {
+        case MessageRole::User:
+            setBackgroundColor(colors.primary.lighter(180));
+            break;
+        case MessageRole::Assistant:
+            setBackgroundColor(colors.surface);
+            break;
+        case MessageRole::System:
+            setBackgroundColor(colors.surfaceHover);
+            break;
+        case MessageRole::Tool:
+            setBackgroundColor(colors.warning.lighter(180));
+            break;
     }
     
     // Update content
@@ -532,6 +536,7 @@ void MessageBubble::applyBubbleStyle() {
             setBorderRadius(Design::RADIUS_SM);
             setShadowEnabled(false);
             setBorderWidth(0);
+            setBackgroundColor(Qt::transparent);
             break;
             
         case BubbleStyle::Terminal:
@@ -569,25 +574,12 @@ void MessageBubble::setShowTimestamp(bool show) {
     }
 }
 
-void MessageBubble::setCompactMode(bool compact) {
-    if (compactMode_ != compact) {
-        compactMode_ = compact;
-        
-        // Adjust spacing and margins
-        int spacing = compact ? Design::SPACING_XS : Design::SPACING_SM;
-        int margin = compact ? Design::SPACING_SM : Design::SPACING_MD;
-        
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
-            mainLayout->setSpacing(spacing);
+void MessageBubble::setShowHeader(bool show) {
+    if (showHeader_ != show) {
+        showHeader_ = show;
+        if (headerWidget_) {
+            headerWidget_->setVisible(show);
         }
-        
-        // Update all child layouts
-        QList<QLayout*> layouts = findChildren<QLayout*>();
-        for (QLayout* layout : layouts) {
-            layout->setSpacing(spacing);
-            layout->setContentsMargins(margin, spacing, margin, spacing);
-        }
-        
         updateLayout();
     }
 }
@@ -890,22 +882,32 @@ void MessageBubble::contextMenuEvent(QContextMenuEvent* event) {
     }
 }
 
-void MessageBubble::enterEvent(QEvent* event) {
-    CardWidget::enterEvent(event);
+void MessageBubble::paintEvent(QPaintEvent* event) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
     
-    // Show footer on hover
-    if (footerWidget_ && interactive_) {
-        footerWidget_->setVisible(true);
+    // Paint background with no hover effects
+    QPainterPath path;
+    path.addRoundedRect(rect(), borderRadius(), borderRadius());
+    painter.fillPath(path, backgroundColor());
+    
+    // Paint content
+    paintContent(&painter);
+    
+    // Paint selection overlay if selected
+    if (isSelected_) {
+        paintSelectionOverlay(&painter);
     }
 }
 
+void MessageBubble::enterEvent(QEvent* event) {
+    // Completely ignore hover events
+    Q_UNUSED(event);
+}
+
 void MessageBubble::leaveEvent(QEvent* event) {
-    CardWidget::leaveEvent(event);
-    
-    // Hide footer when not hovering
-    if (footerWidget_) {
-        footerWidget_->setVisible(false);
-    }
+    // Completely ignore hover events
+    Q_UNUSED(event);
 }
 
 void MessageBubble::onThemeChanged() {
@@ -1017,9 +1019,11 @@ void MessageBubble::paintSelectionOverlay(QPainter* painter) {
 MessageBubbleContainer::MessageBubbleContainer(QWidget* parent)
     : QWidget(parent) {
     
-    setLayout(new QVBoxLayout(this));
-    layout()->setSpacing(spacing_);
-    layout()->setContentsMargins(0, 0, 0, 0);
+    auto* vboxLayout = new QVBoxLayout(this);
+    vboxLayout->setSpacing(spacing_);
+    vboxLayout->setContentsMargins(0, 0, 0, 0);
+    vboxLayout->setAlignment(Qt::AlignTop);  // Prevent messages from spreading out
+    setLayout(vboxLayout);
     
     // Setup layout timer for batched updates
     layoutTimer_ = new QTimer(this);
@@ -1029,16 +1033,59 @@ MessageBubbleContainer::MessageBubbleContainer(QWidget* parent)
 }
 
 void MessageBubbleContainer::addMessage(Message* message, bool animated) {
-    auto* bubble = new MessageBubble(message, this);
-    setupBubble(bubble);
-    
-    bubbles_.append(bubble);
-    bubbleMap_[message->id()] = bubble;
-    
-    if (animated && !batchUpdateCount_) {
-        animateInsertion(bubble, bubbles_.size() - 1);
+    // Check if we can add to current group
+    if (currentGroup_ && currentGroup_->canAddMessage(message)) {
+        currentGroup_->addMessage(message);
+        
+        // Still need to track the bubble for compatibility
+        if (auto* bubble = currentGroup_->findChild<MessageBubble*>(
+                QString(), Qt::FindDirectChildrenOnly)) {
+            if (bubble->message() && bubble->message()->id() == message->id()) {
+                bubbles_.append(bubble);
+                bubbleMap_[message->id()] = bubble;
+            }
+        }
     } else {
-        layout()->addWidget(bubble);
+        // Create new group
+        auto* group = new MessageGroup(message, this);
+        groups_.append(group);
+        currentGroup_ = group;
+        
+        // Configure group
+        group->setDensityMode(densityMode_);
+        group->setMaxWidth(maxBubbleWidth_);
+        group->setShowTimestamp(true);
+        
+        // Connect group signals
+        connect(group, &MessageGroup::messageClicked, [this](const QUuid& id) {
+            emit bubbleClicked(id);
+        });
+        connect(group, &MessageGroup::messageDoubleClicked, [this](const QUuid& id) {
+            emit bubbleDoubleClicked(id);
+        });
+        connect(group, &MessageGroup::contextMenuRequested, [this](const QUuid& id, const QPoint& pos) {
+            emit bubbleContextMenu(id, pos);
+        });
+        connect(group, &MessageGroup::linkClicked, this, &MessageBubbleContainer::linkClicked);
+        
+        // Add to layout with spacing
+        if (groups_.size() > 1) {
+            // Add spacing between groups
+            auto* spacer = new QWidget(this);
+            spacer->setFixedHeight(densityMode_ == 0 ? 12 : densityMode_ == 1 ? 16 : 24);
+            layout()->addWidget(spacer);
+        }
+        
+        layout()->addWidget(group);
+        
+        // Track the bubble for compatibility
+        if (auto* bubble = group->findChild<MessageBubble*>(
+                QString(), Qt::FindDirectChildrenOnly)) {
+            if (bubble->message() && bubble->message()->id() == message->id()) {
+                bubbles_.append(bubble);
+                bubbleMap_[message->id()] = bubble;
+            }
+        }
     }
     
     if (!batchUpdateCount_) {
@@ -1084,17 +1131,22 @@ void MessageBubbleContainer::removeMessage(const QUuid& id, bool animated) {
 }
 
 void MessageBubbleContainer::clearMessages(bool animated) {
-    if (animated && !batchUpdateCount_) {
-        for (MessageBubble* bubble : bubbles_) {
-            animateRemoval(bubble);
-        }
-    } else {
-        qDeleteAll(bubbles_);
-    }
+    // Clear groups
+    qDeleteAll(groups_);
+    groups_.clear();
+    currentGroup_ = nullptr;
     
+    // Clear individual bubble tracking
     bubbles_.clear();
     bubbleMap_.clear();
     selectedBubbles_.clear();
+    
+    // Clear layout
+    QLayoutItem* item;
+    while ((item = layout()->takeAt(0)) != nullptr) {
+        delete item->widget();
+        delete item;
+    }
     
     if (!batchUpdateCount_) {
         updateLayout();
@@ -1301,11 +1353,29 @@ void MessageBubbleContainer::setAnimationType(MessageBubble::AnimationType type)
     animationType_ = type;
 }
 
-void MessageBubbleContainer::setCompactMode(bool compact) {
-    compactMode_ = compact;
-    for (MessageBubble* bubble : bubbles_) {
-        bubble->setCompactMode(compact);
+
+void MessageBubbleContainer::setDensityMode(int mode) {
+    densityMode_ = mode;
+    
+    // Update all groups
+    for (MessageGroup* group : groups_) {
+        group->setDensityMode(mode);
     }
+    
+    // Update spacing
+    switch (mode) {
+        case 0: // Compact
+            spacing_ = Design::SPACING_XS;
+            break;
+        case 1: // Cozy
+            spacing_ = Design::SPACING_SM;
+            break;
+        case 2: // Spacious
+            spacing_ = Design::SPACING_MD;
+            break;
+    }
+    
+    layout()->setSpacing(spacing_);
     updateLayout();
 }
 
@@ -1394,7 +1464,6 @@ void MessageBubbleContainer::cleanupBubble(MessageBubble* bubble) {
 void MessageBubbleContainer::setupBubble(MessageBubble* bubble) {
     bubble->setBubbleStyle(bubbleStyle_);
     bubble->setAnimationType(animationType_);
-    bubble->setCompactMode(compactMode_);
     bubble->setMaxWidth(maxBubbleWidth_);
     
     connect(bubble, &MessageBubble::clicked,

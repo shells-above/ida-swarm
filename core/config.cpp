@@ -34,12 +34,11 @@ bool Config::save_to_file(const std::string& path) const {
         j["ui"]["close_to_tray"] = ui.close_to_tray;
         j["ui"]["start_minimized"] = ui.start_minimized;
         j["ui"]["remember_window_state"] = ui.remember_window_state;
-        j["ui"]["auto_save_layout"] = ui.auto_save_layout;
         
         // Conversation view
         j["ui"]["auto_save_conversations"] = ui.auto_save_conversations;
         j["ui"]["auto_save_interval"] = ui.auto_save_interval;
-        j["ui"]["compact_mode"] = ui.compact_mode;
+        j["ui"]["density_mode"] = ui.density_mode;
         
         // Inspector
         j["ui"]["inspector_follow_cursor"] = ui.inspector_follow_cursor;
@@ -105,12 +104,11 @@ bool Config::load_from_file(const std::string& path) {
             ui.close_to_tray = j["ui"].value("close_to_tray", ui.close_to_tray);
             ui.start_minimized = j["ui"].value("start_minimized", ui.start_minimized);
             ui.remember_window_state = j["ui"].value("remember_window_state", ui.remember_window_state);
-            ui.auto_save_layout = j["ui"].value("auto_save_layout", ui.auto_save_layout);
             
             // Conversation view
             ui.auto_save_conversations = j["ui"].value("auto_save_conversations", ui.auto_save_conversations);
             ui.auto_save_interval = j["ui"].value("auto_save_interval", ui.auto_save_interval);
-            ui.compact_mode = j["ui"].value("compact_mode", ui.compact_mode);
+            ui.density_mode = j["ui"].value("density_mode", ui.density_mode);
             
             // Inspector
             ui.inspector_follow_cursor = j["ui"].value("inspector_follow_cursor", ui.inspector_follow_cursor);

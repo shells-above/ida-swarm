@@ -37,12 +37,11 @@ struct Config {
         bool close_to_tray = false;
         bool start_minimized = false;
         bool remember_window_state = true;
-        bool auto_save_layout = true;
         
         // Conversation view
         bool auto_save_conversations = true;
         int auto_save_interval = 60;  // seconds
-        bool compact_mode = false;
+        int density_mode = 1;  // 0=Compact, 1=Cozy, 2=Spacious
         
         // Inspector
         bool inspector_follow_cursor = true;

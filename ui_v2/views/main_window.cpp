@@ -4,6 +4,7 @@
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
 #include "../core/settings_manager.h"
+#include "../core/agent_controller.h"
 #include "../widgets/command_palette.h"
 #include "memory_dock.h"
 #include "tool_execution_dock.h"
@@ -254,12 +255,38 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onThemeChanged);
     onThemeChanged();
     
-    // Start with a new session
-    QTimer::singleShot(0, this, &MainWindow::newSession);
+    // Start with a new session (without prompting for save)
+    QTimer::singleShot(0, this, [this]() {
+        // Finish initialization now that settings are loaded
+        conversationView_->finishInitialization();
+        
+        // Initialize a new session without checking for unsaved changes
+        conversationView_->newSession();
+        currentFile_.clear();
+        setCurrentFile(QString());
+        hasUnsavedChanges_ = false;
+        updateWindowTitle();
+        showStatusMessage(tr("Session ready"));
+    });
 }
 
 MainWindow::~MainWindow() {
-    saveSettings();
+    // Clean up controller connections first
+    if (controller_) {
+        controller_->cleanup();
+    }
+    
+    // Disconnect all conversation view signals
+    for (auto* view : conversationViews_) {
+        if (view) {
+            view->disconnect();
+        }
+    }
+    
+    // Only save settings if preference is enabled and we should save
+    if (rememberWindowState_ && shouldSaveSettings_) {
+        saveSettings();
+    }
     if (instance_ == this) {
         instance_ = nullptr;
     }
@@ -642,6 +669,7 @@ void MainWindow::createCentralWidget() {
     // Create command palette
     commandPalette_ = new CommandPalette(this);
     commandPalette_->setObjectName("CommandPalette");
+    commandPalette_->setMainWindow(this);
     commandPalette_->registerBuiltinCommands();
 }
 
@@ -1140,6 +1168,8 @@ void MainWindow::focusPreviousSplit() {
 }
 
 void MainWindow::newSession() {
+    // This is called when user explicitly requests a new session
+    // (not during startup)
     if (!maybeSave()) {
         return;
     }
@@ -1182,8 +1212,22 @@ void MainWindow::saveSession(const QString& path) {
     }
     
     if (fileName.isEmpty()) {
-        saveSessionAs();
-        return;
+        // Auto-generate a default session file in the IDB directory
+        QString idbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
+        QFileInfo idbInfo(idbPath);
+        QString idbDir = idbInfo.absolutePath();
+        
+        // Get session ID from conversation view
+        QString sessionId;
+        if (conversationView_) {
+            sessionId = conversationView_->currentSessionId();
+        }
+        if (sessionId.isEmpty()) {
+            sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        
+        // Create default filename
+        fileName = QDir(idbDir).absoluteFilePath(QString("session_%1.llmre").arg(sessionId));
     }
     
     conversationView_->saveSession(fileName);
@@ -1194,9 +1238,25 @@ void MainWindow::saveSession(const QString& path) {
 }
 
 void MainWindow::saveSessionAs() {
+    // Get IDB directory
+    QString idbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
+    QFileInfo idbInfo(idbPath);
+    QString idbDir = idbInfo.absolutePath();
+    
+    // Generate suggested filename with session ID
+    QString sessionId;
+    if (conversationView_) {
+        sessionId = conversationView_->currentSessionId();
+    }
+    if (sessionId.isEmpty()) {
+        sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+    QString suggestedName = QString("session_%1.llmre").arg(sessionId);
+    QString suggestedPath = QDir(idbDir).absoluteFilePath(suggestedName);
+    
     QString fileName = QFileDialog::getSaveFileName(
         this, tr("Save Session As"),
-        QDir::homePath(),
+        suggestedPath,
         tr("Session Files (*.llmre);;All Files (*)")
     );
     
@@ -1447,19 +1507,37 @@ void MainWindow::toggleFullScreen() {
 
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // Prevent multiple close dialogs
+    if (isClosing_) {
+        event->accept();
+        return;
+    }
+    
+    // If IDA is shutting down, don't show save dialog
+    if (isShuttingDown_) {
+        isClosing_ = true;
+        if (rememberWindowState_ && shouldSaveSettings_) {
+            saveSettings();
+        }
+        event->accept();
+        return;
+    }
+    
     if (closeToTray_ && trayIcon_ && trayIcon_->isVisible()) {
         hide();
         event->ignore();
         return;
     }
     
-    if (maybeSave()) {
-        isClosing_ = true;
+    // Set flag before cleanup
+    isClosing_ = true;
+    
+    // Save window state if preference is enabled
+    if (rememberWindowState_ && shouldSaveSettings_) {
         saveSettings();
-        event->accept();
-    } else {
-        event->ignore();
     }
+    
+    event->accept();
 }
 
 void MainWindow::changeEvent(QEvent* event) {
@@ -1834,13 +1912,12 @@ void MainWindow::loadSettings() {
     closeToTray_ = config.ui.close_to_tray;
     startMinimized_ = config.ui.start_minimized;
     rememberWindowState_ = config.ui.remember_window_state;
-    autoSaveLayout_ = config.ui.auto_save_layout;
     
     // Apply conversation view settings
     if (conversationView_) {
         conversationView_->setAutoSaveEnabled(config.ui.auto_save_conversations);
         conversationView_->setAutoSaveInterval(config.ui.auto_save_interval);
-        conversationView_->setCompactMode(config.ui.compact_mode);
+        conversationView_->setDensityMode(config.ui.density_mode);
         conversationView_->setShowTimestamps(config.ui.show_timestamps);
     }
     
@@ -1855,7 +1932,6 @@ void MainWindow::loadSettings() {
     closeToTray_ = settings.value("closeToTray", false).toBool();
     startMinimized_ = settings.value("startMinimized", false).toBool();
     rememberWindowState_ = settings.value("rememberWindowState", true).toBool();
-    autoSaveLayout_ = settings.value("autoSaveLayout", true).toBool();
     
     settings.endGroup();
     
@@ -1877,6 +1953,11 @@ void MainWindow::loadSettings() {
 }
 
 void MainWindow::saveSettings() {
+    // Only save if preference is enabled
+    if (!rememberWindowState_) {
+        return;
+    }
+    
     QSettings settings;
     
     settings.beginGroup("MainWindow");
@@ -1887,7 +1968,6 @@ void MainWindow::saveSettings() {
     settings.setValue("closeToTray", closeToTray_);
     settings.setValue("startMinimized", startMinimized_);
     settings.setValue("rememberWindowState", rememberWindowState_);
-    settings.setValue("autoSaveLayout", autoSaveLayout_);
     settings.endGroup();
     
     // Save recent files
@@ -1926,6 +2006,16 @@ bool MainWindow::maybeSave() {
     case QMessageBox::Cancel:
         return false;
     case QMessageBox::Discard:
+        // Clear unsaved changes to prevent auto-save on destruction
+        for (auto* view : conversationViews_) {
+            if (view) {
+                view->discardChanges();
+            }
+        }
+        hasUnsavedChanges_ = false;
+        // Don't save settings when user explicitly discards changes
+        shouldSaveSettings_ = false;
+        return true;
     default:
         return true;
     }
@@ -1991,7 +2081,9 @@ UiController::UiController(MainWindow* mainWindow)
 {
 }
 
-UiController::~UiController() = default;
+UiController::~UiController() {
+    cleanup();
+}
 
 void UiController::registerConversationView(ConversationView* view) {
     if (!conversationViews_.contains(view)) {
@@ -2018,6 +2110,11 @@ void UiController::routeUserMessage(const QString& content) {
     // Route to active conversation view
     if (activeView_) {
         emit messageRouted(content, "user");
+        
+        // Send to agent controller if available
+        if (agentController_) {
+            agentController_->executeTask(content.toStdString());
+        }
     }
 }
 
@@ -2138,6 +2235,19 @@ ConversationView* UiController::activeConversationView() const {
 
 bool UiController::hasActiveConversations() const {
     return !conversationViews_.isEmpty();
+}
+
+void UiController::cleanup() {
+    // Disconnect all signals from conversation views
+    for (auto* view : conversationViews_) {
+        if (view) {
+            view->disconnect(this);
+        }
+    }
+    
+    // Clear the list
+    conversationViews_.clear();
+    activeView_ = nullptr;
 }
 
 // NotificationManager implementation

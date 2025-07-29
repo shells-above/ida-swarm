@@ -69,6 +69,9 @@ public:
     void showAbout();
     void showKeyboardShortcuts();
     
+    // Shutdown handling
+    void setShuttingDown(bool shutting) { isShuttingDown_ = shutting; }
+    
     // Global instance
     static MainWindow* instance();
     static void setInstance(MainWindow* window);
@@ -247,6 +250,8 @@ private:
     QString currentLayout_;
     bool hasUnsavedChanges_ = false;
     bool isClosing_ = false;
+    bool isShuttingDown_ = false;
+    bool shouldSaveSettings_ = true;
     
     // Settings
     bool showTrayIcon_ = true;
@@ -254,11 +259,13 @@ private:
     bool closeToTray_ = false;
     bool startMinimized_ = false;
     bool rememberWindowState_ = true;
-    bool autoSaveLayout_ = true;
     
     // Global instance
     static MainWindow* instance_;
 };
+
+// Forward declaration
+class AgentController;
 
 // UI Controller - manages UI state and coordination
 class UiController : public QObject {
@@ -294,6 +301,13 @@ public:
     ConversationView* activeConversationView() const;
     bool hasActiveConversations() const;
     
+    // Cleanup
+    void cleanup();
+    
+    // Agent controller
+    void setAgentController(AgentController* controller) { agentController_ = controller; }
+    AgentController* agentController() const { return agentController_; }
+    
 signals:
     void conversationViewActivated(ConversationView* view);
     void messageRouted(const QString& content, const QString& target);
@@ -304,6 +318,7 @@ private:
     MainWindow* mainWindow_;
     QList<ConversationView*> conversationViews_;
     ConversationView* activeView_ = nullptr;
+    AgentController* agentController_ = nullptr;
     
     // Focus state
     QWidget* lastFocusedWidget_ = nullptr;

@@ -189,6 +189,11 @@ llm_plugin_t::~llm_plugin_t() {
 void llm_plugin_t::prepare_for_shutdown() {
     shutting_down = true;
 
+    // Notify the window that we're shutting down
+    if (main_window) {
+        main_window->setShuttingDown(true);
+    }
+
     // Clean up window if it exists
     cleanup_window();
 }
@@ -412,6 +417,11 @@ void llm_plugin_t::show_main_window() {
             agent_controller->connectMemoryDock(main_window->memoryDock());
             agent_controller->connectToolDock(main_window->toolDock());
             agent_controller->connectStatsDock(main_window->statsDock());
+            
+            // Pass agent controller to UI controller
+            if (main_window->controller()) {
+                main_window->controller()->setAgentController(agent_controller);
+            }
         }
 
         // Connect destroyed signal to mark window as closed

@@ -53,8 +53,9 @@ public:
     void setShowTimestamp(bool show);
     bool showTimestamp() const { return showTimestamp_; }
     
-    void setCompactMode(bool compact);
-    bool isCompactMode() const { return compactMode_; }
+    void setShowHeader(bool show);
+    bool showHeader() const { return showHeader_; }
+    
     
     // Animation
     void setAnimationType(AnimationType type) { animationType_ = type; }
@@ -125,6 +126,7 @@ public slots:
     void refresh();
     
 protected:
+    void paintEvent(QPaintEvent* event) override;
     void paintContent(QPainter* painter) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -180,7 +182,6 @@ private:
     
     // Header components
     QLabel* nameLabel_ = nullptr;
-    QLabel* roleLabel_ = nullptr;
     QLabel* timestampLabel_ = nullptr;
     QToolButton* menuButton_ = nullptr;
     
@@ -203,7 +204,7 @@ private:
     bool isHighlighted_ = false;
     bool isExpanded_ = true;
     bool showTimestamp_ = true;
-    bool compactMode_ = false;
+    bool showHeader_ = true;
     bool interactive_ = true;
     bool toolOutputVisible_ = false;
     int maxWidth_ = 600;
@@ -227,6 +228,9 @@ private:
     mutable QSize cachedSize_;
     mutable bool sizeCacheDirty_ = true;
 };
+
+// Forward declaration
+class MessageGroup;
 
 // Container widget for multiple message bubbles with optimized rendering
 class MessageBubbleContainer : public QWidget {
@@ -268,9 +272,10 @@ public:
     // Appearance
     void setBubbleStyle(MessageBubble::BubbleStyle style);
     void setAnimationType(MessageBubble::AnimationType type);
-    void setCompactMode(bool compact);
     void setMaxBubbleWidth(int width);
     void setSpacing(int spacing) { spacing_ = spacing; updateLayout(); }
+    void setDensityMode(int mode); // 0=Compact, 1=Cozy, 2=Spacious
+    int densityMode() const { return densityMode_; }
     
     // Batch operations
     void beginBatchUpdate();
@@ -310,10 +315,14 @@ private:
     QHash<QUuid, MessageBubble*> bubbleMap_;
     QSet<MessageBubble*> selectedBubbles_;
     
+    // Message groups
+    QList<MessageGroup*> groups_;
+    MessageGroup* currentGroup_ = nullptr;
+    
     // State
     MessageBubble::BubbleStyle bubbleStyle_ = MessageBubble::BubbleStyle::Modern;
     MessageBubble::AnimationType animationType_ = MessageBubble::AnimationType::FadeIn;
-    bool compactMode_ = false;
+    int densityMode_ = 1; // 0=Compact, 1=Cozy, 2=Spacious
     int maxBubbleWidth_ = 600;
     int spacing_ = Design::SPACING_MD;
     QString searchFilter_;

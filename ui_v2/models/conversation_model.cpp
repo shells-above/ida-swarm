@@ -1112,9 +1112,13 @@ QSize ConversationDelegate::sizeHint(const QStyleOptionViewItem& option,
     // Add vertical spacing
     height += 2 * Design::SPACING_SM;
     
-    if (compactMode_) {
-        height = height * 0.8; // Reduce height in compact mode
+    // Adjust height based on density mode
+    if (densityMode_ == 0) {  // Compact
+        height = height * 0.8;
+    } else if (densityMode_ == 2) {  // Spacious
+        height = height * 1.2;
     }
+    // densityMode_ == 1 (Cozy) uses normal height
     
     return QSize(option.rect.width(), height);
 }

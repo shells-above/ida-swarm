@@ -294,7 +294,7 @@ void ThemeManager::parseComponentStyles(const QJsonObject& obj) {
 }
 
 void ThemeManager::updateComponentStyles() {
-    if (compactMode_) {
+    if (densityMode_ == 0) {  // Compact mode
         // Reduce spacing in compact mode
         componentStyles_.button.paddingHorizontal = Design::SPACING_SM;
         componentStyles_.button.paddingVertical = Design::SPACING_XS;
@@ -302,6 +302,22 @@ void ThemeManager::updateComponentStyles() {
         componentStyles_.input.paddingVertical = Design::SPACING_XS;
         componentStyles_.card.padding = Design::SPACING_SM;
         componentStyles_.message.padding = Design::SPACING_SM;
+    } else if (densityMode_ == 1) {  // Cozy mode (default)
+        // Use default spacing in normal mode
+        componentStyles_.button.paddingHorizontal = Design::SPACING_MD;
+        componentStyles_.button.paddingVertical = Design::SPACING_SM;
+        componentStyles_.input.paddingHorizontal = Design::SPACING_SM;
+        componentStyles_.input.paddingVertical = Design::SPACING_SM;
+        componentStyles_.card.padding = Design::SPACING_MD;
+        componentStyles_.message.padding = Design::SPACING_MD;
+    } else {  // Spacious mode (densityMode_ == 2)
+        // Increase spacing in spacious mode
+        componentStyles_.button.paddingHorizontal = Design::SPACING_LG;
+        componentStyles_.button.paddingVertical = Design::SPACING_MD;
+        componentStyles_.input.paddingHorizontal = Design::SPACING_MD;
+        componentStyles_.input.paddingVertical = Design::SPACING_MD;
+        componentStyles_.card.padding = Design::SPACING_LG;
+        componentStyles_.message.padding = Design::SPACING_LG;
     }
 }
 
@@ -417,7 +433,7 @@ QString ThemeManager::generateButtonQss() const {
 
 QString ThemeManager::generateInputQss() const {
     return QString(R"(
-        QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+        QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateTimeEdit, QDateEdit, QTimeEdit {
             background-color: %1;
             color: %2;
             border: %3px solid %4;
@@ -428,13 +444,15 @@ QString ThemeManager::generateInputQss() const {
         }
         
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, 
-        QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+        QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
+        QDateTimeEdit:focus, QDateEdit:focus, QTimeEdit:focus {
             border-color: %10;
             outline: none;
         }
         
         QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
-        QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+        QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled,
+        QDateTimeEdit:disabled, QDateEdit:disabled, QTimeEdit:disabled {
             background-color: %11;
             color: %12;
         }
@@ -723,8 +741,8 @@ void ThemeManager::setFontScale(qreal scale) {
     applyThemeToApplication();
 }
 
-void ThemeManager::setCompactMode(bool compact) {
-    compactMode_ = compact;
+void ThemeManager::setDensityMode(int mode) {
+    densityMode_ = mode;
     updateComponentStyles();
     applyThemeToApplication();
     emit themeChanged();
@@ -846,12 +864,9 @@ void ThemeManager::applyThemeToWidget(QWidget* widget) {
     QString widgetQss = generateQss();
     widget->setStyleSheet(widgetQss);
     
-    // Recursively apply to all child widgets
-    for (QObject* child : widget->children()) {
-        if (QWidget* childWidget = qobject_cast<QWidget*>(child)) {
-            applyThemeToWidget(childWidget);
-        }
-    }
+    // DO NOT recursively apply to child widgets!
+    // Qt's style system will cascade the styles naturally
+    // Applying styles to every child widget causes conflicts and overrides
 }
 
 QPalette ThemeManager::widgetPalette() const {

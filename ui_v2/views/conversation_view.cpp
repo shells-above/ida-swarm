@@ -35,11 +35,15 @@ ConversationView::ConversationView(QWidget* parent)
     
     // Set initial focus
     QTimer::singleShot(0, this, &ConversationView::focusInput);
+    
+    // Keep initialization flag true until MainWindow finishes setup
+    // isInitializing_ = false;  // Moved to finishInitialization()
 }
 
 ConversationView::~ConversationView() {
-    if (hasUnsavedChanges_ && autoSaveEnabled_) {
-        saveSession();
+    // Only auto-save if we have a session path (user has saved at least once)
+    if (hasUnsavedChanges_ && autoSaveEnabled_ && !sessionPath_.isEmpty()) {
+        saveSession(sessionPath_);
     }
 }
 
@@ -101,7 +105,7 @@ void ConversationView::createToolBar() {
         ThemeManager::instance().themedIcon("open"),
         tr("Load Session"), [this]() {
             QString path = QFileDialog::getOpenFileName(
-                this, tr("Load Session"), QString(), tr("Session Files (*.json)"));
+                this, tr("Load Session"), QString(), tr("Session Files (*.llmre)"));
             if (!path.isEmpty()) {
                 loadSession(path);
             }
@@ -144,11 +148,32 @@ void ConversationView::createToolBar() {
     
     auto* viewMenu = new QMenu(viewButton);
     
-    compactModeAction_ = viewMenu->addAction(tr("Compact Mode"));
-    compactModeAction_->setCheckable(true);
-    compactModeAction_->setChecked(compactMode_);
-    connect(compactModeAction_, &QAction::toggled, [this](bool checked) {
-        setCompactMode(checked);
+    // Density mode submenu
+    auto* densityMenu = viewMenu->addMenu(tr("Message Density"));
+    auto* densityGroup = new QActionGroup(this);
+    
+    auto* compactDensityAction = densityMenu->addAction(tr("Compact"));
+    compactDensityAction->setCheckable(true);
+    compactDensityAction->setActionGroup(densityGroup);
+    compactDensityAction->setChecked(densityMode_ == 0);
+    connect(compactDensityAction, &QAction::triggered, [this]() {
+        setDensityMode(0);
+    });
+    
+    auto* cozyDensityAction = densityMenu->addAction(tr("Cozy"));
+    cozyDensityAction->setCheckable(true);
+    cozyDensityAction->setActionGroup(densityGroup);
+    cozyDensityAction->setChecked(densityMode_ == 1);
+    connect(cozyDensityAction, &QAction::triggered, [this]() {
+        setDensityMode(1);
+    });
+    
+    auto* spaciousDensityAction = densityMenu->addAction(tr("Spacious"));
+    spaciousDensityAction->setCheckable(true);
+    spaciousDensityAction->setActionGroup(densityGroup);
+    spaciousDensityAction->setChecked(densityMode_ == 2);
+    connect(spaciousDensityAction, &QAction::triggered, [this]() {
+        setDensityMode(2);
     });
     
     showTimestampsAction_ = viewMenu->addAction(tr("Show Timestamps"));
@@ -159,23 +184,6 @@ void ConversationView::createToolBar() {
     });
     
     viewMenu->addSeparator();
-    
-    // Input modes
-    auto* inputModeMenu = viewMenu->addMenu(tr("Input Mode"));
-    auto* inputModeGroup = new QActionGroup(this);
-    
-    auto addInputModeAction = [&](const QString& name, const QString& mode) {
-        auto* action = inputModeMenu->addAction(name);
-        action->setCheckable(true);
-        action->setChecked(inputMode_ == mode);
-        action->setActionGroup(inputModeGroup);
-        connect(action, &QAction::triggered, [this, mode]() {
-            setInputMode(mode);
-        });
-    };
-    
-    addInputModeAction(tr("Single Line"), "single");
-    addInputModeAction(tr("Multi Line"), "multi");
     
     viewMenu->addSeparator();
     
@@ -223,7 +231,7 @@ void ConversationView::createMessageArea() {
     
     bubbleContainer_ = new MessageBubbleContainer(scrollArea_);
     bubbleContainer_->setBubbleStyle(bubbleStyle_);
-    bubbleContainer_->setCompactMode(compactMode_);
+    bubbleContainer_->setDensityMode(densityMode_);
     bubbleContainer_->setMaxBubbleWidth(maxBubbleWidth_);
     
     scrollArea_->setWidget(bubbleContainer_);
@@ -519,11 +527,13 @@ void ConversationView::setBubbleStyle(MessageBubble::BubbleStyle style) {
     markUnsavedChanges();
 }
 
-void ConversationView::setCompactMode(bool compact) {
-    compactMode_ = compact;
-    bubbleContainer_->setCompactMode(compact);
-    compactModeAction_->setChecked(compact);
-    markUnsavedChanges();
+
+void ConversationView::setDensityMode(int mode) {
+    if (densityMode_ != mode) {
+        densityMode_ = mode;
+        bubbleContainer_->setDensityMode(mode);
+        markUnsavedChanges();
+    }
 }
 
 
@@ -540,28 +550,13 @@ void ConversationView::setShowTimestamps(bool show) {
 }
 
 void ConversationView::setMaxBubbleWidth(int width) {
-    maxBubbleWidth_ = width;
-    bubbleContainer_->setMaxBubbleWidth(width);
-    markUnsavedChanges();
-}
-
-void ConversationView::setInputMode(const QString& mode) {
-    if (inputMode_ != mode) {
-        inputMode_ = mode;
-        
-        // Update the input area mode
-        if (inputArea_) {
-            if (mode == "single") {
-                inputArea_->setMode(ConversationInputArea::SingleLine);
-            } else if (mode == "multi") {
-                inputArea_->setMode(ConversationInputArea::MultiLine);
-            }
-        }
-        
-        emit inputModeChanged(mode);
-        markUnsavedChanges();
+    if (maxBubbleWidth_ != width) {
+        maxBubbleWidth_ = width;
+        bubbleContainer_->setMaxBubbleWidth(width);
+        // Don't mark as changed - this is just a UI preference
     }
 }
+
 
 void ConversationView::startToolExecution(const QUuid& messageId, const QString& toolName) {
     if (!model_) return;
@@ -625,10 +620,19 @@ void ConversationView::saveSession(const QString& path) {
     QString savePath = path;
     if (savePath.isEmpty()) {
         if (sessionPath_.isEmpty()) {
+            // Get IDB directory
+            QString idbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
+            QFileInfo idbInfo(idbPath);
+            QString idbDir = idbInfo.absolutePath();
+            
+            // Suggest filename in IDB directory
+            QString suggestedName = QString("session_%1.llmre").arg(sessionId_);
+            QString suggestedPath = QDir(idbDir).absoluteFilePath(suggestedName);
+            
             savePath = QFileDialog::getSaveFileName(
                 this, tr("Save Session"),
-                QString("session_%1.json").arg(sessionId_),
-                tr("Session Files (*.json)"));
+                suggestedPath,
+                tr("Session Files (*.llmre)"));
             
             if (savePath.isEmpty()) return;
             sessionPath_ = savePath;
@@ -657,10 +661,9 @@ void ConversationView::saveSession(const QString& path) {
     // ConversationView settings
     QJsonObject convSettings;
     convSettings["bubbleStyle"] = bubbleStyle_;
-    convSettings["compactMode"] = compactMode_;
+    convSettings["densityMode"] = densityMode_;
     convSettings["showTimestamps"] = showTimestamps_;
     convSettings["maxBubbleWidth"] = maxBubbleWidth_;
-    convSettings["inputMode"] = inputMode_;
     conversation["settings"] = convSettings;
     
     session["conversation"] = conversation;
@@ -822,10 +825,11 @@ void ConversationView::loadSession(const QString& path) {
             QJsonObject settings = session["settings"].toObject();
             setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
                 settings["bubbleStyle"].toInt()));
-            setCompactMode(settings["compactMode"].toBool());
             setShowTimestamps(settings["showTimestamps"].toBool());
             setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
-            setInputMode(settings["inputMode"].toString());
+            if (settings.contains("densityMode")) {
+                setDensityMode(settings["densityMode"].toInt());
+            }
         }
     } else {
         // Version 2 format - complete state restoration
@@ -852,10 +856,8 @@ void ConversationView::loadSession(const QString& path) {
                 QJsonObject settings = conversation["settings"].toObject();
                 setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
                     settings["bubbleStyle"].toInt()));
-                setCompactMode(settings["compactMode"].toBool());
                 setShowTimestamps(settings["showTimestamps"].toBool());
                 setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
-                setInputMode(settings["inputMode"].toString());
             }
         }
         
@@ -953,6 +955,11 @@ void ConversationView::loadSession(const QString& path) {
     emit sessionChanged(sessionId_);
 }
 
+void ConversationView::finishInitialization() {
+    // Called by MainWindow after all initial setup is complete
+    isInitializing_ = false;
+}
+
 void ConversationView::newSession() {
     if (hasUnsavedChanges_) {
         int ret = QMessageBox::question(
@@ -967,10 +974,16 @@ void ConversationView::newSession() {
         }
     }
     
+    // Set initializing flag to prevent marking changes
+    isInitializing_ = true;
+    
     clearConversation();
     generateSessionId();
     sessionPath_.clear();
     clearUnsavedChanges();
+    
+    // Done initializing
+    isInitializing_ = false;
     
     emit sessionChanged(sessionId_);
 }
@@ -1033,9 +1046,10 @@ void ConversationView::resizeEvent(QResizeEvent* event) {
     BaseStyledWidget::resizeEvent(event);
     
     // Update max bubble width based on view width
+    // Only update if change is significant (>50 pixels) to prevent constant resizing
     int viewWidth = scrollArea_->viewport()->width();
     int maxWidth = qMin(800, viewWidth - 100);
-    if (maxWidth != maxBubbleWidth_) {
+    if (abs(maxWidth - maxBubbleWidth_) > 50) {
         setMaxBubbleWidth(maxWidth);
     }
 }
@@ -1306,6 +1320,11 @@ void ConversationView::updateMessageBubbles() {
 }
 
 void ConversationView::markUnsavedChanges() {
+    // Don't mark changes during initialization
+    if (isInitializing_) {
+        return;
+    }
+    
     if (!hasUnsavedChanges_) {
         hasUnsavedChanges_ = true;
         emit unsavedChangesChanged(true);
@@ -1315,6 +1334,10 @@ void ConversationView::markUnsavedChanges() {
             saveSessionAction_->setText(tr("Save Session*"));
         }
     }
+}
+
+void ConversationView::discardChanges() {
+    clearUnsavedChanges();
 }
 
 void ConversationView::clearUnsavedChanges() {
@@ -1508,62 +1531,103 @@ ConversationInputArea::ConversationInputArea(QWidget* parent)
     layout->setSpacing(0);
     layout->setContentsMargins(0, 0, 0, 0);
     
-    // Initialize with multi-line mode by default
-    setMode(MultiLine);
+    setupUI();
 }
 
-void ConversationInputArea::setMode(InputMode mode) {
-    if (mode_ == mode) return;
+void ConversationInputArea::setupUI() {
+    // Create container for input area
+    auto* container = new QWidget(this);
+    auto* containerLayout = new QVBoxLayout(container);
+    containerLayout->setSpacing(0);
+    containerLayout->setContentsMargins(0, 0, 0, 0);
     
-    mode_ = mode;
-    updateLayout();
-    emit modeChanged(mode);
+    // Create text edit
+    textEdit_ = new QTextEdit(this);
+    textEdit_->setPlaceholderText(tr("Type a message..."));
+    textEdit_->setAcceptRichText(false);
+    textEdit_->setFont(ThemeManager::instance().typography().body);
+    
+    // Remove extra margins
+    textEdit_->setContentsMargins(0, 0, 0, 0);
+    textEdit_->document()->setDocumentMargin(4);
+    
+    // Set initial height to properly show single line text
+    textEdit_->setFixedHeight(baseHeight_);
+    textEdit_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    
+    // Connect signals
+    connect(textEdit_, &QTextEdit::textChanged, [this]() {
+        emit textChanged();
+        adjustHeight();
+    });
+    
+    // Install event filter for key handling
+    textEdit_->installEventFilter(this);
+    
+    containerLayout->addWidget(textEdit_);
+    
+    // Add container to main layout
+    layout()->addWidget(container);
+    container->show();
+}
+
+void ConversationInputArea::adjustHeight() {
+    if (!textEdit_) return;
+    
+    // Calculate content height
+    QTextDocument* doc = textEdit_->document();
+    QSizeF docSizeF = doc->documentLayout()->documentSize();
+    
+    int contentHeight = qCeil(docSizeF.height()) + 2 * doc->documentMargin();
+    int totalHeight = contentHeight + 8; // padding for top/bottom
+    
+    // Ensure minimum height is baseHeight_ and limit to ~10 lines max
+    int maxHeight = baseHeight_ * 10;
+    int newHeight = qBound(baseHeight_, totalHeight, maxHeight);
+    
+    // Update height if changed
+    if (newHeight != textEdit_->height()) {
+        textEdit_->setFixedHeight(newHeight);
+    }
 }
 
 QString ConversationInputArea::text() const {
-    if (singleLineEdit_ && currentWidget_ == singleLineEdit_) {
-        return singleLineEdit_->text();
-    } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
-        return multiLineEdit_->toPlainText();
-    }
-    return QString();
+    return textEdit_ ? textEdit_->toPlainText() : QString();
 }
 
 void ConversationInputArea::setText(const QString& text) {
-    if (singleLineEdit_ && currentWidget_ == singleLineEdit_) {
-        singleLineEdit_->setText(text);
-    } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
-        multiLineEdit_->setPlainText(text);
+    if (textEdit_) {
+        textEdit_->setPlainText(text);
     }
 }
 
 void ConversationInputArea::clear() {
-    if (singleLineEdit_) singleLineEdit_->clear();
-    if (multiLineEdit_) multiLineEdit_->clear();
+    if (textEdit_) {
+        textEdit_->clear();
+    }
 }
 
 void ConversationInputArea::focus() {
-    if (currentWidget_) {
-        currentWidget_->setFocus();
+    if (textEdit_) {
+        textEdit_->setFocus();
     }
 }
 
 void ConversationInputArea::selectAll() {
-    if (singleLineEdit_ && currentWidget_ == singleLineEdit_) {
-        singleLineEdit_->selectAll();
-    } else if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
-        multiLineEdit_->selectAll();
+    if (textEdit_) {
+        textEdit_->selectAll();
     }
 }
 
 void ConversationInputArea::setPlaceholder(const QString& text) {
-    if (singleLineEdit_) singleLineEdit_->setPlaceholderText(text);
-    if (multiLineEdit_) multiLineEdit_->setPlaceholderText(text);
+    if (textEdit_) {
+        textEdit_->setPlaceholderText(text);
+    }
 }
 
 void ConversationInputArea::setMaxLength(int length) {
-    if (singleLineEdit_) singleLineEdit_->setMaxLength(length);
-    // For QTextEdit, we'll need to handle this in textChanged signal
+    // For QTextEdit, we'd need to handle this in textChanged signal
+    // Not implementing for now as it's not used
 }
 
 int ConversationInputArea::wordCount() const {
@@ -1583,35 +1647,25 @@ void ConversationInputArea::keyPressEvent(QKeyEvent* event) {
 }
 
 bool ConversationInputArea::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::KeyPress) {
+    if (event->type() == QEvent::KeyPress && watched == textEdit_) {
         QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
         
-        // Multi-line mode key handling
-        if (mode_ == MultiLine && watched == multiLineEdit_) {
-            // Ctrl+Enter (or Cmd+Enter on Mac) to submit
-            if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) &&
-                (keyEvent->modifiers() & Qt::ControlModifier)) {
-                emit submitRequested();
-                return true;
-            }
-            // Shift+Enter for new line (default behavior)
-            else if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) &&
-                     (keyEvent->modifiers() & Qt::ShiftModifier)) {
-                // Let the default behavior handle this
-                return false;
-            }
-            // Plain Enter also creates new line in multi-line mode
-            else if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
-                // Let the default behavior handle this
-                return false;
-            }
-            // Escape to cancel
-            else if (keyEvent->key() == Qt::Key_Escape) {
-                emit cancelRequested();
-                return true;
-            }
+        // Ctrl+Enter (or Cmd+Enter on Mac) to submit
+        if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) &&
+            (keyEvent->modifiers() & Qt::ControlModifier)) {
+            emit submitRequested();
+            return true;
         }
-        
+        // Plain Enter creates new line
+        else if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            // Let the default behavior handle this
+            return false;
+        }
+        // Escape to cancel
+        else if (keyEvent->key() == Qt::Key_Escape) {
+            emit cancelRequested();
+            return true;
+        }
     }
     
     return BaseStyledWidget::eventFilter(watched, event);
@@ -1636,118 +1690,11 @@ void ConversationInputArea::dropEvent(QDropEvent* event) {
                 emit fileDropped(url.toLocalFile());
             }
         }
-    } else if (mimeData->hasText()) {
-        if (multiLineEdit_ && currentWidget_ == multiLineEdit_) {
-            multiLineEdit_->insertPlainText(mimeData->text());
-        } else if (singleLineEdit_ && currentWidget_ == singleLineEdit_) {
-            singleLineEdit_->insert(mimeData->text());
-        }
+    } else if (mimeData->hasText() && textEdit_) {
+        textEdit_->insertPlainText(mimeData->text());
     }
     
     event->acceptProposedAction();
 }
-
-void ConversationInputArea::setupSingleLineMode() {
-    // Remove current widget
-    if (currentWidget_) {
-        layout()->removeWidget(currentWidget_);
-        currentWidget_->hide();
-    }
-    
-    // Create single line edit if needed
-    if (!singleLineEdit_) {
-        singleLineEdit_ = new QLineEdit(this);
-        singleLineEdit_->setPlaceholderText(tr("Type a message..."));
-        
-        connect(singleLineEdit_, &QLineEdit::textChanged,
-                this, &ConversationInputArea::textChanged);
-        connect(singleLineEdit_, &QLineEdit::returnPressed,
-                this, &ConversationInputArea::submitRequested);
-    }
-    
-    // Add to layout
-    layout()->addWidget(singleLineEdit_);
-    singleLineEdit_->show();
-    currentWidget_ = singleLineEdit_;
-    
-    // Set focus
-    singleLineEdit_->setFocus();
-}
-
-void ConversationInputArea::setupMultiLineMode() {
-    // Remove current widget
-    if (currentWidget_) {
-        layout()->removeWidget(currentWidget_);
-        currentWidget_->hide();
-    }
-    
-    
-    // Create container for multi-line mode
-    auto* container = new QWidget(this);
-    auto* containerLayout = new QVBoxLayout(container);
-    containerLayout->setSpacing(Design::SPACING_XS);
-    containerLayout->setContentsMargins(Design::SPACING_SM, Design::SPACING_SM, 
-                                      Design::SPACING_SM, Design::SPACING_SM);
-    
-    // Create multi-line text edit if needed
-    if (!multiLineEdit_) {
-        multiLineEdit_ = new QTextEdit(this);
-        multiLineEdit_->setPlaceholderText(tr("Type a message... (Ctrl+Enter to send, Shift+Enter for new line)"));
-        multiLineEdit_->setAcceptRichText(false);
-        multiLineEdit_->setMinimumHeight(60);
-        multiLineEdit_->setMaximumHeight(200);
-        
-        connect(multiLineEdit_, &QTextEdit::textChanged, [this]() {
-            emit textChanged();
-            
-            // Update status with character/word count
-            if (statusLabel_ && statusLabel_->isVisible()) {
-                int words = wordCount();
-                int chars = charCount();
-                statusLabel_->setText(tr("%1 words, %2 chars").arg(words).arg(chars));
-            }
-        });
-        
-        // Install event filter for key handling
-        multiLineEdit_->installEventFilter(this);
-    }
-    
-    containerLayout->addWidget(multiLineEdit_);
-    
-    // Create status bar for character/word count
-    if (!statusLabel_) {
-        statusLabel_ = new QLabel(this);
-        statusLabel_->setFont(ThemeManager::instance().typography().caption);
-        statusLabel_->setAlignment(Qt::AlignRight);
-        
-        const auto& colors = ThemeManager::instance().colors();
-        statusLabel_->setStyleSheet(QString("QLabel { color: %1; padding: 2px 5px; }")
-                                     .arg(colors.textSecondary.name()));
-    }
-    
-    statusLabel_->setText(tr("0 words, 0 chars"));
-    containerLayout->addWidget(statusLabel_);
-    
-    // Add container to main layout
-    layout()->addWidget(container);
-    container->show();
-    currentWidget_ = container;
-    
-    // Set focus
-    multiLineEdit_->setFocus();
-}
-
-
-void ConversationInputArea::updateLayout() {
-    switch (mode_) {
-        case SingleLine:
-            setupSingleLineMode();
-            break;
-        case MultiLine:
-            setupMultiLineMode();
-            break;
-    }
-}
-
 
 } // namespace llm_re::ui_v2

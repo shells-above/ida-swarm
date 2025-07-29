@@ -204,10 +204,6 @@ void SettingsDialog::createUITab() {
     connect(remember_window_state_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
     windowLayout->addWidget(remember_window_state_check_);
     
-    auto_save_layout_check_ = new QCheckBox("Auto-save Window Layout");
-    connect(auto_save_layout_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    windowLayout->addWidget(auto_save_layout_check_);
-    
     layout->addWidget(windowGroup);
     
     // Conversation view
@@ -215,6 +211,7 @@ void SettingsDialog::createUITab() {
     auto* conversationLayout = new QFormLayout(conversationGroup);
     
     auto_save_conversations_check_ = new QCheckBox("Auto-save Conversations");
+    auto_save_conversations_check_->setToolTip("Automatically saves conversation to the current session file.\nOnly works after you've manually saved the session at least once.");
     connect(auto_save_conversations_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
     conversationLayout->addRow(auto_save_conversations_check_);
     
@@ -225,9 +222,13 @@ void SettingsDialog::createUITab() {
             this, &SettingsDialog::onSettingChanged);
     conversationLayout->addRow("Auto-save Interval:", auto_save_interval_spin_);
     
-    compact_mode_check_ = new QCheckBox("Compact Mode");
-    connect(compact_mode_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    conversationLayout->addRow(compact_mode_check_);
+    density_mode_combo_ = new QComboBox();
+    density_mode_combo_->addItem("Compact");
+    density_mode_combo_->addItem("Cozy");
+    density_mode_combo_->addItem("Spacious");
+    connect(density_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onSettingChanged);
+    conversationLayout->addRow("Density Mode:", density_mode_combo_);
     
     layout->addWidget(conversationGroup);
     
@@ -338,12 +339,11 @@ void SettingsDialog::loadSettings() {
     close_to_tray_check_->setChecked(config.ui.close_to_tray);
     start_minimized_check_->setChecked(config.ui.start_minimized);
     remember_window_state_check_->setChecked(config.ui.remember_window_state);
-    auto_save_layout_check_->setChecked(config.ui.auto_save_layout);
     
     // Conversation view
     auto_save_conversations_check_->setChecked(config.ui.auto_save_conversations);
     auto_save_interval_spin_->setValue(config.ui.auto_save_interval);
-    compact_mode_check_->setChecked(config.ui.compact_mode);
+    density_mode_combo_->setCurrentIndex(config.ui.density_mode);
     
     // Inspector
     inspector_follow_cursor_check_->setChecked(config.ui.inspector_follow_cursor);
@@ -403,12 +403,11 @@ void SettingsDialog::applySettings() {
     config.ui.close_to_tray = close_to_tray_check_->isChecked();
     config.ui.start_minimized = start_minimized_check_->isChecked();
     config.ui.remember_window_state = remember_window_state_check_->isChecked();
-    config.ui.auto_save_layout = auto_save_layout_check_->isChecked();
     
     // Conversation view
     config.ui.auto_save_conversations = auto_save_conversations_check_->isChecked();
     config.ui.auto_save_interval = auto_save_interval_spin_->value();
-    config.ui.compact_mode = compact_mode_check_->isChecked();
+    config.ui.density_mode = density_mode_combo_->currentIndex();
     
     // Inspector
     config.ui.inspector_follow_cursor = inspector_follow_cursor_check_->isChecked();

@@ -45,7 +45,7 @@ public:
     // Theme customization
     void setAccentColor(const QColor& color);
     void setFontScale(qreal scale);
-    void setCompactMode(bool compact);
+    void setDensityMode(int mode);  // 0=Compact, 1=Cozy, 2=Spacious
     
     // Widget theming
     void applyThemeToWidget(QWidget* widget);
@@ -104,7 +104,7 @@ private:
     ComponentStyles componentStyles_;
     
     qreal fontScale_ = 1.0;
-    bool compactMode_ = false;
+    int densityMode_ = 1;  // 0=Compact, 1=Cozy, 2=Spacious
     bool hotReloadEnabled_ = false;
     
     std::unique_ptr<QFileSystemWatcher> fileWatcher_;

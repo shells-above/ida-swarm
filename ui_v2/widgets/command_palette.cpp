@@ -2,6 +2,7 @@
 #include "command_palette.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
+#include "../views/main_window.h"
 
 namespace llm_re::ui_v2 {
 
@@ -371,11 +372,11 @@ void CommandPalette::clearCommands() {
 
 void CommandPalette::registerBuiltinCommands() {
     // Register built-in providers
-    registerProvider(std::make_shared<FileCommandProvider>());
-    registerProvider(std::make_shared<EditCommandProvider>());
-    registerProvider(std::make_shared<ViewCommandProvider>());
-    registerProvider(std::make_shared<ToolsCommandProvider>());
-    registerProvider(std::make_shared<HelpCommandProvider>());
+    registerProvider(std::make_shared<FileCommandProvider>(mainWindow_));
+    registerProvider(std::make_shared<EditCommandProvider>(mainWindow_));
+    registerProvider(std::make_shared<ViewCommandProvider>(mainWindow_));
+    registerProvider(std::make_shared<ToolsCommandProvider>(mainWindow_));
+    registerProvider(std::make_shared<HelpCommandProvider>(mainWindow_));
     
     // Register palette-specific commands
     Command clearRecent;
@@ -922,41 +923,49 @@ void CommandPalette::centerOnScreen() {
 QList<Command> FileCommandProvider::commands() const {
     QList<Command> cmds;
     
+    // Get MainWindow
+    auto* mainWnd = qobject_cast<MainWindow*>(mainWindow_);
+    if (!mainWnd) return cmds;
+    
     Command newFile;
     newFile.id = "file.new";
-    newFile.name = "New File";
-    newFile.description = "Create a new file";
+    newFile.name = "New Session";
+    newFile.description = "Create a new conversation session";
     newFile.category = "File";
     newFile.icon = ThemeManager::instance().themedIcon("file-new");
     newFile.shortcut = QKeySequence::New;
-    newFile.keywords = QStringList{"create", "add"};
+    newFile.keywords = QStringList{"create", "add", "session"};
+    newFile.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "newSession", Qt::QueuedConnection); };
     cmds.append(newFile);
     
     Command openFile;
     openFile.id = "file.open";
-    openFile.name = "Open File";
-    openFile.description = "Open an existing file";
+    openFile.name = "Open Session";
+    openFile.description = "Open an existing session";
     openFile.category = "File";
     openFile.icon = ThemeManager::instance().themedIcon("file-open");
     openFile.shortcut = QKeySequence::Open;
+    openFile.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "openSession", Qt::QueuedConnection); };
     cmds.append(openFile);
     
     Command saveFile;
     saveFile.id = "file.save";
-    saveFile.name = "Save File";
-    saveFile.description = "Save the current file";
+    saveFile.name = "Save Session";
+    saveFile.description = "Save the current session";
     saveFile.category = "File";
     saveFile.icon = ThemeManager::instance().themedIcon("file-save");
     saveFile.shortcut = QKeySequence::Save;
+    saveFile.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "saveSession", Qt::QueuedConnection); };
     cmds.append(saveFile);
     
     Command saveAs;
     saveAs.id = "file.saveAs";
-    saveAs.name = "Save As...";
-    saveAs.description = "Save the current file with a new name";
+    saveAs.name = "Save Session As...";
+    saveAs.description = "Save the current session with a new name";
     saveAs.category = "File";
     saveAs.icon = ThemeManager::instance().themedIcon("file-save-as");
     saveAs.shortcut = QKeySequence::SaveAs;
+    saveAs.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "saveSessionAs", Qt::QueuedConnection); };
     cmds.append(saveAs);
     
     return cmds;
@@ -965,6 +974,10 @@ QList<Command> FileCommandProvider::commands() const {
 QList<Command> EditCommandProvider::commands() const {
     QList<Command> cmds;
     
+    // Get MainWindow
+    auto* mainWnd = qobject_cast<MainWindow*>(mainWindow_);
+    if (!mainWnd) return cmds;
+    
     Command undo;
     undo.id = "edit.undo";
     undo.name = "Undo";
@@ -972,6 +985,7 @@ QList<Command> EditCommandProvider::commands() const {
     undo.category = "Edit";
     undo.icon = ThemeManager::instance().themedIcon("undo");
     undo.shortcut = QKeySequence::Undo;
+    undo.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "undo", Qt::QueuedConnection); };
     cmds.append(undo);
     
     Command redo;
@@ -981,6 +995,7 @@ QList<Command> EditCommandProvider::commands() const {
     redo.category = "Edit";
     redo.icon = ThemeManager::instance().themedIcon("redo");
     redo.shortcut = QKeySequence::Redo;
+    redo.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "redo", Qt::QueuedConnection); };
     cmds.append(redo);
     
     Command cut;
@@ -1035,6 +1050,10 @@ QList<Command> EditCommandProvider::commands() const {
 QList<Command> ViewCommandProvider::commands() const {
     QList<Command> cmds;
     
+    // Get MainWindow
+    auto* mainWnd = qobject_cast<MainWindow*>(mainWindow_);
+    if (!mainWnd) return cmds;
+    
     Command toggleTheme;
     toggleTheme.id = "view.toggleTheme";
     toggleTheme.name = "Toggle Theme";
@@ -1083,6 +1102,7 @@ QList<Command> ViewCommandProvider::commands() const {
     fullScreen.category = "View";
     fullScreen.icon = ThemeManager::instance().themedIcon("fullscreen");
     fullScreen.shortcut = QKeySequence::FullScreen;
+    fullScreen.action = [mainWnd]() { QMetaObject::invokeMethod(mainWnd, "toggleFullScreen", Qt::QueuedConnection); };
     cmds.append(fullScreen);
     
     return cmds;

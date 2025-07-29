@@ -55,10 +55,10 @@ public:
     
     // Settings
     void setBubbleStyle(MessageBubble::BubbleStyle style);
-    void setCompactMode(bool compact);
     void setShowTimestamps(bool show);
     void setMaxBubbleWidth(int width);
-    void setInputMode(const QString& mode); // "single", "multi"
+    void setDensityMode(int mode); // 0=Compact, 1=Cozy, 2=Spacious
+    int densityMode() const { return densityMode_; }
     
     // Tool execution
     void startToolExecution(const QUuid& messageId, const QString& toolName);
@@ -67,6 +67,7 @@ public:
     
     // State
     bool hasUnsavedChanges() const { return hasUnsavedChanges_; }
+    void discardChanges();  // Public method to discard unsaved changes
     QString currentSessionId() const { return sessionId_; }
     
     // Auto-save
@@ -78,6 +79,9 @@ public:
     void saveSession(const QString& path = QString());
     void loadSession(const QString& path);
     void newSession();
+    
+    // Initialization
+    void finishInitialization();
     
 signals:
     void messageSubmitted(const QString& content);
@@ -91,7 +95,6 @@ signals:
     void toolExecutionRequested(const QString& toolName, const QJsonObject& params);
     void linkClicked(const QUrl& url);
     void scrolledToBottom();
-    void inputModeChanged(const QString& mode);
     
 public slots:
     void submitInput();
@@ -165,7 +168,6 @@ private:
     QAction* loadSessionAction_ = nullptr;
     QAction* clearAction_ = nullptr;
     QAction* searchAction_ = nullptr;
-    QAction* compactModeAction_ = nullptr;
     QAction* showTimestampsAction_ = nullptr;
     
     // State
@@ -173,12 +175,12 @@ private:
     QString sessionPath_;
     QDateTime sessionCreatedTime_;
     bool hasUnsavedChanges_ = false;
+    bool isInitializing_ = true;  // Prevent marking changes during setup
     bool autoSaveEnabled_ = true;
     QTimer* autoSaveTimer_ = nullptr;
     int autoSaveInterval_ = 60; // seconds
-    QString inputMode_ = "multi";
     MessageBubble::BubbleStyle bubbleStyle_ = MessageBubble::BubbleStyle::Modern;
-    bool compactMode_ = false;
+    int densityMode_ = 1; // 0=Compact, 1=Cozy, 2=Spacious
     bool showTimestamps_ = true;
     int maxBubbleWidth_ = 600;
     
@@ -191,20 +193,12 @@ private:
     bool programmaticScroll_ = false;
 };
 
-// Input area with multiple modes
+// Input area - single widget that can expand
 class ConversationInputArea : public BaseStyledWidget {
     Q_OBJECT
     
 public:
-    enum InputMode {
-        SingleLine,
-        MultiLine
-    };
-    
     explicit ConversationInputArea(QWidget* parent = nullptr);
-    
-    void setMode(InputMode mode);
-    InputMode mode() const { return mode_; }
     
     QString text() const;
     void setText(const QString& text);
@@ -219,12 +213,10 @@ public:
     int wordCount() const;
     int charCount() const;
     
-    
 signals:
     void submitRequested();
     void cancelRequested();
     void textChanged();
-    void modeChanged(InputMode mode);
     void fileDropped(const QString& path);
     void pasteRequested();
     
@@ -236,15 +228,11 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     
 private:
-    void setupSingleLineMode();
-    void setupMultiLineMode();
-    void updateLayout();
+    void setupUI();
+    void adjustHeight();
     
-    InputMode mode_ = MultiLine;
-    QWidget* currentWidget_ = nullptr;
-    QLineEdit* singleLineEdit_ = nullptr;
-    QTextEdit* multiLineEdit_ = nullptr;
-    QLabel* statusLabel_ = nullptr;
+    QTextEdit* textEdit_ = nullptr;
+    int baseHeight_ = 45;
 };
 
 // Search bar widget
@@ -354,7 +342,6 @@ private:
     QComboBox* themeCombo_ = nullptr;
     QComboBox* bubbleStyleCombo_ = nullptr;
     QSlider* fontSizeSlider_ = nullptr;
-    QCheckBox* compactModeCheck_ = nullptr;
     QCheckBox* showTimestampsCheck_ = nullptr;
     QCheckBox* autoSaveCheck_ = nullptr;
     QSpinBox* autoSaveIntervalSpin_ = nullptr;
