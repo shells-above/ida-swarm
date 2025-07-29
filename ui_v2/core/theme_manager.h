@@ -47,6 +47,10 @@ public:
     void setFontScale(qreal scale);
     void setCompactMode(bool compact);
     
+    // Widget theming
+    void applyThemeToWidget(QWidget* widget);
+    QPalette widgetPalette() const;
+    
     // Utility functions
     static QColor adjustAlpha(const QColor& color, int alpha);
     static QColor lighten(const QColor& color, int amount = 20);

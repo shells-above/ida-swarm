@@ -306,28 +306,18 @@ void ThemeManager::updateComponentStyles() {
 }
 
 void ThemeManager::applyThemeToApplication() {
-    // Apply to Qt application palette
-    QPalette palette;
-    palette.setColor(QPalette::Window, colors_.background);
-    palette.setColor(QPalette::WindowText, colors_.textPrimary);
-    palette.setColor(QPalette::Base, colors_.surface);
-    palette.setColor(QPalette::AlternateBase, colors_.surfaceHover);
-    palette.setColor(QPalette::Text, colors_.textPrimary);
-    palette.setColor(QPalette::BrightText, colors_.textPrimary);
-    palette.setColor(QPalette::Button, colors_.surface);
-    palette.setColor(QPalette::ButtonText, colors_.textPrimary);
-    palette.setColor(QPalette::Highlight, colors_.selection);
-    palette.setColor(QPalette::HighlightedText, colors_.textPrimary);
-    palette.setColor(QPalette::Link, colors_.textLink);
+    // CRITICAL: DO NOT apply theme to the entire application!
+    // This is a plugin and must not affect IDA Pro's theme
     
-    QApplication::setPalette(palette);
-    
-    // Apply global stylesheet
-    QString globalQss = generateQss();
-    qApp->setStyleSheet(globalQss);
-    
-    // Clear component cache to force regeneration
+    // Only clear component cache to force regeneration of styles
+    // that will be applied to individual widgets
     componentQssCache_.clear();
+    
+    // The palette and stylesheet will be applied per-widget
+    // using the applyThemeToWidget() method instead
+    
+    // Emit signal so all our widgets can update themselves
+    emit themeChanged();
 }
 
 QString ThemeManager::generateQss() const {
@@ -844,6 +834,41 @@ QColor ThemeManager::mix(const QColor& color1, const QColor& color2, qreal ratio
     int b = color1.blue() * ratio + color2.blue() * (1 - ratio);
     int a = color1.alpha() * ratio + color2.alpha() * (1 - ratio);
     return QColor(r, g, b, a);
+}
+
+void ThemeManager::applyThemeToWidget(QWidget* widget) {
+    if (!widget) return;
+    
+    // Apply palette
+    widget->setPalette(widgetPalette());
+    
+    // Apply widget-specific stylesheet
+    QString widgetQss = generateQss();
+    widget->setStyleSheet(widgetQss);
+    
+    // Recursively apply to all child widgets
+    for (QObject* child : widget->children()) {
+        if (QWidget* childWidget = qobject_cast<QWidget*>(child)) {
+            applyThemeToWidget(childWidget);
+        }
+    }
+}
+
+QPalette ThemeManager::widgetPalette() const {
+    QPalette palette;
+    palette.setColor(QPalette::Window, colors_.background);
+    palette.setColor(QPalette::WindowText, colors_.textPrimary);
+    palette.setColor(QPalette::Base, colors_.surface);
+    palette.setColor(QPalette::AlternateBase, colors_.surfaceHover);
+    palette.setColor(QPalette::Text, colors_.textPrimary);
+    palette.setColor(QPalette::BrightText, colors_.textPrimary);
+    palette.setColor(QPalette::Button, colors_.surface);
+    palette.setColor(QPalette::ButtonText, colors_.textPrimary);
+    palette.setColor(QPalette::Highlight, colors_.selection);
+    palette.setColor(QPalette::HighlightedText, colors_.textPrimary);
+    palette.setColor(QPalette::Link, colors_.textLink);
+    
+    return palette;
 }
 
 } // namespace llm_re::ui_v2

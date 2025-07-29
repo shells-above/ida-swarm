@@ -1101,16 +1101,6 @@ QList<Command> ToolsCommandProvider::commands() const {
     settings.keywords = QStringList{"preferences", "options", "configure"};
     cmds.append(settings);
     
-    Command showCommandPalette;
-    showCommandPalette.id = "tools.commandPalette";
-    showCommandPalette.name = "Command Palette";
-    showCommandPalette.description = "Show the command palette";
-    showCommandPalette.category = "Tools";
-    showCommandPalette.icon = ThemeManager::instance().themedIcon("command");
-    showCommandPalette.shortcut = QKeySequence("Ctrl+Shift+P");
-    showCommandPalette.closeOnExecute = false;
-    cmds.append(showCommandPalette);
-    
     return cmds;
 }
 

@@ -572,10 +572,6 @@ void MainWindow::createToolBars() {
     mainToolBar_ = addToolBar(tr("Main"));
     mainToolBar_->setObjectName("MainToolBar");
     mainToolBar_->setMovable(true);
-    mainToolBar_->addAction(newAction_);
-    mainToolBar_->addAction(openAction_);
-    mainToolBar_->addAction(saveAction_);
-    mainToolBar_->addSeparator();
     mainToolBar_->addAction(commandPaletteAction_);
     
     // Edit toolbar
@@ -1752,8 +1748,8 @@ void MainWindow::onHelpAbout() {
 }
 
 void MainWindow::onThemeChanged() {
-    // Apply theme-specific window styling
-    setStyleSheet(ThemeManager::instance().generateQss());
+    // Apply theme ONLY to this window and its children
+    ThemeManager::instance().applyThemeToWidget(this);
     
     // Update action states
     for (auto* action : findChildren<QAction*>()) {
