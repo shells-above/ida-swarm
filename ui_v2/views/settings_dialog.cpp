@@ -27,7 +27,6 @@ void SettingsDialog::setupUI() {
     createAPITab();
     createAgentTab();
     createUITab();
-    createExportTab();
     createAdvancedTab();
     
     layout->addWidget(tab_widget_);
@@ -280,25 +279,6 @@ void SettingsDialog::createUITab() {
     tab_widget_->addTab(tab, "User Interface");
 }
 
-void SettingsDialog::createExportTab() {
-    auto* tab = new QWidget();
-    auto* layout = new QFormLayout(tab);
-    
-    auto* path_layout = new QHBoxLayout();
-    export_path_edit_ = new QLineEdit();
-    connect(export_path_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
-    
-    browse_export_button_ = new QPushButton("Browse...");
-    connect(browse_export_button_, &QPushButton::clicked, this, &SettingsDialog::onBrowseExportPath);
-    
-    path_layout->addWidget(export_path_edit_);
-    path_layout->addWidget(browse_export_button_);
-    
-    layout->addRow("Export Path:", path_layout);
-    
-    tab_widget_->addTab(tab, "Export");
-}
-
 void SettingsDialog::createAdvancedTab() {
     auto* tab = new QWidget();
     auto* layout = new QFormLayout(tab);
@@ -377,9 +357,6 @@ void SettingsDialog::loadSettings() {
     inspector_auto_hide_check_->setChecked(config.ui.inspector_auto_hide);
     inspector_auto_hide_delay_spin_->setValue(config.ui.inspector_auto_hide_delay);
     
-    // Export settings
-    export_path_edit_->setText(QString::fromStdString(config.export_settings.path));
-    
     // Advanced settings
     debug_mode_check_->setChecked(config.debug_mode);
 }
@@ -445,9 +422,6 @@ void SettingsDialog::applySettings() {
     config.ui.inspector_auto_hide = inspector_auto_hide_check_->isChecked();
     config.ui.inspector_auto_hide_delay = inspector_auto_hide_delay_spin_->value();
     
-    // Export settings
-    config.export_settings.path = export_path_edit_->text().toStdString();
-    
     // Advanced settings
     config.debug_mode = debug_mode_check_->isChecked();
     
@@ -473,14 +447,6 @@ void SettingsDialog::onTestAPI() {
             api_status_label_->setText("<font color='red'>✗ API key required</font>");
         }
     });
-}
-
-void SettingsDialog::onBrowseExportPath() {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select Export Directory",
-                                                    export_path_edit_->text());
-    if (!dir.isEmpty()) {
-        export_path_edit_->setText(dir);
-    }
 }
 
 void SettingsDialog::onResetDefaults() {

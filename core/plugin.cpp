@@ -125,7 +125,13 @@ llm_plugin_t::llm_plugin_t() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     // Get IDB path for instance tracking
-    idb_path_ = get_path(PATH_TYPE_IDB);
+    // Handle case where no database is loaded yet
+    const char* path = get_path(PATH_TYPE_IDB);
+    if (path && path[0] != '\0') {
+        idb_path_ = path;
+    } else {
+        idb_path_ = "no_database";
+    }
 
     msg("LLM RE: Plugin initialized for IDB: %s\n", idb_path_.c_str());
 
@@ -462,7 +468,9 @@ This will take hundreds of iterations. Begin your first pass now.)";
 void llm_plugin_t::load_config() {
     config_ = std::make_unique<Config>();
     
-    char* config_path = const_cast<char*>(get_user_idadir());
+    // Use a proper buffer instead of modifying const memory
+    char config_path[QMAXPATH];
+    qstrncpy(config_path, get_user_idadir(), sizeof(config_path));
     qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
     
     if (!config_->load_from_file(config_path)) {

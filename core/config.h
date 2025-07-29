@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.h"
+#include "common_base.h"
 #include "api/anthropic_api.h"
 
 namespace llm_re {
@@ -18,7 +18,7 @@ struct Config {
 
     struct AgentSettings {
         int max_iterations = 1000;
-        bool enable_thinking = false;
+        bool enable_thinking = true;
         bool enable_interleaved_thinking = false;
         bool enable_deep_analysis = false;
         bool verbose_logging = false;
@@ -51,10 +51,6 @@ struct Config {
         bool inspector_auto_hide = true;
         int inspector_auto_hide_delay = 3000;  // milliseconds
     } ui;
-
-    struct ExportSettings {
-        std::string path = ".";
-    } export_settings;
 
     bool debug_mode = false;
 

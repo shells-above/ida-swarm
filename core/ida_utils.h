@@ -5,7 +5,7 @@
 #ifndef IDA_UTILS_H
 #define IDA_UTILS_H
 
-#include "core/common.h"
+#include "common.h"
 
 namespace llm_re {
 

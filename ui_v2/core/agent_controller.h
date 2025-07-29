@@ -1,9 +1,23 @@
 #pragma once
 
 #include "ui_v2_common.h"
-#include "agent/agent.h"
 #include "../models/conversation_model.h"
-#include "api/message_types.h"
+
+// Forward declarations
+namespace llm_re {
+    struct Config;
+    class REAgent;
+    namespace api {
+        struct ChatResponse;
+        struct TokenUsage;
+    }
+    namespace messages {
+        class Message;
+        enum class Role;
+        struct ToolUseContent;
+        struct ToolResultContent;
+    }
+}
 
 namespace llm_re::ui_v2 {
 

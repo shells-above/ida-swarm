@@ -188,6 +188,7 @@ set(SOURCES
 
 # Header files
 set(HEADERS
+        core/common_base.h
         core/common.h
         core/ida_utils.h
         core/ida_validators.h

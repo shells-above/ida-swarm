@@ -9,7 +9,7 @@
   },
   "agent": {
     "max_iterations": 1000,
-    "enable_thinking": false,
+    "enable_thinking": true,
     "enable_interleaved_thinking": false,
     "enable_deep_analysis": false,
     "verbose_logging": false
@@ -20,14 +20,20 @@
     "theme": 0,
     "font_size": 10,
     "show_timestamps": true,
-    "show_tool_details": true
-  },
-  "export": {
-    "path": ".",
-    "auto_export": false,
-    "format": 0,
-    "include_memory": true,
-    "include_logs": true
+    "show_tool_details": true,
+    "show_tray_icon": true,
+    "minimize_to_tray": true,
+    "close_to_tray": false,
+    "start_minimized": false,
+    "remember_window_state": true,
+    "auto_save_layout": true,
+    "auto_save_conversations": true,
+    "auto_save_interval": 60,
+    "compact_mode": false,
+    "inspector_follow_cursor": true,
+    "inspector_opacity": 80,
+    "inspector_auto_hide": true,
+    "inspector_auto_hide_delay": 3000
   },
   "debug_mode": false
 }

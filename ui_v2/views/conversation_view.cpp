@@ -639,7 +639,7 @@ void ConversationView::saveSession(const QString& path) {
     
     // Settings
     QJsonObject settings;
-    settings["bubbleStyle"] = static_cast<int>(bubbleStyle_);
+    settings["bubbleStyle"] = bubbleStyle_;
     settings["compactMode"] = compactMode_;
     settings["showTimestamps"] = showTimestamps_;
     settings["maxBubbleWidth"] = maxBubbleWidth_;

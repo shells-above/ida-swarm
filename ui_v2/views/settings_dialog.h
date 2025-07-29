@@ -24,7 +24,6 @@ private:
     void createAPITab();
     void createAgentTab();
     void createUITab();
-    void createExportTab();
     void createAdvancedTab();
     
     // Tab widget
@@ -75,10 +74,6 @@ private:
     QCheckBox* inspector_auto_hide_check_ = nullptr;
     QSpinBox* inspector_auto_hide_delay_spin_ = nullptr;
     
-    // Export settings widgets
-    QLineEdit* export_path_edit_ = nullptr;
-    QPushButton* browse_export_button_ = nullptr;
-    
     // Advanced settings widgets
     QCheckBox* debug_mode_check_ = nullptr;
     
@@ -93,7 +88,6 @@ private:
     
 private slots:
     void onTestAPI();
-    void onBrowseExportPath();
     void onResetDefaults();
     void onSettingChanged();
     void onOK();

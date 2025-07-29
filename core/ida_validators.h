@@ -5,7 +5,7 @@
 #ifndef IDA_VALIDATORS_H
 #define IDA_VALIDATORS_H
 
-#include "core/common.h"
+#include "common.h"
 
 namespace llm_re {
 

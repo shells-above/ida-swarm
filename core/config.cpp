@@ -48,9 +48,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["ui"]["inspector_auto_hide"] = ui.inspector_auto_hide;
         j["ui"]["inspector_auto_hide_delay"] = ui.inspector_auto_hide_delay;
 
-        // Export settings
-        j["export"]["path"] = export_settings.path;
-
         // Debug mode
         j["debug_mode"] = debug_mode;
 
@@ -122,11 +119,6 @@ bool Config::load_from_file(const std::string& path) {
             ui.inspector_opacity = j["ui"].value("inspector_opacity", ui.inspector_opacity);
             ui.inspector_auto_hide = j["ui"].value("inspector_auto_hide", ui.inspector_auto_hide);
             ui.inspector_auto_hide_delay = j["ui"].value("inspector_auto_hide_delay", ui.inspector_auto_hide_delay);
-        }
-
-        // Export settings
-        if (j.contains("export")) {
-            export_settings.path = j["export"].value("path", export_settings.path);
         }
 
         // Debug mode

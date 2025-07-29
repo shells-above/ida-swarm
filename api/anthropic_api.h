@@ -5,7 +5,7 @@
 #ifndef ANTHROPIC_API_H
 #define ANTHROPIC_API_H
 
-#include "core/common.h"
+#include "core/common_base.h"
 #include "api/message_types.h"
 
 // Forward declaration
@@ -195,7 +195,7 @@ public:
     int max_tokens = 8192;
     int max_thinking_tokens = 2048;
     double temperature = 0.0;
-    bool enable_thinking = false;
+    bool enable_thinking = true;
     bool enable_interleaved_thinking = false;
     std::vector<std::string> stop_sequences;
 

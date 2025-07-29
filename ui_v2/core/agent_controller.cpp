@@ -1,11 +1,14 @@
 #include "ui_v2_common.h"
 #include "agent_controller.h"
+// Now it's safe to include agent.h because ui_v2_common.h already set up Qt + kernwin
+#include "agent/agent.h"
+#include "core/config.h"
+#include "api/message_types.h"
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
 #include "../views/statistics_dock.h"
 #include "../models/tool_execution.h"
-#include "core/ida_utils.h"
 
 namespace llm_re::ui_v2 {
 

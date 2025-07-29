@@ -3,48 +3,13 @@
 // This file must be included FIRST in all ui_v2 files
 // It handles the proper include order: IDA -> std -> Qt
 
-// IDA headers (must come first)
-#include <ida.hpp>
-#include <idp.hpp>
-#include <loader.hpp>
-#include <kernwin.hpp>
-#include <bytes.hpp>
-#include <name.hpp>
-#include <funcs.hpp>
-#include <hexrays.hpp>
-#include <lines.hpp>
-#include <segment.hpp>
-#include <search.hpp>
-#include <xref.hpp>
-#include <nalt.hpp>
-#include <entry.hpp>
-#include <auto.hpp>
-#include <strlist.hpp>
-#include <diskio.hpp>
+// Include base common header (IDA SDK without kernwin, std lib, json)
+#include "../../core/common_base.h"
 
-
-// Undefine problematic macros from IDA
-#undef fopen
-#undef fclose
-#undef fread
-#undef fwrite
-#undef wait
-#undef fgetc
-#undef snprintf
-
-// std lib
-#include <algorithm>
-#include <chrono>
-#include <cmath>
+// Additional std lib headers needed for UI
 #include <deque>
-#include <functional>
-#include <limits>
-#include <map>
-#include <memory>
 #include <numeric>
-#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 // Qt headers
 // Qt Core
@@ -200,13 +165,6 @@
 // Qt Math
 #include <QtMath>
 
-// Re-define macros to prevent usage
-#define fopen dont_use_fopen
-#define fclose dont_use_fclose
-#define fread dont_use_fread
-#define fwrite dont_use_fwrite
-#define fgetc dont_use_fgetc
-#define snprintf dont_use_snprintf
 
 // Hash function for QUuid to use in std::unordered_map
 struct QUuidHash {
@@ -224,3 +182,15 @@ namespace std {
         }
     };
 }
+
+// NOW include kernwin.hpp after all Qt headers are already included
+// This way it won't conflict with Qt includes
+#include <kernwin.hpp>
+
+// Re-define macros to prevent usage after kernwin.hpp
+#define fopen dont_use_fopen
+#define fclose dont_use_fclose
+#define fread dont_use_fread
+#define fwrite dont_use_fwrite
+#define fgetc dont_use_fgetc
+#define snprintf dont_use_snprintf
