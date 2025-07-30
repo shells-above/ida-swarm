@@ -4,7 +4,7 @@ namespace llm_re {
 
 bool Config::save_to_file(const std::string& path) const {
     try {
-        json j;
+        nlohmann::ordered_json j;
 
         // API settings
         j["api"]["api_key"] = api.api_key;

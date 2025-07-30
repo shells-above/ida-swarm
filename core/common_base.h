@@ -174,7 +174,7 @@ namespace nlohmann {
 #define fgetc dont_use_fgetc
 #define snprintf dont_use_snprintf
 
-using json = nlohmann::ordered_json;
+using json = nlohmann::json;
 
 // Type definitions
 namespace llm_re {
