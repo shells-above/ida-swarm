@@ -2,6 +2,7 @@
 #include "../core/settings_manager.h"
 #include "../core/theme_manager.h"
 #include "../../api/anthropic_api.h"
+#include <QThread>
 
 namespace llm_re::ui_v2 {
 
@@ -422,16 +423,70 @@ void SettingsDialog::onTestAPI() {
     test_api_button_->setEnabled(false);
     api_status_label_->setText("Testing...");
     
-    // TODO: Implement actual API test
-    // For now, just simulate
-    QTimer::singleShot(1000, [this]() {
+    QString apiKey = api_key_edit_->text().trimmed();
+    if (apiKey.isEmpty()) {
+        api_status_label_->setText("<font color='red'>✗ API key required</font>");
         test_api_button_->setEnabled(true);
-        if (!api_key_edit_->text().isEmpty()) {
-            api_status_label_->setText("<font color='green'>✓ Connected</font>");
-        } else {
-            api_status_label_->setText("<font color='red'>✗ API key required</font>");
-        }
+        return;
+    }
+
+    // run request in background thread
+    QThread* thread = QThread::create([this, apiKey]() {
+        bool valid = validateApiKey(apiKey.toStdString());
+
+        // update ui in main thread
+        QMetaObject::invokeMethod(this, [this, valid]() {
+            test_api_button_->setEnabled(true);
+            if (valid) {
+                api_status_label_->setText("<font color='green'>✓ Connected - API key is valid</font>");
+            } else {
+                api_status_label_->setText("<font color='red'>✗ Invalid API key or connection error</font>");
+            }
+        }, Qt::QueuedConnection);
     });
+    
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
+bool SettingsDialog::validateApiKey(const std::string& apiKey) {
+    try {
+        api::AnthropicClient client(apiKey);
+        
+        api::ChatRequest request;
+        request.model = api::Model::Haiku35;
+        request.max_tokens = 1;
+        request.temperature = 0;
+        request.enable_thinking = false;
+        
+        request.messages.push_back(messages::Message::user_text("Hi"));
+        
+        api::ChatResponse response = client.send_request(request);
+        
+        if (response.success) {
+            return true;
+        } else if (response.error) {
+            std::string error = response.error.value();
+            
+            msg("LLM RE: API validation error: %s\n", error.c_str());
+            
+            if (error.find("401") != std::string::npos ||
+                error.find("authentication") != std::string::npos ||
+                error.find("Invalid API Key") != std::string::npos) {
+                return false;
+            }
+            
+            return false;  // return not valid to be safe
+        }
+    } catch (const std::exception& e) {
+        msg("LLM RE: API validation exception: %s\n", e.what());
+        return false;
+    } catch (...) {
+        msg("LLM RE: API validation unknown exception\n");
+        return false;
+    }
+    
+    return false;
 }
 
 void SettingsDialog::onResetDefaults() {

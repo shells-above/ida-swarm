@@ -52,7 +52,6 @@ bool AgentController::initialize(const Config& config) {
         agent_->start();
         
         isInitialized_ = true;
-        emit errorOccurred("DEBUG: Agent initialized and started successfully");
         return true;
         
     } catch (const std::exception& e) {
@@ -71,8 +70,6 @@ void AgentController::shutdown() {
 }
 
 void AgentController::executeTask(const std::string& task) {
-    emit errorOccurred(QString("DEBUG: executeTask called with: %1").arg(QString::fromStdString(task)));
-    
     if (!agent_) {
         emit errorOccurred("Agent not initialized");
         return;
@@ -213,8 +210,6 @@ json AgentController::getAgentState() const {
 }
 
 void AgentController::onAgentMessage(int messageType, const QString& dataStr) {
-    emit errorOccurred(QString("DEBUG: Received agent message type: %1").arg(messageType));
-    
     try {
         json data = json::parse(dataStr.toStdString());
         

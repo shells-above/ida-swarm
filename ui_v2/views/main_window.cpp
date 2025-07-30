@@ -759,21 +759,9 @@ void MainWindow::createTrayIcon() {
 }
 
 void MainWindow::connectSignals() {
-    // Debug controller state
-    if (!controller_) {
-        msg("LLM RE: ERROR - controller_ is null in connectSignals!\n");
-    } else {
-        msg("LLM RE: controller_ exists in connectSignals\n");
-    }
-    
     // Conversation view signals
     auto result = connect(conversationView_, &ConversationView::messageSubmitted,
                          controller_.get(), &UiController::routeUserMessage);
-    if (!result) {
-        msg("LLM RE: ERROR - Failed to connect messageSubmitted signal!\n");
-    } else {
-        msg("LLM RE: Successfully connected messageSubmitted signal\n");
-    }
     
     connect(conversationView_, &ConversationView::toolExecutionRequested,
             [this](const QString& toolName, const QJsonObject& params) {
@@ -2121,7 +2109,6 @@ UiController::UiController(MainWindow* mainWindow)
     : QObject(mainWindow)
     , mainWindow_(mainWindow)
 {
-    msg("LLM RE: UiController constructor called\n");
 }
 
 UiController::~UiController() {
@@ -2135,7 +2122,6 @@ void UiController::registerConversationView(ConversationView* view) {
         // Set as active view if we don't have one
         if (!activeView_) {
             activeView_ = view;
-            msg("LLM RE: Set activeView_ to newly registered conversation view\n");
         }
         
         // Connect view signals
@@ -2156,36 +2142,25 @@ void UiController::unregisterConversationView(ConversationView* view) {
 }
 
 void UiController::routeUserMessage(const QString& content) {
-    msg("LLM RE: UiController::routeUserMessage called with: %s\n", content.toStdString().c_str());
-    
     // Route to active conversation view
     if (activeView_) {
-        msg("LLM RE: activeView_ exists\n");
         emit messageRouted(content, "user");
         
         // Send to agent controller if available
         if (agentController_) {
-            msg("LLM RE: agentController_ exists\n");
-            
             // Check agent state to determine routing
             bool isRunning = agentController_->isRunning();
             bool isPaused = agentController_->isPaused();
             bool isCompleted = agentController_->isCompleted();
             
-            msg("LLM RE: Agent state - running: %d, paused: %d, completed: %d\n", 
-                isRunning, isPaused, isCompleted);
-            
             if (!isRunning && !isPaused && !isCompleted) {
                 // No active task, start new one
-                msg("LLM RE: Starting new task\n");
                 agentController_->executeTask(content.toStdString());
             } else if (isRunning) {
                 // Agent is running, inject as guidance
-                msg("LLM RE: Injecting user message\n");
                 agentController_->injectUserMessage(content.toStdString());
             } else if (agentController_->canContinue()) {
                 // Agent is completed/idle, continue with new instructions
-                msg("LLM RE: Continuing with task\n");
                 agentController_->continueWithTask(content.toStdString());
             }
         } else {

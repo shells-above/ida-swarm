@@ -81,6 +81,9 @@ private:
     // Track changes
     bool has_changes_ = false;
     
+private:
+    bool validateApiKey(const std::string& apiKey);
+
 private slots:
     void onTestAPI();
     void onResetDefaults();
