@@ -110,6 +110,11 @@ public:
     void addAnalysisEntry(const AnalysisEntry& entry);
     void clearAnalysisEntries() { analysisEntries_.clear(); }
     
+    // Thinking content
+    bool hasThinking() const { return !thinkingContent_.isEmpty(); }
+    QString thinkingContent() const { return thinkingContent_; }
+    void setThinkingContent(const QString& thinking) { thinkingContent_ = thinking; }
+    
     // Attachments
     bool hasAttachments() const { return !attachments_.empty(); }
     const std::vector<MessageAttachment>& attachments() const { return attachments_; }
@@ -136,6 +141,7 @@ private:
     QUuid id_;
     QString content_;
     QString htmlContent_;
+    QString thinkingContent_;
     MessageRole role_ = MessageRole::User;
     MessageType type_ = MessageType::Text;
     MessageMetadata metadata_;

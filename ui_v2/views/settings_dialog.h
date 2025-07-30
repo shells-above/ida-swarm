@@ -72,9 +72,6 @@ private:
     QCheckBox* inspector_auto_hide_check_ = nullptr;
     QSpinBox* inspector_auto_hide_delay_spin_ = nullptr;
     
-    // Advanced settings widgets
-    QCheckBox* debug_mode_check_ = nullptr;
-    
     // Buttons
     QPushButton* ok_button_ = nullptr;
     QPushButton* cancel_button_ = nullptr;

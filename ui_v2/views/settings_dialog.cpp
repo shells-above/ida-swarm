@@ -280,14 +280,10 @@ void SettingsDialog::createAdvancedTab() {
     auto* tab = new QWidget();
     auto* layout = new QFormLayout(tab);
     
-    debug_mode_check_ = new QCheckBox("Enable Debug Mode");
-    connect(debug_mode_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    layout->addRow(debug_mode_check_);
-    
-    auto* warning_label = new QLabel(
-        "<i>Warning: Debug mode may impact performance and generate large log files.</i>");
-    warning_label->setWordWrap(true);
-    layout->addRow(warning_label);
+    // Currently no advanced settings
+    auto* placeholder_label = new QLabel(
+        "<i>No advanced settings available</i>");
+    layout->addRow(placeholder_label);
     
     tab_widget_->addTab(tab, "Advanced");
 }
@@ -352,8 +348,6 @@ void SettingsDialog::loadSettings() {
     inspector_auto_hide_check_->setChecked(config.ui.inspector_auto_hide);
     inspector_auto_hide_delay_spin_->setValue(config.ui.inspector_auto_hide_delay);
     
-    // Advanced settings
-    debug_mode_check_->setChecked(config.debug_mode);
 }
 
 void SettingsDialog::applySettings() {
@@ -415,8 +409,6 @@ void SettingsDialog::applySettings() {
     config.ui.inspector_auto_hide = inspector_auto_hide_check_->isChecked();
     config.ui.inspector_auto_hide_delay = inspector_auto_hide_delay_spin_->value();
     
-    // Advanced settings
-    config.debug_mode = debug_mode_check_->isChecked();
     
     // Apply and save
     SettingsManager::instance().applyUISettings();

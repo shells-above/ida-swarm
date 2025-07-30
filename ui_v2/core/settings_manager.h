@@ -44,19 +44,12 @@ public:
         config_.ui.theme = theme; 
         emit themeChanged(theme);
     }
-    
-    bool debugMode() const { return config_.debug_mode; }
-    void setDebugMode(bool enabled) { 
-        config_.debug_mode = enabled; 
-        emit debugModeChanged(enabled);
-    }
 
 signals:
     // Settings change notifications
     void settingsChanged();
     void apiKeyChanged(const QString& key);
     void themeChanged(int theme);
-    void debugModeChanged(bool enabled);
     void settingsLoadError(const QString& error);
     void settingsSaveError(const QString& error);
 

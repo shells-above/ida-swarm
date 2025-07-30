@@ -336,18 +336,38 @@ void MessageBubble::updateMessage() {
 void MessageBubble::updateContentDisplay() {
     if (!message_) return;
     
-    QString content = message_->content();
+    QString content;
+    
+    // Add thinking content if present (for assistant messages)
+    if (message_->hasThinking() && message_->role() == MessageRole::Assistant) {
+        QString thinking = message_->thinkingContent();
+        
+        // Apply search highlighting to thinking if needed
+        if (!searchHighlight_.isEmpty()) {
+            thinking = UIUtils::highlightText(thinking, searchHighlight_, "search-highlight");
+        }
+        
+        // Format thinking content in italics with darker color
+        content = QString("*<span style='color: #888888;'>Thinking:</span>*\n\n");
+        content += QString("*<span style='color: #888888;'>%1</span>*\n\n").arg(thinking.replace("\n", "\n> "));
+    }
+    
+    // Add regular content
+    QString mainContent = message_->content();
     
     // Apply search highlighting if needed
     if (!searchHighlight_.isEmpty()) {
-        content = UIUtils::highlightText(content, searchHighlight_, "search-highlight");
+        mainContent = UIUtils::highlightText(mainContent, searchHighlight_, "search-highlight");
     }
+    
+    content += mainContent;
     
     // Use markdown viewer for rich content
     if (message_->type() == MessageType::Code || 
         content.contains("```") || 
         content.contains("**") ||
-        content.contains("[]()")) {
+        content.contains("[]()") ||
+        message_->hasThinking()) {  // Always use markdown if has thinking
         
         contentViewer_->setMarkdown(content);
         contentViewer_->setVisible(true);

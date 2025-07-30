@@ -168,6 +168,7 @@ set(SOURCES
         ui_v2/views/memory_dock.cpp
         ui_v2/views/tool_execution_dock.cpp
         ui_v2/views/statistics_dock.cpp
+        ui_v2/views/console_dock.cpp
         ui_v2/views/floating_inspector.cpp
         ui_v2/views/settings_dialog.cpp
         # ui_v2 widgets

@@ -9,6 +9,7 @@
 #include "memory_dock.h"
 #include "tool_execution_dock.h"
 #include "statistics_dock.h"
+#include "console_dock.h"
 #include "floating_inspector.h"
 #include "settings_dialog.h"
 
@@ -444,6 +445,10 @@ void MainWindow::createActions() {
     executionHistoryAction_->setCheckable(true);
     connect(executionHistoryAction_, &QAction::triggered, this, &MainWindow::onToolsExecutionHistory);
     
+    consoleAction_ = new QAction(ThemeManager::instance().themedIcon("utilities-terminal"), tr("&Console"), this);
+    consoleAction_->setCheckable(true);
+    connect(consoleAction_, &QAction::triggered, this, &MainWindow::onToolsConsole);
+    
     // Help actions
     documentationAction_ = new QAction(ThemeManager::instance().themedIcon("help-contents"), tr("&Documentation"), this);
     documentationAction_->setShortcut(QKeySequence::HelpContents);
@@ -556,6 +561,7 @@ void MainWindow::createMenus() {
     toolsMenu_->addAction(memoryAnalysisAction_);
     toolsMenu_->addAction(executionHistoryAction_);
     toolsMenu_->addAction(statisticsAction_);
+    toolsMenu_->addAction(consoleAction_);
     
     // Window menu
     windowMenu_ = menuBar()->addMenu(tr("&Window"));
@@ -621,6 +627,7 @@ void MainWindow::createToolBars() {
     viewToolBar_->addAction(memoryAnalysisAction_);
     viewToolBar_->addAction(executionHistoryAction_);
     viewToolBar_->addAction(statisticsAction_);
+    viewToolBar_->addAction(consoleAction_);
 }
 
 void MainWindow::createStatusBar() {
@@ -709,6 +716,19 @@ void MainWindow::createDockWindows() {
     
     connect(statsDockWidget_, &QDockWidget::visibilityChanged,
             statisticsAction_, &QAction::setChecked);
+    
+    // Console dock
+    consoleDock_ = new ConsoleDock(this);
+    consoleDockWidget_ = new QDockWidget(tr("Console"), this);
+    consoleDockWidget_->setObjectName("ConsoleDock");
+    consoleDockWidget_->setWidget(consoleDock_);
+    consoleDockWidget_->setAllowedAreas(Qt::AllDockWidgetAreas);
+    addDockWidget(Qt::BottomDockWidgetArea, consoleDockWidget_);
+    consoleDockWidget_->hide();
+    
+    // Connect visibility changes to action state
+    connect(consoleDockWidget_, &QDockWidget::visibilityChanged,
+            consoleAction_, &QAction::setChecked);
     
     // Tab docks on the right
     tabifyDockWidget(memoryDockWidget_, statsDockWidget_);
@@ -1821,6 +1841,15 @@ void MainWindow::onToolsExecutionHistory() {
         toolDockWidget_->setVisible(executionHistoryAction_->isChecked());
         if (executionHistoryAction_->isChecked()) {
             toolDockWidget_->raise();
+        }
+    }
+}
+
+void MainWindow::onToolsConsole() {
+    if (consoleDockWidget_) {
+        consoleDockWidget_->setVisible(consoleAction_->isChecked());
+        if (consoleAction_->isChecked()) {
+            consoleDockWidget_->raise();
         }
     }
 }

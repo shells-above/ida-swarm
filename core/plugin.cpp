@@ -417,6 +417,7 @@ void llm_plugin_t::show_main_window() {
             agent_controller->connectMemoryDock(main_window->memoryDock());
             agent_controller->connectToolDock(main_window->toolDock());
             agent_controller->connectStatsDock(main_window->statsDock());
+            agent_controller->connectConsoleDock(main_window->consoleDock());
             
             // Pass agent controller to UI controller
             if (main_window->controller()) {

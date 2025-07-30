@@ -10,6 +10,7 @@ namespace llm_re::ui_v2 {
 class MemoryDock;
 class ToolExecutionDock;
 class StatisticsDock;
+class ConsoleDock;
 class FloatingInspector;
 class NotificationManager;
 class LayoutManager;
@@ -30,6 +31,7 @@ public:
     MemoryDock* memoryDock() { return memoryDock_; }
     ToolExecutionDock* toolDock() { return toolDock_; }
     StatisticsDock* statsDock() { return statsDock_; }
+    ConsoleDock* consoleDock() { return consoleDock_; }
     NotificationManager* notificationManager() { return notificationManager_; }
     UiController* controller() { return controller_.get(); }
     
@@ -129,6 +131,7 @@ private slots:
     void onToolsStatistics();
     void onToolsMemoryAnalysis();
     void onToolsExecutionHistory();
+    void onToolsConsole();
     void onHelpDocumentation();
     void onHelpKeyboardShortcuts();
     void onHelpAbout();
@@ -178,9 +181,11 @@ private:
     MemoryDock* memoryDock_ = nullptr;
     ToolExecutionDock* toolDock_ = nullptr;
     StatisticsDock* statsDock_ = nullptr;
+    ConsoleDock* consoleDock_ = nullptr;
     QDockWidget* memoryDockWidget_ = nullptr;
     QDockWidget* toolDockWidget_ = nullptr;
     QDockWidget* statsDockWidget_ = nullptr;
+    QDockWidget* consoleDockWidget_ = nullptr;
     
     // Floating windows
     FloatingInspector* floatingInspector_ = nullptr;
@@ -232,6 +237,7 @@ private:
     QAction* statisticsAction_ = nullptr;
     QAction* memoryAnalysisAction_ = nullptr;
     QAction* executionHistoryAction_ = nullptr;
+    QAction* consoleAction_ = nullptr;
     QAction* documentationAction_ = nullptr;
     QAction* keyboardShortcutsAction_ = nullptr;
     QAction* aboutAction_ = nullptr;

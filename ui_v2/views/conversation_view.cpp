@@ -994,9 +994,6 @@ void ConversationView::submitInput() {
     QString text = inputArea_->text().trimmed();
     if (text.isEmpty()) return;
     
-    // Add user message
-    addUserMessage(text);
-    
     // Clear input
     inputArea_->clear();
     inputArea_->focus();

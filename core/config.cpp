@@ -46,9 +46,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["ui"]["inspector_auto_hide"] = ui.inspector_auto_hide;
         j["ui"]["inspector_auto_hide_delay"] = ui.inspector_auto_hide_delay;
 
-        // Debug mode
-        j["debug_mode"] = debug_mode;
-
         // Write to file
         std::ofstream file(path);
         if (!file) return false;
@@ -117,8 +114,6 @@ bool Config::load_from_file(const std::string& path) {
             ui.inspector_auto_hide_delay = j["ui"].value("inspector_auto_hide_delay", ui.inspector_auto_hide_delay);
         }
 
-        // Debug mode
-        debug_mode = j.value("debug_mode", debug_mode);
 
         return true;
     } catch (const std::exception& e) {

@@ -8,6 +8,7 @@
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
 #include "../views/statistics_dock.h"
+#include "../views/console_dock.h"
 #include "../models/tool_execution.h"
 
 namespace llm_re::ui_v2 {
@@ -181,6 +182,10 @@ void AgentController::connectStatsDock(StatisticsDock* dock) {
     updateStatistics();
 }
 
+void AgentController::connectConsoleDock(ConsoleDock* dock) {
+    consoleDock_ = dock;
+}
+
 void AgentController::updateConfig(const Config& config) {
     config_ = std::make_unique<Config>(config);
     // Note: Agent needs to be reinitialized for config changes to take effect
@@ -242,30 +247,100 @@ void AgentController::handleLogMessage(const json& data) {
     LogLevel level = static_cast<LogLevel>(data["level"].get<int>());
     std::string message = data["message"];
     
-    // Create log message for conversation - make INFO logs visible for debugging
-    auto logMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::System);
-    logMsg->metadata().timestamp = QDateTime::currentDateTime();
+    // Send to console dock if available
+    if (consoleDock_) {
+        LogEntry entry;
+        entry.timestamp = QDateTime::currentDateTime();
+        entry.level = static_cast<LogEntry::Level>(static_cast<int>(level));
+        entry.category = "Agent";
+        entry.message = QString::fromStdString(message);
+        
+        // Add metadata if available
+        if (data.contains("metadata")) {
+            QString metadataStr = QString::fromStdString(data["metadata"].dump());
+            entry.metadata = QJsonDocument::fromJson(metadataStr.toUtf8()).object();
+        }
+        
+        consoleDock_->addLog(entry);
+    }
     
-    // Set appropriate message type based on log level
+    // Only show important messages in conversation
+    bool showInConversation = false;
+    
     switch (level) {
         case LogLevel::ERROR:
-            logMsg->setType(MessageType::Error);
+            showInConversation = true;
             break;
         case LogLevel::WARNING:
-            logMsg->setType(MessageType::Warning);
+            // Only show warnings if they're user-facing
+            showInConversation = message.find("Failed") != std::string::npos ||
+                               message.find("Error") != std::string::npos;
+            break;
+        case LogLevel::INFO:
+            // Only show specific info messages
+            showInConversation = message.find("Starting new task") != std::string::npos ||
+                               message.find("Task completed") != std::string::npos ||
+                               message.find("Final report") != std::string::npos;
             break;
         default:
-            logMsg->setType(MessageType::Info);
             break;
     }
     
-    addMessageToConversation(std::move(logMsg));
+    if (showInConversation) {
+        auto logMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::System);
+        logMsg->metadata().timestamp = QDateTime::currentDateTime();
+        
+        // Set appropriate message type based on log level
+        switch (level) {
+            case LogLevel::ERROR:
+                logMsg->setType(MessageType::Error);
+                break;
+            case LogLevel::WARNING:
+                logMsg->setType(MessageType::Warning);
+                break;
+            default:
+                logMsg->setType(MessageType::Info);
+                break;
+        }
+        
+        addMessageToConversation(std::move(logMsg));
+    }
 }
 
 void AgentController::handleApiMessage(const json& data) {
     std::string type = data["type"];
     json content = data["content"];
     int iteration = data["iteration"];
+    
+    // Send API info to console
+    if (consoleDock_) {
+        LogEntry entry;
+        entry.timestamp = QDateTime::currentDateTime();
+        entry.level = LogEntry::Debug;
+        entry.category = "API";
+        entry.message = QString("Iteration %1: %2").arg(iteration).arg(QString::fromStdString(type));
+        
+        // Add token usage if available
+        if (content.contains("usage")) {
+            json usage = content["usage"];
+            entry.metadata = QJsonObject{
+                {"iteration", iteration},
+                {"type", QString::fromStdString(type)},
+                {"input_tokens", usage.value("input_tokens", 0)},
+                {"output_tokens", usage.value("output_tokens", 0)},
+                {"cache_read_tokens", usage.value("cache_read_tokens", 0)},
+                {"cache_creation_tokens", usage.value("cache_creation_tokens", 0)},
+                {"estimated_cost", usage.value("estimated_cost", 0.0)}
+            };
+        } else {
+            entry.metadata = QJsonObject{
+                {"iteration", iteration},
+                {"type", QString::fromStdString(type)}
+            };
+        }
+        
+        consoleDock_->addLog(entry);
+    }
     
     if (type == "request" || type == "response") {
         currentIteration_ = iteration;
@@ -326,6 +401,25 @@ void AgentController::handleToolStarted(const json& data) {
     QString toolName = QString::fromStdString(data["tool_name"]);
     json input = data["input"];
     
+    // Send detailed info to console
+    if (consoleDock_) {
+        LogEntry entry;
+        entry.timestamp = QDateTime::currentDateTime();
+        entry.level = LogEntry::Info;
+        entry.category = "Tool";
+        entry.message = QString("Executing tool: %1 (ID: %2)").arg(toolName).arg(toolId);
+        
+        // Add input as metadata
+        QString inputStr = QString::fromStdString(input.dump());
+        entry.metadata = QJsonObject{
+            {"tool_id", toolId},
+            {"tool_name", toolName},
+            {"input", QJsonDocument::fromJson(inputStr.toUtf8()).object()}
+        };
+        
+        consoleDock_->addLog(entry);
+    }
+    
     // Create tool execution message
     auto toolMsg = std::make_unique<Message>();
     toolMsg->setRole(MessageRole::Assistant);
@@ -365,6 +459,29 @@ void AgentController::handleToolExecuted(const json& data) {
     QString toolId = QString::fromStdString(data["tool_id"]);
     QString toolName = QString::fromStdString(data["tool_name"]);
     json result = data["result"];
+    
+    // Send result to console
+    if (consoleDock_) {
+        LogEntry entry;
+        entry.timestamp = QDateTime::currentDateTime();
+        entry.level = LogEntry::Info;
+        entry.category = "Tool";
+        entry.message = QString("Tool completed: %1 (ID: %2)").arg(toolName).arg(toolId);
+        
+        // Add result as metadata (truncate if too large)
+        QString resultStr = QString::fromStdString(result.dump());
+        if (resultStr.length() > 1000) {
+            resultStr = resultStr.left(997) + "...";
+        }
+        
+        entry.metadata = QJsonObject{
+            {"tool_id", toolId},
+            {"tool_name", toolName},
+            {"result", resultStr}
+        };
+        
+        consoleDock_->addLog(entry);
+    }
     
     // Update existing tool execution message
     if (conversationModel_ && toolIdToMessageId_.contains(toolId)) {
@@ -430,21 +547,32 @@ std::unique_ptr<Message> AgentController::convertApiMessage(const messages::Mess
     
     // Build content from message parts
     QString content;
+    QString thinkingContent;
     QTextStream stream(&content);
+    QTextStream thinkingStream(&thinkingContent);
     
     for (const auto& contentPtr : apiMsg.contents()) {
         if (auto text = dynamic_cast<const messages::TextContent*>(contentPtr.get())) {
             stream << QString::fromStdString(text->text);
+        } else if (auto thinking = dynamic_cast<const messages::ThinkingContent*>(contentPtr.get())) {
+            // Collect thinking content
+            if (!thinkingContent.isEmpty()) {
+                thinkingStream << "\n\n";
+            }
+            thinkingStream << QString::fromStdString(thinking->thinking);
         } else if (auto toolUse = dynamic_cast<const messages::ToolUseContent*>(contentPtr.get())) {
             processToolUseContent(uiMsg.get(), toolUse);
         } else if (auto toolResult = dynamic_cast<const messages::ToolResultContent*>(contentPtr.get())) {
             processToolResultContent(uiMsg.get(), toolResult);
         }
-        // Note: Thinking content is internal and not shown in UI
     }
     
     if (!content.isEmpty()) {
         uiMsg->setContent(content);
+    }
+    
+    if (!thinkingContent.isEmpty()) {
+        uiMsg->setThinkingContent(thinkingContent);
     }
     
     return uiMsg;

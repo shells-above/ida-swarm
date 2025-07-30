@@ -50,8 +50,6 @@ struct Config {
         int inspector_auto_hide_delay = 3000;  // milliseconds
     } ui;
 
-    bool debug_mode = false;
-
     // Load/save configuration
     bool save_to_file(const std::string& path) const;
     bool load_from_file(const std::string& path);

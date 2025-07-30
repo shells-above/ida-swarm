@@ -10,14 +10,8 @@ StatisticsDock::StatisticsDock(QWidget* parent)
     setupUI();
     createToolBar();
     createViews();
-    connectSignals();
-    loadSettings();
     
-    // Initialize time range
-    endTime_ = QDateTime::currentDateTime();
-    startTime_ = endTime_.addSecs(-24 * 3600);
-    
-    // Setup timers
+    // Setup timers BEFORE connecting signals
     refreshTimer_ = new QTimer(this);
     refreshTimer_->setInterval(5000);
     connect(refreshTimer_, &QTimer::timeout, this, &StatisticsDock::updateStatistics);
@@ -25,6 +19,13 @@ StatisticsDock::StatisticsDock(QWidget* parent)
     realtimeTimer_ = new QTimer(this);
     realtimeTimer_->setInterval(1000);
     connect(realtimeTimer_, &QTimer::timeout, this, &StatisticsDock::updateRealtimeMetrics);
+    
+    connectSignals();
+    loadSettings();
+    
+    // Initialize time range
+    endTime_ = QDateTime::currentDateTime();
+    startTime_ = endTime_.addSecs(-24 * 3600);
     
     // Initialize with empty data
     updateStatistics();

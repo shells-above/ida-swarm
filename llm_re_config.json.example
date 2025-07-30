@@ -32,6 +32,5 @@
     "inspector_opacity": 80,
     "inspector_auto_hide": true,
     "inspector_auto_hide_delay": 3000
-  },
-  "debug_mode": false
+  }
 }

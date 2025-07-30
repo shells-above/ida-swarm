@@ -25,6 +25,7 @@ class ConversationView;
 class MemoryDock;
 class ToolExecutionDock;
 class StatisticsDock;
+class ConsoleDock;
 
 // Controller that bridges between the REAgent and ui_v2
 class AgentController : public QObject {
@@ -57,6 +58,7 @@ public:
     void connectMemoryDock(MemoryDock* dock);
     void connectToolDock(ToolExecutionDock* dock);
     void connectStatsDock(StatisticsDock* dock);
+    void connectConsoleDock(ConsoleDock* dock);
     
     // Configuration
     const Config& config() const { return *config_; }
@@ -126,6 +128,7 @@ private:
     MemoryDock* memoryDock_ = nullptr;
     ToolExecutionDock* toolDock_ = nullptr;
     StatisticsDock* statsDock_ = nullptr;
+    ConsoleDock* consoleDock_ = nullptr;
     
     // State tracking
     bool isInitialized_ = false;
