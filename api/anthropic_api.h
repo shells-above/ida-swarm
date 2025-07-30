@@ -34,10 +34,10 @@ inline std::string model_to_string(Model model) {
 }
 
 inline Model model_from_string(const std::string& s) {
-    if (s == "claude-opus-4-20250514") return Model::Opus4;
-    if (s == "claude-sonnet-4-20250514") return Model::Sonnet4;
-    if (s == "claude-3-7-sonnet-latest") return Model::Sonnet37;
-    if (s == "claude-3-5-haiku-latest") return Model::Haiku35;
+    if (s.starts_with("claude-opus-4-")) return Model::Opus4;
+    if (s.starts_with("claude-sonnet-4-")) return Model::Sonnet4;
+    if (s.starts_with("claude-3-7-sonnet-")) return Model::Sonnet37;
+    if (s.starts_with("claude-3-5-haiku-")) return Model::Haiku35;
     throw std::runtime_error("Unknown model: " + s);
 }
 
