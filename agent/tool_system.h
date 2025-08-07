@@ -1148,17 +1148,21 @@ public:
     }
     
     std::string description() const override {
-        return "Patch raw bytes at a specific address with mandatory verification. "
-               "REQUIRES original bytes for safety verification before patching. "
-               "Checks instruction boundaries and validates all inputs.";
+        return "⚠️ EXTREMELY DANGEROUS - Patch raw bytes at a specific address. "
+               "CRITICAL: You MUST be 100% certain about your patch before using this tool! "
+               "MANDATORY: Verify original bytes match EXACTLY before patching. "
+               "WARNING: If new_bytes length > original_bytes length, YOU WILL OVERWRITE adjacent data/code! "
+               "DANGER: Overwriting beyond intended boundaries can corrupt instructions, data structures, or critical code. "
+               "ALWAYS: 1) Check instruction boundaries, 2) Verify patch size, 3) Understand what follows the patch location. "
+               "This tool modifies the binary permanently - mistakes can break the entire program!";
     }
     
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("address", "Target address to patch")
-            .add_string("original_bytes", "Original bytes in hex format for verification (e.g., '90 90 90' or '909090')")
-            .add_string("new_bytes", "New bytes to write in hex format")
-            .add_string("description", "REQUIRED: Description of why this patch is being applied (for audit trail)")
+            .add_integer("address", "Target address to patch - MUST be exact start of instruction/data")
+            .add_string("original_bytes", "CRITICAL: Original bytes for verification - MUST match exactly or patch will fail (hex format)")
+            .add_string("new_bytes", "⚠️ New bytes to write - WARNING: If longer than original, WILL OVERWRITE adjacent memory!")
+            .add_string("description", "REQUIRED: Detailed explanation of patch purpose and why it's safe (for audit trail)")
             .build();
     }
     
@@ -1215,17 +1219,22 @@ public:
     }
     
     std::string description() const override {
-        return "Patch assembly instructions at a specific address with mandatory verification. "
-               "REQUIRES original assembly for safety verification before patching. "
-               "Automatically handles NOP padding if new instruction is smaller.";
+        return "⚠️ EXTREMELY DANGEROUS - Patch assembly instructions at a specific address. "
+               "CRITICAL: You MUST be 100% certain about your patch before using this tool! "
+               "MANDATORY: Verify original assembly matches EXACTLY before patching. "
+               "WARNING: If assembled bytes > original instruction size, YOU WILL OVERWRITE following instructions! "
+               "DANGER: Overwriting adjacent instructions can break control flow, corrupt function logic, or crash the program. "
+               "ALWAYS: 1) Analyze surrounding instructions, 2) Check assembled size vs original, 3) Understand code flow impact. "
+               "NOTE: Tool adds NOPs only if new instruction is SMALLER - it will NOT prevent overwriting if larger! "
+               "This tool modifies the binary permanently - incorrect patches can destroy program functionality!";
     }
     
     json parameters_schema() const override {
         return ParameterBuilder()
-            .add_integer("address", "Target address to patch")
-            .add_string("original_asm", "Original assembly instruction(s) for verification")
-            .add_string("new_asm", "New assembly instruction(s) to write")
-            .add_string("description", "REQUIRED: Description of why this patch is being applied (for audit trail)")
+            .add_integer("address", "Target instruction address - MUST be exact start of instruction")
+            .add_string("original_asm", "CRITICAL: Original assembly for verification - MUST match exactly or patch will fail")
+            .add_string("new_asm", "⚠️ New assembly - WARNING: If assembled size > original, WILL DESTROY following instructions!")
+            .add_string("description", "REQUIRED: Detailed explanation of patch purpose and safety analysis (for audit trail)")
             .build();
     }
     
