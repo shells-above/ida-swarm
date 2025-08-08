@@ -5,13 +5,11 @@
 #include "../core/ui_utils.h"
 #include "../core/settings_manager.h"
 #include "../core/agent_controller.h"
-#include "../widgets/command_palette.h"
 #include "memory_dock.h"
 #include "tool_execution_dock.h"
-#include "statistics_dock.h"
 #include "console_dock.h"
-#include "floating_inspector.h"
 #include "settings_dialog.h"
+#include "theme_editor/theme_editor_dialog.h"
 
 namespace llm_re::ui_v2 {
 
@@ -125,19 +123,19 @@ protected:
         QString iconName;
         switch (type_) {
         case NotificationManager::Success:
-            typeColor = QColor("#4CAF50");
+            typeColor = ThemeColor("notificationSuccess");
             iconName = "check-circle";
             break;
         case NotificationManager::Warning:
-            typeColor = QColor("#FF9800");
+            typeColor = ThemeColor("notificationWarning");
             iconName = "warning";
             break;
         case NotificationManager::Error:
-            typeColor = QColor("#F44336");
+            typeColor = ThemeColor("notificationError");
             iconName = "error";
             break;
         default:
-            typeColor = ThemeManager::instance().colors().primary;
+            typeColor = ThemeColor("notificationInfo");
             iconName = "info";
             break;
         }
@@ -245,6 +243,15 @@ MainWindow::MainWindow(QWidget* parent)
     , controller_(std::make_unique<UiController>(this))
 {
     setObjectName("MainWindow");
+    
+    // Mark this as a plugin widget to prevent theme bleeding into IDA
+    setProperty("llm_re_widget", true);
+    
+    // CRITICAL: Prevent Qt from using the application style for background
+    setAttribute(Qt::WA_StyledBackground, false);
+    // This ensures our widget doesn't inherit IDA's theme
+    setAutoFillBackground(false);
+    
     setupUI();
     loadSettings();
     
@@ -309,19 +316,14 @@ void MainWindow::setupUI() {
     createStatusBar();
     createCentralWidget();
     createDockWindows();
-    createTrayIcon();
     
     // Connect signals
     connectSignals();
-    
-    // Register command providers
-    registerCommandProviders();
     
     // Setup managers
     layoutManager_ = new LayoutManager(this);
     shortcutManager_ = new ShortcutManager(this);
     notificationManager_ = new NotificationManager(this);
-    floatingInspector_ = new FloatingInspector(this);
     
     // Setup shortcuts
     setupShortcuts();
@@ -359,25 +361,6 @@ void MainWindow::createActions() {
     connect(exitAction_, &QAction::triggered, this, &MainWindow::onFileExit);
     
     // Edit actions
-    undoAction_ = new QAction(ThemeManager::instance().themedIcon("edit-undo"), tr("&Undo"), this);
-    undoAction_->setShortcut(QKeySequence::Undo);
-    connect(undoAction_, &QAction::triggered, this, &MainWindow::onEditUndo);
-    
-    redoAction_ = new QAction(ThemeManager::instance().themedIcon("edit-redo"), tr("&Redo"), this);
-    redoAction_->setShortcut(QKeySequence::Redo);
-    connect(redoAction_, &QAction::triggered, this, &MainWindow::onEditRedo);
-    
-    cutAction_ = new QAction(ThemeManager::instance().themedIcon("edit-cut"), tr("Cu&t"), this);
-    cutAction_->setShortcut(QKeySequence::Cut);
-    connect(cutAction_, &QAction::triggered, this, &MainWindow::onEditCut);
-    
-    copyAction_ = new QAction(ThemeManager::instance().themedIcon("edit-copy"), tr("&Copy"), this);
-    copyAction_->setShortcut(QKeySequence::Copy);
-    connect(copyAction_, &QAction::triggered, this, &MainWindow::onEditCopy);
-    
-    pasteAction_ = new QAction(ThemeManager::instance().themedIcon("edit-paste"), tr("&Paste"), this);
-    pasteAction_->setShortcut(QKeySequence::Paste);
-    connect(pasteAction_, &QAction::triggered, this, &MainWindow::onEditPaste);
     
     selectAllAction_ = new QAction(ThemeManager::instance().themedIcon("edit-select-all"), tr("Select &All"), this);
     selectAllAction_->setShortcut(QKeySequence::SelectAll);
@@ -424,18 +407,6 @@ void MainWindow::createActions() {
     connect(saveLayoutAction_, &QAction::triggered, this, &MainWindow::onViewSaveLayout);
     
     // Tools actions
-    commandPaletteAction_ = new QAction(ThemeManager::instance().themedIcon("command-palette"), tr("&Command Palette"), this);
-    commandPaletteAction_->setShortcut(QKeySequence(tr("Ctrl+K")));
-    connect(commandPaletteAction_, &QAction::triggered, this, &MainWindow::onToolsCommandPalette);
-    
-    floatingInspectorAction_ = new QAction(tr("&Floating Inspector"), this);
-    floatingInspectorAction_->setCheckable(true);
-    floatingInspectorAction_->setShortcut(QKeySequence(tr("Ctrl+I")));
-    connect(floatingInspectorAction_, &QAction::triggered, this, &MainWindow::onToolsFloatingInspector);
-    
-    statisticsAction_ = new QAction(ThemeManager::instance().themedIcon("view-statistics"), tr("&Statistics"), this);
-    statisticsAction_->setCheckable(true);
-    connect(statisticsAction_, &QAction::triggered, this, &MainWindow::onToolsStatistics);
     
     memoryAnalysisAction_ = new QAction(ThemeManager::instance().themedIcon("memory-analysis"), tr("&Memory Analysis"), this);
     memoryAnalysisAction_->setCheckable(true);
@@ -498,13 +469,6 @@ void MainWindow::createMenus() {
     
     // Edit menu
     editMenu_ = menuBar()->addMenu(tr("&Edit"));
-    editMenu_->addAction(undoAction_);
-    editMenu_->addAction(redoAction_);
-    editMenu_->addSeparator();
-    editMenu_->addAction(cutAction_);
-    editMenu_->addAction(copyAction_);
-    editMenu_->addAction(pasteAction_);
-    editMenu_->addSeparator();
     editMenu_->addAction(selectAllAction_);
     editMenu_->addSeparator();
     editMenu_->addAction(findAction_);
@@ -526,18 +490,28 @@ void MainWindow::createMenus() {
     themeGroup->addAction(lightThemeAction);
     
     connect(darkThemeAction, &QAction::triggered, [this]() {
-        ThemeManager::instance().setTheme(ThemeManager::Theme::Dark);
+        ThemeManager::instance().loadTheme("dark");
     });
     connect(lightThemeAction, &QAction::triggered, [this]() {
-        ThemeManager::instance().setTheme(ThemeManager::Theme::Light);
+        ThemeManager::instance().loadTheme("light");
     });
     
     // Set initial theme check
-    if (ThemeManager::instance().currentTheme() == ThemeManager::Theme::Dark) {
+    auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+    if (currentInfo.name == "dark") {
         darkThemeAction->setChecked(true);
-    } else {
+    } else if (currentInfo.name == "light") {
         lightThemeAction->setChecked(true);
     }
+    
+    themeMenu_->addSeparator();
+    auto* themeEditorAction = themeMenu_->addAction(tr("Theme Editor..."));
+    connect(themeEditorAction, &QAction::triggered, [this]() {
+        auto* dialog = new ThemeEditorDialog(this);
+        dialog->loadCurrentTheme();
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    });
     
     viewMenu_->addSeparator();
     viewMenu_->addAction(toggleSidebarAction_);
@@ -555,12 +529,8 @@ void MainWindow::createMenus() {
     
     // Tools menu
     toolsMenu_ = menuBar()->addMenu(tr("&Tools"));
-    toolsMenu_->addAction(commandPaletteAction_);
-    toolsMenu_->addAction(floatingInspectorAction_);
-    toolsMenu_->addSeparator();
     toolsMenu_->addAction(memoryAnalysisAction_);
     toolsMenu_->addAction(executionHistoryAction_);
-    toolsMenu_->addAction(statisticsAction_);
     toolsMenu_->addAction(consoleAction_);
     
     // Window menu
@@ -605,18 +575,11 @@ void MainWindow::createToolBars() {
     mainToolBar_ = addToolBar(tr("Main"));
     mainToolBar_->setObjectName("MainToolBar");
     mainToolBar_->setMovable(true);
-    mainToolBar_->addAction(commandPaletteAction_);
     
     // Edit toolbar
     editToolBar_ = addToolBar(tr("Edit"));
     editToolBar_->setObjectName("EditToolBar");
     editToolBar_->setMovable(true);
-    editToolBar_->addAction(undoAction_);
-    editToolBar_->addAction(redoAction_);
-    editToolBar_->addSeparator();
-    editToolBar_->addAction(cutAction_);
-    editToolBar_->addAction(copyAction_);
-    editToolBar_->addAction(pasteAction_);
     
     // View toolbar
     viewToolBar_ = addToolBar(tr("View"));
@@ -626,7 +589,6 @@ void MainWindow::createToolBars() {
     viewToolBar_->addSeparator();
     viewToolBar_->addAction(memoryAnalysisAction_);
     viewToolBar_->addAction(executionHistoryAction_);
-    viewToolBar_->addAction(statisticsAction_);
     viewToolBar_->addAction(consoleAction_);
 }
 
@@ -673,11 +635,6 @@ void MainWindow::createCentralWidget() {
     // Set as central widget
     setCentralWidget(mainSplitter_);
     
-    // Create command palette
-    commandPalette_ = new CommandPalette(this);
-    commandPalette_->setObjectName("CommandPalette");
-    commandPalette_->setMainWindow(this);
-    commandPalette_->registerBuiltinCommands();
 }
 
 void MainWindow::createDockWindows() {
@@ -705,18 +662,6 @@ void MainWindow::createDockWindows() {
     connect(toolDockWidget_, &QDockWidget::visibilityChanged,
             executionHistoryAction_, &QAction::setChecked);
     
-    // Statistics dock
-    statsDock_ = new StatisticsDock(this);
-    statsDockWidget_ = new QDockWidget(tr("Statistics"), this);
-    statsDockWidget_->setObjectName("StatsDock");
-    statsDockWidget_->setWidget(statsDock_);
-    statsDockWidget_->setAllowedAreas(Qt::AllDockWidgetAreas);
-    addDockWidget(Qt::RightDockWidgetArea, statsDockWidget_);
-    statsDockWidget_->hide();
-    
-    connect(statsDockWidget_, &QDockWidget::visibilityChanged,
-            statisticsAction_, &QAction::setChecked);
-    
     // Console dock
     consoleDock_ = new ConsoleDock(this);
     consoleDockWidget_ = new QDockWidget(tr("Console"), this);
@@ -731,38 +676,10 @@ void MainWindow::createDockWindows() {
             consoleAction_, &QAction::setChecked);
     
     // Tab docks on the right
-    tabifyDockWidget(memoryDockWidget_, statsDockWidget_);
-}
-
-void MainWindow::createTrayIcon() {
-    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
-        return;
-    }
-    
-    trayIconMenu_ = new QMenu(this);
-    trayIconMenu_->addAction(tr("&Show"), this, &MainWindow::showWindow);
-    trayIconMenu_->addAction(tr("&Hide"), this, &MainWindow::hideWindow);
-    trayIconMenu_->addSeparator();
-    trayIconMenu_->addAction(exitAction_);
-    
-    trayIcon_ = new QSystemTrayIcon(this);
-    trayIcon_->setContextMenu(trayIconMenu_);
-    trayIcon_->setIcon(ThemeManager::instance().themedIcon("application-icon"));
-    trayIcon_->setToolTip(tr("LLM RE Agent"));
-    
-    connect(trayIcon_, &QSystemTrayIcon::activated,
-            this, &MainWindow::onTrayIconActivated);
-    
-    if (showTrayIcon_) {
-        trayIcon_->show();
-    }
 }
 
 void MainWindow::connectSignals() {
     // Conversation view signals
-    auto result = connect(conversationView_, &ConversationView::messageSubmitted,
-                         controller_.get(), &UiController::routeUserMessage);
-    
     connect(conversationView_, &ConversationView::toolExecutionRequested,
             [this](const QString& toolName, const QJsonObject& params) {
                 controller_->routeToolExecution(toolName, params);
@@ -773,87 +690,15 @@ void MainWindow::connectSignals() {
     connect(conversationView_, &ConversationView::unsavedChangesChanged,
             this, &MainWindow::onSessionModified);
     
-    // Command palette signals
-    connect(commandPalette_, &CommandPalette::commandExecuted,
-            [this](const QString& commandId) {
-                showStatusMessage(tr("Executed: %1").arg(commandId));
-            });
     
-    // Floating inspector
+    // Link handling
     connect(conversationView_, &ConversationView::linkClicked,
             [this](const QUrl& url) {
-                if (floatingInspector_ && floatingInspectorAction_->isChecked()) {
-                    floatingInspector_->setPosition(FloatingInspector::FollowCursor);
-                    floatingInspector_->showMessage("Link", url.toString());
-                }
+                // Link handling can be added here if needed
+                Q_UNUSED(url);
             });
 }
 
-void MainWindow::registerCommandProviders() {
-    // File commands
-    commandPalette_->registerCommand({
-        "file.new", tr("New Session"), tr("Start a new conversation session"),
-        "File", ThemeManager::instance().themedIcon("document-new"), QKeySequence::New,
-        [this]() { newSession(); }
-    });
-    
-    commandPalette_->registerCommand({
-        "file.open", tr("Open Session"), tr("Open an existing session"),
-        "File", ThemeManager::instance().themedIcon("document-open"), QKeySequence::Open,
-        [this]() { openSession(); }
-    });
-    
-    commandPalette_->registerCommand({
-        "file.save", tr("Save Session"), tr("Save the current session"),
-        "File", ThemeManager::instance().themedIcon("document-save"), QKeySequence::Save,
-        [this]() { saveSession(); }
-    });
-    
-    // View commands
-    commandPalette_->registerCommand({
-        "view.theme.dark", tr("Dark Theme"), tr("Switch to dark theme"),
-        "View", ThemeManager::instance().themedIcon("theme-dark"), QKeySequence(),
-        [this]() { ThemeManager::instance().setTheme(ThemeManager::Theme::Dark); }
-    });
-    
-    commandPalette_->registerCommand({
-        "view.theme.light", tr("Light Theme"), tr("Switch to light theme"),
-        "View", ThemeManager::instance().themedIcon("theme-light"), QKeySequence(),
-        [this]() { ThemeManager::instance().setTheme(ThemeManager::Theme::Light); }
-    });
-    
-    // Window commands
-    commandPalette_->registerCommand({
-        "window.split.horizontal", tr("Split Horizontally"), tr("Split view horizontally"),
-        "Window", ThemeManager::instance().themedIcon("view-split-horizontal"), QKeySequence(),
-        [this]() { splitHorizontally(); }
-    });
-    
-    commandPalette_->registerCommand({
-        "window.split.vertical", tr("Split Vertically"), tr("Split view vertically"),
-        "Window", ThemeManager::instance().themedIcon("view-split-vertical"), QKeySequence(),
-        [this]() { splitVertically(); }
-    });
-    
-    // Tools commands
-    commandPalette_->registerCommand({
-        "tools.memory", tr("Memory Analysis"), tr("Show memory analysis panel"),
-        "Tools", ThemeManager::instance().themedIcon("memory-analysis"), QKeySequence(),
-        [this]() { memoryDockWidget_->setVisible(!memoryDockWidget_->isVisible()); }
-    });
-    
-    commandPalette_->registerCommand({
-        "tools.execution", tr("Tool Execution"), tr("Show tool execution history"),
-        "Tools", ThemeManager::instance().themedIcon("execution-history"), QKeySequence(),
-        [this]() { toolDockWidget_->setVisible(!toolDockWidget_->isVisible()); }
-    });
-    
-    commandPalette_->registerCommand({
-        "tools.statistics", tr("Statistics"), tr("Show statistics dashboard"),
-        "Tools", ThemeManager::instance().themedIcon("view-statistics"), QKeySequence(),
-        [this]() { statsDockWidget_->setVisible(!statsDockWidget_->isVisible()); }
-    });
-}
 
 void MainWindow::setupShortcuts() {
     // Additional global shortcuts
@@ -875,11 +720,6 @@ void MainWindow::setupShortcuts() {
         [this]() { controller_->focusTools(); }
     );
     
-    shortcutManager_->registerShortcut(
-        "focus.stats", QKeySequence(tr("Alt+4")),
-        tr("Focus statistics panel"),
-        [this]() { controller_->focusStats(); }
-    );
     
     // Quick split shortcuts
     shortcutManager_->registerShortcut(
@@ -984,18 +824,13 @@ void MainWindow::resetLayout() {
     // Reset dock widgets
     memoryDockWidget_->setFloating(false);
     toolDockWidget_->setFloating(false);
-    statsDockWidget_->setFloating(false);
     
     addDockWidget(Qt::RightDockWidgetArea, memoryDockWidget_);
     addDockWidget(Qt::BottomDockWidgetArea, toolDockWidget_);
-    addDockWidget(Qt::RightDockWidgetArea, statsDockWidget_);
-    
-    tabifyDockWidget(memoryDockWidget_, statsDockWidget_);
     
     // Hide all docks by default
     memoryDockWidget_->hide();
     toolDockWidget_->hide();
-    statsDockWidget_->hide();
     
     showStatusMessage(tr("Layout reset to default"));
 }
@@ -1009,10 +844,10 @@ void MainWindow::deleteLayout(const QString& name) {
 }
 
 void MainWindow::applyTheme(const QString& theme) {
-    if (theme == "dark") {
-        ThemeManager::instance().setTheme(ThemeManager::Theme::Dark);
-    } else if (theme == "light") {
-        ThemeManager::instance().setTheme(ThemeManager::Theme::Light);
+    if (!ThemeManager::instance().loadTheme(theme)) {
+        QMessageBox::warning(this, "Theme Load Failed",
+            QString("Failed to load theme '%1'. Using default dark theme.").arg(theme));
+        ThemeManager::instance().loadTheme("dark");
     }
     emit themeChanged(theme);
 }
@@ -1382,11 +1217,6 @@ void MainWindow::showKeyboardShortcuts() {
     
     // Edit shortcuts
     categorizedShortcuts["Edit"] = {
-        {tr("Undo"), QKeySequence(QKeySequence::Undo).toString()},
-        {tr("Redo"), QKeySequence(QKeySequence::Redo).toString()},
-        {tr("Cut"), QKeySequence(QKeySequence::Cut).toString()},
-        {tr("Copy"), QKeySequence(QKeySequence::Copy).toString()},
-        {tr("Paste"), QKeySequence(QKeySequence::Paste).toString()},
         {tr("Select All"), QKeySequence(QKeySequence::SelectAll).toString()},
         {tr("Find"), QKeySequence(QKeySequence::Find).toString()},
         {tr("Replace"), tr("Ctrl+H")}
@@ -1395,9 +1225,7 @@ void MainWindow::showKeyboardShortcuts() {
     // View shortcuts
     categorizedShortcuts["View"] = {
         {tr("Toggle Sidebar"), tr("Ctrl+B")},
-        {tr("Full Screen"), QKeySequence(QKeySequence::FullScreen).toString()},
-        {tr("Command Palette"), tr("Ctrl+K")},
-        {tr("Floating Inspector"), tr("Ctrl+I")}
+        {tr("Full Screen"), QKeySequence(QKeySequence::FullScreen).toString()}
     };
     
     // Window shortcuts
@@ -1413,8 +1241,7 @@ void MainWindow::showKeyboardShortcuts() {
     categorizedShortcuts["Focus"] = {
         {tr("Focus Conversation"), tr("Alt+1")},
         {tr("Focus Memory"), tr("Alt+2")},
-        {tr("Focus Tools"), tr("Alt+3")},
-        {tr("Focus Statistics"), tr("Alt+4")}
+        {tr("Focus Tools"), tr("Alt+3")}
     };
     
     // Add custom shortcuts from shortcut manager
@@ -1503,15 +1330,7 @@ void MainWindow::showStatusMessage(const QString& message, int timeout) {
 }
 
 void MainWindow::updateWindowTitle() {
-    QString title = tr("LLM RE Agent");
-    
-    if (!currentFile_.isEmpty()) {
-        title = tr("%1[*] - %2").arg(strippedName(currentFile_)).arg(title);
-    } else {
-        title = tr("Untitled[*] - %1").arg(title);
-    }
-    
-    setWindowTitle(title);
+    setWindowTitle(tr("LLM RE Agent"));
     setWindowModified(hasUnsavedChanges());
 }
 
@@ -1544,11 +1363,6 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     
-    if (closeToTray_ && trayIcon_ && trayIcon_->isVisible()) {
-        hide();
-        event->ignore();
-        return;
-    }
     
     // Set flag before cleanup
     isClosing_ = true;
@@ -1562,13 +1376,6 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::WindowStateChange) {
-        if (isMinimized() && minimizeToTray_ && trayIcon_ && trayIcon_->isVisible()) {
-            hide();
-            event->ignore();
-            return;
-        }
-    }
     QMainWindow::changeEvent(event);
 }
 
@@ -1622,23 +1429,17 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     return QMainWindow::eventFilter(watched, event);
 }
 
-void MainWindow::onTrayIconActivated(QSystemTrayIcon::ActivationReason reason) {
-    switch (reason) {
-    case QSystemTrayIcon::Trigger:
-    case QSystemTrayIcon::DoubleClick:
-        toggleWindow();
-        break;
-    case QSystemTrayIcon::MiddleClick:
-        showNotification(
-            tr("LLM RE Agent"),
-            tr("Running in background"),
-            "info"
-        );
-        break;
-    default:
-        break;
-    }
+void MainWindow::paintEvent(QPaintEvent* event) {
+    // CRITICAL: Override painting to prevent IDA's theme from being used
+    // We paint our own background with our theme colors
+    QPainter painter(this);
+    const auto& colors = ThemeManager::instance().colors();
+    painter.fillRect(rect(), colors.background);
+    
+    // Don't call QMainWindow::paintEvent as it would use the application style
+    // QMainWindow::paintEvent(event);  // INTENTIONALLY NOT CALLED
 }
+
 
 void MainWindow::onFileNew() {
     newSession();
@@ -1661,57 +1462,7 @@ void MainWindow::onFileExit() {
     close();
 }
 
-void MainWindow::onEditUndo() {
-    if (auto* focusWidget = QApplication::focusWidget()) {
-        if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
-            textEdit->undo();
-        } else if (auto* lineEdit = qobject_cast<QLineEdit*>(focusWidget)) {
-            lineEdit->undo();
-        }
-    }
-}
 
-void MainWindow::onEditRedo() {
-    if (auto* focusWidget = QApplication::focusWidget()) {
-        if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
-            textEdit->redo();
-        } else if (auto* lineEdit = qobject_cast<QLineEdit*>(focusWidget)) {
-            lineEdit->redo();
-        }
-    }
-}
-
-void MainWindow::onEditCut() {
-    if (auto* focusWidget = QApplication::focusWidget()) {
-        if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
-            textEdit->cut();
-        } else if (auto* lineEdit = qobject_cast<QLineEdit*>(focusWidget)) {
-            lineEdit->cut();
-        }
-    }
-}
-
-void MainWindow::onEditCopy() {
-    if (auto* focusWidget = QApplication::focusWidget()) {
-        if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
-            textEdit->copy();
-        } else if (auto* lineEdit = qobject_cast<QLineEdit*>(focusWidget)) {
-            lineEdit->copy();
-        } else if (conversationView_) {
-            conversationView_->copySelectedMessages();
-        }
-    }
-}
-
-void MainWindow::onEditPaste() {
-    if (auto* focusWidget = QApplication::focusWidget()) {
-        if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
-            textEdit->paste();
-        } else if (auto* lineEdit = qobject_cast<QLineEdit*>(focusWidget)) {
-            lineEdit->paste();
-        }
-    }
-}
 
 void MainWindow::onEditSelectAll() {
     if (auto* focusWidget = QApplication::focusWidget()) {
@@ -1745,7 +1496,6 @@ void MainWindow::onViewToggleSidebar() {
     bool visible = toggleSidebarAction_->isChecked();
     memoryDockWidget_->setVisible(visible && memoryAnalysisAction_->isChecked());
     toolDockWidget_->setVisible(visible && executionHistoryAction_->isChecked());
-    statsDockWidget_->setVisible(visible && statisticsAction_->isChecked());
 }
 
 void MainWindow::onViewToggleToolBar() {
@@ -1790,30 +1540,7 @@ void MainWindow::onViewLoadLayout() {
     }
 }
 
-void MainWindow::onToolsCommandPalette() {
-    if (commandPalette_) {
-        commandPalette_->popup();
-    }
-}
 
-void MainWindow::onToolsFloatingInspector() {
-    if (floatingInspector_) {
-        if (floatingInspectorAction_->isChecked()) {
-            floatingInspector_->show();
-        } else {
-            floatingInspector_->hide();
-        }
-    }
-}
-
-void MainWindow::onToolsStatistics() {
-    if (statsDockWidget_) {
-        statsDockWidget_->setVisible(statisticsAction_->isChecked());
-        if (statisticsAction_->isChecked()) {
-            statsDockWidget_->raise();
-        }
-    }
-}
 
 void MainWindow::onToolsMemoryAnalysis() {
     if (memoryDockWidget_) {
@@ -1889,13 +1616,7 @@ void MainWindow::updateActions() {
     QWidget* focusWidget = QApplication::focusWidget();
     bool isTextWidget = qobject_cast<QTextEdit*>(focusWidget) || 
                        qobject_cast<QLineEdit*>(focusWidget);
-    
-    undoAction_->setEnabled(isTextWidget);
-    redoAction_->setEnabled(isTextWidget);
-    cutAction_->setEnabled(isTextWidget);
-    copyAction_->setEnabled(isTextWidget || (conversationView_ && 
-                                           !conversationView_->selectedMessages().isEmpty()));
-    pasteAction_->setEnabled(isTextWidget);
+
     selectAllAction_->setEnabled(isTextWidget || hasSession);
     findAction_->setEnabled(hasSession);
 }
@@ -1924,12 +1645,6 @@ void MainWindow::onSessionModified() {
     updateActions();
 }
 
-void MainWindow::onFloatingInspectorRequested(const QPoint& pos, const QString& context) {
-    if (floatingInspector_ && floatingInspectorAction_->isChecked()) {
-        floatingInspector_->move(pos);
-        floatingInspector_->showMessage("Context", context);
-    }
-}
 
 void MainWindow::loadSettings() {
     // Load configuration from SettingsManager
@@ -1937,9 +1652,6 @@ void MainWindow::loadSettings() {
     const Config& config = SettingsManager::instance().config();
     
     // Apply window management settings
-    showTrayIcon_ = config.ui.show_tray_icon;
-    minimizeToTray_ = config.ui.minimize_to_tray;
-    closeToTray_ = config.ui.close_to_tray;
     startMinimized_ = config.ui.start_minimized;
     rememberWindowState_ = config.ui.remember_window_state;
     
@@ -1957,9 +1669,6 @@ void MainWindow::loadSettings() {
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("windowState").toByteArray());
     
-    showTrayIcon_ = settings.value("showTrayIcon", true).toBool();
-    minimizeToTray_ = settings.value("minimizeToTray", true).toBool();
-    closeToTray_ = settings.value("closeToTray", false).toBool();
     startMinimized_ = settings.value("startMinimized", false).toBool();
     rememberWindowState_ = settings.value("rememberWindowState", true).toBool();
     
@@ -1993,9 +1702,6 @@ void MainWindow::saveSettings() {
     settings.beginGroup("MainWindow");
     settings.setValue("geometry", saveGeometry());
     settings.setValue("windowState", saveState());
-    settings.setValue("showTrayIcon", showTrayIcon_);
-    settings.setValue("minimizeToTray", minimizeToTray_);
-    settings.setValue("closeToTray", closeToTray_);
     settings.setValue("startMinimized", startMinimized_);
     settings.setValue("rememberWindowState", rememberWindowState_);
     settings.endGroup();
@@ -2199,9 +1905,6 @@ void UiController::saveFocusState() {
     } else if (mainWindow_->toolDock() && 
                mainWindow_->toolDock()->isAncestorOf(lastFocusedWidget_)) {
         lastFocusedComponent_ = "tools";
-    } else if (mainWindow_->statsDock() && 
-               mainWindow_->statsDock()->isAncestorOf(lastFocusedWidget_)) {
-        lastFocusedComponent_ = "stats";
     }
 }
 
@@ -2216,8 +1919,6 @@ void UiController::restoreFocusState() {
             focusMemory();
         } else if (lastFocusedComponent_ == "tools") {
             focusTools();
-        } else if (lastFocusedComponent_ == "stats") {
-            focusStats();
         }
     }
 }
@@ -2251,18 +1952,6 @@ void UiController::focusTools() {
         }
         mainWindow_->toolDock()->setFocus();
         emit focusChanged("tools");
-    }
-}
-
-void UiController::focusStats() {
-    if (mainWindow_->statsDock()) {
-        // Show stats dock through its parent dock widget
-        if (auto dockWidget = qobject_cast<QDockWidget*>(mainWindow_->statsDock()->parent())) {
-            dockWidget->show();
-            dockWidget->raise();
-        }
-        mainWindow_->statsDock()->setFocus();
-        emit focusChanged("stats");
     }
 }
 

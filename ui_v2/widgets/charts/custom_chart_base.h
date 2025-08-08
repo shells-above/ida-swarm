@@ -92,7 +92,7 @@ protected:
     
     // Helper methods
     void calculateChartRect();
-    void updateAxesRange();
+    virtual void updateAxesRange();
     QPointF mapToChart(const QPointF& point) const;
     QPointF mapFromChart(const QPointF& chartPoint) const;
     

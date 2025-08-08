@@ -60,11 +60,6 @@ public:
     void setDensityMode(int mode); // 0=Compact, 1=Cozy, 2=Spacious
     int densityMode() const { return densityMode_; }
     
-    // Tool execution
-    void startToolExecution(const QUuid& messageId, const QString& toolName);
-    void updateToolProgress(const QUuid& messageId, int progress, const QString& status = QString());
-    void completeToolExecution(const QUuid& messageId, bool success, const QString& output = QString());
-    
     // State
     bool hasUnsavedChanges() const { return hasUnsavedChanges_; }
     void discardChanges();  // Public method to discard unsaved changes
@@ -102,6 +97,7 @@ public slots:
     void showTypingIndicator(const QString& user = QString());
     void hideTypingIndicator();
     void updateTheme();
+    void onAgentStateChanged();  // Called when agent state changes
     
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -124,7 +120,7 @@ private slots:
     void onSearchTextChanged(const QString& text);
     void onScrollPositionChanged();
     void onAutoSaveTimeout();
-    void updateSendButtonState();
+    void updateButtonStates();
     void handleFileDropped(const QString& filePath);
     
 private:
@@ -154,6 +150,8 @@ private:
     ConversationInputArea* inputArea_ = nullptr;
     QPushButton* sendButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
+    QPushButton* resumeButton_ = nullptr;
+    QPushButton* stopButton_ = nullptr;
     ConversationSearchBar* searchBar_ = nullptr;
     QLineEdit* searchInput_ = nullptr;
     QLabel* searchStatusLabel_ = nullptr;
@@ -233,6 +231,8 @@ private:
     
     QTextEdit* textEdit_ = nullptr;
     int baseHeight_ = 45;
+    int maxLength_ = 0;
+    bool maxLengthConnected_ = false;
 };
 
 // Search bar widget

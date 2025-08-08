@@ -105,10 +105,14 @@ private:
     void handleFocusChange(QWidget* oldWidget, QWidget* newWidget);
     void buildFocusChain();
     int findWidgetIndex(QWidget* widget) const;
+    void rebuildIndices();
     
     // Focus items
     QList<FocusItem> focusItems_;
-    QHash<QWidget*, FocusItem*> widgetMap_;
+    QHash<QWidget*, int> widgetItemIndices_;  // Index-based mapping for safety
+    
+    // Thread safety
+    mutable QMutex mutex_;
     
     // Focus chain
     QList<QWidget*> focusChain_;
@@ -160,7 +164,7 @@ private slots:
     
 private:
     QPointer<QWidget> targetWidget_;
-    QColor highlightColor_ = QColor(0, 120, 215);
+    QColor highlightColor_;  // Initialized from theme
     int highlightWidth_ = 2;
     int animationDuration_ = 200;
     

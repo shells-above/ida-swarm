@@ -40,6 +40,11 @@ public:
     void setData(const QString& category, const QString& series, double value);
     double getData(const QString& category, const QString& series) const;
     
+    // Range chart data API
+    void setRangeData(const QString& category, const QString& series, double low, double high);
+    QPair<double, double> getRangeData(const QString& category, const QString& series) const;
+    void clearRangeData();
+    
     // Configuration
     void setTheme(const BarChartTheme& theme);
     BarChartTheme theme() const { return theme_; }
@@ -135,6 +140,7 @@ private:
     QStringList categories_;
     std::vector<ChartSeries> series_;
     std::map<std::pair<QString, QString>, double> dataMap_; // (category, series) -> value
+    std::map<std::pair<QString, QString>, QPair<double, double>> rangeDataMap_; // (category, series) -> (low, high)
     
     // Configuration
     ChartType chartType_ = Vertical;

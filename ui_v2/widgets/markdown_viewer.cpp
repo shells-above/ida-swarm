@@ -35,6 +35,8 @@ void MarkdownViewer::setupTextBrowser() {
     // Connect signals
     connect(textBrowser_, &QTextBrowser::anchorClicked, 
             this, &MarkdownViewer::onLinkClicked);
+    connect(textBrowser_, QOverload<const QUrl &>::of(&QTextBrowser::highlighted),
+            this, &MarkdownViewer::linkHovered);
     connect(textBrowser_, &QTextBrowser::cursorPositionChanged,
             this, &MarkdownViewer::onCursorPositionChanged);
     connect(textBrowser_->document(), &QTextDocument::contentsChanged,
@@ -682,6 +684,8 @@ void MarkdownViewer::copy() {
 void MarkdownViewer::findText(const QString& text, bool forward, 
                             bool caseSensitive, bool wholeWords) {
     currentSearchText_ = text;
+    searchCaseSensitive_ = caseSensitive;
+    searchWholeWords_ = wholeWords;
     updateSearchMatches();
     
     if (!searchMatches_.isEmpty()) {
@@ -719,9 +723,18 @@ void MarkdownViewer::updateSearchMatches() {
     QTextDocument* doc = textBrowser_->document();
     QTextCursor cursor(doc);
     
+    // Set up find flags
+    QTextDocument::FindFlags flags;
+    if (searchCaseSensitive_) {
+        flags |= QTextDocument::FindCaseSensitively;
+    }
+    if (searchWholeWords_) {
+        flags |= QTextDocument::FindWholeWords;
+    }
+    
     // Find all matches
     while (!cursor.isNull() && !cursor.atEnd()) {
-        cursor = doc->find(currentSearchText_, cursor);
+        cursor = doc->find(currentSearchText_, cursor, flags);
         if (!cursor.isNull()) {
             searchMatches_.append(cursor);
         }
@@ -1103,7 +1116,8 @@ QString MarkdownProcessor::processCodeBlocks(const QString& text) {
     QString result = text;
     
     QRegularExpressionMatchIterator it = codeBlockRegex_.globalMatch(text);
-    QList<QPair<int, int>> replacements;
+    // Store position, length, and replacement string
+    QList<std::tuple<int, int, QString>> replacements;
     
     while (it.hasNext()) {
         QRegularExpressionMatch match = it.next();
@@ -1118,13 +1132,12 @@ QString MarkdownProcessor::processCodeBlocks(const QString& text) {
             .arg(language)
             .arg(UIUtils::escapeHtml(code));
         
-        replacements.prepend({match.capturedStart(), match.capturedLength()});
+        replacements.prepend({match.capturedStart(), match.capturedLength(), replacement});
     }
     
     // Apply replacements in reverse order
     for (const auto& rep : replacements) {
-        result.replace(rep.first, rep.second, 
-                      codeBlockTemplate_.arg("text").arg("CODE"));
+        result.replace(std::get<0>(rep), std::get<1>(rep), std::get<2>(rep));
     }
     
     return result;
@@ -1685,6 +1698,10 @@ void CodeBlockHighlighter::highlightAsm(const QString& text) {
     if (text.trimmed().endsWith(':')) {
         setFormat(0, text.indexOf(':') + 1, functionFormat_);
     }
+}
+
+void MarkdownProcessor::setCodeBlockTemplate(const QString& template_) {
+    codeBlockTemplate_ = template_;
 }
 
 } // namespace llm_re::ui_v2

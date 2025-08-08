@@ -145,7 +145,9 @@ struct EffectsConfig {
     float shadowOffsetX = 2.0f;
     float shadowOffsetY = 2.0f;
     float shadowBlur = 4.0f;
-    QColor shadowColor = QColor(0, 0, 0, 50);
+    QColor shadowColor;  // Initialized from theme
+    
+    EffectsConfig();
     
     // Animation
     bool animationEnabled = true;
@@ -229,6 +231,7 @@ namespace ChartUtils {
     double lerp(double a, double b, double t);
     QPointF lerp(const QPointF& a, const QPointF& b, double t);
     QColor lerp(const QColor& a, const QColor& b, double t);
+    QColor interpolateColor(const QColor& from, const QColor& to, double t);
     
     // Bezier curve calculation
     QPointF calculateBezierPoint(const QPointF& p0, const QPointF& p1, 

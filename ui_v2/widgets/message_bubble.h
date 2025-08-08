@@ -81,10 +81,6 @@ public:
     bool isExpanded() const { return isExpanded_; }
     void toggleExpanded() { setExpanded(!isExpanded_); }
     
-    // Tool execution display
-    void updateToolExecution();
-    void setToolOutputVisible(bool visible);
-    bool isToolOutputVisible() const { return toolOutputVisible_; }
     
     // Search
     void setSearchHighlight(const QString& text);
@@ -145,20 +141,17 @@ private slots:
     void onPinAction();
     void onBookmarkAction();
     void onAnimationFinished();
-    void onToolProgressChanged();
     
 private:
     void setupUI();
     void createHeader();
     void createContent();
     void createFooter();
-    void createToolExecutionWidget();
     void createAnalysisWidget();
     void createAttachmentsWidget();
     void createContextMenu();
     void updateLayout();
     void updateContentDisplay();
-    void updateToolExecutionDisplay();
     void updateAnalysisDisplay();
     void updateAttachmentsDisplay();
     void applyBubbleStyle();
@@ -176,7 +169,6 @@ private:
     QWidget* headerWidget_ = nullptr;
     QWidget* contentWidget_ = nullptr;
     QWidget* footerWidget_ = nullptr;
-    QWidget* toolWidget_ = nullptr;
     QWidget* analysisWidget_ = nullptr;
     QWidget* attachmentsWidget_ = nullptr;
     
@@ -189,12 +181,6 @@ private:
     MarkdownViewer* contentViewer_ = nullptr;
     QLabel* plainTextLabel_ = nullptr;
     
-    // Tool execution components
-    QLabel* toolNameLabel_ = nullptr;
-    QLabel* toolStatusLabel_ = nullptr;
-    QProgressBar* toolProgress_ = nullptr;
-    QTextEdit* toolOutputEdit_ = nullptr;
-    QToolButton* toolOutputToggle_ = nullptr;
     
     // Footer components
     QToolButton* shareButton_ = nullptr;
@@ -206,7 +192,6 @@ private:
     bool showTimestamp_ = true;
     bool showHeader_ = true;
     bool interactive_ = true;
-    bool toolOutputVisible_ = false;
     int maxWidth_ = 600;
     QString searchHighlight_;
     

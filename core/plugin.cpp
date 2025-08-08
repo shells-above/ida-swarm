@@ -18,7 +18,7 @@ class llm_plugin_t : public plugmod_t, public event_listener_t {
     qstring idb_path_;
     bool shutting_down = false;
     bool window_closed = false;
-    std::unique_ptr<Config> config_;
+    Config* config_ = nullptr;
 
     // Action handler that checks if plugin is still valid
     struct llm_action_handler_t : public action_handler_t {
@@ -416,7 +416,6 @@ void llm_plugin_t::show_main_window() {
             agent_controller->connectConversationView(main_window->conversationView());
             agent_controller->connectMemoryDock(main_window->memoryDock());
             agent_controller->connectToolDock(main_window->toolDock());
-            agent_controller->connectStatsDock(main_window->statsDock());
             agent_controller->connectConsoleDock(main_window->consoleDock());
             
             // Pass agent controller to UI controller
@@ -485,7 +484,7 @@ This will take hundreds of iterations. Begin your first pass now.)";
 }
 
 void llm_plugin_t::load_config() {
-    config_ = std::make_unique<Config>();
+    config_ = &Config::instance();
     
     // Use a proper buffer instead of modifying const memory
     char config_path[QMAXPATH];
@@ -496,7 +495,7 @@ void llm_plugin_t::load_config() {
         msg("LLM RE: ERROR - Configuration file not found at: %s\n", config_path);
         msg("LLM RE: Please create a configuration file with your API key and settings.\n");
         msg("LLM RE: See llm_re_config.json.example for the required format.\n");
-        config_.reset();  // Clear config to indicate failure
+        config_ = nullptr;  // Clear config to indicate failure
     }
 }
 

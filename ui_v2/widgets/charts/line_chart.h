@@ -76,6 +76,7 @@ protected:
     void drawData(QPainter* painter) override;
     void drawLegend(QPainter* painter) override;
     int findNearestDataPoint(const QPointF& pos, int& seriesIndex) override;
+    void updateAxesRange() override;
     
 private:
     // Drawing helpers
@@ -95,7 +96,6 @@ private:
                                           int seriesIndex);
     
     // Data processing
-    void updateAxisRanges();
     std::vector<QPointF> dataPointsToScreen(const ChartSeries& series);
     QPointF dataPointToScreen(const ChartDataPoint& point);
     

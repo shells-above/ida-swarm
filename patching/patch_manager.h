@@ -6,12 +6,7 @@
 #define PATCH_MANAGER_H
 
 #include "core/common.h"
-#include <keystone/keystone.h>
-#include <unordered_map>
-#include <vector>
-#include <string>
-#include <chrono>
-#include <optional>
+
 
 namespace llm_re {
 
@@ -101,11 +96,6 @@ private:
     
     // Patches storage
     std::unordered_map<ea_t, PatchEntry> patches_;
-    
-    // Backup management
-    std::string input_file_path_;
-    std::string backup_path_;
-    bool backup_created_ = false;
 
     // Safety validation methods
     bool validate_address(ea_t address, std::string& error_msg);
@@ -131,10 +121,6 @@ private:
     std::vector<uint8_t> read_bytes(ea_t address, size_t size);
     bool write_bytes(ea_t address, const std::vector<uint8_t>& bytes);
     void trigger_reanalysis(ea_t address, size_t size);
-    
-    // Backup management
-    bool create_backup();
-    bool has_backup() const;
 };
 
 } // namespace llm_re

@@ -6,66 +6,6 @@
 
 namespace llm_re::ui_v2 {
 
-// Execution timeline widget
-class ExecutionTimelineWidget : public BaseStyledWidget {
-    Q_OBJECT
-    
-public:
-    explicit ExecutionTimelineWidget(QWidget* parent = nullptr);
-    
-    void setExecutions(const QList<ToolExecution>& executions);
-    void highlightExecution(const QUuid& id);
-    void setTimeRange(const QDateTime& start, const QDateTime& end);
-    void setZoomLevel(int level);
-    
-    void setShowDependencies(bool show) { showDependencies_ = show; update(); }
-    void setShowSubTasks(bool show) { showSubTasks_ = show; update(); }
-    void setGroupByTool(bool group) { groupByTool_ = group; update(); }
-    
-signals:
-    void executionClicked(const QUuid& id);
-    void executionDoubleClicked(const QUuid& id);
-    void timeRangeChanged(const QDateTime& start, const QDateTime& end);
-    
-protected:
-    void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-    void wheelEvent(QWheelEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
-    
-private:
-    struct TimelineItem {
-        ToolExecution execution;
-        QRectF rect;
-        int row;
-    };
-    
-    void calculateLayout();
-    QColor statusColor(ToolExecutionState state) const;
-    QString formatDuration(qint64 ms) const;
-    
-    QList<TimelineItem> items_;
-    QDateTime startTime_;
-    QDateTime endTime_;
-    int zoomLevel_ = 100;
-    bool showDependencies_ = true;
-    bool showSubTasks_ = false;
-    bool groupByTool_ = false;
-    
-    // Interaction
-    QUuid highlightedId_;
-    QUuid hoveredId_;
-    bool isPanning_ = false;
-    QPoint panStartPos_;
-    QPointF viewOffset_;
-    
-    // Layout
-    int headerHeight_ = 40;
-    int rowHeight_ = 30;
-    int margin_ = 10;
-};
 
 // Performance chart widget
 class PerformanceChartWidget : public BaseStyledWidget {
@@ -117,7 +57,6 @@ private:
     void drawPieChart(QPainter* painter);
     void drawScatterPlot(QPainter* painter);
     void drawAxes(QPainter* painter);
-    void drawLegend(QPainter* painter);
 
     QList<ToolExecution> executions_;
     QList<DataPoint> dataPoints_;
@@ -132,7 +71,6 @@ private:
     
     // Layout
     QRectF chartRect_;
-    QRectF legendRect_;
 };
 
 // Tool execution dock
@@ -145,7 +83,6 @@ public:
     
     // Execution management
     QUuid startExecution(const QString& toolName, const QJsonObject& parameters);
-    void updateProgress(const QUuid& id, int progress, const QString& message = QString());
     void completeExecution(const QUuid& id, bool success, const QString& output = QString());
     void cancelExecution(const QUuid& id);
     
@@ -183,15 +120,12 @@ public:
     
 signals:
     void executionStarted(const QUuid& id);
-    void executionProgress(const QUuid& id, int progress);
     void executionCompleted(const QUuid& id, bool success);
     void executionCancelled(const QUuid& id);
-    void retryRequested(const QUuid& id);
     void outputReceived(const QUuid& id, const QString& output);
     void metricsUpdated();
     
 public slots:
-    void retryExecution(const QUuid& id);
     void clearHistory();
     void updateMetrics();
     
@@ -204,7 +138,6 @@ private slots:
     void onExecutionDoubleClicked(const QModelIndex& index);
     void onSelectionChanged();
     void onCustomContextMenu(const QPoint& pos);
-    void onTimelineExecutionClicked(const QUuid& id);
     void onChartDataPointClicked(const QString& label, double value);
     void onFilterChanged();
     void updateRunningExecutions();
@@ -223,14 +156,13 @@ private:
     
     // Models and views
     class ExecutionModel;
+    class ExecutionFilterProxyModel;
     ExecutionModel* model_ = nullptr;
-    QSortFilterProxyModel* proxyModel_ = nullptr;
+    ExecutionFilterProxyModel* proxyModel_ = nullptr;
     
     QSplitter* mainSplitter_ = nullptr;
     QTabWidget* viewTabs_ = nullptr;
     QTreeView* treeView_ = nullptr;
-    QTableView* tableView_ = nullptr;
-    ExecutionTimelineWidget* timelineWidget_ = nullptr;
     PerformanceChartWidget* chartWidget_ = nullptr;
     
     // Detail panel
@@ -240,9 +172,6 @@ private:
     QLabel* detailDurationLabel_ = nullptr;
     QTextEdit* detailParametersEdit_ = nullptr;
     QTextEdit* detailOutputEdit_ = nullptr;
-    QProgressBar* detailProgressBar_ = nullptr;
-    QPushButton* retryButton_ = nullptr;
-    QPushButton* cancelButton_ = nullptr;
     
     // Toolbar
     QToolBar* toolBar_ = nullptr;
@@ -303,7 +232,6 @@ public:
     enum Column {
         ToolColumn,
         StatusColumn,
-        ProgressColumn,
         DurationColumn,
         StartTimeColumn,
         OutputColumn,
@@ -313,8 +241,7 @@ public:
     enum Role {
         ExecutionRole = Qt::UserRole + 1,
         IdRole,
-        StatusRole,
-        ProgressRole
+        StatusRole
     };
     
     explicit ExecutionModel(QObject* parent = nullptr);
@@ -340,6 +267,86 @@ public:
 private:
     QList<ToolExecution> executions_;
     QHash<QUuid, int> indexMap_;
+};
+
+// Custom filter proxy model
+class ToolExecutionDock::ExecutionFilterProxyModel : public QSortFilterProxyModel {
+public:
+    explicit ExecutionFilterProxyModel(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
+    
+    void setToolFilter(const QStringList& tools) { toolFilter_ = tools; invalidateFilter(); }
+    void setStatusFilter(const QList<ToolExecutionState>& states) { statusFilter_ = states; invalidateFilter(); }
+    void setTimeRange(const QDateTime& start, const QDateTime& end) {
+        timeRangeStart_ = start;
+        timeRangeEnd_ = end;
+        invalidateFilter();
+    }
+    
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override {
+        QModelIndex index = sourceModel()->index(sourceRow, 0, sourceParent);
+        if (!index.isValid()) {
+            return false;
+        }
+        
+        ToolExecution exec = index.data(ExecutionModel::ExecutionRole).value<ToolExecution>();
+        
+        // Tool filter
+        if (!toolFilter_.isEmpty() && !toolFilter_.contains(exec.toolName)) {
+            return false;
+        }
+        
+        // Status filter
+        if (!statusFilter_.isEmpty() && !statusFilter_.contains(exec.state)) {
+            return false;
+        }
+        
+        // Time range filter
+        if (timeRangeStart_.isValid() && exec.startTime < timeRangeStart_) {
+            return false;
+        }
+        if (timeRangeEnd_.isValid() && exec.endTime.isValid() && exec.endTime > timeRangeEnd_) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    bool lessThan(const QModelIndex& sourceLeft, const QModelIndex& sourceRight) const override {
+        // Special handling for duration column - sort numerically not alphabetically
+        if (sourceLeft.column() == ExecutionModel::DurationColumn) {
+            ToolExecution leftExec = sourceLeft.sibling(sourceLeft.row(), 0).data(ExecutionModel::ExecutionRole).value<ToolExecution>();
+            ToolExecution rightExec = sourceRight.sibling(sourceRight.row(), 0).data(ExecutionModel::ExecutionRole).value<ToolExecution>();
+            
+            qint64 leftDuration = leftExec.getDuration();
+            qint64 rightDuration = rightExec.getDuration();
+            
+            // Handle cases where duration is 0 (pending/running tasks)
+            if (leftDuration == 0 && rightDuration == 0) {
+                // Both are 0, maintain original order
+                return sourceLeft.row() < sourceRight.row();
+            }
+            if (leftDuration == 0) {
+                // Put 0 duration items at the end when ascending
+                return false;
+            }
+            if (rightDuration == 0) {
+                // Put 0 duration items at the end when ascending
+                return true;
+            }
+            
+            return leftDuration < rightDuration;
+        }
+        
+        // For other columns, use default sorting
+        return QSortFilterProxyModel::lessThan(sourceLeft, sourceRight);
+    }
+    
+private:
+    QStringList toolFilter_;
+    QList<ToolExecutionState> statusFilter_;
+    QDateTime timeRangeStart_;
+    QDateTime timeRangeEnd_;
 };
 
 } // namespace llm_re::ui_v2

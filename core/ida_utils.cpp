@@ -170,8 +170,15 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::search_strings_unified(const
         std::string lower_pattern = pattern;
         std::transform(lower_pattern.begin(), lower_pattern.end(), lower_pattern.begin(), ::tolower);
 
+        // Suppress dialog by temporarily setting batch mode
+        bool old_batch = batch;
+        batch = true;
+        
         // Refresh string list
         build_strlist();
+        
+        // Restore batch mode
+        batch = old_batch;
 
         size_t qty = get_strlist_qty();
         int count = 0;

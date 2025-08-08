@@ -1,6 +1,7 @@
 #include "../../core/ui_v2_common.h"
 #include "bar_chart.h"
 #include "../../core/theme_manager.h"
+#include "../../core/color_constants.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -13,14 +14,47 @@ BarChart::BarChart(QWidget* parent)
     theme_ = BarChartTheme();
     
     // Initialize theme colors based on current theme
-    auto currentTheme = ThemeManager::instance().currentTheme();
-    theme_.positiveColor = ChartTheme::getSeriesColor(currentTheme, 0);
-    theme_.negativeColor = ChartTheme::getSeriesColor(currentTheme, 1);
-    theme_.connectorColor = ChartTheme::getAxisColor(currentTheme);
-    theme_.valueFontColor = ChartTheme::getTextColor(currentTheme);
+    auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+    auto themeEnum = (currentInfo.name == "dark" || currentInfo.metadata.baseTheme == "dark") ? 
+                     ThemeManager::Theme::Dark : ThemeManager::Theme::Light;
+    theme_.positiveColor = ChartTheme::getSeriesColor(themeEnum, 0);
+    theme_.negativeColor = ChartTheme::getSeriesColor(themeEnum, 1);
+    theme_.connectorColor = ChartTheme::getAxisColor(themeEnum);
+    theme_.valueFontColor = ChartTheme::getTextColor(themeEnum);
     
     // Enable mouse tracking for hover effects
     setMouseTracking(true);
+    
+    // Connect base class signals to emit bar-specific signals
+    connect(this, &CustomChartBase::dataPointClicked, 
+            [this](int seriesIndex, int pointIndex) {
+        if (pointIndex >= 0 && pointIndex < categories_.size()) {
+            emit barClicked(categories_[pointIndex], seriesIndex);
+        }
+    });
+    
+    connect(this, &CustomChartBase::dataPointHovered,
+            [this](int seriesIndex, int pointIndex) {
+        if (pointIndex >= 0 && pointIndex < categories_.size()) {
+            emit barHovered(categories_[pointIndex], seriesIndex);
+        }
+    });
+    
+    // Connect chartClicked to emit categoryClicked when clicking on category area
+    connect(this, &CustomChartBase::chartClicked,
+            [this](const QPointF& chartPos) {
+        // Find which category was clicked based on chart position
+        int categoryIndex = -1;
+        if (theme_.horizontal) {
+            categoryIndex = static_cast<int>(chartPos.y() / layout_.categoryWidth);
+        } else {
+            categoryIndex = static_cast<int>(chartPos.x() / layout_.categoryWidth);
+        }
+        
+        if (categoryIndex >= 0 && categoryIndex < categories_.size()) {
+            emit categoryClicked(categories_[categoryIndex]);
+        }
+    });
 }
 
 BarChart::~BarChart() = default;
@@ -90,6 +124,7 @@ void BarChart::removeSeries(int index) {
 void BarChart::clearSeries() {
     series_.clear();
     dataMap_.clear();
+    rangeDataMap_.clear();
     animatedHeights_.clear();
     targetHeights_.clear();
     calculateBarLayout();
@@ -125,6 +160,29 @@ void BarChart::setData(const QString& category, const QString& series, double va
 double BarChart::getData(const QString& category, const QString& series) const {
     auto it = dataMap_.find({category, series});
     return it != dataMap_.end() ? it->second : 0.0;
+}
+
+void BarChart::setRangeData(const QString& category, const QString& series, double low, double high) {
+    rangeDataMap_[{category, series}] = qMakePair(low, high);
+    
+    // For range charts, we need to update layout to handle the range visualization
+    if (chartType_ == Range) {
+        calculateBarLayout();
+        update();
+    }
+}
+
+QPair<double, double> BarChart::getRangeData(const QString& category, const QString& series) const {
+    auto it = rangeDataMap_.find({category, series});
+    return it != rangeDataMap_.end() ? it->second : qMakePair(0.0, 0.0);
+}
+
+void BarChart::clearRangeData() {
+    rangeDataMap_.clear();
+    if (chartType_ == Range) {
+        calculateBarLayout();
+        update();
+    }
 }
 
 void BarChart::setTheme(const BarChartTheme& theme) {
@@ -259,7 +317,10 @@ void BarChart::drawLegend(QPainter* painter) {
         
         // Color box
         QRectF colorBox(legendPos.x(), legendPos.y() + 4, colorBoxSize, colorBoxSize);
-        auto seriesColors = ChartTheme::getSeriesColors(ThemeManager::instance().currentTheme());
+        auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+        auto themeEnum = (currentInfo.name == "dark" || currentInfo.metadata.baseTheme == "dark") ? 
+                         ThemeManager::Theme::Dark : ThemeManager::Theme::Light;
+        auto seriesColors = ChartTheme::getSeriesColors(themeEnum);
         QColor color = series_[i].color.isValid() ? series_[i].color : seriesColors[i % seriesColors.size()];
         
         if (theme_.gradient) {
@@ -272,7 +333,10 @@ void BarChart::drawLegend(QPainter* painter) {
         }
         
         // Text
-        painter->setPen(ChartTheme::getTextColor(ThemeManager::instance().currentTheme()));
+        auto currentInfo2 = ThemeManager::instance().getCurrentThemeInfo();
+        auto themeEnum2 = (currentInfo2.name == "dark" || currentInfo2.metadata.baseTheme == "dark") ? 
+                         ThemeManager::Theme::Dark : ThemeManager::Theme::Light;
+        painter->setPen(ChartTheme::getTextColor(themeEnum2));
         painter->drawText(QPointF(legendPos.x() + textOffset, legendPos.y() + 14), series_[i].name);
         
         legendPos.setY(legendPos.y() + legendItemHeight + legendItemSpacing);
@@ -282,7 +346,10 @@ void BarChart::drawLegend(QPainter* painter) {
 void BarChart::drawAxes(QPainter* painter) {
     if (!theme_.showAxes) return;
     
-    painter->setPen(QPen(ChartTheme::getAxisColor(ThemeManager::instance().currentTheme()), 1));
+    auto currentInfo3 = ThemeManager::instance().getCurrentThemeInfo();
+    auto themeEnum3 = (currentInfo3.name == "dark" || currentInfo3.metadata.baseTheme == "dark") ? 
+                     ThemeManager::Theme::Dark : ThemeManager::Theme::Light;
+    painter->setPen(QPen(ChartTheme::getAxisColor(themeEnum3), 1));
     
     // Draw axes lines
     painter->drawLine(chartRect_.bottomLeft(), chartRect_.bottomRight());
@@ -567,7 +634,7 @@ void BarChart::drawBar(QPainter* painter, const QRectF& rect, double value,
         // Shadow
         if (effects_.shadowEnabled) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(QColor(0, 0, 0, 30));
+            painter->setBrush(effects_.shadowColor);
             painter->translate(2, 2);
             painter->drawPath(barPath);
             painter->translate(-2, -2);
@@ -648,7 +715,7 @@ void BarChart::drawBarValue(QPainter* painter, const QRectF& barRect, double val
     if (theme_.showValues) {
         QRectF bgRect = textRect.translated(textPos - QPointF(0, textRect.height()));
         bgRect.adjust(-2, -1, 2, 1);
-        painter->fillRect(bgRect, QColor(255, 255, 255, 200));
+        painter->fillRect(bgRect, ThemeManager::instance().colors().chartTooltipBg);
     }
     
     painter->setPen(theme_.valueFontColor);
@@ -757,7 +824,10 @@ QColor BarChart::getBarColor(int seriesIndex, int categoryIndex) const {
         return series_[seriesIndex].color;
     }
     
-    auto seriesColors = ChartTheme::getSeriesColors(ThemeManager::instance().currentTheme());
+    auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+    auto themeEnum = (currentInfo.name == "dark" || currentInfo.metadata.baseTheme == "dark") ? 
+                     ThemeManager::Theme::Dark : ThemeManager::Theme::Light;
+    auto seriesColors = ChartTheme::getSeriesColors(themeEnum);
     if (seriesIndex < static_cast<int>(seriesColors.size())) {
         return seriesColors[seriesIndex];
     }

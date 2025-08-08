@@ -6,19 +6,14 @@
 // Include base common header (IDA SDK without kernwin, std lib, json)
 #include "../../core/common_base.h"
 
-// Additional std lib headers needed for UI
-#include <deque>
-#include <numeric>
-#include <unordered_set>
-
 // Qt headers
-// Qt Core
 #include <QtGlobal>
 #include <QObject>
 #include <QString>
 #include <QDateTime>
 #include <QUuid>
 #include <QTimer>
+#include <QThread>
 #include <QMetaProperty>
 #include <QPointer>
 #include <QList>
@@ -40,17 +35,20 @@
 #include <QClipboard>
 #include <QApplication>
 #include <QGuiApplication>
-#include <QSystemTrayIcon>
-
-// Qt GUI
 #include <QColor>
 #include <QFont>
 #include <QMargins>
 #include <QRect>
 #include <QPoint>
 #include <QPointF>
+#include <QGraphicsScale>
+#include <QGraphicsRotation>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPainter>
 #include <QPainterPath>
+#include <QStandardPaths>
+#include <QDir>
 #include <QLinearGradient>
 #include <QRadialGradient>
 #include <QPixmap>
@@ -65,8 +63,6 @@
 #include <QDesktopServices>
 #include <QDragEnterEvent>
 #include <QTextCharFormat>
-
-// Qt Widgets
 #include <QWidget>
 #include <QMainWindow>
 #include <QDockWidget>
@@ -85,7 +81,6 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QSlider>
-#include <QProgressBar>
 #include <QListView>
 #include <QListWidget>
 #include <QTreeView>
@@ -113,14 +108,10 @@
 #include <QToolTip>
 #include <QShortcut>
 #include <QDateTimeEdit>
-
-// Qt Layouts
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QFormLayout>
-
-// Qt Graphics
 #include <QGraphicsItem>
 #include <QGraphicsObject>
 #include <QGraphicsScene>
@@ -130,22 +121,16 @@
 #include <QGraphicsBlurEffect>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSceneHoverEvent>
-
-// Qt Animation
 #include <QPropertyAnimation>
 #include <QParallelAnimationGroup>
 #include <QSequentialAnimationGroup>
 #include <QEasingCurve>
-
-// Qt Events
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QFocusEvent>
 #include <QContextMenuEvent>
-
-// Qt Text
 #include <QTextDocument>
 #include <QTextCursor>
 #include <QTextBlock>
@@ -156,13 +141,9 @@
 #include <QTextTableCell>
 #include <QTextDocumentWriter>
 #include <QSyntaxHighlighter>
-
-// Qt Network
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-
-// Qt Math
 #include <QtMath>
 
 

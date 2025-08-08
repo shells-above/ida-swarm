@@ -54,9 +54,6 @@ private:
     QCheckBox* show_tool_details_check_ = nullptr;
     
     // Window management widgets
-    QCheckBox* show_tray_icon_check_ = nullptr;
-    QCheckBox* minimize_to_tray_check_ = nullptr;
-    QCheckBox* close_to_tray_check_ = nullptr;
     QCheckBox* start_minimized_check_ = nullptr;
     QCheckBox* remember_window_state_check_ = nullptr;
     
@@ -65,12 +62,6 @@ private:
     QSpinBox* auto_save_interval_spin_ = nullptr;
     QComboBox* density_mode_combo_ = nullptr;
     
-    // Inspector widgets
-    QCheckBox* inspector_follow_cursor_check_ = nullptr;
-    QSlider* inspector_opacity_slider_ = nullptr;
-    QLabel* inspector_opacity_label_ = nullptr;
-    QCheckBox* inspector_auto_hide_check_ = nullptr;
-    QSpinBox* inspector_auto_hide_delay_spin_ = nullptr;
     
     // Buttons
     QPushButton* ok_button_ = nullptr;

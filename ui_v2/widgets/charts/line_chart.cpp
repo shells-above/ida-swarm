@@ -38,7 +38,7 @@ void LineChart::addSeries(const ChartSeries& series) {
     previousPoints_.resize(series_.size());
     seriesAnimationProgress_.resize(series_.size(), 0.0f);
     
-    updateAxisRanges();
+    updateAxesRange();
     screenPointsCacheDirty_ = true;
     
     emit seriesAdded(series_.size() - 1);
@@ -65,7 +65,7 @@ void LineChart::updateSeries(int index, const ChartSeries& series) {
     }
     
     series_[index] = series;
-    updateAxisRanges();
+    updateAxesRange();
     screenPointsCacheDirty_ = true;
     
     if (effects_.animationEnabled) {
@@ -94,7 +94,7 @@ void LineChart::removeSeries(int index) {
     previousPoints_.erase(previousPoints_.begin() + index);
     seriesAnimationProgress_.erase(seriesAnimationProgress_.begin() + index);
     
-    updateAxisRanges();
+    updateAxesRange();
     screenPointsCacheDirty_ = true;
     
     emit seriesRemoved(index);
@@ -196,7 +196,7 @@ void LineChart::setTimeSeriesMode(bool enabled) {
         xAxis_.type = AxisConfig::Linear;
     }
     
-    updateAxisRanges();
+    updateAxesRange();
     update();
 }
 
@@ -222,12 +222,12 @@ void LineChart::setMaxDataPoints(int max) {
         }
     }
     
-    updateAxisRanges();
+    updateAxesRange();
     update();
 }
 
 void LineChart::updateData() {
-    updateAxisRanges();
+    updateAxesRange();
     screenPointsCacheDirty_ = true;
     update();
 }
@@ -251,7 +251,7 @@ void LineChart::appendDataPoint(int seriesIndex, const ChartDataPoint& point) {
         xAxis_.min = xAxis_.max - range;
     }
     
-    updateAxisRanges();
+    updateAxesRange();
     screenPointsCacheDirty_ = true;
     
     emit dataPointAdded(seriesIndex, point);
@@ -606,9 +606,9 @@ void LineChart::drawDataPoints(QPainter* painter, const std::vector<QPointF>& po
         drawGlowingPoint(painter, points[i], currentRadius, series.color,
                         isHovered ? effects_.hoverGlow * effects_.glowRadius : 0);
         
-        // Draw white center for better visibility
+        // Draw contrasting center for better visibility
         painter->setPen(Qt::NoPen);
-        painter->setBrush(Qt::white);
+        painter->setBrush(ThemeManager::instance().colors().background);
         painter->drawEllipse(points[i], currentRadius * 0.6f, currentRadius * 0.6f);
         
         // Draw colored ring
@@ -718,7 +718,7 @@ std::vector<QPointF> LineChart::getAnimatedPoints(const std::vector<QPointF>& ta
     return animatedPoints;
 }
 
-void LineChart::updateAxisRanges() {
+void LineChart::updateAxesRange() {
     if (series_.empty()) return;
     
     double minX = std::numeric_limits<double>::max();

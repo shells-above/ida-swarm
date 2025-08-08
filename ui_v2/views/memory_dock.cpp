@@ -1,855 +1,396 @@
-#include "../core/ui_v2_common.h"
 #include "memory_dock.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
+#include <QGraphicsDropShadowEffect>
+#include <QPainter>
+#include <QRegularExpression>
 
 namespace llm_re::ui_v2 {
 
-// MemoryGraphNode implementation
+// ========== MemoryEntryViewer Implementation ==========
 
-MemoryGraphNode::MemoryGraphNode(const MemoryEntry& entry)
-    : entry_(entry)
-{
-    setAcceptHoverEvents(true);
-    setFlag(QGraphicsItem::ItemIsSelectable);
-    setFlag(QGraphicsItem::ItemIsMovable);
+MemoryEntryViewer::MemoryEntryViewer(const MemoryEntry& entry, QWidget* parent)
+    : QDialog(parent), entry_(entry) {
+    setupUI();
+    
+    // Set window properties
+    setWindowTitle(tr("Memory Analysis Entry"));
+    setModal(true);
+    resize(900, 600);
+    
+    // Center on parent
+    if (parent) {
+        move(parent->window()->frameGeometry().center() - rect().center());
+    }
 }
 
-QRectF MemoryGraphNode::boundingRect() const {
-    return QRectF(-nodeRadius_, -nodeRadius_, nodeRadius_ * 2, nodeRadius_ * 2);
+void MemoryEntryViewer::setupUI() {
+    auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(8, 8, 8, 8);
+    mainLayout->setSpacing(8);
+    mainLayout->setAlignment(Qt::AlignTop);
+    
+    // Simple header - title, address, timestamp on one line
+    auto* headerLayout = new QHBoxLayout();
+    
+    titleLabel_ = new QLabel(entry_.title.isEmpty() ? tr("(no title)") : entry_.title, this);
+    QFont titleFont = titleLabel_->font();
+    titleFont.setWeight(QFont::DemiBold);
+    titleLabel_->setFont(titleFont);
+    headerLayout->addWidget(titleLabel_);
+    
+    if (!entry_.address.isEmpty()) {
+        headerLayout->addWidget(new QLabel(entry_.address, this));
+    }
+    
+    headerLayout->addWidget(new QLabel(entry_.timestamp.toString("yyyy-MM-dd hh:mm"), this));
+    headerLayout->addStretch();
+    
+    mainLayout->addLayout(headerLayout);
+    
+    // Splitter for two panels
+    splitter_ = new QSplitter(Qt::Horizontal, this);
+    splitter_->setChildrenCollapsible(false);
+    
+    // Left panel - Analysis view
+    auto* leftPanel = new QWidget(this);
+    auto* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 4, 0);
+    leftLayout->setSpacing(4);
+    
+    auto* mdHeaderLayout = new QHBoxLayout();
+    auto* mdLabel = new QLabel(tr("Analysis"), this);
+    QFont sectionFont = mdLabel->font();
+    sectionFont.setWeight(QFont::DemiBold);
+    mdLabel->setFont(sectionFont);
+    mdHeaderLayout->addWidget(mdLabel);
+    mdHeaderLayout->addStretch();
+    
+    copyMarkdownBtn_ = new QPushButton(tr("Copy"), this);
+    copyMarkdownBtn_->setMaximumHeight(24);
+    mdHeaderLayout->addWidget(copyMarkdownBtn_);
+    
+    leftLayout->addLayout(mdHeaderLayout);
+    
+    markdownView_ = new QTextBrowser(this);
+    markdownView_->setOpenExternalLinks(false);
+    markdownView_->setPlainText(entry_.analysis);
+    leftLayout->addWidget(markdownView_);
+    
+    // Right panel - JSON view
+    auto* rightPanel = new QWidget(this);
+    auto* rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(4, 0, 0, 0);
+    rightLayout->setSpacing(4);
+    
+    auto* jsonHeaderLayout = new QHBoxLayout();
+    auto* jsonLabel = new QLabel(tr("JSON"), this);
+    jsonLabel->setFont(sectionFont);
+    jsonHeaderLayout->addWidget(jsonLabel);
+    jsonHeaderLayout->addStretch();
+    
+    copyJsonBtn_ = new QPushButton(tr("Copy"), this);
+    copyJsonBtn_->setMaximumHeight(24);
+    jsonHeaderLayout->addWidget(copyJsonBtn_);
+    
+    rightLayout->addLayout(jsonHeaderLayout);
+    
+    jsonView_ = new QTextEdit(this);
+    jsonView_->setReadOnly(true);
+    jsonView_->setPlainText(formatJson(entry_.toJson()));
+    jsonView_->setFont(QFont("Menlo, Consolas, Monaco, monospace", 11));
+    rightLayout->addWidget(jsonView_);
+    
+    splitter_->addWidget(leftPanel);
+    splitter_->addWidget(rightPanel);
+    splitter_->setSizes({600, 600});
+    
+    mainLayout->addWidget(splitter_, 1);  // Stretch factor 1 to fill available space
+    
+    // Button bar at bottom
+    auto* buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+    
+    auto* closeBtn = new QPushButton(tr("Close"), this);
+    closeBtn->setDefault(true);
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    buttonLayout->addWidget(closeBtn);
+    
+    mainLayout->addLayout(buttonLayout);
+    
+    // Connect copy buttons
+    connect(copyMarkdownBtn_, &QPushButton::clicked, this, &MemoryEntryViewer::onCopyMarkdown);
+    connect(copyJsonBtn_, &QPushButton::clicked, this, &MemoryEntryViewer::onCopyJson);
 }
 
-void MemoryGraphNode::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) {
-    Q_UNUSED(option);
-    Q_UNUSED(widget);
+QString MemoryEntryViewer::renderMarkdown(const QString& text) {
+    // For now, just display as plain text with basic formatting
+    // QTextBrowser will handle basic markdown
+    return text;
+}
+
+QString MemoryEntryViewer::formatJson(const QJsonObject& obj) {
+    QJsonDocument doc(obj);
+    return doc.toJson(QJsonDocument::Indented);
+}
+
+void MemoryEntryViewer::onCopyMarkdown() {
+    QApplication::clipboard()->setText(entry_.analysis);
     
-    painter->setRenderHint(QPainter::Antialiasing);
+    // Visual feedback
+    copyMarkdownBtn_->setText(tr("Copied!"));
+    QTimer::singleShot(1000, [this]() {
+        copyMarkdownBtn_->setText(tr("Copy"));
+    });
+}
+
+void MemoryEntryViewer::onCopyJson() {
+    QJsonDocument doc(entry_.toJson());
+    QApplication::clipboard()->setText(doc.toJson(QJsonDocument::Indented));
     
-    // Node color based on confidence
-    QColor nodeColor;
-    if (entry_.confidence >= 80) {
-        nodeColor = QColor("#4CAF50");
-    } else if (entry_.confidence >= 50) {
-        nodeColor = QColor("#FF9800");
-    } else {
-        nodeColor = QColor("#F44336");
-    }
+    // Visual feedback
+    copyJsonBtn_->setText(tr("Copied!"));
+    QTimer::singleShot(1000, [this]() {
+        copyJsonBtn_->setText(tr("Copy"));
+    });
+}
+
+// ========== MemoryTableModel Implementation ==========
+
+MemoryTableModel::MemoryTableModel(QObject* parent)
+    : QAbstractTableModel(parent) {}
+
+int MemoryTableModel::rowCount(const QModelIndex& parent) const {
+    Q_UNUSED(parent);
+    return isFiltered_ ? filteredEntries_.size() : entries_.size();
+}
+
+int MemoryTableModel::columnCount(const QModelIndex& parent) const {
+    Q_UNUSED(parent);
+    return ColumnCount;
+}
+
+QVariant MemoryTableModel::data(const QModelIndex& index, int role) const {
+    if (!index.isValid() || index.row() >= rowCount())
+        return QVariant();
     
-    if (highlighted_) {
-        nodeColor = nodeColor.lighter(120);
-    }
+    const MemoryEntry& entry = isFiltered_ ? 
+        filteredEntries_.at(index.row()) : entries_.at(index.row());
     
-    if (hovered_) {
-        nodeColor = nodeColor.lighter(110);
-    }
-    
-    // Shadow
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(QColor(0, 0, 0, 50));
-    painter->drawEllipse(QPointF(2, 2), nodeRadius_ - 2, nodeRadius_ - 2);
-    
-    // Node
-    painter->setBrush(nodeColor);
-    painter->setPen(QPen(nodeColor.darker(120), 2));
-    painter->drawEllipse(QPointF(0, 0), nodeRadius_, nodeRadius_);
-    
-    // Bookmark indicator
-    if (entry_.isBookmarked) {
-        painter->setBrush(QColor("#FFD700"));
-        painter->setPen(Qt::NoPen);
-        QPolygonF star;
-        for (int i = 0; i < 10; ++i) {
-            qreal radius = (i % 2 == 0) ? 8 : 4;
-            qreal angle = i * M_PI / 5;
-            star << QPointF(radius * cos(angle), radius * sin(angle));
+    if (role == Qt::DisplayRole || role == Qt::EditRole) {
+        switch (index.column()) {
+        case AddressColumn:
+            return entry.address.isEmpty() ? "-" : entry.address;
+        case FunctionColumn:
+            return entry.title.isEmpty() ? "Analysis Entry" : entry.title;
+        case TimestampColumn:
+            return entry.timestamp.toString("yyyy-MM-dd hh:mm");
         }
-        painter->drawPolygon(star);
+    } else if (role == Qt::ToolTipRole) {
+        // Show first few lines of analysis as tooltip
+        QString preview = entry.analysis.left(200);
+        if (entry.analysis.length() > 200) {
+            preview += "...";
+        }
+        return preview;
+    } else if (role == Qt::UserRole) {
+        // Store the entry ID for easy retrieval
+        return entry.id;
+    } else if (role == Qt::TextAlignmentRole) {
+        if (index.column() == TimestampColumn) {
+            return Qt::AlignCenter;
+        }
     }
     
-    // Label
-    if (isSelected() || hovered_) {
-        painter->setPen(ThemeManager::instance().colors().textPrimary);
-        painter->setFont(QFont("Sans", 9));
-        QString label = entry_.function.isEmpty() ? entry_.address : entry_.function;
-        QRectF textRect = painter->fontMetrics().boundingRect(label);
-        textRect.moveCenter(QPointF(0, nodeRadius_ + 15));
-        painter->drawText(textRect, Qt::AlignCenter, label);
-    }
+    return QVariant();
 }
 
-QPointF MemoryGraphNode::centerPos() const {
-    return pos();
-}
-
-void MemoryGraphNode::addEdge(MemoryGraphNode* target) {
-    if (!edges_.contains(target)) {
-        edges_.append(target);
-    }
-}
-
-void MemoryGraphNode::removeEdge(MemoryGraphNode* target) {
-    edges_.removeOne(target);
-}
-
-void MemoryGraphNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
-    Q_UNUSED(event);
-    // Handled by scene
-}
-
-void MemoryGraphNode::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
-    Q_UNUSED(event);
-    // Emit signal through scene
-}
-
-void MemoryGraphNode::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
-    Q_UNUSED(event);
-    hovered_ = true;
-    update();
-}
-
-void MemoryGraphNode::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
-    Q_UNUSED(event);
-    hovered_ = false;
-    update();
-}
-
-// MemoryGraphEdge implementation
-
-MemoryGraphEdge::MemoryGraphEdge(MemoryGraphNode* source, MemoryGraphNode* target)
-    : source_(source)
-    , target_(target)
-{
-    setFlag(QGraphicsItem::ItemIsSelectable, false);
-    setZValue(-1); // Behind nodes
-}
-
-QRectF MemoryGraphEdge::boundingRect() const {
-    if (!source_ || !target_) {
-        return QRectF();
+QVariant MemoryTableModel::headerData(int section, Qt::Orientation orientation, int role) const {
+    if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
+        return QVariant();
+    
+    switch (section) {
+    case AddressColumn:
+        return tr("Address");
+    case FunctionColumn:
+        return tr("Title");
+    case TimestampColumn:
+        return tr("Timestamp");
     }
     
-    QPointF sourcePoint = source_->centerPos();
-    QPointF targetPoint = target_->centerPos();
-    
-    return QRectF(sourcePoint, targetPoint).normalized()
-        .adjusted(-5, -5, 5, 5);
+    return QVariant();
 }
 
-void MemoryGraphEdge::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) {
-    Q_UNUSED(option);
-    Q_UNUSED(widget);
+Qt::ItemFlags MemoryTableModel::flags(const QModelIndex& index) const {
+    if (!index.isValid())
+        return Qt::NoItemFlags;
     
-    if (!source_ || !target_) {
+    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+
+void MemoryTableModel::addEntry(const MemoryEntry& entry) {
+    if (isFiltered_) {
+        // Add to main list
+        entries_.append(entry);
+        
+        // Check if it matches filter
+        if (matchesFilter(entry)) {
+            beginInsertRows(QModelIndex(), filteredEntries_.size(), filteredEntries_.size());
+            filteredEntries_.append(entry);
+            endInsertRows();
+        }
+    } else {
+        beginInsertRows(QModelIndex(), entries_.size(), entries_.size());
+        entries_.append(entry);
+        endInsertRows();
+    }
+    
+    emit entryAdded(entry.id);
+}
+
+void MemoryTableModel::updateEntry(int row, const MemoryEntry& entry) {
+    if (row < 0 || row >= rowCount())
         return;
-    }
     
-    painter->setRenderHint(QPainter::Antialiasing);
-    
-    QPointF sourcePoint = source_->centerPos();
-    QPointF targetPoint = target_->centerPos();
-    
-    // Calculate edge points on node boundaries
-    QLineF line(sourcePoint, targetPoint);
-    qreal angle = std::atan2(line.dy(), line.dx());
-    
-    QPointF sourceEdge = sourcePoint + QPointF(30 * cos(angle), 30 * sin(angle));
-    QPointF targetEdge = targetPoint - QPointF(30 * cos(angle), 30 * sin(angle));
-    
-    // Draw edge
-    QPen pen(ThemeManager::instance().colors().textSecondary, 2);
-    pen.setStyle(Qt::SolidLine);
-    painter->setPen(pen);
-    
-    // Curved edge
-    QPainterPath path;
-    path.moveTo(sourceEdge);
-    QPointF control1 = sourceEdge + QPointF(0, line.length() * 0.2);
-    QPointF control2 = targetEdge - QPointF(0, line.length() * 0.2);
-    path.cubicTo(control1, control2, targetEdge);
-    painter->drawPath(path);
-    
-    // Arrow
-    qreal arrowSize = 10;
-    QPointF arrowP1 = targetEdge - QPointF(
-        arrowSize * cos(angle - M_PI / 6),
-        arrowSize * sin(angle - M_PI / 6)
-    );
-    QPointF arrowP2 = targetEdge - QPointF(
-        arrowSize * cos(angle + M_PI / 6),
-        arrowSize * sin(angle + M_PI / 6)
-    );
-    
-    painter->setBrush(pen.color());
-    QPolygonF arrow;
-    arrow << targetEdge << arrowP1 << arrowP2;
-    painter->drawPolygon(arrow);
-}
-
-void MemoryGraphEdge::updatePosition() {
-    prepareGeometryChange();
-}
-
-// MemoryGraphView implementation
-
-MemoryGraphView::MemoryGraphView(QWidget* parent)
-    : QGraphicsView(parent)
-{
-    scene_ = new QGraphicsScene(this);
-    this->setScene(scene_);
-    
-    this->setRenderHint(QPainter::Antialiasing);
-    this->setViewportUpdateMode(QGraphicsView::BoundingRectViewportUpdate);
-    this->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    this->setResizeAnchor(QGraphicsView::AnchorViewCenter);
-    
-    // Enable dragging
-    this->setDragMode(QGraphicsView::RubberBandDrag);
-}
-
-void MemoryGraphView::setEntries(const QList<MemoryEntry>& entries) {
-    // Clear existing
-    scene_->clear();
-    nodes_.clear();
-    edges_.clear();
-    
-    // Create nodes
-    for (const MemoryEntry& entry : entries) {
-        auto* node = new MemoryGraphNode(entry);
-        scene_->addItem(node);
-        nodes_[entry.id] = node;
-    }
-    
-    // Create edges
-    for (const MemoryEntry& entry : entries) {
-        MemoryGraphNode* sourceNode = nodes_[entry.id];
-        for (const QUuid& refId : entry.references) {
-            if (nodes_.contains(refId)) {
-                MemoryGraphNode* targetNode = nodes_[refId];
-                sourceNode->addEdge(targetNode);
-                
-                auto* edge = new MemoryGraphEdge(sourceNode, targetNode);
-                scene_->addItem(edge);
-                edges_.append(edge);
-            }
-        }
-    }
-    
-    // Perform layout
-    performLayout();
-}
-
-void MemoryGraphView::highlightEntry(const QUuid& id) {
-    // Clear previous highlights
-    for (auto* node : nodes_) {
-        node->setHighlighted(false);
-    }
-    
-    // Highlight new
-    if (nodes_.contains(id)) {
-        nodes_[id]->setHighlighted(true);
-    }
-}
-
-void MemoryGraphView::centerOnEntry(const QUuid& id) {
-    if (nodes_.contains(id)) {
-        if (animated_) {
-            // Smooth animation to center
-            QPointF targetPos = nodes_[id]->pos();
-            
-            // QPropertyAnimation not directly usable with QGraphicsView
-            // Just center directly
-            this->centerOn(targetPos);
-        } else {
-            this->centerOn(nodes_[id]);
-        }
-    }
-}
-
-void MemoryGraphView::setLayoutAlgorithm(const QString& algorithm) {
-    layoutAlgorithm_ = algorithm;
-    performLayout();
-}
-
-void MemoryGraphView::setEdgeStyle(const QString& style) {
-    edgeStyle_ = style;
-    scene_->update();
-}
-
-void MemoryGraphView::setShowLabels(bool show) {
-    showLabels_ = show;
-    scene_->update();
-}
-
-void MemoryGraphView::setAnimated(bool animated) {
-    animated_ = animated;
-}
-
-
-void MemoryGraphView::zoomIn() {
-    this->scale(1.2, 1.2);
-    currentScale_ *= 1.2;
-}
-
-void MemoryGraphView::zoomOut() {
-    this->scale(0.8, 0.8);
-    currentScale_ *= 0.8;
-}
-
-void MemoryGraphView::fitInView() {
-    QGraphicsView::fitInView(scene_->itemsBoundingRect(), Qt::KeepAspectRatio);
-    currentScale_ = 1.0;
-}
-
-void MemoryGraphView::resetZoom() {
-    this->resetTransform();
-    currentScale_ = 1.0;
-}
-
-void MemoryGraphView::wheelEvent(QWheelEvent* event) {
-    // Zoom with mouse wheel
-    const qreal scaleFactor = 1.15;
-    
-    if (event->angleDelta().y() > 0) {
-        this->scale(scaleFactor, scaleFactor);
-        currentScale_ *= scaleFactor;
-    } else {
-        this->scale(1.0 / scaleFactor, 1.0 / scaleFactor);
-        currentScale_ /= scaleFactor;
-    }
-}
-
-void MemoryGraphView::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton) {
-        isPanning_ = true;
-        lastMousePos_ = event->pos();
-        this->setCursor(Qt::ClosedHandCursor);
-        event->accept();
-    } else {
-        QGraphicsView::mousePressEvent(event);
-        
-        // Check for node click
-        QGraphicsItem* item = this->itemAt(event->pos());
-        if (auto* node = dynamic_cast<MemoryGraphNode*>(item)) {
-            emit entryClicked(node->entry().id);
-        }
-    }
-}
-
-void MemoryGraphView::mouseMoveEvent(QMouseEvent* event) {
-    if (isPanning_) {
-        QPoint delta = event->pos() - lastMousePos_;
-        lastMousePos_ = event->pos();
-        
-        this->horizontalScrollBar()->setValue(this->horizontalScrollBar()->value() - delta.x());
-        this->verticalScrollBar()->setValue(this->verticalScrollBar()->value() - delta.y());
-        
-        event->accept();
-    } else {
-        QGraphicsView::mouseMoveEvent(event);
-    }
-}
-
-void MemoryGraphView::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton) {
-        isPanning_ = false;
-        this->setCursor(Qt::ArrowCursor);
-        event->accept();
-    } else {
-        QGraphicsView::mouseReleaseEvent(event);
-    }
-}
-
-void MemoryGraphView::drawBackground(QPainter* painter, const QRectF& rect) {
-    // Grid background
-    painter->fillRect(rect, ThemeManager::instance().colors().surface);
-    
-    if (currentScale_ > 0.5) {
-        QPen gridPen(ThemeManager::instance().colors().textSecondary);
-        gridPen.setStyle(Qt::DotLine);
-        gridPen.setWidthF(0.5);
-        painter->setPen(gridPen);
-        
-        const int gridSize = 50;
-        qreal left = int(rect.left()) - (int(rect.left()) % gridSize);
-        qreal top = int(rect.top()) - (int(rect.top()) % gridSize);
-        
-        for (qreal x = left; x < rect.right(); x += gridSize) {
-            painter->drawLine(x, rect.top(), x, rect.bottom());
-        }
-        for (qreal y = top; y < rect.bottom(); y += gridSize) {
-            painter->drawLine(rect.left(), y, rect.right(), y);
-        }
-    }
-}
-
-void MemoryGraphView::performLayout() {
-    if (layoutAlgorithm_ == "force-directed") {
-        performForceDirectedLayout();
-    } else if (layoutAlgorithm_ == "hierarchical") {
-        performHierarchicalLayout();
-    } else if (layoutAlgorithm_ == "circular") {
-        performCircularLayout();
-    }
-    
-    // Update edges
-    for (auto* edge : edges_) {
-        edge->updatePosition();
-    }
-    
-    // Fit view
-    fitInView();
-}
-
-void MemoryGraphView::performForceDirectedLayout() {
-    if (nodes_.isEmpty()) return;
-    
-    // Initialize random positions
-    QList<MemoryGraphNode*> nodeList = nodes_.values();
-    for (auto* node : nodeList) {
-        node->setPos(
-            (QRandomGenerator::global()->bounded(1000)) - 500,
-            (QRandomGenerator::global()->bounded(1000)) - 500
-        );
-    }
-    
-    // Force-directed simulation
-    const int iterations = 100;
-    const qreal c_rep = 10000.0; // Repulsion constant
-    const qreal damping = 0.9;
-    
-    QHash<MemoryGraphNode*, QPointF> velocities;
-    for (auto* node : nodeList) {
-        velocities[node] = QPointF(0, 0);
-    }
-    
-    for (int iter = 0; iter < iterations; ++iter) {
-        // Calculate forces
-        QHash<MemoryGraphNode*, QPointF> forces;
-        
-        // Repulsion between all nodes
-        for (int i = 0; i < nodeList.size(); ++i) {
-            QPointF force(0, 0);
-            
-            for (int j = 0; j < nodeList.size(); ++j) {
-                if (i == j) continue;
-                
-                QPointF delta = nodeList[i]->pos() - nodeList[j]->pos();
-                qreal distance = sqrt(delta.x() * delta.x() + delta.y() * delta.y());
-                if (distance < 0.01) distance = 0.01;
-                
-                qreal repulsion = c_rep / (distance * distance);
-                force += (delta / distance) * repulsion;
-            }
-            
-            forces[nodeList[i]] = force;
-        }
-        
-        // Spring forces for connected nodes
-        // TODO: Implement spring forces when edge endpoints are accessible
-        
-        // Apply forces
-        for (auto* node : nodeList) {
-            QPointF velocity = velocities[node] + forces[node];
-            velocity *= damping;
-            velocities[node] = velocity;
-            
-            if (animated_) {
-                // Animate to new position
-                QPointF newPos = node->pos() + velocity;
-                
-                // Direct position update for graphics items
-                node->setPos(newPos);
-            } else {
-                node->moveBy(velocity.x(), velocity.y());
-            }
-        }
-    }
-}
-
-void MemoryGraphView::performHierarchicalLayout() {
-    if (nodes_.isEmpty()) return;
-    
-    // Simple hierarchical layout based on reference count
-    QList<MemoryGraphNode*> nodeList = nodes_.values();
-    
-    // Calculate levels based on incoming references
-    QHash<MemoryGraphNode*, int> levels;
-    QList<QList<MemoryGraphNode*>> levelNodes;
-    
-    // Find root nodes (no incoming references)
-    for (auto* node : nodeList) {
-        bool hasIncoming = false;
-        for (auto* other : nodeList) {
-            if (other->edges().contains(node)) {
-                hasIncoming = true;
+    if (isFiltered_) {
+        filteredEntries_[row] = entry;
+        // Update in main list
+        for (MemoryEntry& e : entries_) {
+            if (e.id == entry.id) {
+                e = entry;
                 break;
             }
         }
-        if (!hasIncoming) {
-            levels[node] = 0;
-        }
+    } else {
+        entries_[row] = entry;
     }
     
-    // Assign levels
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (auto* node : nodeList) {
-            if (!levels.contains(node)) {
-                for (auto* other : nodeList) {
-                    if (levels.contains(other) && other->edges().contains(node)) {
-                        levels[node] = levels[other] + 1;
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
-    
-    // Group by level
-    int maxLevel = 0;
-    for (auto level : levels.values()) {
-        maxLevel = std::max(maxLevel, level);
-    }
-    
-    // Pre-allocate lists for each level
-    for (int i = 0; i <= maxLevel; ++i) {
-        levelNodes.append(QList<MemoryGraphNode*>());
-    }
-    
-    for (auto it = levels.begin(); it != levels.end(); ++it) {
-        levelNodes[it.value()].append(it.key());
-    }
-    
-    // Position nodes
-    const qreal levelHeight = 150;
-    const qreal nodeSpacing = 100;
-    
-    for (int level = 0; level <= maxLevel; ++level) {
-        qreal y = level * levelHeight;
-        qreal totalWidth = levelNodes[level].size() * nodeSpacing;
-        qreal x = -totalWidth / 2;
-        
-        for (auto* node : levelNodes[level]) {
-            if (animated_) {
-                // Direct position update for graphics items
-                node->setPos(x, y);
-            } else {
-                node->setPos(x, y);
-            }
-            x += nodeSpacing;
-        }
-    }
+    emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
+    emit entryUpdated(entry.id);
 }
 
-void MemoryGraphView::performCircularLayout() {
-    if (nodes_.isEmpty()) return;
+void MemoryTableModel::removeEntry(int row) {
+    if (row < 0 || row >= rowCount())
+        return;
     
-    QList<MemoryGraphNode*> nodeList = nodes_.values();
-    const int count = nodeList.size();
-    const qreal radius = count * 30;
+    QUuid id;
     
-    for (int i = 0; i < count; ++i) {
-        qreal angle = (2 * M_PI * i) / count;
-        qreal x = radius * cos(angle);
-        qreal y = radius * sin(angle);
+    if (isFiltered_) {
+        id = filteredEntries_.at(row).id;
         
-        if (animated_) {
-            // Direct position update for graphics items
-            nodeList[i]->setPos(x, y);
-        } else {
-            nodeList[i]->setPos(x, y);
-        }
-    }
-}
-
-// MemoryHeatmapView implementation
-
-MemoryHeatmapView::MemoryHeatmapView(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
-    setMouseTracking(true);
-}
-
-void MemoryHeatmapView::setEntries(const QList<MemoryEntry>& entries) {
-    entries_ = entries;
-    calculateLayout();
-    update();
-}
-
-void MemoryHeatmapView::setColorScheme(const QString& scheme) {
-    colorScheme_ = scheme;
-    update();
-}
-
-void MemoryHeatmapView::setGroupBy(const QString& field) {
-    groupBy_ = field;
-    calculateLayout();
-    update();
-}
-
-void MemoryHeatmapView::setMetric(const QString& metric) {
-    metric_ = metric;
-    calculateLayout();
-    update();
-}
-
-
-void MemoryHeatmapView::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
-    
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    // Background
-    painter.fillRect(rect(), ThemeManager::instance().colors().surface);
-    
-    // Draw cells
-    for (int i = 0; i < cells_.size(); ++i) {
-        const HeatmapCell& cell = cells_[i];
+        beginRemoveRows(QModelIndex(), row, row);
+        filteredEntries_.removeAt(row);
+        endRemoveRows();
         
-        // Cell color
-        QColor cellColor = valueToColor(cell.value);
-        if (selectedCells_.contains(i)) {
-            cellColor = cellColor.lighter(120);
-        }
-        if (i == hoveredCell_) {
-            cellColor = cellColor.lighter(110);
-        }
-        
-        painter.fillRect(cell.rect, cellColor);
-        
-        // Cell border
-        painter.setPen(ThemeManager::instance().colors().surface);
-        painter.drawRect(cell.rect);
-    }
-    
-    // Labels
-    QFont font = painter.font();
-    font.setPointSize(9);
-    painter.setFont(font);
-    painter.setPen(ThemeManager::instance().colors().textPrimary);
-    
-    // Y-axis labels (groups)
-    QStringList groups;
-    for (const auto& cell : cells_) {
-        if (!groups.contains(cell.group)) {
-            groups.append(cell.group);
-        }
-    }
-    
-    for (int i = 0; i < groups.size(); ++i) {
-        QRectF labelRect(0, margin_ + i * (cellSize_ + spacing_), margin_ - 5, cellSize_);
-        painter.drawText(labelRect, Qt::AlignRight | Qt::AlignVCenter, groups[i]);
-    }
-    
-    // Tooltip
-    if (hoveredCell_ >= 0 && hoveredCell_ < cells_.size()) {
-        const HeatmapCell& cell = cells_[hoveredCell_];
-        
-        QString tooltip = QString("%1 / %2\n%3: %4")
-            .arg(cell.group)
-            .arg(cell.subgroup)
-            .arg(metric_)
-            .arg(formatValue(cell.value));
-        
-        QFontMetrics fm(painter.font());
-        QRect tooltipRect = fm.boundingRect(tooltip);
-        tooltipRect.adjust(-5, -5, 5, 5);
-        tooltipRect.moveTopLeft(QCursor::pos() - mapToGlobal(QPoint(0, 0)) + QPoint(10, 10));
-        
-        painter.fillRect(tooltipRect, ThemeManager::instance().colors().surface);
-        painter.setPen(ThemeManager::instance().colors().textPrimary);
-        painter.drawText(tooltipRect, Qt::AlignCenter, tooltip);
-    }
-}
-
-void MemoryHeatmapView::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        for (int i = 0; i < cells_.size(); ++i) {
-            if (cells_[i].rect.contains(event->pos())) {
-                if (event->modifiers() & Qt::ControlModifier) {
-                    // Toggle selection
-                    if (selectedCells_.contains(i)) {
-                        selectedCells_.remove(i);
-                    } else {
-                        selectedCells_.insert(i);
-                    }
-                } else {
-                    // Single selection
-                    selectedCells_.clear();
-                    selectedCells_.insert(i);
-                }
-                
-                emit cellClicked(cells_[i].group, cells_[i].subgroup);
-                
-                QStringList selectedGroups;
-                for (int idx : selectedCells_) {
-                    QString groupId = cells_[idx].group + "/" + cells_[idx].subgroup;
-                    if (!selectedGroups.contains(groupId)) {
-                        selectedGroups.append(groupId);
-                    }
-                }
-                emit selectionChanged(selectedGroups);
-                
-                update();
+        // Remove from main list
+        for (int i = 0; i < entries_.size(); ++i) {
+            if (entries_[i].id == id) {
+                entries_.removeAt(i);
                 break;
             }
         }
-    }
-}
-
-void MemoryHeatmapView::mouseMoveEvent(QMouseEvent* event) {
-    int oldHovered = hoveredCell_;
-    hoveredCell_ = -1;
-    
-    for (int i = 0; i < cells_.size(); ++i) {
-        if (cells_[i].rect.contains(event->pos())) {
-            hoveredCell_ = i;
-            break;
-        }
-    }
-    
-    if (hoveredCell_ != oldHovered) {
-        update();
-    }
-}
-
-void MemoryHeatmapView::leaveEvent(QEvent* event) {
-    Q_UNUSED(event);
-    hoveredCell_ = -1;
-    update();
-}
-
-void MemoryHeatmapView::resizeEvent(QResizeEvent* event) {
-    BaseStyledWidget::resizeEvent(event);
-    calculateLayout();
-}
-
-void MemoryHeatmapView::calculateLayout() {
-    cells_.clear();
-    
-    if (entries_.isEmpty()) return;
-    
-    // Group data
-    QHash<QString, QHash<QString, double>> groupedData;
-    QHash<QString, QHash<QString, int>> groupedCounts;
-    
-    for (const MemoryEntry& entry : entries_) {
-        QString group;
-        QString subgroup = "default";
+    } else {
+        id = entries_.at(row).id;
         
-        if (groupBy_ == "function") {
-            group = entry.function.isEmpty() ? "Unknown" : entry.function;
-        } else if (groupBy_ == "module") {
-            group = entry.module.isEmpty() ? "Unknown" : entry.module;
-        } else if (groupBy_ == "tag") {
-            group = entry.tags.isEmpty() ? "Untagged" : entry.tags.first();
-        }
-        
-        double value = 0;
-        if (metric_ == "count") {
-            value = 1;
-        } else if (metric_ == "confidence") {
-            value = entry.confidence;
-        }
-        
-        groupedData[group][subgroup] += value;
-        groupedCounts[group][subgroup]++;
+        beginRemoveRows(QModelIndex(), row, row);
+        entries_.removeAt(row);
+        endRemoveRows();
     }
     
-    // Calculate average for confidence metric
-    if (metric_ == "confidence") {
-        for (auto& group : groupedData) {
-            for (auto it = group.begin(); it != group.end(); ++it) {
-                it.value() /= groupedCounts[it.key()][it.key()];
+    emit entryRemoved(id);
+}
+
+void MemoryTableModel::removeEntry(const QUuid& id) {
+    int row = findEntry(id);
+    if (row >= 0) {
+        removeEntry(row);
+    }
+}
+
+void MemoryTableModel::clearEntries() {
+    beginResetModel();
+    entries_.clear();
+    filteredEntries_.clear();
+    endResetModel();
+}
+
+MemoryEntry MemoryTableModel::entry(int row) const {
+    if (row < 0 || row >= rowCount())
+        return MemoryEntry();
+    
+    return isFiltered_ ? filteredEntries_.at(row) : entries_.at(row);
+}
+
+MemoryEntry MemoryTableModel::entry(const QUuid& id) const {
+    for (const MemoryEntry& e : entries_) {
+        if (e.id == id)
+            return e;
+    }
+    return MemoryEntry();
+}
+
+int MemoryTableModel::findEntry(const QUuid& id) const {
+    const QList<MemoryEntry>& list = isFiltered_ ? filteredEntries_ : entries_;
+    
+    for (int i = 0; i < list.size(); ++i) {
+        if (list.at(i).id == id)
+            return i;
+    }
+    return -1;
+}
+
+void MemoryTableModel::setSearchFilter(const QString& text) {
+    searchText_ = text;
+    applyFilters();
+}
+
+void MemoryTableModel::clearFilters() {
+    searchText_.clear();
+    applyFilters();
+}
+
+void MemoryTableModel::applyFilters() {
+    beginResetModel();
+    
+    if (searchText_.isEmpty()) {
+        isFiltered_ = false;
+        filteredEntries_.clear();
+    } else {
+        isFiltered_ = true;
+        filteredEntries_.clear();
+        
+        for (const MemoryEntry& entry : entries_) {
+            if (matchesFilter(entry)) {
+                filteredEntries_.append(entry);
             }
         }
     }
     
-    // Create cells
-    int row = 0;
-    for (auto groupIt = groupedData.begin(); groupIt != groupedData.end(); ++groupIt) {
-        int col = 0;
-        for (auto subIt = groupIt.value().begin(); subIt != groupIt.value().end(); ++subIt) {
-            HeatmapCell cell;
-            cell.group = groupIt.key();
-            cell.subgroup = subIt.key();
-            cell.value = subIt.value();
-            cell.count = groupedCounts[groupIt.key()][subIt.key()];
-            cell.rect = QRectF(
-                margin_ + col * (cellSize_ + spacing_),
-                margin_ + row * (cellSize_ + spacing_),
-                cellSize_,
-                cellSize_
-            );
-            
-            cells_.append(cell);
-            col++;
-        }
-        row++;
-    }
+    endResetModel();
 }
 
-QColor MemoryHeatmapView::valueToColor(double value) {
-    // Normalize value to 0-1
-    double minVal = 0;
-    double maxVal = 100;
-    if (metric_ == "count") {
-        maxVal = 0;
-        for (const auto& cell : cells_) {
-            maxVal = std::max(maxVal, cell.value);
-        }
+bool MemoryTableModel::matchesFilter(const MemoryEntry& entry) const {
+    if (!searchText_.isEmpty()) {
+        QString searchLower = searchText_.toLower();
+        return entry.address.toLower().contains(searchLower) ||
+               entry.title.toLower().contains(searchLower) ||
+               entry.analysis.toLower().contains(searchLower);
     }
-    
-    double normalized = (value - minVal) / (maxVal - minVal);
-    normalized = qBound(0.0, normalized, 1.0);
-    
-    // Color schemes
-    if (colorScheme_ == "viridis") {
-        // Simplified viridis
-        if (normalized < 0.25) {
-            return QColor::fromRgbF(0.267, 0.005, 0.329);
-        } else if (normalized < 0.5) {
-            return QColor::fromRgbF(0.128, 0.565, 0.551);
-        } else if (normalized < 0.75) {
-            return QColor::fromRgbF(0.153, 0.682, 0.377);
-        } else {
-            return QColor::fromRgbF(0.993, 0.906, 0.144);
-        }
-    } else if (colorScheme_ == "heat") {
-        // Red to yellow
-        return QColor::fromRgbF(1.0, normalized, 0);
-    } else if (colorScheme_ == "cool") {
-        // Blue to green
-        return QColor::fromRgbF(0, normalized, 1.0 - normalized);
-    }
-    
-    return QColor::fromRgbF(normalized, normalized, normalized);
+    return true;
 }
 
-QString MemoryHeatmapView::formatValue(double value) {
-    if (metric_ == "count") {
-        return QString::number(static_cast<int>(value));
-    } else if (metric_ == "confidence") {
-        return QString("%1%").arg(static_cast<int>(value));
-    }
-    return QString::number(value, 'f', 2);
-}
-
-// MemoryDock implementation
+// ========== MemoryDock Implementation ==========
 
 MemoryDock::MemoryDock(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
+    : BaseStyledWidget(parent) {
     setupUI();
+    createActions();
     connectSignals();
-    loadSettings();
 }
 
 MemoryDock::~MemoryDock() {
-    saveSettings();
+    // Cleanup handled by Qt parent-child relationships
 }
 
 void MemoryDock::setupUI() {
@@ -857,335 +398,144 @@ void MemoryDock::setupUI() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     
-    // Create toolbar
-    createToolBar();
-    layout->addWidget(toolBar_);
+    // Toolbar
+    auto* toolbar = new QWidget(this);
+    toolbar->setObjectName("MemoryToolbar");
+    auto* toolbarLayout = new QHBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(8, 4, 8, 4);
     
-    // Create views
-    createViews();
-    layout->addWidget(viewStack_);
-    
-    // Create status bar
-    createStatusBar();
-    
-    // Create context menu
-    createContextMenu();
-}
-
-void MemoryDock::createToolBar() {
-    toolBar_ = new QToolBar(this);
-    toolBar_->setIconSize(QSize(16, 16));
-    
-    // Search
+    // Search box
     searchEdit_ = new QLineEdit(this);
     searchEdit_->setPlaceholderText(tr("Search memory entries..."));
     searchEdit_->setClearButtonEnabled(true);
-    toolBar_->addWidget(searchEdit_);
+    toolbarLayout->addWidget(searchEdit_);
     
-    // View mode
-    toolBar_->addSeparator();
-    auto* viewLabel = new QLabel(tr("View:"), this);
-    toolBar_->addWidget(viewLabel);
+    // Import button
+    auto* importBtn = new QPushButton(tr("Import"), this);
+    importBtn->setIcon(ThemeManager::instance().themedIcon("document-import"));
+    toolbarLayout->addWidget(importBtn);
     
-    viewModeCombo_ = new QComboBox(this);
-    viewModeCombo_->addItems({tr("Tree"), tr("Table"), tr("Graph"), tr("Heatmap")});
-    toolBar_->addWidget(viewModeCombo_);
+    // Clear button
+    auto* clearBtn = new QPushButton(tr("Clear"), this);
+    clearBtn->setIcon(ThemeManager::instance().themedIcon("edit-clear"));
+    toolbarLayout->addWidget(clearBtn);
     
-    // Group by
-    auto* groupLabel = new QLabel(tr("Group:"), this);
-    toolBar_->addWidget(groupLabel);
+    toolbarLayout->addStretch();
     
-    groupByCombo_ = new QComboBox(this);
-    groupByCombo_->addItems({tr("Module"), tr("Function"), tr("Tag"), tr("None")});
-    toolBar_->addWidget(groupByCombo_);
-    
-    // Actions
-    toolBar_->addSeparator();
-    
-    refreshAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("view-refresh"), tr("Refresh"));
-    refreshAction_->setShortcut(QKeySequence::Refresh);
-    
-    filterAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("view-filter"), tr("Advanced Filter"));
-    
-    toolBar_->addSeparator();
-    
-    bookmarkAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("bookmark"), tr("Bookmark"));
-    bookmarkAction_->setCheckable(true);
-    
-    deleteAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("edit-delete"), tr("Delete"));
-    deleteAction_->setShortcut(QKeySequence::Delete);
-    
-    toolBar_->addSeparator();
-    
-    importAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("document-import"), tr("Import"));
-}
-
-void MemoryDock::createViews() {
-    viewStack_ = new QStackedWidget(this);
-    
-    // Create model
-    model_ = new MemoryModel(this);
-    proxyModel_ = new QSortFilterProxyModel(this);
-    proxyModel_->setSourceModel(model_);
-    proxyModel_->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    proxyModel_->setRecursiveFilteringEnabled(true);
-    
-    // Tree view
-    treeView_ = new QTreeView(this);
-    treeView_->setModel(proxyModel_);
-    treeView_->setAlternatingRowColors(true);
-    treeView_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    treeView_->setContextMenuPolicy(Qt::CustomContextMenu);
-    treeView_->header()->setStretchLastSection(true);
-    viewStack_->addWidget(treeView_);
+    layout->addWidget(toolbar);
     
     // Table view
+    model_ = new MemoryTableModel(this);
+    
     tableView_ = new QTableView(this);
-    tableView_->setModel(proxyModel_);
+    tableView_->setModel(model_);
     tableView_->setAlternatingRowColors(true);
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    tableView_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    tableView_->setSelectionMode(QAbstractItemView::SingleSelection);
     tableView_->setContextMenuPolicy(Qt::CustomContextMenu);
-    tableView_->setSortingEnabled(true);
+    tableView_->setSortingEnabled(false);
     tableView_->horizontalHeader()->setStretchLastSection(true);
-    viewStack_->addWidget(tableView_);
     
-    // Graph view
-    graphView_ = new MemoryGraphView(this);
-    viewStack_->addWidget(graphView_);
+    // Set column widths
+    tableView_->setColumnWidth(MemoryTableModel::AddressColumn, 150);
+    tableView_->setColumnWidth(MemoryTableModel::FunctionColumn, 350);
+    tableView_->setColumnWidth(MemoryTableModel::TimestampColumn, 150);
     
-    // Heatmap view
-    heatmapView_ = new MemoryHeatmapView(this);
-    viewStack_->addWidget(heatmapView_);
+    // Make function column stretch
+    tableView_->horizontalHeader()->setSectionResizeMode(
+        MemoryTableModel::FunctionColumn, QHeaderView::Stretch);
+    
+    
+    layout->addWidget(tableView_);
+    
+    // Status bar
+    statusLabel_ = new QLabel(this);
+    statusLabel_->setContentsMargins(8, 4, 8, 4);
+    layout->addWidget(statusLabel_);
+    
+    updateStatusText();
+    
+    // Connect button signals
+    connect(importBtn, &QPushButton::clicked, this, &MemoryDock::onImportClicked);
+    connect(clearBtn, &QPushButton::clicked, this, &MemoryDock::onClearClicked);
 }
 
-void MemoryDock::createStatusBar() {
-    auto* statusLayout = new QHBoxLayout();
-    statusLayout->setContentsMargins(5, 2, 5, 2);
+void MemoryDock::createActions() {
+    // Context menu actions
+    viewAction_ = new QAction(tr("View Entry"), this);
+    viewAction_->setIcon(ThemeManager::instance().themedIcon("document-open"));
     
-    statusLabel_ = new QLabel(this);
-    statusLayout->addWidget(statusLabel_);
-    statusLayout->addStretch();
+    copyAddressAction_ = new QAction(tr("Copy Address"), this);
+    copyAddressAction_->setIcon(ThemeManager::instance().themedIcon("edit-copy"));
     
-    auto* statusWidget = new QWidget(this);
-    statusWidget->setLayout(statusLayout);
-    statusWidget->setMaximumHeight(25);
+    deleteAction_ = new QAction(tr("Delete Entry"), this);
+    deleteAction_->setIcon(ThemeManager::instance().themedIcon("edit-delete"));
+    deleteAction_->setShortcut(QKeySequence::Delete);
     
-    layout()->addWidget(statusWidget);
-    
-    updateStatusBar();
+    // Create context menu
+    contextMenu_ = new QMenu(this);
+    contextMenu_->addAction(viewAction_);
+    contextMenu_->addSeparator();
+    contextMenu_->addAction(copyAddressAction_);
+    contextMenu_->addSeparator();
+    contextMenu_->addAction(deleteAction_);
 }
 
 void MemoryDock::connectSignals() {
-    // View mode
-    connect(viewModeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MemoryDock::onViewModeChanged);
-    
     // Search
     connect(searchEdit_, &QLineEdit::textChanged,
             this, &MemoryDock::onSearchTextChanged);
     
-    // Actions
-    connect(refreshAction_, &QAction::triggered,
-            this, &MemoryDock::refreshView);
-    
-    connect(filterAction_, &QAction::triggered,
-            this, &MemoryDock::onAdvancedFilterClicked);
-    
-    connect(importAction_, &QAction::triggered,
-            this, &MemoryDock::onImportClicked);
-    
-    
-    connect(bookmarkAction_, &QAction::triggered,
-            [this]() { bookmarkSelection(bookmarkAction_->isChecked()); });
-    
-    connect(deleteAction_, &QAction::triggered,
-            [this]() { deleteSelection(); });
-    
-    // Tree/Table views
-    connect(treeView_, &QTreeView::activated,
-            this, &MemoryDock::onEntryActivated);
-    
-    connect(tableView_, &QTableView::activated,
-            this, &MemoryDock::onEntryActivated);
-    
-    connect(treeView_, &QWidget::customContextMenuRequested,
-            this, &MemoryDock::onCustomContextMenu);
+    // Table
+    connect(tableView_, &QTableView::doubleClicked,
+            this, &MemoryDock::onTableDoubleClicked);
     
     connect(tableView_, &QWidget::customContextMenuRequested,
-            this, &MemoryDock::onCustomContextMenu);
-    
-    connect(treeView_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, &MemoryDock::onSelectionChanged);
-    
-    connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, &MemoryDock::onSelectionChanged);
-    
-    // Graph view
-    connect(graphView_, &MemoryGraphView::entryClicked,
-            this, &MemoryDock::onGraphEntryClicked);
-    
-    connect(graphView_, &MemoryGraphView::entryDoubleClicked,
-            this, &MemoryDock::entryDoubleClicked);
-    
-    // Heatmap view
-    connect(heatmapView_, &MemoryHeatmapView::cellClicked,
-            this, &MemoryDock::onHeatmapCellClicked);
+            this, &MemoryDock::onContextMenuRequested);
     
     // Model
-    connect(model_, &MemoryModel::entryAdded,
-            [this]() { updateStatusBar(); });
+    connect(model_, &MemoryTableModel::entryAdded,
+            [this]() { updateStatusText(); });
     
-    connect(model_, &MemoryModel::entryRemoved,
-            [this]() { updateStatusBar(); });
+    connect(model_, &MemoryTableModel::entryRemoved,
+            [this]() { updateStatusText(); });
     
-    connect(model_, &MemoryModel::modelReset,
-            [this]() { updateStatusBar(); });
+    // Context menu actions
+    connect(viewAction_, &QAction::triggered,
+            this, &MemoryDock::onViewEntry);
     
-    // Group by
-    connect(groupByCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            [this](int index) {
-                QStringList fields = {"module", "function", "tag", ""};
-                if (index < fields.size()) {
-                    model_->setGroupBy(fields[index]);
-                }
-            });
-}
-
-void MemoryDock::createContextMenu() {
-    contextMenu_ = new QMenu(this);
+    connect(copyAddressAction_, &QAction::triggered,
+            this, &MemoryDock::onCopyAddress);
     
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("go-jump"), tr("Navigate to Address"),
-                           [this]() {
-        if (!selectedEntries_.isEmpty()) {
-            emit navigateToAddress(entry(selectedEntries_.first()).address);
-        }
-    });
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("view-refresh"), tr("Re-analyze"),
-                           [this]() {
-        if (!selectedEntries_.isEmpty()) {
-            emit analyzeRequested(selectedEntries_.first());
-        }
-    });
-    
-    contextMenu_->addSeparator();
-    
-    auto* bookmarkAction = contextMenu_->addAction(ThemeManager::instance().themedIcon("bookmark"), tr("Bookmark"));
-    bookmarkAction->setCheckable(true);
-    connect(bookmarkAction, &QAction::triggered,
-            [this, bookmarkAction]() { bookmarkSelection(bookmarkAction->isChecked()); });
-    
-    contextMenu_->addSeparator();
-    
-    auto* tagMenu = contextMenu_->addMenu(ThemeManager::instance().themedIcon("tag"), tr("Tags"));
-    
-    // Add tag actions dynamically
-    connect(tagMenu, &QMenu::aboutToShow, [this, tagMenu]() {
-        tagMenu->clear();
-        
-        for (const QString& tag : model_->allTags()) {
-            auto* action = tagMenu->addAction(tag);
-            action->setCheckable(true);
-            
-            // Check if all selected have this tag
-            bool allHaveTag = true;
-            for (const QUuid& id : selectedEntries_) {
-                if (!entry(id).tags.contains(tag)) {
-                    allHaveTag = false;
-                    break;
-                }
-            }
-            action->setChecked(allHaveTag);
-            
-            connect(action, &QAction::triggered, [this, tag, action]() {
-                if (action->isChecked()) {
-                    tagSelection({tag});
-                } else {
-                    untagSelection({tag});
-                }
-            });
-        }
-        
-        tagMenu->addSeparator();
-        tagMenu->addAction(tr("Add New Tag..."), [this]() {
-            bool ok;
-            QString tag = QInputDialog::getText(
-                this, tr("Add Tag"),
-                tr("Tag name:"),
-                QLineEdit::Normal, "", &ok
-            );
-            if (ok && !tag.isEmpty()) {
-                tagSelection({tag});
-            }
-        });
-    });
-    
-    contextMenu_->addSeparator();
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-copy"), tr("Copy Address"),
-                           [this]() {
-        if (!selectedEntries_.isEmpty()) {
-            QApplication::clipboard()->setText(entry(selectedEntries_.first()).address);
-        }
-    });
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-copy"), tr("Copy Analysis"),
-                           [this]() {
-        if (!selectedEntries_.isEmpty()) {
-            QApplication::clipboard()->setText(entry(selectedEntries_.first()).analysis);
-        }
-    });
-    
-    contextMenu_->addSeparator();
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-delete"), tr("Delete"),
-                           [this]() { deleteSelection(); });
+    connect(deleteAction_, &QAction::triggered,
+            this, &MemoryDock::onDeleteEntry);
 }
 
 void MemoryDock::addEntry(const MemoryEntry& entry) {
     model_->addEntry(entry);
-    
-    // Update views
-    if (currentViewMode_ == "graph") {
-        graphView_->setEntries(model_->entries());
-    } else if (currentViewMode_ == "heatmap") {
-        heatmapView_->setEntries(model_->entries());
-    }
 }
 
 void MemoryDock::updateEntry(const QUuid& id, const MemoryEntry& entry) {
-    model_->updateEntry(id, entry);
-    
-    // Update views
-    if (currentViewMode_ == "graph") {
-        graphView_->setEntries(model_->entries());
-    } else if (currentViewMode_ == "heatmap") {
-        heatmapView_->setEntries(model_->entries());
+    int row = model_->findEntry(id);
+    if (row >= 0) {
+        model_->updateEntry(row, entry);
     }
 }
 
 void MemoryDock::removeEntry(const QUuid& id) {
     model_->removeEntry(id);
-    selectedEntries_.removeOne(id);
-    
-    // Update views
-    if (currentViewMode_ == "graph") {
-        graphView_->setEntries(model_->entries());
-    } else if (currentViewMode_ == "heatmap") {
-        heatmapView_->setEntries(model_->entries());
-    }
 }
 
 void MemoryDock::clearEntries() {
-    model_->clearEntries();
-    selectedEntries_.clear();
-    
-    // Update views
-    if (currentViewMode_ == "graph") {
-        graphView_->setEntries({});
-    } else if (currentViewMode_ == "heatmap") {
-        heatmapView_->setEntries({});
+    if (model_->rowCount() > 0) {
+        auto reply = QMessageBox::question(
+            this, tr("Clear Entries"),
+            tr("Clear all %1 memory entries?").arg(model_->rowCount()),
+            QMessageBox::Yes | QMessageBox::No);
+        
+        if (reply == QMessageBox::Yes) {
+            model_->clearEntries();
+        }
     }
 }
 
@@ -1197,1273 +547,253 @@ MemoryEntry MemoryDock::entry(const QUuid& id) const {
     return model_->entry(id);
 }
 
-void MemoryDock::setViewMode(const QString& mode) {
-    int index = 0;
-    if (mode == "table") index = 1;
-    else if (mode == "graph") index = 2;
-    else if (mode == "heatmap") index = 3;
+void MemoryDock::importFromLLMRESession(const QString& path) {
+    QString fileName = path;
+    if (fileName.isEmpty()) {
+        fileName = QFileDialog::getOpenFileName(
+            this, tr("Import Session"),
+            "",
+            tr("LLMRE Session Files (*.llmre);;All Files (*)"));
+    }
     
-    viewModeCombo_->setCurrentIndex(index);
-}
-
-void MemoryDock::showEntry(const QUuid& id) {
-    if (currentViewMode_ == "tree" || currentViewMode_ == "table") {
-        // Find in model
-        for (int row = 0; row < proxyModel_->rowCount(); ++row) {
-            QModelIndex index = proxyModel_->index(row, 0);
-            if (index.data(MemoryModel::IdRole).toUuid() == id) {
-                if (currentViewMode_ == "tree") {
-                    treeView_->scrollTo(index);
-                    treeView_->setCurrentIndex(index);
-                } else {
-                    tableView_->scrollTo(index);
-                    tableView_->setCurrentIndex(index);
+    if (fileName.isEmpty())
+        return;
+    
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Import Failed"),
+                           tr("Could not open file for reading."));
+        return;
+    }
+    
+    QTextStream stream(&file);
+    QString content = stream.readAll();
+    file.close();
+    
+    QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
+    if (!doc.isObject()) {
+        QMessageBox::warning(this, tr("Import Failed"),
+                           tr("Invalid session file format."));
+        return;
+    }
+    
+    QJsonObject session = doc.object();
+    
+    // Check IDB path
+    QString sessionIdbPath;
+    if (session.contains("metadata")) {
+        sessionIdbPath = session["metadata"].toObject()["idbPath"].toString();
+    }
+    
+    QString currentIdbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
+    
+    if (!sessionIdbPath.isEmpty() && sessionIdbPath != currentIdbPath) {
+        int ret = QMessageBox::warning(this, tr("IDB Mismatch"),
+            tr("This session is from a different IDA database:\n%1\n\nImport anyway?")
+            .arg(sessionIdbPath),
+            QMessageBox::Yes | QMessageBox::No);
+        
+        if (ret != QMessageBox::Yes) {
+            return;
+        }
+    }
+    
+    // Extract memory entries from UI state
+    int importedCount = 0;
+    
+    if (session.contains("ui")) {
+        QJsonObject ui = session["ui"].toObject();
+        if (ui.contains("docks")) {
+            QJsonObject docks = ui["docks"].toObject();
+            if (docks.contains("memory")) {
+                QJsonObject memoryState = docks["memory"].toObject();
+                if (memoryState.contains("entries")) {
+                    QJsonArray entriesArray = memoryState["entries"].toArray();
+                    
+                    for (const QJsonValue& val : entriesArray) {
+                        QJsonObject obj = val.toObject();
+                        
+                        MemoryEntry entry;
+                        
+                        // Try to use existing ID or generate new one
+                        QString idStr = obj["id"].toString();
+                        entry.id = idStr.isEmpty() ? QUuid::createUuid() : QUuid(idStr);
+                        
+                        // Extract address
+                        entry.address = obj["address"].toString();
+                        
+                        // Extract title field (which is the key/identifier)
+                        entry.title = obj["title"].toString();
+                        
+                        // Extract content field
+                        entry.analysis = obj["content"].toString();
+                        
+                        // Extract timestamp
+                        QString timestampStr = obj["timestamp"].toString();
+                        entry.timestamp = QDateTime::fromString(timestampStr, Qt::ISODate);
+                        if (!entry.timestamp.isValid()) {
+                            entry.timestamp = QDateTime::currentDateTime();
+                        }
+                        
+                        // Add entry if it has some content
+                        if (!entry.address.isEmpty() || !entry.title.isEmpty() || !entry.analysis.isEmpty()) {
+                            addEntry(entry);
+                            importedCount++;
+                        }
+                    }
                 }
-                break;
-            }
-        }
-    } else if (currentViewMode_ == "graph") {
-        graphView_->centerOnEntry(id);
-        graphView_->highlightEntry(id);
-    }
-}
-
-void MemoryDock::selectEntry(const QUuid& id) {
-    selectedEntries_.clear();
-    selectedEntries_.append(id);
-    showEntry(id);
-    emit selectionChanged(selectedEntries_);
-}
-
-void MemoryDock::selectEntries(const QList<QUuid>& ids) {
-    selectedEntries_ = ids;
-    
-    if (currentViewMode_ == "tree" || currentViewMode_ == "table") {
-        QItemSelectionModel* selModel = currentViewMode_ == "tree" 
-            ? treeView_->selectionModel() 
-            : tableView_->selectionModel();
-        
-        selModel->clear();
-        
-        for (const QUuid& id : ids) {
-            for (int row = 0; row < proxyModel_->rowCount(); ++row) {
-                QModelIndex index = proxyModel_->index(row, 0);
-                if (index.data(MemoryModel::IdRole).toUuid() == id) {
-                    selModel->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
-                    break;
-                }
             }
         }
     }
     
-    emit selectionChanged(selectedEntries_);
-}
-
-void MemoryDock::setFilter(const QString& text) {
-    searchEdit_->setText(text);
-}
-
-void MemoryDock::setTagFilter(const QStringList& tags) {
-    tagFilters_ = tags;
-    applyFilters();
-}
-
-void MemoryDock::setDateRangeFilter(const QDateTime& start, const QDateTime& end) {
-    startDateFilter_ = start;
-    endDateFilter_ = end;
-    applyFilters();
-}
-
-void MemoryDock::clearFilters() {
-    searchEdit_->clear();
-    tagFilters_.clear();
-    startDateFilter_ = QDateTime();
-    endDateFilter_ = QDateTime();
-    applyFilters();
-}
-
-void MemoryDock::saveQuery(const QString& name) {
-    SavedQuery query;
-    query.name = name;
-    query.searchText = searchText_;
-    query.tags = tagFilters_;
-    query.startDate = startDateFilter_;
-    query.endDate = endDateFilter_;
-    
-    savedQueries_[name] = query;
-    saveSettings();
-}
-
-void MemoryDock::loadQuery(const QString& name) {
-    if (savedQueries_.contains(name)) {
-        const SavedQuery& query = savedQueries_[name];
-        
-        searchEdit_->setText(query.searchText);
-        
-        tagFilters_ = query.tags;
-        
-        startDateFilter_ = query.startDate;
-        endDateFilter_ = query.endDate;
-        
-        applyFilters();
-    }
-}
-
-QStringList MemoryDock::savedQueries() const {
-    return savedQueries_.keys();
-}
-
-void MemoryDock::deleteQuery(const QString& name) {
-    savedQueries_.remove(name);
-    saveSettings();
-}
-
-
-void MemoryDock::tagSelection(const QStringList& tags) {
-    for (const QUuid& id : selectedEntries_) {
-        MemoryEntry e = entry(id);
-        for (const QString& tag : tags) {
-            if (!e.tags.contains(tag)) {
-                e.tags.append(tag);
-            }
-        }
-        updateEntry(id, e);
-    }
-}
-
-void MemoryDock::untagSelection(const QStringList& tags) {
-    for (const QUuid& id : selectedEntries_) {
-        MemoryEntry e = entry(id);
-        for (const QString& tag : tags) {
-            e.tags.removeAll(tag);
-        }
-        updateEntry(id, e);
-    }
-}
-
-void MemoryDock::deleteSelection() {
-    if (selectedEntries_.isEmpty()) return;
-    
-    auto reply = QMessageBox::question(
-        this, tr("Delete Entries"),
-        tr("Delete %1 selected entries?").arg(selectedEntries_.size()),
-        QMessageBox::Yes | QMessageBox::No
-    );
-    
-    if (reply == QMessageBox::Yes) {
-        for (const QUuid& id : selectedEntries_) {
-            removeEntry(id);
-        }
-    }
-}
-
-void MemoryDock::bookmarkSelection(bool bookmark) {
-    for (const QUuid& id : selectedEntries_) {
-        MemoryEntry e = entry(id);
-        e.isBookmarked = bookmark;
-        updateEntry(id, e);
+    if (importedCount == 0) {
+        QMessageBox::warning(this, tr("Import Failed"),
+                           tr("No memory entries found in session file."));
     }
 }
 
 QJsonObject MemoryDock::exportState() const {
     QJsonObject state;
     
-    // Export all entries
+    // Export all entries using the same toJson() format
     QJsonArray entriesArray;
     for (const MemoryEntry& entry : entries()) {
-        QJsonObject entryObj;
-        entryObj["id"] = entry.id.toString();
-        entryObj["timestamp"] = entry.timestamp.toString(Qt::ISODate);
-        entryObj["type"] = entry.type;
-        entryObj["category"] = entry.category;
-        entryObj["title"] = entry.title;
-        entryObj["content"] = entry.content;
-        entryObj["functionName"] = entry.functionName;
-        entryObj["address"] = entry.address;
-        entryObj["confidence"] = entry.confidence;
-        
-        QJsonArray tagsArray;
-        for (const QString& tag : entry.tags) {
-            tagsArray.append(tag);
-        }
-        entryObj["tags"] = tagsArray;
-        
-        entryObj["isBookmarked"] = entry.isBookmarked;
-        entryObj["isPinned"] = entry.isPinned;
-        
-        QJsonArray referencesArray;
-        for (const QUuid& ref : entry.references) {
-            referencesArray.append(ref.toString());
-        }
-        entryObj["references"] = referencesArray;
-        
-        entryObj["customData"] = entry.customData;
-        
-        entriesArray.append(entryObj);
+        entriesArray.append(entry.toJson());
     }
     state["entries"] = entriesArray;
     
-    // Export current view state
-    state["viewMode"] = currentViewMode_;
+    // Export current search
     state["searchText"] = searchEdit_->text();
-    
-    // Export filters
-    QJsonObject filters;
-    QJsonArray tagFilters;
-    for (const QString& tag : tagFilters_) {
-        tagFilters.append(tag);
-    }
-    filters["tags"] = tagFilters;
-    if (startDateFilter_.isValid()) {
-        filters["startDate"] = startDateFilter_.toString(Qt::ISODate);
-    }
-    if (endDateFilter_.isValid()) {
-        filters["endDate"] = endDateFilter_.toString(Qt::ISODate);
-    }
-    state["filters"] = filters;
-    
-    // Export selection
-    QJsonArray selectedArray;
-    for (const QUuid& id : selectedEntries_) {
-        selectedArray.append(id.toString());
-    }
-    state["selection"] = selectedArray;
-    
-    // Export saved queries
-    QJsonArray queriesArray;
-    for (auto it = savedQueries_.constBegin(); it != savedQueries_.constEnd(); ++it) {
-        const SavedQuery& query = it.value();
-        QJsonObject queryObj;
-        queryObj["name"] = query.name;
-        queryObj["searchText"] = query.searchText;
-        QJsonArray queryTags;
-        for (const QString& tag : query.tags) {
-            queryTags.append(tag);
-        }
-        queryObj["tags"] = queryTags;
-        if (query.startDate.isValid()) {
-            queryObj["startDate"] = query.startDate.toString(Qt::ISODate);
-        }
-        if (query.endDate.isValid()) {
-            queryObj["endDate"] = query.endDate.toString(Qt::ISODate);
-        }
-        queriesArray.append(queryObj);
-    }
-    state["savedQueries"] = queriesArray;
     
     return state;
 }
 
 void MemoryDock::importState(const QJsonObject& state) {
     // Clear existing entries
-    clearEntries();
+    model_->clearEntries();
     
     // Import entries
     if (state.contains("entries")) {
         QJsonArray entriesArray = state["entries"].toArray();
         for (const QJsonValue& val : entriesArray) {
-            QJsonObject entryObj = val.toObject();
+            QJsonObject obj = val.toObject();
+            
             MemoryEntry entry;
             
-            entry.id = QUuid(entryObj["id"].toString());
-            entry.timestamp = QDateTime::fromString(entryObj["timestamp"].toString(), Qt::ISODate);
-            entry.type = entryObj["type"].toString();
-            entry.category = entryObj["category"].toString();
-            entry.title = entryObj["title"].toString();
-            entry.content = entryObj["content"].toString();
-            entry.functionName = entryObj["functionName"].toString();
-            entry.address = entryObj["address"].toString().toULongLong(nullptr, 16);
-            entry.confidence = entryObj["confidence"].toInt();
+            QString idStr = obj["id"].toString();
+            entry.id = idStr.isEmpty() ? QUuid::createUuid() : QUuid(idStr);
             
-            QJsonArray tagsArray = entryObj["tags"].toArray();
-            for (const QJsonValue& tag : tagsArray) {
-                entry.tags.append(tag.toString());
+            entry.address = obj["address"].toString();
+            
+            // Extract title field
+            entry.title = obj["title"].toString();
+            
+            // Try content field first (actual format), fallback to analysis
+            entry.analysis = obj["content"].toString();
+            if (entry.analysis.isEmpty()) {
+                entry.analysis = obj["analysis"].toString();
             }
             
-            entry.isBookmarked = entryObj["isBookmarked"].toBool();
-            entry.isPinned = entryObj["isPinned"].toBool();
-            
-            QJsonArray referencesArray = entryObj["references"].toArray();
-            for (const QJsonValue& ref : referencesArray) {
-                entry.references.append(ref.toString());
+            QString timestampStr = obj["timestamp"].toString();
+            entry.timestamp = QDateTime::fromString(timestampStr, Qt::ISODate);
+            if (!entry.timestamp.isValid()) {
+                entry.timestamp = QDateTime::currentDateTime();
             }
-            
-            entry.customData = entryObj["customData"].toObject();
             
             addEntry(entry);
         }
     }
     
-    // Import view state
-    if (state.contains("viewMode")) {
-        setViewMode(state["viewMode"].toString());
-    }
-    
+    // Restore search text
     if (state.contains("searchText")) {
         searchEdit_->setText(state["searchText"].toString());
-    }
-    
-    // Import filters
-    if (state.contains("filters")) {
-        QJsonObject filters = state["filters"].toObject();
-        
-        if (filters.contains("tags")) {
-            QJsonArray tagFilters = filters["tags"].toArray();
-            QStringList tags;
-            for (const QJsonValue& tag : tagFilters) {
-                tags.append(tag.toString());
-            }
-            setTagFilter(tags);
-        }
-        
-        QDateTime startDate, endDate;
-        if (filters.contains("startDate")) {
-            startDate = QDateTime::fromString(filters["startDate"].toString(), Qt::ISODate);
-        }
-        if (filters.contains("endDate")) {
-            endDate = QDateTime::fromString(filters["endDate"].toString(), Qt::ISODate);
-        }
-        if (startDate.isValid() || endDate.isValid()) {
-            setDateRangeFilter(startDate, endDate);
-        }
-    }
-    
-    // Import selection
-    if (state.contains("selection")) {
-        QJsonArray selectedArray = state["selection"].toArray();
-        QList<QUuid> selectedIds;
-        for (const QJsonValue& val : selectedArray) {
-            selectedIds.append(QUuid(val.toString()));
-        }
-        selectEntries(selectedIds);
-    }
-    
-    // Import saved queries
-    if (state.contains("savedQueries")) {
-        savedQueries_.clear();
-        QJsonArray queriesArray = state["savedQueries"].toArray();
-        for (const QJsonValue& val : queriesArray) {
-            QJsonObject queryObj = val.toObject();
-            SavedQuery query;
-            query.name = queryObj["name"].toString();
-            query.searchText = queryObj["searchText"].toString();
-            
-            QJsonArray queryTags = queryObj["tags"].toArray();
-            for (const QJsonValue& tag : queryTags) {
-                query.tags.append(tag.toString());
-            }
-            
-            if (queryObj.contains("startDate")) {
-                query.startDate = QDateTime::fromString(queryObj["startDate"].toString(), Qt::ISODate);
-            }
-            if (queryObj.contains("endDate")) {
-                query.endDate = QDateTime::fromString(queryObj["endDate"].toString(), Qt::ISODate);
-            }
-            
-            savedQueries_[query.name] = query;
-        }
-    }
-}
-
-void MemoryDock::refreshView() {
-    // Refresh current view
-    if (currentViewMode_ == "graph") {
-        graphView_->setEntries(model_->entries());
-    } else if (currentViewMode_ == "heatmap") {
-        heatmapView_->setEntries(model_->entries());
-    }
-    
-    updateStatusBar();
-}
-
-void MemoryDock::importData(const QString& path) {
-    QString fileName = path;
-    if (fileName.isEmpty()) {
-        fileName = QFileDialog::getOpenFileName(
-            this, tr("Import Memory Data"),
-            "",
-            tr("Session Files (*.llmre);;JSON Files (*.json);;CSV Files (*.csv);;All Files (*)")
-        );
-    }
-    
-    if (!fileName.isEmpty()) {
-        QFile file(fileName);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, tr("Import Failed"),
-                               tr("Could not open file for reading."));
-            return;
-        }
-        
-        QTextStream stream(&file);
-        QString content = stream.readAll();
-        file.close();
-        
-        if (fileName.endsWith(".llmre")) {
-            // Import from session file
-            QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
-            if (!doc.isObject()) {
-                QMessageBox::warning(this, tr("Import Failed"),
-                                   tr("Invalid session file format."));
-                return;
-            }
-            
-            QJsonObject session = doc.object();
-            
-            // Validate IDB path
-            QString sessionIdbPath;
-            if (session.contains("metadata")) {
-                sessionIdbPath = session["metadata"].toObject()["idbPath"].toString();
-            }
-            
-            QString currentIdbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
-            
-            if (!sessionIdbPath.isEmpty() && sessionIdbPath != currentIdbPath) {
-                int ret = QMessageBox::warning(this, tr("IDB Mismatch"),
-                    tr("This memory data is from a different IDA database:\n%1\n\nImport anyway?")
-                    .arg(sessionIdbPath),
-                    QMessageBox::Yes | QMessageBox::No);
-                
-                if (ret != QMessageBox::Yes) {
-                    return;
-                }
-            }
-            
-            // Extract memory entries from dock states
-            if (session.contains("ui")) {
-                QJsonObject ui = session["ui"].toObject();
-                if (ui.contains("docks")) {
-                    QJsonObject docks = ui["docks"].toObject();
-                    if (docks.contains("memory")) {
-                        QJsonObject memoryState = docks["memory"].toObject();
-                        if (memoryState.contains("entries")) {
-                            QJsonArray entriesArray = memoryState["entries"].toArray();
-                            
-                            for (const QJsonValue& val : entriesArray) {
-                                QJsonObject obj = val.toObject();
-                                
-                                MemoryEntry entry;
-                                entry.id = QUuid(obj["id"].toString());
-                                if (entry.id.isNull()) {
-                                    entry.id = QUuid::createUuid();
-                                }
-                                entry.timestamp = QDateTime::fromString(obj["timestamp"].toString(), Qt::ISODate);
-                                entry.type = obj["type"].toString();
-                                entry.category = obj["category"].toString();
-                                entry.title = obj["title"].toString();
-                                entry.content = obj["content"].toString();
-                                entry.functionName = obj["functionName"].toString();
-                                entry.address = obj["address"].toString();
-                                entry.confidence = obj["confidence"].toInt();
-                                
-                                for (const QJsonValue& tag : obj["tags"].toArray()) {
-                                    entry.tags.append(tag.toString());
-                                }
-                                
-                                entry.isBookmarked = obj["isBookmarked"].toBool();
-                                entry.isPinned = obj["isPinned"].toBool();
-                                
-                                for (const QJsonValue& ref : obj["references"].toArray()) {
-                                    entry.references.append(QUuid(ref.toString()));
-                                }
-                                
-                                entry.metadata = obj["metadata"].toObject();
-                                
-                                addEntry(entry);
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (fileName.endsWith(".json")) {
-            QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
-            if (doc.isArray()) {
-                for (const QJsonValue& val : doc.array()) {
-                    QJsonObject obj = val.toObject();
-                    
-                    MemoryEntry entry;
-                    entry.id = QUuid(obj["id"].toString());
-                    if (entry.id.isNull()) {
-                        entry.id = QUuid::createUuid();
-                    }
-                    entry.address = obj["address"].toString();
-                    entry.function = obj["function"].toString();
-                    entry.module = obj["module"].toString();
-                    entry.analysis = obj["analysis"].toString();
-                    
-                    for (const QJsonValue& tag : obj["tags"].toArray()) {
-                        entry.tags.append(tag.toString());
-                    }
-                    
-                    entry.timestamp = QDateTime::fromString(obj["timestamp"].toString(), Qt::ISODate);
-                    entry.confidence = obj["confidence"].toInt();
-                    entry.isBookmarked = obj["isBookmarked"].toBool();
-                    entry.metadata = obj["metadata"].toObject();
-                    
-                    addEntry(entry);
-                }
-            }
-        }
-        
-        // Add to recent imports
-        recentImports_.removeAll(fileName);
-        recentImports_.prepend(fileName);
-        while (recentImports_.size() > 10) {
-            recentImports_.removeLast();
-        }
-        saveSettings();
     }
 }
 
 void MemoryDock::onThemeChanged() {
-    // Update views
-    updateStatusBar();
-}
-
-void MemoryDock::onViewModeChanged(int index) {
-    QStringList modes = {"tree", "table", "graph", "heatmap"};
-    if (index < modes.size()) {
-        currentViewMode_ = modes[index];
-        viewStack_->setCurrentIndex(index);
-        
-        // Update group by visibility
-        groupByCombo_->setVisible(index < 2); // Only for tree/table
-        
-        // Update data for graph/heatmap views
-        if (currentViewMode_ == "graph") {
-            graphView_->setEntries(model_->entries());
-        } else if (currentViewMode_ == "heatmap") {
-            heatmapView_->setEntries(model_->entries());
-        }
-        
-        emit viewModeChanged(currentViewMode_);
-    }
+    // Update icons if needed
+    updateStatusText();
 }
 
 void MemoryDock::onSearchTextChanged(const QString& text) {
-    searchText_ = text;
-    applyFilters();
+    model_->setSearchFilter(text);
+    updateStatusText();
 }
-
-void MemoryDock::onAdvancedFilterClicked() {
-    auto* dialog = new MemoryFilterDialog(this);
-    dialog->setFilters(searchText_, tagFilters_, startDateFilter_, endDateFilter_);
-    dialog->setAvailableTags(model_->allTags());
-    
-    if (dialog->exec() == QDialog::Accepted) {
-        searchText_ = dialog->searchText();
-        tagFilters_ = dialog->selectedTags();
-        startDateFilter_ = dialog->startDate();
-        endDateFilter_ = dialog->endDate();
-        
-        searchEdit_->setText(searchText_);
-        applyFilters();
-    }
-    
-    delete dialog;
-}
-
 
 void MemoryDock::onImportClicked() {
-    importData(QString());
+    importFromLLMRESession();
 }
 
-void MemoryDock::onEntryActivated(const QModelIndex& index) {
+void MemoryDock::onClearClicked() {
+    clearEntries();
+}
+
+void MemoryDock::onTableDoubleClicked(const QModelIndex& index) {
     if (index.isValid()) {
-        QUuid id = index.data(MemoryModel::IdRole).toUuid();
+        QUuid id = index.data(Qt::UserRole).toUuid();
+        showEntryViewer(id);
+    }
+}
+
+void MemoryDock::onContextMenuRequested(const QPoint& pos) {
+    QModelIndex index = tableView_->indexAt(pos);
+    if (index.isValid()) {
+        selectedEntryId_ = index.data(Qt::UserRole).toUuid();
+        
+        // Enable/disable actions based on entry
+        MemoryEntry entry = model_->entry(selectedEntryId_);
+        copyAddressAction_->setEnabled(!entry.address.isEmpty());
+        
+        contextMenu_->exec(tableView_->mapToGlobal(pos));
+    }
+}
+
+void MemoryDock::onCopyAddress() {
+    if (!selectedEntryId_.isNull()) {
+        MemoryEntry entry = model_->entry(selectedEntryId_);
+        if (!entry.address.isEmpty()) {
+            QApplication::clipboard()->setText(entry.address);
+        }
+    }
+}
+
+void MemoryDock::onDeleteEntry() {
+    if (!selectedEntryId_.isNull()) {
+        model_->removeEntry(selectedEntryId_);
+        selectedEntryId_ = QUuid();
+    }
+}
+
+void MemoryDock::onViewEntry() {
+    if (!selectedEntryId_.isNull()) {
+        showEntryViewer(selectedEntryId_);
+    }
+}
+
+void MemoryDock::showEntryViewer(const QUuid& id) {
+    MemoryEntry entry = model_->entry(id);
+    if (!entry.id.isNull()) {
+        auto* viewer = new MemoryEntryViewer(entry, this);
+        viewer->setAttribute(Qt::WA_DeleteOnClose);
+        viewer->show();
+        
+        // Also emit signal for navigation if address exists
+        if (!entry.address.isEmpty()) {
+            emit navigateToAddress(entry.address);
+        }
         emit entryDoubleClicked(id);
     }
 }
 
-void MemoryDock::onSelectionChanged() {
-    selectedEntries_.clear();
-    
-    QItemSelectionModel* selModel = nullptr;
-    if (currentViewMode_ == "tree") {
-        selModel = treeView_->selectionModel();
-    } else if (currentViewMode_ == "table") {
-        selModel = tableView_->selectionModel();
-    }
-    
-    if (selModel) {
-        for (const QModelIndex& index : selModel->selectedRows()) {
-            QUuid id = index.data(MemoryModel::IdRole).toUuid();
-            if (!id.isNull()) {
-                selectedEntries_.append(id);
-            }
-        }
-    }
-    
-    // Update bookmark action state
-    if (!selectedEntries_.isEmpty()) {
-        bool allBookmarked = true;
-        for (const QUuid& id : selectedEntries_) {
-            if (!entry(id).isBookmarked) {
-                allBookmarked = false;
-                break;
-            }
-        }
-        bookmarkAction_->setChecked(allBookmarked);
-    }
-    
-    emit selectionChanged(selectedEntries_);
-    updateStatusBar();
-}
-
-void MemoryDock::onCustomContextMenu(const QPoint& pos) {
-    Q_UNUSED(pos);
-    
-    if (!selectedEntries_.isEmpty()) {
-        // Update bookmark state
-        bool allBookmarked = true;
-        for (const QUuid& id : selectedEntries_) {
-            if (!entry(id).isBookmarked) {
-                allBookmarked = false;
-                break;
-            }
-        }
-        
-        for (QAction* action : contextMenu_->actions()) {
-            if (action->text() == tr("Bookmark")) {
-                action->setChecked(allBookmarked);
-                break;
-            }
-        }
-        
-        contextMenu_->exec(QCursor::pos());
-    }
-}
-
-void MemoryDock::onGraphEntryClicked(const QUuid& id) {
-    selectEntry(id);
-    emit entryClicked(id);
-}
-
-void MemoryDock::onHeatmapCellClicked(const QString& group, const QString& subgroup) {
-    Q_UNUSED(subgroup);
-    
-    // Filter entries by group
-    QList<QUuid> matchingIds;
-    for (const MemoryEntry& entry : model_->entries()) {
-        QString entryGroup;
-        
-        QString groupBy = heatmapView_->groupBy();
-        if (groupBy == "function") {
-            entryGroup = entry.function.isEmpty() ? "Unknown" : entry.function;
-        } else if (groupBy == "module") {
-            entryGroup = entry.module.isEmpty() ? "Unknown" : entry.module;
-        } else if (groupBy == "tag") {
-            entryGroup = entry.tags.isEmpty() ? "Untagged" : entry.tags.first();
-        }
-        
-        if (entryGroup == group) {
-            matchingIds.append(entry.id);
-        }
-    }
-    
-    selectEntries(matchingIds);
-}
-
-void MemoryDock::updateStatusBar() {
-    QString status = tr("Total: %1 entries").arg(model_->totalEntries());
-    
-    if (!selectedEntries_.isEmpty()) {
-        status += tr(" | Selected: %1").arg(selectedEntries_.size());
-    }
-    
-    int bookmarked = model_->bookmarkedCount();
-    if (bookmarked > 0) {
-        status += tr(" | Bookmarked: %1").arg(bookmarked);
-    }
-    
-    statusLabel_->setText(status);
-}
-
-void MemoryDock::applyFilters() {
-    // Text filter
-    proxyModel_->setFilterFixedString(searchText_);
-    
-    // Additional filters would be implemented here
-    // For now, just emit signal
-    emit filterChanged();
-}
-
-void MemoryDock::saveSettings() {
-    QSettings settings;
-    settings.beginGroup("MemoryDock");
-    
-    settings.setValue("viewMode", currentViewMode_);
-    settings.setValue("groupBy", groupByCombo_->currentText());
-    settings.setValue("recentImports", recentImports_);
-    
-    // Save queries
-    QJsonObject queries;
-    for (auto it = savedQueries_.begin(); it != savedQueries_.end(); ++it) {
-        const SavedQuery& query = it.value();
-        QJsonObject queryObj;
-        queryObj["name"] = query.name;
-        queryObj["searchText"] = query.searchText;
-        QJsonArray queryTags;
-        for (const QString& tag : query.tags) {
-            queryTags.append(tag);
-        }
-        queryObj["tags"] = queryTags;
-        if (query.startDate.isValid()) {
-            queryObj["startDate"] = query.startDate.toString(Qt::ISODate);
-        }
-        if (query.endDate.isValid()) {
-            queryObj["endDate"] = query.endDate.toString(Qt::ISODate);
-        }
-        queries[it.key()] = queryObj;
-    }
-    settings.setValue("savedQueries", QJsonDocument(queries).toJson());
-    
-    settings.endGroup();
-}
-
-void MemoryDock::loadSettings() {
-    QSettings settings;
-    settings.beginGroup("MemoryDock");
-    
-    setViewMode(settings.value("viewMode", "tree").toString());
-    
-    QString groupBy = settings.value("groupBy", "Module").toString();
-    int index = groupByCombo_->findText(groupBy);
-    if (index >= 0) {
-        groupByCombo_->setCurrentIndex(index);
-    }
-    
-    recentImports_ = settings.value("recentImports").toStringList();
-    
-    // Load queries
-    QJsonDocument doc = QJsonDocument::fromJson(settings.value("savedQueries").toByteArray());
-    if (doc.isObject()) {
-        QJsonObject queries = doc.object();
-        for (auto it = queries.begin(); it != queries.end(); ++it) {
-            QJsonObject queryObj = it.value().toObject();
-            SavedQuery query;
-            query.name = queryObj["name"].toString();
-            query.searchText = queryObj["searchText"].toString();
-            
-            QJsonArray queryTags = queryObj["tags"].toArray();
-            for (const QJsonValue& tag : queryTags) {
-                query.tags.append(tag.toString());
-            }
-            
-            if (queryObj.contains("startDate")) {
-                query.startDate = QDateTime::fromString(queryObj["startDate"].toString(), Qt::ISODate);
-            }
-            if (queryObj.contains("endDate")) {
-                query.endDate = QDateTime::fromString(queryObj["endDate"].toString(), Qt::ISODate);
-            }
-            
-            savedQueries_[it.key()] = query;
-        }
-    }
-    
-    settings.endGroup();
-}
-
-// MemoryFilterDialog implementation
-
-MemoryFilterDialog::MemoryFilterDialog(QWidget* parent)
-    : QDialog(parent)
-{
-    this->setWindowTitle(tr("Advanced Filter"));
-    this->setModal(true);
-    this->resize(400, 500);
-    
-    setupUI();
-}
-
-void MemoryFilterDialog::setupUI() {
-    auto* layout = new QVBoxLayout(this);
-    
-    // Search text
-    auto* searchGroup = new QGroupBox(tr("Search Text"), this);
-    auto* searchLayout = new QVBoxLayout(searchGroup);
-    
-    searchEdit_ = new QLineEdit(this);
-    searchEdit_->setPlaceholderText(tr("Enter search text..."));
-    searchLayout->addWidget(searchEdit_);
-    
-    layout->addWidget(searchGroup);
-    
-    // Tags
-    auto* tagsGroup = new QGroupBox(tr("Tags"), this);
-    auto* tagsLayout = new QVBoxLayout(tagsGroup);
-    
-    tagsList_ = new QListWidget(this);
-    tagsList_->setSelectionMode(QAbstractItemView::MultiSelection);
-    tagsLayout->addWidget(tagsList_);
-    
-    layout->addWidget(tagsGroup);
-    
-    // Date range
-    auto* dateGroup = new QGroupBox(tr("Date Range"), this);
-    auto* dateLayout = new QFormLayout(dateGroup);
-    
-    startDateEdit_ = new QDateTimeEdit(this);
-    startDateEdit_->setCalendarPopup(true);
-    startDateEdit_->setDateTime(QDateTime::currentDateTime().addMonths(-1));
-    dateLayout->addRow(tr("From:"), startDateEdit_);
-    
-    endDateEdit_ = new QDateTimeEdit(this);
-    endDateEdit_->setCalendarPopup(true);
-    endDateEdit_->setDateTime(QDateTime::currentDateTime());
-    dateLayout->addRow(tr("To:"), endDateEdit_);
-    
-    layout->addWidget(dateGroup);
-    
-    // Additional filters
-    auto* additionalGroup = new QGroupBox(tr("Additional Filters"), this);
-    auto* additionalLayout = new QFormLayout(additionalGroup);
-    
-    confidenceCombo_ = new QComboBox(this);
-    confidenceCombo_->addItems({tr("Any"), tr(">= 80%"), tr(">= 50%"), tr("< 50%")});
-    additionalLayout->addRow(tr("Confidence:"), confidenceCombo_);
-    
-    bookmarkedOnlyCheck_ = new QCheckBox(tr("Bookmarked only"), this);
-    additionalLayout->addRow(bookmarkedOnlyCheck_);
-    
-    layout->addWidget(additionalGroup);
-    
-    // Buttons
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        Qt::Horizontal,
-        this
-    );
-    layout->addWidget(buttonBox);
-    
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-}
-
-void MemoryFilterDialog::setFilters(const QString& text, const QStringList& tags,
-                                   const QDateTime& startDate, const QDateTime& endDate) {
-    searchEdit_->setText(text);
-    
-    // Select tags
-    for (int i = 0; i < tagsList_->count(); ++i) {
-        QListWidgetItem* item = tagsList_->item(i);
-        item->setSelected(tags.contains(item->text()));
-    }
-    
-    if (startDate.isValid()) {
-        startDateEdit_->setDateTime(startDate);
-    }
-    
-    if (endDate.isValid()) {
-        endDateEdit_->setDateTime(endDate);
-    }
-}
-
-QString MemoryFilterDialog::searchText() const {
-    return searchEdit_->text();
-}
-
-QStringList MemoryFilterDialog::selectedTags() const {
-    QStringList tags;
-    for (QListWidgetItem* item : tagsList_->selectedItems()) {
-        tags.append(item->text());
-    }
-    return tags;
-}
-
-QDateTime MemoryFilterDialog::startDate() const {
-    return startDateEdit_->dateTime();
-}
-
-QDateTime MemoryFilterDialog::endDate() const {
-    return endDateEdit_->dateTime();
-}
-
-void MemoryFilterDialog::setAvailableTags(const QStringList& tags) {
-    tagsList_->clear();
-    tagsList_->addItems(tags);
-}
-
-// MemoryModel implementation
-
-MemoryModel::MemoryModel(QObject* parent)
-    : QAbstractItemModel(parent)
-{
-    rootNode_ = new TreeNode;
-    rootNode_->name = "Root";
-}
-
-MemoryModel::~MemoryModel() {
-    clearTree();
-    delete rootNode_;
-}
-
-QModelIndex MemoryModel::index(int row, int column, const QModelIndex& parent) const {
-    if (!hasIndex(row, column, parent)) {
-        return QModelIndex();
-    }
-    
-    TreeNode* parentNode = nodeForIndex(parent);
-    if (!parentNode) {
-        parentNode = rootNode_;
-    }
-    
-    if (row < parentNode->children.size()) {
-        return createIndex(row, column, parentNode->children[row]);
-    }
-    
-    return QModelIndex();
-}
-
-QModelIndex MemoryModel::parent(const QModelIndex& child) const {
-    if (!child.isValid()) {
-        return QModelIndex();
-    }
-    
-    TreeNode* childNode = static_cast<TreeNode*>(child.internalPointer());
-    TreeNode* parentNode = childNode->parent;
-    
-    if (!parentNode || parentNode == rootNode_) {
-        return QModelIndex();
-    }
-    
-    // Find row of parent
-    TreeNode* grandParent = parentNode->parent;
-    if (grandParent) {
-        int row = grandParent->children.indexOf(parentNode);
-        return createIndex(row, 0, parentNode);
-    }
-    
-    return QModelIndex();
-}
-
-int MemoryModel::rowCount(const QModelIndex& parent) const {
-    TreeNode* parentNode = nodeForIndex(parent);
-    if (!parentNode) {
-        parentNode = rootNode_;
-    }
-    
-    return parentNode->children.size();
-}
-
-int MemoryModel::columnCount(const QModelIndex& parent) const {
-    Q_UNUSED(parent);
-    return ColumnCount;
-}
-
-QVariant MemoryModel::data(const QModelIndex& index, int role) const {
-    if (!index.isValid()) {
-        return QVariant();
-    }
-    
-    TreeNode* node = static_cast<TreeNode*>(index.internalPointer());
-    if (!node) {
-        return QVariant();
-    }
-    
-    if (node->isGroup) {
-        // Group node
-        if (role == Qt::DisplayRole) {
-            if (index.column() == 0) {
-                return QString("%1 (%2)").arg(node->name).arg(node->children.size());
-            }
-        } else if (role == Qt::FontRole) {
-            QFont font;
-            font.setBold(true);
-            return font;
-        }
-        return QVariant();
-    }
-    
-    // Entry node
-    if (!node->entry) {
-        return QVariant();
-    }
-    
-    const MemoryEntry& entry = *node->entry;
-    
-    if (role == Qt::DisplayRole) {
-        switch (index.column()) {
-        case AddressColumn:
-            return entry.address;
-        case FunctionColumn:
-            return entry.function;
-        case ModuleColumn:
-            return entry.module;
-        case TagsColumn:
-            return entry.tags.join(", ");
-        case TimestampColumn:
-            return entry.timestamp.toString("yyyy-MM-dd hh:mm");
-        case ConfidenceColumn:
-            return QString("%1%").arg(entry.confidence);
-        }
-    } else if (role == Qt::DecorationRole && index.column() == 0) {
-        if (entry.isBookmarked) {
-            return ThemeManager::instance().themedIcon("bookmark");
-        }
-    } else if (role == Qt::ForegroundRole) {
-        if (entry.confidence < 50) {
-            return QColor("#F44336");
-        }
-    } else if (role == EntryRole) {
-        return QVariant::fromValue(entry);
-    } else if (role == IdRole) {
-        return entry.id;
-    } else if (role == BookmarkedRole) {
-        return entry.isBookmarked;
-    } else if (role == ConfidenceRole) {
-        return entry.confidence;
-    }
-    
-    return QVariant();
-}
-
-QVariant MemoryModel::headerData(int section, Qt::Orientation orientation, int role) const {
-    if (orientation != Qt::Horizontal || role != Qt::DisplayRole) {
-        return QVariant();
-    }
-    
-    switch (section) {
-    case AddressColumn:
-        return tr("Address");
-    case FunctionColumn:
-        return tr("Function");
-    case ModuleColumn:
-        return tr("Module");
-    case TagsColumn:
-        return tr("Tags");
-    case TimestampColumn:
-        return tr("Timestamp");
-    case ConfidenceColumn:
-        return tr("Confidence");
-    }
-    
-    return QVariant();
-}
-
-Qt::ItemFlags MemoryModel::flags(const QModelIndex& index) const {
-    if (!index.isValid()) {
-        return Qt::NoItemFlags;
-    }
-    
-    TreeNode* node = static_cast<TreeNode*>(index.internalPointer());
-    if (node && node->isGroup) {
-        return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
-    }
-    
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable;
-}
-
-bool MemoryModel::setData(const QModelIndex& index, const QVariant& value, int role) {
-    if (!index.isValid() || role != Qt::EditRole) {
-        return false;
-    }
-    
-    TreeNode* node = static_cast<TreeNode*>(index.internalPointer());
-    if (!node || !node->entry) {
-        return false;
-    }
-    
-    // Handle editing based on column
-    switch (index.column()) {
-    case FunctionColumn:
-        node->entry->function = value.toString();
-        break;
-    case TagsColumn:
-        node->entry->tags = value.toString().split(",", Qt::SkipEmptyParts);
-        break;
-    default:
-        return false;
-    }
-    
-    emit dataChanged(index, index);
-    return true;
-}
-
-void MemoryModel::addEntry(const MemoryEntry& entry) {
-    beginResetModel();
-    
-    entries_.append(entry);
-    entryMap_[entry.id] = &entries_.last();
-    
-    rebuildTree();
-    
-    endResetModel();
-    emit entryAdded(entry.id);
-}
-
-void MemoryModel::updateEntry(const QUuid& id, const MemoryEntry& entry) {
-    if (entryMap_.contains(id)) {
-        beginResetModel();
-        
-        *entryMap_[id] = entry;
-        rebuildTree();
-        
-        endResetModel();
-        emit entryUpdated(id);
-    }
-}
-
-void MemoryModel::removeEntry(const QUuid& id) {
-    if (entryMap_.contains(id)) {
-        beginResetModel();
-        
-        entries_.removeOne(*entryMap_[id]);
-        entryMap_.remove(id);
-        rebuildTree();
-        
-        endResetModel();
-        emit entryRemoved(id);
-    }
-}
-
-void MemoryModel::clearEntries() {
-    beginResetModel();
-    
-    entries_.clear();
-    entryMap_.clear();
-    clearTree();
-    
-    endResetModel();
-    emit modelReset();
-}
-
-MemoryEntry MemoryModel::entry(const QUuid& id) const {
-    if (entryMap_.contains(id)) {
-        return *entryMap_[id];
-    }
-    return MemoryEntry();
-}
-
-void MemoryModel::setGroupBy(const QString& field) {
-    if (groupBy_ != field) {
-        beginResetModel();
-        groupBy_ = field;
-        rebuildTree();
-        endResetModel();
-    }
-}
-
-int MemoryModel::bookmarkedCount() const {
-    int count = 0;
-    for (const MemoryEntry& entry : entries_) {
-        if (entry.isBookmarked) {
-            count++;
-        }
-    }
-    return count;
-}
-
-QStringList MemoryModel::allTags() const {
-    QStringList tags;
-    for (const MemoryEntry& entry : entries_) {
-        for (const QString& tag : entry.tags) {
-            if (!tags.contains(tag)) {
-                tags.append(tag);
-            }
-        }
-    }
-    tags.sort();
-    return tags;
-}
-
-QStringList MemoryModel::allModules() const {
-    QStringList modules;
-    for (const MemoryEntry& entry : entries_) {
-        if (!entry.module.isEmpty() && !modules.contains(entry.module)) {
-            modules.append(entry.module);
-        }
-    }
-    modules.sort();
-    return modules;
-}
-
-QStringList MemoryModel::allFunctions() const {
-    QStringList functions;
-    for (const MemoryEntry& entry : entries_) {
-        if (!entry.function.isEmpty() && !functions.contains(entry.function)) {
-            functions.append(entry.function);
-        }
-    }
-    functions.sort();
-    return functions;
-}
-
-void MemoryModel::rebuildTree() {
-    clearTree();
-    
-    if (groupBy_.isEmpty()) {
-        // No grouping - flat list
-        for (MemoryEntry& entry : entries_) {
-            TreeNode* node = new TreeNode;
-            node->parent = rootNode_;
-            node->entry = &entry;
-            rootNode_->children.append(node);
-        }
+void MemoryDock::updateStatusText() {
+    int total = model_->entries().size();
+    int shown = model_->rowCount();
+    
+    if (total == shown) {
+        statusLabel_->setText(tr("%1 entries").arg(total));
     } else {
-        // Group entries
-        QHash<QString, TreeNode*> groups;
-        
-        for (MemoryEntry& entry : entries_) {
-            QString groupName;
-            
-            if (groupBy_ == "module") {
-                groupName = entry.module.isEmpty() ? tr("Unknown") : entry.module;
-            } else if (groupBy_ == "function") {
-                groupName = entry.function.isEmpty() ? tr("Unknown") : entry.function;
-            } else if (groupBy_ == "tag") {
-                groupName = entry.tags.isEmpty() ? tr("Untagged") : entry.tags.first();
-            }
-            
-            if (!groups.contains(groupName)) {
-                TreeNode* groupNode = new TreeNode;
-                groupNode->name = groupName;
-                groupNode->parent = rootNode_;
-                groupNode->isGroup = true;
-                rootNode_->children.append(groupNode);
-                groups[groupName] = groupNode;
-            }
-            
-            TreeNode* node = new TreeNode;
-            node->parent = groups[groupName];
-            node->entry = &entry;
-            groups[groupName]->children.append(node);
-        }
+        statusLabel_->setText(tr("Showing %1 of %2 entries").arg(shown).arg(total));
     }
-}
-
-void MemoryModel::clearTree() {
-    // Delete all nodes except root
-    std::function<void(TreeNode*)> deleteNode = [&deleteNode](TreeNode* node) {
-        for (TreeNode* child : node->children) {
-            deleteNode(child);
-        }
-        node->children.clear();
-    };
-    
-    deleteNode(rootNode_);
-}
-
-MemoryModel::TreeNode* MemoryModel::nodeForIndex(const QModelIndex& index) const {
-    if (index.isValid()) {
-        return static_cast<TreeNode*>(index.internalPointer());
-    }
-    return nullptr;
-}
-
-QModelIndex MemoryModel::indexForNode(TreeNode* node) const {
-    if (!node || node == rootNode_) {
-        return QModelIndex();
-    }
-    
-    TreeNode* parent = node->parent;
-    if (parent) {
-        int row = parent->children.indexOf(node);
-        if (row >= 0) {
-            return createIndex(row, 0, node);
-        }
-    }
-    
-    return QModelIndex();
 }
 
 } // namespace llm_re::ui_v2

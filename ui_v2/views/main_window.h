@@ -3,15 +3,12 @@
 #include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
 #include "conversation_view.h"
-#include "../widgets/command_palette.h"
 
 namespace llm_re::ui_v2 {
 
 class MemoryDock;
 class ToolExecutionDock;
-class StatisticsDock;
 class ConsoleDock;
-class FloatingInspector;
 class NotificationManager;
 class LayoutManager;
 class ShortcutManager;
@@ -27,10 +24,8 @@ public:
     
     // Component access
     ConversationView* conversationView() { return conversationView_; }
-    CommandPalette* commandPalette() { return commandPalette_; }
     MemoryDock* memoryDock() { return memoryDock_; }
     ToolExecutionDock* toolDock() { return toolDock_; }
-    StatisticsDock* statsDock() { return statsDock_; }
     ConsoleDock* consoleDock() { return consoleDock_; }
     NotificationManager* notificationManager() { return notificationManager_; }
     UiController* controller() { return controller_.get(); }
@@ -74,6 +69,9 @@ public:
     // Shutdown handling
     void setShuttingDown(bool shutting) { isShuttingDown_ = shutting; }
     
+    // Controller access
+    UiController* uiController() const { return controller_.get(); }
+    
     // Global instance
     static MainWindow* instance();
     static void setInstance(MainWindow* window);
@@ -102,19 +100,14 @@ protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
     
 private slots:
-    void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
     void onFileNew();
     void onFileOpen();
     void onFileSave();
     void onFileSaveAs();
     void onFileExit();
-    void onEditUndo();
-    void onEditRedo();
-    void onEditCut();
-    void onEditCopy();
-    void onEditPaste();
     void onEditSelectAll();
     void onEditFind();
     void onEditReplace();
@@ -126,9 +119,6 @@ private slots:
     void onViewResetLayout();
     void onViewSaveLayout();
     void onViewLoadLayout();
-    void onToolsCommandPalette();
-    void onToolsFloatingInspector();
-    void onToolsStatistics();
     void onToolsMemoryAnalysis();
     void onToolsExecutionHistory();
     void onToolsConsole();
@@ -143,7 +133,6 @@ private slots:
     void restoreWindowState();
     void checkUnsavedChanges();
     void onSessionModified();
-    void onFloatingInspectorRequested(const QPoint& pos, const QString& context);
     
 private:
     void setupUI();
@@ -152,14 +141,11 @@ private:
     void createToolBars();
     void createStatusBar();
     void createDockWindows();
-    void createTrayIcon();
     void createCentralWidget();
     void connectSignals();
     void loadSettings();
     void saveSettings();
-    void registerCommandProviders();
     void setupShortcuts();
-    void setupSplitView();
     bool maybeSave();
     void updateRecentFiles();
     void setCurrentFile(const QString& fileName);
@@ -172,7 +158,6 @@ private:
     
     // Main components
     ConversationView* conversationView_ = nullptr;
-    CommandPalette* commandPalette_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
     QSplitter* mainSplitter_ = nullptr;
     QList<ConversationView*> conversationViews_;
@@ -180,16 +165,11 @@ private:
     // Dock windows
     MemoryDock* memoryDock_ = nullptr;
     ToolExecutionDock* toolDock_ = nullptr;
-    StatisticsDock* statsDock_ = nullptr;
     ConsoleDock* consoleDock_ = nullptr;
     QDockWidget* memoryDockWidget_ = nullptr;
     QDockWidget* toolDockWidget_ = nullptr;
-    QDockWidget* statsDockWidget_ = nullptr;
     QDockWidget* consoleDockWidget_ = nullptr;
-    
-    // Floating windows
-    FloatingInspector* floatingInspector_ = nullptr;
-    
+
     // Managers
     NotificationManager* notificationManager_ = nullptr;
     LayoutManager* layoutManager_ = nullptr;
@@ -217,11 +197,6 @@ private:
     QAction* saveAction_ = nullptr;
     QAction* saveAsAction_ = nullptr;
     QAction* exitAction_ = nullptr;
-    QAction* undoAction_ = nullptr;
-    QAction* redoAction_ = nullptr;
-    QAction* cutAction_ = nullptr;
-    QAction* copyAction_ = nullptr;
-    QAction* pasteAction_ = nullptr;
     QAction* selectAllAction_ = nullptr;
     QAction* findAction_ = nullptr;
     QAction* replaceAction_ = nullptr;
@@ -232,9 +207,6 @@ private:
     QAction* toggleFullScreenAction_ = nullptr;
     QAction* resetLayoutAction_ = nullptr;
     QAction* saveLayoutAction_ = nullptr;
-    QAction* commandPaletteAction_ = nullptr;
-    QAction* floatingInspectorAction_ = nullptr;
-    QAction* statisticsAction_ = nullptr;
     QAction* memoryAnalysisAction_ = nullptr;
     QAction* executionHistoryAction_ = nullptr;
     QAction* consoleAction_ = nullptr;
@@ -247,9 +219,6 @@ private:
     QList<QAction*> recentFileActions_;
     static constexpr int MaxRecentFiles = 10;
     
-    // System tray
-    QSystemTrayIcon* trayIcon_ = nullptr;
-    QMenu* trayIconMenu_ = nullptr;
     
     // State
     QString currentFile_;
@@ -260,9 +229,6 @@ private:
     bool shouldSaveSettings_ = true;
     
     // Settings
-    bool showTrayIcon_ = true;
-    bool minimizeToTray_ = true;
-    bool closeToTray_ = false;
     bool startMinimized_ = false;
     bool rememberWindowState_ = true;
     
@@ -296,7 +262,6 @@ public:
     void focusConversation();
     void focusMemory();
     void focusTools();
-    void focusStats();
     
     // Coordination
     void synchronizeViews();

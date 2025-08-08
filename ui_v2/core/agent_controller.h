@@ -24,7 +24,6 @@ namespace llm_re::ui_v2 {
 class ConversationView;
 class MemoryDock;
 class ToolExecutionDock;
-class StatisticsDock;
 class ConsoleDock;
 
 // Controller that bridges between the REAgent and ui_v2
@@ -57,7 +56,6 @@ public:
     void connectConversationView(ConversationView* view);
     void connectMemoryDock(MemoryDock* dock);
     void connectToolDock(ToolExecutionDock* dock);
-    void connectStatsDock(StatisticsDock* dock);
     void connectConsoleDock(ConsoleDock* dock);
     
     // Configuration
@@ -75,7 +73,6 @@ public:
 signals:
     // Status updates
     void statusChanged(const QString& status);
-    void progressChanged(int value, int max);
     void errorOccurred(const QString& error);
     
     // Agent state
@@ -109,14 +106,10 @@ private:
     std::unique_ptr<Message> convertApiMessage(const messages::Message& apiMsg);
     MessageRole convertMessageRole(messages::Role role);
     MessageType inferMessageType(const messages::Message& msg);
-    void processToolUseContent(Message* uiMsg, const messages::ToolUseContent* toolUse);
-    void processToolResultContent(Message* uiMsg, const messages::ToolResultContent* toolResult);
     
     // UI updates
     void addMessageToConversation(std::unique_ptr<Message> msg);
-    void updateToolExecution(const QString& toolId, const json& data);
     void updateMemoryView();
-    void updateStatistics();
     
     // Core components
     std::unique_ptr<REAgent> agent_;
@@ -127,7 +120,6 @@ private:
     ConversationView* conversationView_ = nullptr;
     MemoryDock* memoryDock_ = nullptr;
     ToolExecutionDock* toolDock_ = nullptr;
-    StatisticsDock* statsDock_ = nullptr;
     ConsoleDock* consoleDock_ = nullptr;
     
     // State tracking

@@ -64,40 +64,14 @@ QColor ChartTheme::getBorderColor(ThemeManager::Theme theme) {
 }
 
 std::vector<QColor> ChartTheme::getSeriesColors(ThemeManager::Theme theme) {
-    if (theme == ThemeManager::Theme::Dark) {
-        // Neon-inspired colors for dark theme
-        return {
-            QColor(0, 255, 255),      // Cyan
-            QColor(255, 0, 255),      // Magenta
-            QColor(0, 255, 127),      // Spring green
-            QColor(255, 127, 0),      // Orange
-            QColor(127, 0, 255),      // Blue violet
-            QColor(255, 255, 0),      // Yellow
-            QColor(255, 0, 127),      // Hot pink
-            QColor(0, 127, 255),      // Sky blue
-            QColor(127, 255, 0),      // Chartreuse
-            QColor(255, 127, 255)     // Light pink
-        };
-    } else {
-        // Professional colors for light theme
-        return {
-            QColor(59, 130, 246),     // Blue
-            QColor(16, 185, 129),     // Green
-            QColor(251, 146, 60),     // Orange
-            QColor(244, 63, 94),      // Red
-            QColor(147, 51, 234),     // Purple
-            QColor(250, 204, 21),     // Yellow
-            QColor(14, 165, 233),     // Sky
-            QColor(236, 72, 153),     // Pink
-            QColor(34, 197, 94),      // Emerald
-            QColor(168, 85, 247)      // Violet
-        };
-    }
+    Q_UNUSED(theme);
+    // Get colors from ThemeManager
+    return ThemeManager::instance().chartSeriesColors();
 }
 
 QColor ChartTheme::getSeriesColor(ThemeManager::Theme theme, int index) {
-    auto colors = getSeriesColors(theme);
-    return colors[index % colors.size()];
+    Q_UNUSED(theme);
+    return ThemeManager::instance().chartSeriesColor(index);
 }
 
 QLinearGradient ChartTheme::getBackgroundGradient(ThemeManager::Theme theme, const QRectF& rect) {
@@ -452,33 +426,163 @@ QStringList ChartThemePresets::availablePresets() {
 }
 
 void ChartThemePresets::savePreset(const QString& name, const LineChartTheme& theme) {
-    Q_UNUSED(name)
-    Q_UNUSED(theme)
-    // TODO: Implement preset saving to JSON
+    QDir presetsDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/chart_presets");
+    if (!presetsDir.exists()) {
+        presetsDir.mkpath(".");
+    }
+    
+    QJsonObject obj;
+    obj["type"] = "line_chart";
+    obj["name"] = name;
+    obj["lineWidth"] = theme.lineWidth;
+    obj["pointRadius"] = theme.pointRadius;
+    obj["hoverPointRadius"] = theme.hoverPointRadius;
+    obj["smoothCurves"] = theme.smoothCurves;
+    obj["fillArea"] = theme.fillArea;
+    obj["areaOpacity"] = theme.areaOpacity;
+    obj["showDataPoints"] = theme.showDataPoints;
+    obj["animateDrawing"] = theme.animateDrawing;
+    obj["drawingDuration"] = theme.drawingDuration;
+    obj["animateOnUpdate"] = theme.animateOnUpdate;
+    obj["glowOnHover"] = theme.glowOnHover;
+    obj["hoverGlowRadius"] = theme.hoverGlowRadius;
+    obj["hoverLineWidth"] = theme.hoverLineWidth;
+    
+    QJsonDocument doc(obj);
+    QFile file(presetsDir.filePath(name + "_line.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+    }
 }
 
 void ChartThemePresets::savePreset(const QString& name, const CircularChartTheme& theme) {
-    Q_UNUSED(name)
-    Q_UNUSED(theme)
-    // TODO: Implement preset saving to JSON
+    QDir presetsDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/chart_presets");
+    if (!presetsDir.exists()) {
+        presetsDir.mkpath(".");
+    }
+    
+    QJsonObject obj;
+    obj["type"] = "circular_chart";
+    obj["name"] = name;
+    obj["innerRadiusRatio"] = theme.innerRadiusRatio;
+    obj["segmentSpacing"] = theme.segmentSpacing;
+    obj["hoverScale"] = theme.hoverScale;
+    obj["hoverOffset"] = theme.hoverOffset;
+    obj["showLabels"] = theme.showLabels;
+    obj["showPercentages"] = theme.showPercentages;
+    obj["animateRotation"] = theme.animateRotation;
+    obj["rotationDuration"] = theme.rotationDuration;
+    obj["startAngle"] = theme.startAngle;
+    obj["innerShadow"] = theme.innerShadow;
+    obj["outerGlow"] = theme.outerGlow;
+    obj["glowRadius"] = theme.glowRadius;
+    
+    QJsonDocument doc(obj);
+    QFile file(presetsDir.filePath(name + "_circular.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+    }
 }
 
 void ChartThemePresets::savePreset(const QString& name, const BarChartTheme& theme) {
-    Q_UNUSED(name)
-    Q_UNUSED(theme)
-    // TODO: Implement preset saving to JSON
+    QDir presetsDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/chart_presets");
+    if (!presetsDir.exists()) {
+        presetsDir.mkpath(".");
+    }
+    
+    QJsonObject obj;
+    obj["type"] = "bar_chart";
+    obj["name"] = name;
+    obj["barSpacing"] = theme.barSpacing;
+    obj["cornerRadius"] = theme.cornerRadius;
+    obj["showValues"] = theme.showValues;
+    obj["horizontal"] = theme.horizontal;
+    obj["animateGrowth"] = theme.animateGrowth;
+    obj["growthDuration"] = theme.growthDuration;
+    obj["growthAnimation"] = static_cast<int>(theme.growthAnimation);
+    obj["gradient"] = theme.gradient;
+    obj["shadow"] = theme.shadow;
+    obj["shadowOffset"] = theme.shadowOffset;
+    obj["showLegend"] = theme.showLegend;
+    obj["showAxes"] = theme.showAxes;
+    obj["rotateLabels"] = theme.rotateLabels;
+    obj["barBorderWidth"] = theme.barBorderWidth;
+    obj["valueFontSize"] = theme.valueFontSize;
+    obj["labelFontSize"] = theme.labelFontSize;
+    obj["valuePosition"] = static_cast<int>(theme.valuePosition);
+    
+    // Save colors
+    obj["positiveColor"] = theme.positiveColor.name();
+    obj["negativeColor"] = theme.negativeColor.name();
+    obj["connectorColor"] = theme.connectorColor.name();
+    obj["valueFontColor"] = theme.valueFontColor.name();
+    
+    QJsonDocument doc(obj);
+    QFile file(presetsDir.filePath(name + "_bar.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+    }
 }
 
 void ChartThemePresets::savePreset(const QString& name, const HeatmapTheme& theme) {
-    Q_UNUSED(name)
-    Q_UNUSED(theme)
-    // TODO: Implement preset saving to JSON
+    QDir presetsDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/chart_presets");
+    if (!presetsDir.exists()) {
+        presetsDir.mkpath(".");
+    }
+    
+    QJsonObject obj;
+    obj["type"] = "heatmap";
+    obj["name"] = name;
+    obj["colorScale"] = static_cast<int>(theme.colorScale);
+    obj["cellSpacing"] = theme.cellSpacing;
+    obj["cellCornerRadius"] = theme.cellCornerRadius;
+    obj["showGrid"] = theme.showGrid;
+    obj["showValues"] = theme.showValues;
+    obj["highlightOnHover"] = theme.highlightOnHover;
+    obj["hoverScale"] = theme.hoverScale;
+    obj["showTooltipValue"] = theme.showTooltipValue;
+    
+    // Save custom colors if using custom color scale
+    if (theme.colorScale == HeatmapTheme::Custom) {
+        QJsonArray colorsArray;
+        for (const auto& color : theme.customColors) {
+            colorsArray.append(color.name());
+        }
+        obj["customColors"] = colorsArray;
+    }
+    
+    QJsonDocument doc(obj);
+    QFile file(presetsDir.filePath(name + "_heatmap.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+    }
 }
 
 void ChartThemePresets::savePreset(const QString& name, const SparklineTheme& theme) {
-    Q_UNUSED(name)
-    Q_UNUSED(theme)
-    // TODO: Implement preset saving to JSON
+    QDir presetsDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/chart_presets");
+    if (!presetsDir.exists()) {
+        presetsDir.mkpath(".");
+    }
+    
+    QJsonObject obj;
+    obj["type"] = "sparkline";
+    obj["name"] = name;
+    obj["lineWidth"] = theme.lineWidth;
+    obj["fillArea"] = theme.fillArea;
+    obj["areaOpacity"] = theme.areaOpacity;
+    obj["showMinMax"] = theme.showMinMax;
+    obj["showLastValue"] = theme.showLastValue;
+    obj["height"] = theme.height;
+    obj["showAxes"] = theme.showAxes;
+    obj["showGrid"] = theme.showGrid;
+    obj["animateOnUpdate"] = theme.animateOnUpdate;
+    obj["updateDuration"] = theme.updateDuration;
+    
+    QJsonDocument doc(obj);
+    QFile file(presetsDir.filePath(name + "_sparkline.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+    }
 }
 
 } // namespace llm_re::ui_v2::charts

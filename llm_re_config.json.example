@@ -16,21 +16,14 @@
   "ui": {
     "log_buffer_size": 1000,
     "auto_scroll": true,
-    "theme": 0,
+    "theme_name": "dark",
     "font_size": 10,
     "show_timestamps": true,
     "show_tool_details": true,
-    "show_tray_icon": true,
-    "minimize_to_tray": true,
-    "close_to_tray": false,
     "start_minimized": false,
     "remember_window_state": true,
     "auto_save_conversations": true,
     "auto_save_interval": 60,
-    "density_mode": 1,
-    "inspector_follow_cursor": true,
-    "inspector_opacity": 80,
-    "inspector_auto_hide": true,
-    "inspector_auto_hide_delay": 3000
+    "density_mode": 1
   }
 }

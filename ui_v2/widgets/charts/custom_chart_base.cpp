@@ -1,5 +1,6 @@
 #include "../../core/ui_v2_common.h"
 #include "custom_chart_base.h"
+#include "../../core/color_constants.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -609,12 +610,9 @@ void CustomChartBase::calculateChartRect() {
 }
 
 void CustomChartBase::updateAxesRange() {
-    if (xAxis_.autoScale) {
-        updateData();
-    }
-    if (yAxis_.autoScale) {
-        updateData();
-    }
+    // Calculate data bounds for auto-scaling
+    // This should be implemented by derived classes that need auto-scaling
+    // Default implementation does nothing to avoid recursion
 }
 
 QPointF CustomChartBase::mapToChart(const QPointF& point) const {
@@ -720,14 +718,15 @@ void CustomChartBase::drawGlassRect(QPainter* painter, const QRectF& rect, const
     painter->fillRect(rect, baseColor);
     
     // Draw glass gradient overlay
+    const auto& colors = ThemeManager::instance().colors();
     QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
-    gradient.setColorAt(0, QColor(255, 255, 255, 40));
-    gradient.setColorAt(0.5, QColor(255, 255, 255, 20));
-    gradient.setColorAt(1, QColor(255, 255, 255, 10));
+    gradient.setColorAt(0, colors.glassOverlay);
+    gradient.setColorAt(0.5, ThemeManager::adjustAlpha(colors.glassOverlay, colors.glassOverlay.alpha() / 2));
+    gradient.setColorAt(1, ThemeManager::adjustAlpha(colors.glassOverlay, colors.glassOverlay.alpha() / 4));
     painter->fillRect(rect, gradient);
     
     // Draw glass border
-    QPen borderPen(QColor(255, 255, 255, 80));
+    QPen borderPen(colors.glassBorder);
     borderPen.setWidth(1);
     painter->setPen(borderPen);
     painter->drawRect(rect);
@@ -782,5 +781,6 @@ void CustomChartBase::hideTooltip() {
     tooltipText_.clear();
     update();
 }
+
 
 } // namespace llm_re::ui_v2::charts

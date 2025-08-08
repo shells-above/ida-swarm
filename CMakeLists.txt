@@ -156,10 +156,16 @@ set(SOURCES
         # ui_v2 core
         ui_v2/core/base_styled_widget.cpp
         ui_v2/core/theme_manager.cpp
+        ui_v2/core/theme_templates.cpp
+        ui_v2/core/theme_transition_manager.cpp
+        ui_v2/core/theme_undo_manager.cpp
+        ui_v2/core/effects_manager.cpp
+        ui_v2/core/animation_manager.cpp
         ui_v2/core/focus_manager.cpp
         ui_v2/core/ui_utils.cpp
         ui_v2/core/agent_controller.cpp
         ui_v2/core/settings_manager.cpp
+        ui_v2/core/color_constants.cpp
         # ui_v2 models
         ui_v2/models/conversation_model.cpp
         # ui_v2 views
@@ -167,16 +173,22 @@ set(SOURCES
         ui_v2/views/conversation_view.cpp
         ui_v2/views/memory_dock.cpp
         ui_v2/views/tool_execution_dock.cpp
-        ui_v2/views/statistics_dock.cpp
         ui_v2/views/console_dock.cpp
-        ui_v2/views/floating_inspector.cpp
         ui_v2/views/settings_dialog.cpp
+        # ui_v2 theme editor
+        ui_v2/views/theme_editor/theme_editor_dialog.cpp
+        ui_v2/views/theme_editor/widgets/accessibility_tools.cpp
+        ui_v2/views/theme_editor/widgets/animation_config_widget.cpp
+        ui_v2/views/theme_editor/widgets/chart_theme_widget.cpp
+        ui_v2/views/theme_editor/widgets/color_picker_widget.cpp
+        ui_v2/views/theme_editor/widgets/effects_config_widget.cpp
+        ui_v2/views/theme_editor/widgets/theme_preview_widget.cpp
+        ui_v2/views/theme_editor/widgets/theme_template_selector.cpp
+        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.cpp
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.cpp
         ui_v2/widgets/message_group.cpp
         ui_v2/widgets/markdown_viewer.cpp
-        ui_v2/widgets/command_palette.cpp
-        ui_v2/widgets/tool_execution_visualizer.cpp
         # ui_v2 custom charts
         ui_v2/widgets/charts/chart_types.cpp
         ui_v2/widgets/charts/custom_chart_base.cpp
@@ -207,12 +219,18 @@ set(HEADERS
         # ui_v2 core
         ui_v2/core/base_styled_widget.h
         ui_v2/core/theme_manager.h
+        ui_v2/core/theme_constants.h
+        ui_v2/core/theme_transition_manager.h
+        ui_v2/core/theme_undo_manager.h
+        ui_v2/core/effects_manager.h
+        ui_v2/core/animation_manager.h
         ui_v2/core/focus_manager.h
         ui_v2/core/ui_constants.h
         ui_v2/core/ui_utils.h
         ui_v2/core/agent_controller.h
         ui_v2/core/settings_manager.h
         ui_v2/core/ui_v2_common.h
+        ui_v2/core/color_constants.h
         # ui_v2 models
         ui_v2/models/conversation_model.h
         ui_v2/models/tool_execution.h
@@ -221,15 +239,21 @@ set(HEADERS
         ui_v2/views/conversation_view.h
         ui_v2/views/memory_dock.h
         ui_v2/views/tool_execution_dock.h
-        ui_v2/views/statistics_dock.h
-        ui_v2/views/floating_inspector.h
         ui_v2/views/settings_dialog.h
+        # ui_v2 theme editor
+        ui_v2/views/theme_editor/theme_editor_dialog.h
+        ui_v2/views/theme_editor/widgets/accessibility_tools.h
+        ui_v2/views/theme_editor/widgets/animation_config_widget.h
+        ui_v2/views/theme_editor/widgets/chart_theme_widget.h
+        ui_v2/views/theme_editor/widgets/color_picker_widget.h
+        ui_v2/views/theme_editor/widgets/effects_config_widget.h
+        ui_v2/views/theme_editor/widgets/theme_preview_widget.h
+        ui_v2/views/theme_editor/widgets/theme_template_selector.h
+        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.h
         # ui_v2 widgets
         ui_v2/widgets/message_bubble.h
         ui_v2/widgets/message_group.h
         ui_v2/widgets/markdown_viewer.h
-        ui_v2/widgets/command_palette.h
-        ui_v2/widgets/tool_execution_visualizer.h
         # ui_v2 custom charts
         ui_v2/widgets/charts/chart_types.h
         ui_v2/widgets/charts/custom_chart_base.h

@@ -2,7 +2,6 @@
 #include "../core/settings_manager.h"
 #include "../core/theme_manager.h"
 #include "../../api/anthropic_api.h"
-#include <QThread>
 
 namespace llm_re::ui_v2 {
 
@@ -11,6 +10,10 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     setWindowTitle("Settings");
     setModal(true);
     resize(600, 500);
+    
+    // CRITICAL: Prevent Qt from using the application style for background
+    setAttribute(Qt::WA_StyledBackground, false);
+    setAutoFillBackground(false);
     
     setupUI();
     loadSettings();
@@ -72,7 +75,7 @@ void SettingsDialog::createAPITab() {
     layout->addRow("Base URL:", base_url_edit_);
     
     model_combo_ = new QComboBox();
-    model_combo_->addItems({"Opus 4", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
+    model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
     connect(model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
             this, &SettingsDialog::onSettingChanged);
     layout->addRow("Model:", model_combo_);
@@ -161,7 +164,7 @@ void SettingsDialog::createUITab() {
     
     theme_combo_ = new QComboBox();
     theme_combo_->addItems({"Default", "Dark", "Light"});
-    connect(theme_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
+    connect(theme_combo_, &QComboBox::currentTextChanged, 
             this, &SettingsDialog::onSettingChanged);
     generalLayout->addRow("Theme:", theme_combo_);
     
@@ -184,18 +187,6 @@ void SettingsDialog::createUITab() {
     // Window management
     auto* windowGroup = new QGroupBox("Window Management");
     auto* windowLayout = new QVBoxLayout(windowGroup);
-    
-    show_tray_icon_check_ = new QCheckBox("Show System Tray Icon");
-    connect(show_tray_icon_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    windowLayout->addWidget(show_tray_icon_check_);
-    
-    minimize_to_tray_check_ = new QCheckBox("Minimize to System Tray");
-    connect(minimize_to_tray_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    windowLayout->addWidget(minimize_to_tray_check_);
-    
-    close_to_tray_check_ = new QCheckBox("Close to System Tray");
-    connect(close_to_tray_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    windowLayout->addWidget(close_to_tray_check_);
     
     start_minimized_check_ = new QCheckBox("Start Minimized");
     connect(start_minimized_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
@@ -232,40 +223,6 @@ void SettingsDialog::createUITab() {
     conversationLayout->addRow("Density Mode:", density_mode_combo_);
     
     layout->addWidget(conversationGroup);
-    
-    // Inspector
-    auto* inspectorGroup = new QGroupBox("Floating Inspector");
-    auto* inspectorLayout = new QFormLayout(inspectorGroup);
-    
-    inspector_follow_cursor_check_ = new QCheckBox("Follow Cursor");
-    connect(inspector_follow_cursor_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    inspectorLayout->addRow(inspector_follow_cursor_check_);
-    
-    auto* opacityLayout = new QHBoxLayout();
-    inspector_opacity_slider_ = new QSlider(Qt::Horizontal);
-    inspector_opacity_slider_->setRange(20, 100);
-    connect(inspector_opacity_slider_, &QSlider::valueChanged, [this](int value) {
-        inspector_opacity_label_->setText(QString("%1%").arg(value));
-        onSettingChanged();
-    });
-    inspector_opacity_label_ = new QLabel("80%");
-    opacityLayout->addWidget(inspector_opacity_slider_);
-    opacityLayout->addWidget(inspector_opacity_label_);
-    inspectorLayout->addRow("Opacity:", opacityLayout);
-    
-    inspector_auto_hide_check_ = new QCheckBox("Auto-hide");
-    connect(inspector_auto_hide_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    inspectorLayout->addRow(inspector_auto_hide_check_);
-    
-    inspector_auto_hide_delay_spin_ = new QSpinBox();
-    inspector_auto_hide_delay_spin_->setRange(500, 10000);
-    inspector_auto_hide_delay_spin_->setSingleStep(500);
-    inspector_auto_hide_delay_spin_->setSuffix(" ms");
-    connect(inspector_auto_hide_delay_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
-            this, &SettingsDialog::onSettingChanged);
-    inspectorLayout->addRow("Auto-hide Delay:", inspector_auto_hide_delay_spin_);
-    
-    layout->addWidget(inspectorGroup);
     layout->addStretch();
     
     scroll->setWidget(content);
@@ -298,7 +255,7 @@ void SettingsDialog::loadSettings() {
     
     // Map model enum to combo index
     switch (config.api.model) {
-        case api::Model::Opus4:
+        case api::Model::Opus41:
             model_combo_->setCurrentIndex(0);
             break;
         case api::Model::Sonnet4:
@@ -325,15 +282,12 @@ void SettingsDialog::loadSettings() {
     // UI settings
     log_buffer_spin_->setValue(config.ui.log_buffer_size);
     auto_scroll_check_->setChecked(config.ui.auto_scroll);
-    theme_combo_->setCurrentIndex(config.ui.theme);
+    theme_combo_->setCurrentText(QString::fromStdString(config.ui.theme_name));
     font_size_spin_->setValue(config.ui.font_size);
     show_timestamps_check_->setChecked(config.ui.show_timestamps);
     show_tool_details_check_->setChecked(config.ui.show_tool_details);
     
     // Window management
-    show_tray_icon_check_->setChecked(config.ui.show_tray_icon);
-    minimize_to_tray_check_->setChecked(config.ui.minimize_to_tray);
-    close_to_tray_check_->setChecked(config.ui.close_to_tray);
     start_minimized_check_->setChecked(config.ui.start_minimized);
     remember_window_state_check_->setChecked(config.ui.remember_window_state);
     
@@ -341,14 +295,6 @@ void SettingsDialog::loadSettings() {
     auto_save_conversations_check_->setChecked(config.ui.auto_save_conversations);
     auto_save_interval_spin_->setValue(config.ui.auto_save_interval);
     density_mode_combo_->setCurrentIndex(config.ui.density_mode);
-    
-    // Inspector
-    inspector_follow_cursor_check_->setChecked(config.ui.inspector_follow_cursor);
-    inspector_opacity_slider_->setValue(config.ui.inspector_opacity);
-    inspector_opacity_label_->setText(QString("%1%").arg(config.ui.inspector_opacity));
-    inspector_auto_hide_check_->setChecked(config.ui.inspector_auto_hide);
-    inspector_auto_hide_delay_spin_->setValue(config.ui.inspector_auto_hide_delay);
-    
 }
 
 void SettingsDialog::applySettings() {
@@ -361,7 +307,7 @@ void SettingsDialog::applySettings() {
     // Map combo index to model enum
     switch (model_combo_->currentIndex()) {
         case 0:
-            config.api.model = api::Model::Opus4;
+            config.api.model = api::Model::Opus41;
             break;
         case 1:
             config.api.model = api::Model::Sonnet4;
@@ -387,15 +333,12 @@ void SettingsDialog::applySettings() {
     // UI settings
     config.ui.log_buffer_size = log_buffer_spin_->value();
     config.ui.auto_scroll = auto_scroll_check_->isChecked();
-    config.ui.theme = theme_combo_->currentIndex();
+    config.ui.theme_name = theme_combo_->currentText().toStdString();
     config.ui.font_size = font_size_spin_->value();
     config.ui.show_timestamps = show_timestamps_check_->isChecked();
     config.ui.show_tool_details = show_tool_details_check_->isChecked();
     
     // Window management
-    config.ui.show_tray_icon = show_tray_icon_check_->isChecked();
-    config.ui.minimize_to_tray = minimize_to_tray_check_->isChecked();
-    config.ui.close_to_tray = close_to_tray_check_->isChecked();
     config.ui.start_minimized = start_minimized_check_->isChecked();
     config.ui.remember_window_state = remember_window_state_check_->isChecked();
     
@@ -403,13 +346,6 @@ void SettingsDialog::applySettings() {
     config.ui.auto_save_conversations = auto_save_conversations_check_->isChecked();
     config.ui.auto_save_interval = auto_save_interval_spin_->value();
     config.ui.density_mode = density_mode_combo_->currentIndex();
-    
-    // Inspector
-    config.ui.inspector_follow_cursor = inspector_follow_cursor_check_->isChecked();
-    config.ui.inspector_opacity = inspector_opacity_slider_->value();
-    config.ui.inspector_auto_hide = inspector_auto_hide_check_->isChecked();
-    config.ui.inspector_auto_hide_delay = inspector_auto_hide_delay_spin_->value();
-    
     
     // Apply and save
     SettingsManager::instance().applyUISettings();
@@ -495,8 +431,8 @@ void SettingsDialog::onResetDefaults() {
                                    QMessageBox::Yes | QMessageBox::No);
     
     if (ret == QMessageBox::Yes) {
-        Config default_config;
-        SettingsManager::instance().config() = default_config;
+        // Reset settings to defaults
+        SettingsManager::instance().config().reset();
         loadSettings();
         has_changes_ = true;
         apply_button_->setEnabled(true);

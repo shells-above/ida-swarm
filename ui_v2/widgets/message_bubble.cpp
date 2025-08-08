@@ -46,7 +46,6 @@ void MessageBubble::setupUI() {
     // Add to layout
     if (headerWidget_) mainLayout->addWidget(headerWidget_);
     if (contentWidget_) mainLayout->addWidget(contentWidget_);
-    if (toolWidget_) mainLayout->addWidget(toolWidget_);
     if (analysisWidget_) mainLayout->addWidget(analysisWidget_);
     if (attachmentsWidget_) mainLayout->addWidget(attachmentsWidget_);
     if (footerWidget_) mainLayout->addWidget(footerWidget_);
@@ -138,60 +137,6 @@ void MessageBubble::createFooter() {
     footerWidget_->setVisible(false);
 }
 
-void MessageBubble::createToolExecutionWidget() {
-    if (!toolWidget_) {
-        toolWidget_ = new QWidget(this);
-        auto* layout = new QVBoxLayout(toolWidget_);
-        layout->setSpacing(Design::SPACING_SM);
-        layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, 0);
-        
-        // Tool header
-        auto* headerLayout = new QHBoxLayout();
-        
-        toolNameLabel_ = new QLabel(this);
-        toolNameLabel_->setFont(ThemeManager::instance().typography().body);
-        headerLayout->addWidget(toolNameLabel_);
-        
-        headerLayout->addStretch();
-        
-        toolStatusLabel_ = new QLabel(this);
-        toolStatusLabel_->setFont(ThemeManager::instance().typography().caption);
-        headerLayout->addWidget(toolStatusLabel_);
-        
-        toolOutputToggle_ = new QToolButton(this);
-        toolOutputToggle_->setIcon(ThemeManager::instance().themedIcon("expand"));
-        toolOutputToggle_->setCheckable(true);
-        toolOutputToggle_->setAutoRaise(true);
-        connect(toolOutputToggle_, &QToolButton::toggled, [this](bool checked) {
-            setToolOutputVisible(checked);
-        });
-        headerLayout->addWidget(toolOutputToggle_);
-        
-        layout->addLayout(headerLayout);
-        
-        // Progress bar
-        toolProgress_ = new QProgressBar(this);
-        toolProgress_->setTextVisible(false);
-        toolProgress_->setMaximumHeight(4);
-        layout->addWidget(toolProgress_);
-        
-        // Output area
-        toolOutputEdit_ = new QTextEdit(this);
-        toolOutputEdit_->setReadOnly(true);
-        toolOutputEdit_->setFont(ThemeManager::instance().typography().code);
-        toolOutputEdit_->setMaximumHeight(200);
-        toolOutputEdit_->setVisible(false);
-        layout->addWidget(toolOutputEdit_);
-        
-        // Insert after content
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
-            int index = mainLayout->indexOf(contentWidget_) + 1;
-            mainLayout->insertWidget(index, toolWidget_);
-        }
-    }
-    
-    toolWidget_->setVisible(message_ && message_->hasToolExecution());
-}
 
 void MessageBubble::createAnalysisWidget() {
     if (!analysisWidget_) {
@@ -202,9 +147,9 @@ void MessageBubble::createAnalysisWidget() {
         
         // Analysis entries will be created dynamically
         
-        // Insert after tool widget or content
+        // Insert after content
         if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
-            int index = mainLayout->indexOf(toolWidget_ ? toolWidget_ : contentWidget_) + 1;
+            int index = mainLayout->indexOf(contentWidget_) + 1;
             mainLayout->insertWidget(index, analysisWidget_);
         }
     }
@@ -279,7 +224,7 @@ void MessageBubble::updateMessage() {
         // Convert QDateTime to std::chrono::system_clock::time_point
         auto timestamp = std::chrono::system_clock::from_time_t(
             message_->metadata().timestamp.toSecsSinceEpoch());
-        timestampLabel_->setText(UIUtils::formatRelativeTime(timestamp));
+        timestampLabel_->setText(UIUtils::formatTimestamp(timestamp));
         timestampLabel_->setVisible(showTimestamp_);
     }
     
@@ -302,12 +247,6 @@ void MessageBubble::updateMessage() {
     
     // Update content
     updateContentDisplay();
-    
-    // Update tool execution
-    if (message_->hasToolExecution()) {
-        createToolExecutionWidget();
-        updateToolExecutionDisplay();
-    }
     
     // Update analysis
     if (message_->hasAnalysis()) {
@@ -348,8 +287,11 @@ void MessageBubble::updateContentDisplay() {
         }
         
         // Format thinking content in italics with darker color
-        content = QString("*<span style='color: #888888;'>Thinking:</span>*\n\n");
-        content += QString("*<span style='color: #888888;'>%1</span>*\n\n").arg(thinking.replace("\n", "\n> "));
+        // Use theme secondary text color for thinking content
+        const auto& colors = ThemeManager::instance().colors();
+        QString secondaryColorHex = colors.textSecondary.name();
+        content = QString("*<span style='color: %1;'>Thinking:</span>*\n\n").arg(secondaryColorHex);
+        content += QString("*<span style='color: %1;'>%2</span>*\n\n").arg(secondaryColorHex).arg(thinking.replace("\n", "\n> "));
     }
     
     // Add regular content
@@ -381,66 +323,6 @@ void MessageBubble::updateContentDisplay() {
     }
 }
 
-void MessageBubble::updateToolExecutionDisplay() {
-    if (!message_ || !message_->hasToolExecution() || !toolWidget_) return;
-    
-    const ToolExecution* exec = message_->toolExecution();
-    
-    toolNameLabel_->setText(exec->toolName);
-    
-    // Update status
-    QString statusText;
-    QColor statusColor;
-    const auto& colors = ThemeManager::instance().colors();
-    
-    switch (exec->state) {
-        case ToolExecutionState::Pending:
-            statusText = tr("Pending");
-            statusColor = colors.textTertiary;
-            break;
-        case ToolExecutionState::Running:
-            statusText = tr("Running...");
-            statusColor = colors.info;
-            toolProgress_->setVisible(true);
-            break;
-        case ToolExecutionState::Completed:
-            statusText = tr("Completed");
-            statusColor = colors.success;
-            toolProgress_->setVisible(false);
-            break;
-        case ToolExecutionState::Failed:
-            statusText = tr("Failed");
-            statusColor = colors.error;
-            toolProgress_->setVisible(false);
-            break;
-        case ToolExecutionState::Cancelled:
-            statusText = tr("Cancelled");
-            statusColor = colors.warning;
-            toolProgress_->setVisible(false);
-            break;
-    }
-    
-    toolStatusLabel_->setText(statusText);
-    toolStatusLabel_->setStyleSheet(QString("color: %1;").arg(statusColor.name()));
-    
-    // Update progress
-    if (exec->state == ToolExecutionState::Running) {
-        toolProgress_->setValue(exec->progress);
-        if (!exec->progressMessage.isEmpty()) {
-            toolProgress_->setToolTip(exec->progressMessage);
-        }
-    }
-    
-    // Update output
-    QString output = exec->output;
-    if (!exec->errorMessage.isEmpty()) {
-        output += "\n\nError:\n" + exec->errorMessage;
-    }
-    toolOutputEdit_->setPlainText(output);
-    
-    // Show output toggle only if there's output
-    toolOutputToggle_->setVisible(!output.isEmpty());
-}
 
 void MessageBubble::updateAnalysisDisplay() {
     if (!message_ || !message_->hasAnalysis() || !analysisWidget_) return;
@@ -745,38 +627,6 @@ void MessageBubble::setExpanded(bool expanded, bool animated) {
     emit expansionChanged(expanded);
 }
 
-void MessageBubble::updateToolExecution() {
-    if (message_ && message_->hasToolExecution()) {
-        createToolExecutionWidget();
-        updateToolExecutionDisplay();
-        
-        // Connect to progress updates if running
-        if (message_->toolExecution()->state == ToolExecutionState::Running) {
-            // Start a timer to simulate progress updates
-            // In real implementation, this would be connected to actual tool execution
-            auto* timer = new QTimer(this);
-            timer->setInterval(100);
-            connect(timer, &QTimer::timeout, this, &MessageBubble::onToolProgressChanged);
-            timer->start();
-        }
-    }
-}
-
-void MessageBubble::setToolOutputVisible(bool visible) {
-    if (toolOutputVisible_ != visible) {
-        toolOutputVisible_ = visible;
-        if (toolOutputEdit_) {
-            toolOutputEdit_->setVisible(visible);
-        }
-        if (toolOutputToggle_) {
-            toolOutputToggle_->setIcon(ThemeManager::instance().themedIcon(
-                visible ? "collapse" : "expand"));
-        }
-        updateLayout();
-        emit toolOutputToggled();
-    }
-}
-
 void MessageBubble::setSearchHighlight(const QString& text) {
     if (searchHighlight_ != text) {
         searchHighlight_ = text;
@@ -799,7 +649,6 @@ void MessageBubble::setExpandProgress(qreal progress) {
     
     // Update visibility of collapsible elements
     bool showFull = progress > 0.5;
-    if (toolWidget_) toolWidget_->setVisible(showFull && message_->hasToolExecution());
     if (analysisWidget_) analysisWidget_->setVisible(showFull && message_->hasAnalysis());
     if (attachmentsWidget_) attachmentsWidget_->setVisible(showFull && message_->hasAttachments());
     
@@ -973,18 +822,6 @@ void MessageBubble::onAnimationFinished() {
     emit animationFinished();
 }
 
-void MessageBubble::onToolProgressChanged() {
-    // Simulate progress update
-    // In real implementation, this would be connected to actual tool execution
-    if (message_ && message_->hasToolExecution() && toolProgress_) {
-        int value = toolProgress_->value() + 5;
-        if (value >= 100) {
-            value = 100;
-            sender()->deleteLater(); // Stop the timer
-        }
-        toolProgress_->setValue(value);
-    }
-}
 
 void MessageBubble::updateLayout() {
     // Force layout update
@@ -1426,8 +1263,13 @@ void MessageBubbleContainer::resizeEvent(QResizeEvent* event) {
 }
 
 void MessageBubbleContainer::paintEvent(QPaintEvent* event) {
-    // Could implement custom background here
-    QWidget::paintEvent(event);
+    // CRITICAL: Do NOT call QWidget::paintEvent as it uses the application style
+    // Paint our own background with theme colors
+    QPainter painter(this);
+    const auto& colors = ThemeManager::instance().colors();
+    painter.fillRect(rect(), colors.background);
+    
+    // QWidget::paintEvent(event);  // REMOVED - was causing theme inheritance
 }
 
 bool MessageBubbleContainer::eventFilter(QObject* watched, QEvent* event) {

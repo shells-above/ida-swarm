@@ -1,5 +1,7 @@
 #include "../../core/ui_v2_common.h"
 #include "heatmap_widget.h"
+#include "../../core/ui_utils.h"
+#include "../../core/color_constants.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -21,8 +23,12 @@ HeatmapWidget::HeatmapWidget(QWidget* parent)
     setAcceptDrops(false);
     setFocusPolicy(Qt::StrongFocus);
     
-    // Initialize text color from theme
-    textColor_ = ThemeManager::instance().colors().textPrimary;
+    // Initialize colors from theme
+    const auto& colors = ThemeManager::instance().colors();
+    textColor_ = colors.textPrimary;
+    gridColor_ = colors.border.darker(150);  // Slightly darker than border
+    selectionColor_ = colors.selection;
+    highlightColor_ = colors.primary;
 }
 
 HeatmapWidget::~HeatmapWidget() = default;
@@ -475,8 +481,7 @@ void HeatmapWidget::drawCellValue(QPainter* painter, const QRectF& rect, double 
     
     // Choose text color based on cell brightness
     QColor cellColor = valueToColor(value);
-    int brightness = (cellColor.red() * 299 + cellColor.green() * 587 + cellColor.blue() * 114) / 1000;
-    painter->setPen(brightness > 128 ? Qt::black : Qt::white);
+    painter->setPen(UIUtils::contrastColor(cellColor));
     
     painter->drawText(rect, Qt::AlignCenter, text);
 }
@@ -712,7 +717,7 @@ QColor HeatmapWidget::interpolateColor(double value, double min, double max) con
     normalized = std::max(0.0, std::min(1.0, normalized));
     
     int numColors = colorScale_.size();
-    if (numColors == 0) return Qt::gray;
+    if (numColors == 0) return ThemeManager::instance().colors().surface;
     if (numColors == 1) return colorScale_[0];
     
     double scaledValue = normalized * (numColors - 1);
@@ -800,7 +805,22 @@ std::vector<QColor> HeatmapWidget::generateColorScale() const {
                 colors = std::vector<QColor>(theme_.customColors.begin(), 
                                            theme_.customColors.end());
             } else {
-                colors = {Qt::blue, Qt::cyan, Qt::green, Qt::yellow, Qt::red};
+                // Use theme chart colors as fallback
+                auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+                bool isDark = (currentInfo.name == "dark" || currentInfo.metadata.baseTheme == "dark");
+                const auto& chartColors = isDark ?
+                    ThemeManager::instance().colors().chartSeriesColorsDark :
+                    ThemeManager::instance().colors().chartSeriesColorsLight;
+                if (chartColors.size() >= 5) {
+                    colors = {chartColors[0], chartColors[1], chartColors[2], 
+                             chartColors[3], chartColors[4]};
+                } else {
+                    // Ultimate fallback using theme semantic colors
+                    const auto& themeColors = ThemeManager::instance().colors();
+                    colors = {themeColors.info, themeColors.primary, 
+                             themeColors.success, themeColors.warning, 
+                             themeColors.error};
+                }
             }
             break;
             
@@ -969,9 +989,9 @@ QString HeatmapWidget::formatAddress(quint64 address) const {
 QColor HeatmapWidget::getMemoryColor(double value, quint64 address) const {
     if (memoryMode_) {
         // Color based on byte value patterns
-        if (value == 0) return QColor(50, 50, 50);      // Null bytes
-        if (value == 0xFF) return QColor(255, 100, 100); // Full bytes
-        if (value >= 0x20 && value <= 0x7E) return QColor(100, 255, 100); // ASCII
+        if (value == 0) return ThemeManager::instance().colors().memoryNullByte;      // Null bytes
+        if (value == 0xFF) return ThemeManager::instance().colors().memoryFullByte; // Full bytes
+        if (value >= 0x20 && value <= 0x7E) return ThemeManager::instance().colors().memoryAsciiByte; // ASCII
         
         // Default to normal color scale
     }

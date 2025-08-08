@@ -16,6 +16,9 @@
 #include <name.hpp>
 #include <funcs.hpp>
 #include <hexrays.hpp>
+#include <ua.hpp>
+#include <allins.hpp>
+#include <segregs.hpp>
 #include <lines.hpp>
 #include <segment.hpp>
 #include <search.hpp>
@@ -44,18 +47,23 @@
 #include <ctime>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <atomic>
 #include <condition_variable>
 #include <utility>
 #include <algorithm>
+#include <deque>
+#include <numeric>
+#include <unordered_set>
 #include <cctype>
 #include <regex>
-#include <curl/curl.h>
 #include <chrono>
 #include <cmath>
 #include <optional>
 #include <unordered_map>
+#include <curl/curl.h>
+#include <keystone/keystone.h>
 
 #define fopen dont_use_fopen
 #define fclose dont_use_fclose

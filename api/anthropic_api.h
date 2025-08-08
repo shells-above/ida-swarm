@@ -17,7 +17,7 @@ namespace llm_re::api {
 
 // Model selection
 enum class Model {
-    Opus4,
+    Opus41,
     Sonnet4,
     Sonnet37,
     Haiku35
@@ -25,7 +25,7 @@ enum class Model {
 
 inline std::string model_to_string(Model model) {
     switch (model) {
-        case Model::Opus4: return "claude-opus-4-20250514";
+        case Model::Opus41: return "claude-opus-4-1-20250805";
         case Model::Sonnet4: return "claude-sonnet-4-20250514";
         case Model::Sonnet37: return "claude-3-7-sonnet-latest";
         case Model::Haiku35: return "claude-3-5-haiku-latest";
@@ -34,14 +34,13 @@ inline std::string model_to_string(Model model) {
 }
 
 inline Model model_from_string(const std::string& s) {
-    if (s.starts_with("claude-opus-4-")) return Model::Opus4;
+    if (s.starts_with("claude-opus-4-1-")) return Model::Opus41;
     if (s.starts_with("claude-sonnet-4-")) return Model::Sonnet4;
     if (s.starts_with("claude-3-7-sonnet-")) return Model::Sonnet37;
     if (s.starts_with("claude-3-5-haiku-")) return Model::Haiku35;
     throw std::runtime_error("Unknown model: " + s);
 }
 
-// Stop reason enum
 enum class StopReason {
     EndTurn,
     MaxTokens,
@@ -107,7 +106,7 @@ struct TokenUsage {
         double price_input, price_output, price_cache_write, price_cache_read;
 
         switch (model) {
-            case Model::Opus4:
+            case Model::Opus41:
                 price_input = 15.0;
                 price_output = 75.0;
                 price_cache_write = 18.75;

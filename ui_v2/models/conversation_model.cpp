@@ -22,11 +22,6 @@ void Message::setContent(const QString& content) {
     metadata_.editedAt = QDateTime::currentDateTime();
 }
 
-void Message::setToolExecution(std::unique_ptr<ToolExecution> execution) {
-    toolExecution_ = std::move(execution);
-    type_ = MessageType::ToolExecution;
-}
-
 void Message::addAnalysisEntry(const AnalysisEntry& entry) {
     analysisEntries_.push_back(entry);
     if (type_ == MessageType::Text) {
@@ -98,23 +93,6 @@ QJsonObject Message::toJson() const {
     meta["lineNumber"] = metadata_.lineNumber;
     obj["metadata"] = meta;
     
-    // Tool execution
-    if (toolExecution_) {
-        QJsonObject tool;
-        tool["toolName"] = toolExecution_->toolName;
-        tool["toolId"] = toolExecution_->toolId;
-        tool["parameters"] = toolExecution_->parameters;
-        tool["state"] = static_cast<int>(toolExecution_->state);
-        tool["output"] = toolExecution_->output;
-        tool["error"] = toolExecution_->errorMessage;
-        tool["startTime"] = toolExecution_->startTime.toString(Qt::ISODate);
-        tool["endTime"] = toolExecution_->endTime.toString(Qt::ISODate);
-        tool["exitCode"] = toolExecution_->exitCode;
-        tool["duration"] = toolExecution_->duration;
-        tool["affectedFiles"] = QJsonArray::fromStringList(toolExecution_->affectedFiles);
-        obj["toolExecution"] = tool;
-    }
-    
     // Analysis entries
     if (!analysisEntries_.empty()) {
         QJsonArray analyses;
@@ -150,6 +128,10 @@ QJsonObject Message::toJson() const {
         obj["attachments"] = atts;
     }
     
+    // Thinking content
+    if (!thinkingContent_.isEmpty()) {
+        obj["thinkingContent"] = thinkingContent_;
+    }
     
     return obj;
 }
@@ -179,27 +161,6 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         msg->metadata_.language = meta["language"].toString();
         msg->metadata_.fileName = meta["fileName"].toString();
         msg->metadata_.lineNumber = meta["lineNumber"].toInt();
-    }
-    
-    // Tool execution
-    if (json.contains("toolExecution")) {
-        QJsonObject tool = json["toolExecution"].toObject();
-        auto exec = std::make_unique<ToolExecution>();
-        exec->toolName = tool["toolName"].toString();
-        exec->toolId = tool["toolId"].toString();
-        exec->parameters = tool["parameters"].toObject();
-        exec->state = static_cast<ToolExecutionState>(tool["state"].toInt());
-        exec->output = tool["output"].toString();
-        exec->errorMessage = tool["error"].toString();
-        exec->startTime = QDateTime::fromString(tool["startTime"].toString(), Qt::ISODate);
-        exec->endTime = QDateTime::fromString(tool["endTime"].toString(), Qt::ISODate);
-        exec->exitCode = tool["exitCode"].toInt();
-        exec->duration = tool["duration"].toVariant().toLongLong();
-        exec->affectedFiles.clear();
-        for (const auto& val : tool["affectedFiles"].toArray()) {
-            exec->affectedFiles.append(val.toString());
-        }
-        msg->toolExecution_ = std::move(exec);
     }
     
     // Analysis entries
@@ -243,6 +204,11 @@ std::unique_ptr<Message> Message::fromJson(const QJsonObject& json) {
         }
     }
     
+    // Thinking content
+    if (json.contains("thinkingContent")) {
+        msg->thinkingContent_ = json["thinkingContent"].toString();
+    }
+    
     
     return msg;
 }
@@ -271,7 +237,6 @@ QString Message::typeString() const {
         case MessageType::Text: return "Text";
         case MessageType::Code: return "Code";
         case MessageType::Analysis: return "Analysis";
-        case MessageType::ToolExecution: return "Tool Execution";
         case MessageType::Error: return "Error";
         case MessageType::Info: return "Info";
         case MessageType::Warning: return "Warning";
@@ -371,14 +336,7 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
             } else if (index.column() == TimestampColumn) {
                 return msg->metadata().timestamp.toString("hh:mm:ss");
             } else if (index.column() == StatusColumn) {
-                if (msg->hasToolExecution()) {
-                    switch (msg->toolExecution()->state) {
-                        case ToolExecutionState::Running: return "Running...";
-                        case ToolExecutionState::Completed: return "Completed";
-                        case ToolExecutionState::Failed: return "Failed";
-                        default: return "";
-                    }
-                }
+                return "";
             }
             break;
             
@@ -399,9 +357,6 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
             
         case MessageObjectRole:
             return QVariant::fromValue(const_cast<Message*>(msg));
-            
-        case ToolExecutionRole:
-            return QVariant::fromValue(msg->toolExecution());
             
         case AnalysisRole:
             return QVariant::fromValue(&msg->analysisEntries());
@@ -427,9 +382,6 @@ QVariant ConversationModel::data(const QModelIndex& index, int role) const {
             
             
         case ProgressRole:
-            if (msg->hasToolExecution()) {
-                return msg->toolExecution()->progress;
-            }
             break;
     }
     
@@ -590,7 +542,6 @@ void ConversationModel::clearMessages() {
     nodes_.clear();
     nodeMap_.clear();
     visibleNodes_.clear();
-    // roots_.clear(); // TODO: roots_ not defined
     searchMatches_.clear();
     
     endResetModel();
@@ -651,56 +602,6 @@ void ConversationModel::removeMessages(const QSet<QUuid>& ids) {
     
     endBatchUpdate();
 }
-
-void ConversationModel::updateToolExecution(const QUuid& messageId,
-                                          const std::function<void(ToolExecution*)>& updater) {
-    Message* msg = getMessage(messageId);
-    if (!msg || !msg->toolExecution()) return;
-    
-    updater(msg->toolExecution());
-    emitDataChangedForMessage(messageId);
-    
-    if (msg->toolExecution()->state == ToolExecutionState::Running) {
-        emit toolExecutionStarted(messageId);
-    } else if (msg->toolExecution()->state == ToolExecutionState::Completed ||
-               msg->toolExecution()->state == ToolExecutionState::Failed) {
-        emit toolExecutionCompleted(messageId, 
-                                  msg->toolExecution()->state == ToolExecutionState::Completed);
-    }
-    
-    statsCacheDirty_ = true;
-}
-
-void ConversationModel::setToolExecutionState(const QUuid& messageId, ToolExecutionState state) {
-    updateToolExecution(messageId, [state](ToolExecution* exec) {
-        exec->state = state;
-        if (state == ToolExecutionState::Running) {
-            exec->startTime = QDateTime::currentDateTime();
-        } else if (state == ToolExecutionState::Completed || state == ToolExecutionState::Failed) {
-            exec->endTime = QDateTime::currentDateTime();
-            exec->duration = exec->startTime.msecsTo(exec->endTime);
-        }
-    });
-}
-
-void ConversationModel::setToolExecutionProgress(const QUuid& messageId, int value, const QString& text) {
-    updateToolExecution(messageId, [value, text](ToolExecution* exec) {
-        exec->progress = value;
-        if (!text.isEmpty()) {
-            exec->progressMessage = text;
-        }
-    });
-    emit toolExecutionProgress(messageId, value);
-}
-
-void ConversationModel::addToolExecutionOutput(const QUuid& messageId, const QString& output) {
-    updateToolExecution(messageId, [output](ToolExecution* exec) {
-        exec->output += output;
-    });
-}
-
-
-
 
 
 
@@ -851,21 +752,6 @@ ConversationModel::ConversationStats ConversationModel::getStatistics() const {
                 break;
         }
         
-        // Tool executions
-        if (msg->hasToolExecution()) {
-            stats.toolExecutions++;
-            const ToolExecution* exec = msg->toolExecution();
-            
-            if (exec->state == ToolExecutionState::Completed) {
-                stats.successfulTools++;
-            } else if (exec->state == ToolExecutionState::Failed) {
-                stats.failedTools++;
-            }
-            
-            stats.toolUsageCount[exec->toolName]++;
-            stats.totalToolDuration += exec->duration;
-        }
-        
         // Analysis entries
         if (msg->hasAnalysis()) {
             stats.totalAnalyses += msg->analysisEntries().size();
@@ -907,25 +793,6 @@ void ConversationModel::endBatchUpdate() {
     }
 }
 
-bool ConversationModel::canUndo() const {
-    return undoStack_ && undoStack_->canUndo();
-}
-
-bool ConversationModel::canRedo() const {
-    return undoStack_ && undoStack_->canRedo();
-}
-
-void ConversationModel::undo() {
-    if (undoStack_) {
-        undoStack_->undo();
-    }
-}
-
-void ConversationModel::redo() {
-    if (undoStack_) {
-        undoStack_->redo();
-    }
-}
 
 
 
@@ -1052,12 +919,6 @@ void ConversationDelegate::paint(QPainter* painter, const QStyleOptionViewItem& 
     // Draw message bubble
     drawMessageBubble(painter, option, msg, option.state & QStyle::State_Selected);
     
-    // Draw tool execution if present
-    if (msg->hasToolExecution()) {
-        QRect toolRect = bubbleRect.adjusted(0, bubbleRect.height() + Design::SPACING_SM, 0, 0);
-        drawToolExecution(painter, toolRect, msg->toolExecution());
-    }
-    
     // Draw analysis entries if present
     if (msg->hasAnalysis()) {
         QRect analysisRect = bubbleRect.adjusted(0, bubbleRect.height() + Design::SPACING_SM, 0, 0);
@@ -1094,11 +955,6 @@ QSize ConversationDelegate::sizeHint(const QStyleOptionViewItem& option,
         height += option.fontMetrics.height() + Design::SPACING_XS;
     }
     
-    // Add space for tool execution
-    if (msg->hasToolExecution()) {
-        height += 100; // Approximate height for tool execution display
-    }
-    
     // Add space for analysis entries
     if (msg->hasAnalysis()) {
         height += msg->analysisEntries().size() * 60; // Approximate height per entry
@@ -1132,7 +988,6 @@ bool ConversationDelegate::editorEvent(QEvent* event, QAbstractItemModel* model,
         const Message* msg = index.data(ConversationModel::MessageObjectRole).value<Message*>();
         if (!msg) return false;
         
-        QRect hitRect = hitTest(mouseEvent->pos(), option, index);
         QString hitArea = "";
         
         // Check what was clicked
@@ -1246,106 +1101,6 @@ void ConversationDelegate::drawMessageBubble(QPainter* painter, const QStyleOpti
     }
 }
 
-void ConversationDelegate::drawToolExecution(QPainter* painter, const QRect& rect,
-                                           const ToolExecution* execution) const {
-    const auto& theme = ThemeManager::instance();
-    const auto& colors = theme.colors();
-    
-    // Draw tool execution card
-    QRect cardRect = rect.adjusted(0, 0, 0, 80);
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(colors.surface);
-    painter->drawRoundedRect(cardRect, Design::RADIUS_SM, Design::RADIUS_SM);
-    
-    // Draw border
-    painter->setPen(QPen(colors.border, 1));
-    painter->setBrush(Qt::NoBrush);
-    painter->drawRoundedRect(cardRect, Design::RADIUS_SM, Design::RADIUS_SM);
-    
-    // Draw tool name and status
-    QRect headerRect = cardRect.adjusted(Design::SPACING_SM, Design::SPACING_SM,
-                                       -Design::SPACING_SM, 0);
-    headerRect.setHeight(20);
-    
-    painter->setPen(colors.textPrimary);
-    painter->setFont(theme.typography().bodySmall);
-    painter->drawText(headerRect, Qt::AlignLeft, execution->toolName);
-    
-    // Draw status
-    QColor statusColor;
-    QString statusText;
-    switch (execution->state) {
-        case ToolExecutionState::Pending:
-            statusColor = colors.textTertiary;
-            statusText = "Pending";
-            break;
-        case ToolExecutionState::Running:
-            statusColor = colors.info;
-            statusText = "Running...";
-            break;
-        case ToolExecutionState::Completed:
-            statusColor = colors.success;
-            statusText = "Completed";
-            break;
-        case ToolExecutionState::Failed:
-            statusColor = colors.error;
-            statusText = "Failed";
-            break;
-        case ToolExecutionState::Cancelled:
-            statusColor = colors.warning;
-            statusText = "Cancelled";
-            break;
-    }
-    
-    painter->setPen(statusColor);
-    painter->drawText(headerRect, Qt::AlignRight, statusText);
-    
-    // Draw progress bar if running
-    if (execution->state == ToolExecutionState::Running) {
-        QRect progressRect = cardRect.adjusted(
-            Design::SPACING_SM, headerRect.bottom() + Design::SPACING_XS,
-            -Design::SPACING_SM, 0
-        );
-        progressRect.setHeight(4);
-        
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(colors.border);
-        painter->drawRoundedRect(progressRect, 2, 2);
-        
-        int progress = execution->progress;
-        if (progress > 0) {
-            QRect fillRect = progressRect;
-            fillRect.setWidth(progressRect.width() * progress / 100);
-            painter->setBrush(colors.primary);
-            painter->drawRoundedRect(fillRect, 2, 2);
-        }
-        
-        // Draw progress text
-        if (!execution->progressMessage.isEmpty()) {
-            QRect textRect = progressRect.adjusted(0, 6, 0, 20);
-            painter->setPen(colors.textSecondary);
-            painter->setFont(theme.typography().caption);
-            painter->drawText(textRect, Qt::AlignLeft, execution->progressMessage);
-        }
-    }
-    
-    // Draw duration
-    if (execution->duration > 0) {
-        QString durationStr = UIUtils::formatDuration(
-            std::chrono::milliseconds(execution->duration));
-        QRect durationRect = cardRect.adjusted(
-            Design::SPACING_SM, 0,
-            -Design::SPACING_SM, -Design::SPACING_SM
-        );
-        
-        painter->setPen(colors.textTertiary);
-        painter->setFont(theme.typography().caption);
-        painter->drawText(durationRect, Qt::AlignLeft | Qt::AlignBottom, durationStr);
-    }
-    
-    // Store hit area for output toggle
-    hitAreas_[execution->toolId]["toolOutput"] = cardRect;
-}
 
 void ConversationDelegate::drawAnalysisEntries(QPainter* painter, const QRect& rect,
                                              const std::vector<AnalysisEntry>& entries) const {
@@ -1459,8 +1214,26 @@ void ConversationDelegate::drawAttachments(QPainter* painter, const QRect& rect,
 
 QRect ConversationDelegate::hitTest(const QPoint& pos, const QStyleOptionViewItem& option,
                                   const QModelIndex& index) const {
-    // This would implement precise hit testing for interactive elements
-    // For now, return the full rect
+    const Message* msg = index.data(ConversationModel::MessageObjectRole).value<Message*>();
+    if (!msg) return option.rect;
+    
+    // Check all hit areas for this message
+    auto hitAreas = hitAreas_[msg->id()];
+    for (auto it = hitAreas.begin(); it != hitAreas.end(); ++it) {
+        if (it.value().contains(pos)) {
+            return it.value();
+        }
+    }
+    
+    // Check if we're in the message bubble area
+    if (bubbleRects_.contains(msg->id())) {
+        QRect bubbleRect = bubbleRects_[msg->id()];
+        if (bubbleRect.contains(pos)) {
+            return bubbleRect;
+        }
+    }
+    
+    // Default to the full option rect
     return option.rect;
 }
 

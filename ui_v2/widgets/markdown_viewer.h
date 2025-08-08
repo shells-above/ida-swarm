@@ -145,6 +145,8 @@ private:
     QString currentSearchText_;
     QList<QTextCursor> searchMatches_;
     int currentSearchIndex_ = -1;
+    bool searchCaseSensitive_ = false;
+    bool searchWholeWords_ = false;
     
     // Options
     bool openExternalLinks_ = true;

@@ -27,9 +27,9 @@ namespace Design {
     constexpr int ANIM_NORMAL = 250;
     constexpr int ANIM_SLOW = 400;
 
-    // Font sizes
-    constexpr int FONT_SIZE_XS = 11;
-    constexpr int FONT_SIZE_SM = 12;
+    // Font sizes - increased for better readability
+    constexpr int FONT_SIZE_XS = 12;
+    constexpr int FONT_SIZE_SM = 13;
     constexpr int FONT_SIZE_MD = 14;
     constexpr int FONT_SIZE_LG = 16;
     constexpr int FONT_SIZE_XL = 20;
@@ -103,6 +103,55 @@ struct ColorPalette {
     QColor syntaxFunction;
     QColor syntaxVariable;
     QColor syntaxOperator;
+    
+    // Status colors
+    QColor statusPending;
+    QColor statusRunning;
+    QColor statusCompleted;
+    QColor statusFailed;
+    QColor statusInterrupted;
+    QColor statusUnknown;
+    
+    // Notification colors
+    QColor notificationSuccess;
+    QColor notificationWarning;
+    QColor notificationError;
+    QColor notificationInfo;
+    
+    // Node confidence colors
+    QColor confidenceHigh;
+    QColor confidenceMedium;
+    QColor confidenceLow;
+    
+    // Special purpose colors
+    QColor bookmark;
+    QColor searchHighlight;
+    QColor diffAdd;
+    QColor diffRemove;
+    QColor currentLineHighlight;
+    
+    // Chart colors
+    std::vector<QColor> chartSeriesColorsDark;
+    std::vector<QColor> chartSeriesColorsLight;
+    QColor chartGrid;
+    QColor chartAxis;
+    QColor chartLabel;
+    QColor chartTooltipBg;
+    QColor chartTooltipBorder;
+    
+    // Memory visualization colors
+    QColor memoryNullByte;
+    QColor memoryFullByte;
+    QColor memoryAsciiByte;
+    
+    // Glass morphism colors
+    QColor glassOverlay;
+    QColor glassBorder;
+    
+    // Shadow colors with different intensities
+    QColor shadowLight;
+    QColor shadowMedium;
+    QColor shadowDark;
 };
 
 // Typography definitions
@@ -167,10 +216,51 @@ struct ComponentStyles {
         int maxWidth = 600;
     };
     
+    // Charts
+    struct Chart {
+        // Line charts
+        float lineWidth = 2.5f;
+        float pointRadius = 4.0f;
+        float hoverPointRadius = 6.0f;
+        bool smoothCurves = true;
+        bool showDataPoints = true;
+        float areaOpacity = 0.2f;
+        
+        // Bar charts
+        float barSpacing = 0.2f;
+        float barCornerRadius = 4.0f;
+        bool showBarValues = true;
+        bool barGradient = true;
+        bool barShadow = true;
+        
+        // Pie/Circular charts
+        float innerRadiusRatio = 0.6f;
+        float segmentSpacing = 2.0f;
+        float hoverScale = 1.05f;
+        float hoverOffset = 10.0f;
+        
+        // Heatmaps
+        float cellSpacing = 1.0f;
+        float cellCornerRadius = 2.0f;
+        
+        // General
+        bool animateOnLoad = true;
+        bool animateOnUpdate = true;
+        int animationDuration = 800;
+        bool showTooltips = true;
+        bool showLegend = true;
+        bool glowEffects = true;
+        float glowRadius = 15.0f;
+    };
+    
     Button button;
     Input input;
     Card card;
     Message message;
+    Chart chart;
+    
+    // Global border radius setting
+    int borderRadius = 8;
 };
 
 // Z-index layers

@@ -1,6 +1,7 @@
 #include "../../core/ui_v2_common.h"
 #include "circular_chart.h"
 #include "../../core/theme_manager.h"
+#include "../../core/color_constants.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -547,7 +548,7 @@ void CircularChart::drawSegment(QPainter* painter, const QRectF& rect, double st
         
         QRadialGradient innerGradient(rect.center(), innerRadius_);
         innerGradient.setColorAt(0.8, Qt::transparent);
-        innerGradient.setColorAt(1.0, QColor(0, 0, 0, 50));
+        innerGradient.setColorAt(1.0, ThemeManager::instance().colors().shadowMedium);
         
         painter->setClipPath(path);
         painter->fillPath(innerPath, innerGradient);

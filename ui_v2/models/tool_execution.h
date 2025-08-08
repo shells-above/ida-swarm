@@ -18,7 +18,6 @@ struct ToolExecution {
     // Sub-task definition
     struct SubTask {
         QString name;
-        int progress = 0;
         bool completed = false;
     };
     
@@ -34,10 +33,8 @@ struct ToolExecution {
     QString errorMessage;        // Error message if failed
     int exitCode = 0;            // Exit code
     
-    // Status and progress
+    // Status
     ToolExecutionState state = ToolExecutionState::Pending;
-    int progress = 0;            // 0-100
-    QString progressMessage;     // Current status message
     
     // Timing
     QDateTime startTime;

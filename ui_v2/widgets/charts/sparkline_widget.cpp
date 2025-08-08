@@ -1,6 +1,7 @@
 #include "../../core/ui_v2_common.h"
 #include "sparkline_widget.h"
 #include "../../core/theme_manager.h"
+#include "../../core/color_constants.h"
 
 namespace llm_re::ui_v2::charts {
 
@@ -736,7 +737,7 @@ void SparklineWidget::drawLastValueLabel(QPainter* painter) {
     // Draw background for readability
     QRectF bgRect = textRect.translated(textPos - QPointF(0, textRect.height()));
     bgRect.adjust(-2, -1, 2, 1);
-    painter->fillRect(bgRect, QColor(255, 255, 255, 200));
+    painter->fillRect(bgRect, ThemeManager::instance().colors().chartTooltipBg);
     
     painter->setPen(lastVal >= 0 ? positiveColor_ : negativeColor_);
     painter->drawText(textPos, label);
@@ -956,7 +957,8 @@ void InlineSparkline::paintEvent(QPaintEvent* event) {
         labelFont.setPointSize(8);
         painter.setFont(labelFont);
         
-        painter.setPen(palette().text().color());
+        const auto& colors = ThemeManager::instance().colors();
+        painter.setPen(colors.textPrimary);
         painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, label_);
         
         if (!suffix_.isEmpty() && dataPointCount() > 0) {

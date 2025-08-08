@@ -7,7 +7,6 @@
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
-#include "../views/statistics_dock.h"
 #include "../views/console_dock.h"
 #include "../models/tool_execution.h"
 
@@ -174,11 +173,6 @@ void AgentController::connectToolDock(ToolExecutionDock* dock) {
     toolDock_ = dock;
 }
 
-void AgentController::connectStatsDock(StatisticsDock* dock) {
-    statsDock_ = dock;
-    updateStatistics();
-}
-
 void AgentController::connectConsoleDock(ConsoleDock* dock) {
     consoleDock_ = dock;
 }
@@ -337,20 +331,67 @@ void AgentController::handleApiMessage(const json& data) {
         consoleDock_->addLog(entry);
     }
     
-    if (type == "request" || type == "response") {
+    if (type == "REQUEST" || type == "RESPONSE") {
         currentIteration_ = iteration;
         emit iterationChanged(iteration);
         
-        if (type == "response" && content.contains("message")) {
-            // Convert API message to UI message
+        if (type == "RESPONSE" && content.contains("content")) {
+            // Convert API response to UI message
             try {
-                messages::Message apiMsg = messages::Message::from_json(content["message"]);
+                // Create an assistant message from the response
+                messages::Message apiMsg(messages::Role::Assistant);
+                
+                // Parse the content array
+                if (content["content"].is_array()) {
+                    for (const auto& item : content["content"]) {
+                        if (!item.contains("type")) continue;
+                        
+                        std::string contentType = item["type"];
+                        if (contentType == "text") {
+                            if (auto text = messages::TextContent::from_json(item)) {
+                                apiMsg.add_content(std::move(text));
+                            }
+                        } else if (contentType == "thinking") {
+                            if (auto thinking = messages::ThinkingContent::from_json(item)) {
+                                apiMsg.add_content(std::move(thinking));
+                            }
+                        } else if (contentType == "tool_use") {
+                            if (auto toolUse = messages::ToolUseContent::from_json(item)) {
+                                apiMsg.add_content(std::move(toolUse));
+                            }
+                        }
+                    }
+                }
+                
+                // Convert to UI message but only log to console, don't add to conversation
                 auto uiMsg = convertApiMessage(apiMsg);
-                if (uiMsg) {
-                    addMessageToConversation(std::move(uiMsg));
+                if (uiMsg && (!uiMsg->content().isEmpty() || !uiMsg->thinkingContent().isEmpty())) {
+                    // Log to console but don't add to conversation view
+                    if (consoleDock_) {
+                        LogEntry entry;
+                        entry.timestamp = QDateTime::currentDateTime();
+                        entry.level = LogEntry::Info;
+                        entry.category = "Assistant";
+                        
+                        QString contentToLog = uiMsg->content();
+                        if (contentToLog.isEmpty() && !uiMsg->thinkingContent().isEmpty()) {
+                            contentToLog = "[Thinking] " + uiMsg->thinkingContent();
+                        }
+                        
+                        if (!contentToLog.isEmpty()) {
+                            entry.message = contentToLog;
+                            entry.metadata = QJsonObject{
+                                {"type", static_cast<int>(uiMsg->type())},
+                                {"has_thinking", !uiMsg->thinkingContent().isEmpty()}
+                            };
+                            consoleDock_->addLog(entry);
+                        }
+                    }
+                    // Don't add to conversation view - commented out
+                    // addMessageToConversation(std::move(uiMsg));
                 }
             } catch (const std::exception& e) {
-                emit errorOccurred(QString("Failed to convert API message: %1").arg(e.what()));
+                emit errorOccurred(QString("Failed to convert API response: %1").arg(e.what()));
             }
         }
         
@@ -415,34 +456,11 @@ void AgentController::handleToolStarted(const json& data) {
         consoleDock_->addLog(entry);
     }
     
-    // Create tool execution message
-    auto toolMsg = std::make_unique<Message>();
-    toolMsg->setRole(MessageRole::Assistant);
-    toolMsg->setType(MessageType::ToolExecution);
-    toolMsg->setContent(QString("Executing %1...").arg(toolName));
-    toolMsg->metadata().timestamp = QDateTime::currentDateTime();
-    
-    // Create tool execution object
-    auto toolExec = std::make_unique<ToolExecution>();
-    toolExec->toolId = toolId;
-    toolExec->toolName = toolName;
-    
-    // Convert json to QJsonObject
+    // Convert json to QJsonObject for tool dock
     QString jsonStr = QString::fromStdString(input.dump());
     QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-    toolExec->parameters = doc.object();
     
-    toolExec->state = ToolExecutionState::Running;
-    toolExec->startTime = QDateTime::currentDateTime();
-    
-    toolMsg->setToolExecution(std::move(toolExec));
-    
-    // Track tool ID to message ID mapping
-    toolIdToMessageId_[toolId] = toolMsg->id().toString();
-    
-    addMessageToConversation(std::move(toolMsg));
-    
-    // Update tool dock if connected - use the correct API
+    // Update tool dock if connected
     if (toolDock_) {
         QUuid execId = toolDock_->startExecution(toolName, doc.object());
         // Store the execution ID for later updates
@@ -478,40 +496,39 @@ void AgentController::handleToolExecuted(const json& data) {
         consoleDock_->addLog(entry);
     }
     
-    // Update existing tool execution message
-    if (conversationModel_ && toolIdToMessageId_.contains(toolId)) {
-        QString messageId = toolIdToMessageId_[toolId];
-        
-        // Find and update the message
-        for (int i = 0; i < conversationModel_->rowCount(); ++i) {
-            auto msg = conversationModel_->getMessageAt(i);
-            if (msg && msg->id().toString() == messageId) {
-                if (auto toolExec = msg->toolExecution()) {
-                    toolExec->state = ToolExecutionState::Completed;
-                    toolExec->endTime = QDateTime::currentDateTime();
-                    toolExec->duration = toolExec->startTime.msecsTo(toolExec->endTime);
-                    toolExec->output = QString::fromStdString(result.dump());
-                    
-                    // Update content with result summary
-                    QString newContent = QString("Executed %1 successfully").arg(toolName);
-                    
-                    // Notify model of update - updateMessage takes QUuid and QString
-                    conversationModel_->updateMessage(msg->id(), newContent);
-                }
-                break;
-            }
-        }
-    }
+    // Tool execution messages are no longer added to conversation, so no update needed
+    // The tool dock handles its own updates via toolIdToExecId_ mapping
     
     // Update tool dock
     if (toolDock_ && toolIdToExecId_.contains(toolId)) {
         QUuid execId = toolIdToExecId_[toolId];
         QString output = QString::fromStdString(result.dump());
-        toolDock_->completeExecution(execId, true, output);
+        
+        // Check multiple ways a tool result might indicate failure
+        bool success = true;
+        
+        // Check for success field
+        if (result.contains("success") && result["success"].is_boolean()) {
+            success = result["success"].get<bool>();
+        }
+        // Check for error field (boolean or string)
+        else if (result.contains("error")) {
+            if (result["error"].is_boolean()) {
+                success = !result["error"].get<bool>();
+            } else if (result["error"].is_string()) {
+                // Non-empty error string indicates failure
+                success = result["error"].get<std::string>().empty();
+            }
+        }
+        // Check for failed field
+        else if (result.contains("failed") && result["failed"].is_boolean()) {
+            success = !result["failed"].get<bool>();
+        }
+        
+        toolDock_->completeExecution(execId, success, output);
     }
     
     updateMemoryView();
-    updateStatistics();
 }
 
 void AgentController::handleFinalReport(const json& data) {
@@ -545,8 +562,9 @@ std::unique_ptr<Message> AgentController::convertApiMessage(const messages::Mess
     QString thinkingContent;
     QTextStream stream(&content);
     QTextStream thinkingStream(&thinkingContent);
+    bool hasToolError = false;
     
-    for (const auto& contentPtr : apiMsg.contents()) {
+    for (const std::unique_ptr<messages::Content>& contentPtr: apiMsg.contents()) {
         if (auto text = dynamic_cast<const messages::TextContent*>(contentPtr.get())) {
             stream << QString::fromStdString(text->text);
         } else if (auto thinking = dynamic_cast<const messages::ThinkingContent*>(contentPtr.get())) {
@@ -555,19 +573,37 @@ std::unique_ptr<Message> AgentController::convertApiMessage(const messages::Mess
                 thinkingStream << "\n\n";
             }
             thinkingStream << QString::fromStdString(thinking->thinking);
-        } else if (auto toolUse = dynamic_cast<const messages::ToolUseContent*>(contentPtr.get())) {
-            processToolUseContent(uiMsg.get(), toolUse);
-        } else if (auto toolResult = dynamic_cast<const messages::ToolResultContent*>(contentPtr.get())) {
-            processToolResultContent(uiMsg.get(), toolResult);
         }
+        // else if (auto toolUse = dynamic_cast<const messages::ToolUseContent*>(contentPtr.get())) {
+        //     // Add tool use to content stream instead of directly to message
+        //     if (!content.isEmpty()) {
+        //         stream << "\n";
+        //     }
+        //     stream << QString("[Tool: %1]").arg(QString::fromStdString(toolUse->name));
+        // } else if (auto toolResult = dynamic_cast<const messages::ToolResultContent*>(contentPtr.get())) {
+        //     // Add tool result to content stream
+        //     if (!content.isEmpty()) {
+        //         stream << "\n";
+        //     }
+        //     if (toolResult->is_error) {
+        //         stream << QString("[Tool Error: %1]").arg(QString::fromStdString(toolResult->content));
+        //         hasToolError = true;
+        //     } else {
+        //         stream << QString("[Tool Result]");
+        //     }
+        // }
     }
     
-    if (!content.isEmpty()) {
-        uiMsg->setContent(content);
-    }
+    // Always set content, even if empty (message might have only thinking content)
+    uiMsg->setContent(content);
     
     if (!thinkingContent.isEmpty()) {
         uiMsg->setThinkingContent(thinkingContent);
+    }
+    
+    // Set error type if there was a tool error
+    if (hasToolError) {
+        uiMsg->setType(MessageType::Error);
     }
     
     return uiMsg;
@@ -587,13 +623,6 @@ MessageRole AgentController::convertMessageRole(messages::Role role) {
 }
 
 MessageType AgentController::inferMessageType(const messages::Message& msg) {
-    // Check if it contains tool uses
-    for (const auto& content : msg.contents()) {
-        if (dynamic_cast<const messages::ToolUseContent*>(content.get())) {
-            return MessageType::ToolExecution;
-        }
-    }
-    
     // Default based on role
     if (msg.role() == messages::Role::Assistant) {
         return MessageType::Analysis;
@@ -602,36 +631,39 @@ MessageType AgentController::inferMessageType(const messages::Message& msg) {
     return MessageType::Text;
 }
 
-void AgentController::processToolUseContent(Message* uiMsg, const messages::ToolUseContent* toolUse) {
-    // Tool use is handled separately in handleToolStarted
-    // Here we just note it in the message
-    QString currentContent = uiMsg->content();
-    if (!currentContent.isEmpty()) {
-        currentContent += "\n";
-    }
-    currentContent += QString("[Tool: %1]").arg(QString::fromStdString(toolUse->name));
-    uiMsg->setContent(currentContent);
-}
-
-void AgentController::processToolResultContent(Message* uiMsg, const messages::ToolResultContent* toolResult) {
-    // Add tool result to content
-    QString currentContent = uiMsg->content();
-    if (!currentContent.isEmpty()) {
-        currentContent += "\n";
-    }
-    
-    if (toolResult->is_error) {
-        currentContent += QString("[Tool Error: %1]").arg(QString::fromStdString(toolResult->content));
-        uiMsg->setType(MessageType::Error);
-    } else {
-        currentContent += QString("[Tool Result]");
-    }
-    
-    uiMsg->setContent(currentContent);
-}
+// Tool content processing is now handled inline in convertApiMessage
 
 void AgentController::addMessageToConversation(std::unique_ptr<Message> msg) {
     if (conversationModel_) {
+        // Log assistant messages to console
+        if (consoleDock_ && msg->role() == MessageRole::Assistant) {
+            LogEntry entry;
+            entry.timestamp = QDateTime::currentDateTime();
+            entry.level = LogEntry::Info;
+            entry.category = "Assistant";
+            
+            // Get the actual content to log
+            QString contentToLog = msg->content();
+            
+            // If there's no regular content but there is thinking content, log that
+            if (contentToLog.isEmpty() && !msg->thinkingContent().isEmpty()) {
+                contentToLog = "[Thinking] " + msg->thinkingContent();
+            }
+            
+            // Only log if there's actual content
+            if (!contentToLog.isEmpty()) {
+                entry.message = contentToLog;
+                
+                // Add metadata
+                entry.metadata = QJsonObject{
+                    {"type", static_cast<int>(msg->type())},
+                    {"has_thinking", !msg->thinkingContent().isEmpty()}
+                };
+                
+                consoleDock_->addLog(entry);
+            }
+        }
+        
         conversationModel_->addMessage(std::move(msg));
         
         // Auto-scroll conversation view
@@ -641,12 +673,6 @@ void AgentController::addMessageToConversation(std::unique_ptr<Message> msg) {
     }
 }
 
-void AgentController::updateToolExecution(const QString& toolId, const json& data) {
-    // Implementation depends on tool dock API
-    if (toolDock_) {
-        // Update tool execution visualization
-    }
-}
 
 void AgentController::updateMemoryView() {
     if (!memoryDock_ || !agent_) {
@@ -661,69 +687,41 @@ void AgentController::updateMemoryView() {
         // Convert analysis entries to MemoryEntry objects
         memoryDock_->clearEntries();
         
-        if (snapshot.contains("analysis_entries") && snapshot["analysis_entries"].is_array()) {
-            for (const auto& entry : snapshot["analysis_entries"]) {
+        // The key is "analyses" not "analysis_entries"
+        if (snapshot.contains("analyses") && snapshot["analyses"].is_array()) {
+            for (const auto& entry : snapshot["analyses"]) {
                 MemoryEntry memEntry;
                 memEntry.id = QUuid::createUuid();
-                memEntry.address = QString::fromStdString(entry.value("address", ""));
-                memEntry.function = QString::fromStdString(entry.value("function", ""));
-                memEntry.module = QString::fromStdString(entry.value("module", ""));
-                memEntry.analysis = QString::fromStdString(entry.value("content", "")); // Map content to analysis
-                memEntry.timestamp = QDateTime::currentDateTime();
                 
-                // Extract tags if present
-                if (entry.contains("tags") && entry["tags"].is_array()) {
-                    for (const auto& tag : entry["tags"]) {
-                        memEntry.tags.append(QString::fromStdString(tag));
+                // Map fields from the actual memory structure
+                // Memory has: key, content, type, address (optional), related_addresses, timestamp
+                
+                // Extract title from key field (memory uses "key" but UI uses "title")
+                QString key = QString::fromStdString(entry.value("key", ""));
+                memEntry.title = key; // Use key as title
+                
+                // Use address if available, otherwise use the key as a fallback
+                if (entry.contains("address") && !entry["address"].is_null() && 
+                    !entry["address"].get<std::string>().empty()) {
+                    memEntry.address = QString::fromStdString(entry["address"]);
+                    } else {
+                        // Empty address - the view will handle this
+                        memEntry.address = "";
                     }
-                }
                 
-                // Extract metadata
-                if (entry.contains("metadata")) {
-                    QString metadataStr = QString::fromStdString(entry["metadata"].dump());
-                    memEntry.metadata = QJsonDocument::fromJson(metadataStr.toUtf8()).object();
+                // Content is the actual analysis text
+                memEntry.analysis = QString::fromStdString(entry.value("content", ""));
+                
+                // Use the stored timestamp if available
+                if (entry.contains("timestamp")) {
+                    memEntry.timestamp = QDateTime::fromSecsSinceEpoch(entry["timestamp"]);
+                } else {
+                    memEntry.timestamp = QDateTime::currentDateTime();
                 }
                 
                 memoryDock_->addEntry(memEntry);
             }
         }
-    }
-}
-
-void AgentController::updateStatistics() {
-    if (!statsDock_ || !agent_) {
-        return;
-    }
-    
-    // Get agent state
-    json state = agent_->get_state_json();
-    
-    // Get token usage
-    auto usage = agent_->get_token_usage();
-    
-    // Create statistics data point
-    StatDataPoint dataPoint;
-    dataPoint.timestamp = QDateTime::currentDateTime();
-    dataPoint.category = "tokens";
-    dataPoint.subcategory = "total";
-    dataPoint.value = usage.input_tokens + usage.output_tokens;
-    dataPoint.metadata = QJsonObject{
-        {"input_tokens", usage.input_tokens},
-        {"output_tokens", usage.output_tokens},
-        {"cache_read_tokens", usage.cache_read_tokens},
-        {"cache_creation_tokens", usage.cache_creation_tokens},
-        {"estimated_cost", usage.estimated_cost()}
-    };
-    
-    statsDock_->addDataPoint(dataPoint);
-    
-    // Update iteration data
-    if (state.contains("conversation")) {
-        StatDataPoint iterationPoint;
-        iterationPoint.timestamp = QDateTime::currentDateTime();
-        iterationPoint.category = "iterations";
-        iterationPoint.value = currentIteration_;
-        statsDock_->addDataPoint(iterationPoint);
     }
 }
 

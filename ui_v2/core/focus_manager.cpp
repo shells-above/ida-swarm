@@ -1,5 +1,6 @@
 #include "ui_v2_common.h"
 #include "focus_manager.h"
+#include "theme_manager.h"
 
 namespace llm_re::ui_v2 {
 
@@ -21,7 +22,12 @@ FocusManager::~FocusManager()
 
 void FocusManager::registerWidget(QWidget* widget, const QString& group, int priority)
 {
-    if (!widget || widgetMap_.contains(widget)) return;
+    if (!widget) return;
+    
+    // Thread safety - use mutex if accessed from multiple threads
+    QMutexLocker locker(&mutex_);
+    
+    if (widgetItemIndices_.contains(widget)) return;
     
     FocusItem item;
     item.widget = widget;
@@ -30,13 +36,18 @@ void FocusManager::registerWidget(QWidget* widget, const QString& group, int pri
     item.acceptsKeyboardFocus = widget->focusPolicy() != Qt::NoFocus;
     
     focusItems_.append(item);
-    widgetMap_[widget] = &focusItems_.last();
+    // Store index instead of pointer to avoid dangling pointers
+    int index = focusItems_.size() - 1;
+    widgetItemIndices_[widget] = index;
     
     // Install event filters
     installEventFilters(widget);
     
-    // Connect to destroyed signal
-    connect(widget, &QObject::destroyed, this, &FocusManager::onWidgetDestroyed);
+    // Connect to destroyed signal using lambda to capture widget safely
+    connect(widget, &QObject::destroyed, this, [this, widget]() {
+        QMutexLocker locker(&mutex_);
+        unregisterWidget(widget);
+    });
     
     // Mark focus chain as dirty
     focusChainDirty_ = true;
@@ -44,13 +55,18 @@ void FocusManager::registerWidget(QWidget* widget, const QString& group, int pri
 
 void FocusManager::unregisterWidget(QWidget* widget)
 {
-    if (!widget || !widgetMap_.contains(widget)) return;
+    // Note: mutex might already be locked if called from destroyed signal
+    // Use recursive mutex or check if we're already in a locked context
+    
+    if (!widget || !widgetItemIndices_.contains(widget)) return;
     
     // Remove event filters
     removeEventFilters(widget);
     
     // Remove from maps and lists
-    widgetMap_.remove(widget);
+    widgetItemIndices_.remove(widget);
+    
+    // Remove from focusItems_ vector
     focusItems_.erase(
         std::remove_if(focusItems_.begin(), focusItems_.end(),
                        [widget](const FocusItem& item) {
@@ -58,33 +74,54 @@ void FocusManager::unregisterWidget(QWidget* widget)
                        }),
         focusItems_.end());
     
+    // Rebuild indices after removal
+    rebuildIndices();
+    
     // Remove from focus chain
     focusChain_.removeAll(widget);
     
     // Clear from history
     focusHistory_.removeAll(widget);
     
-    // Disconnect signals
-    disconnect(widget, nullptr, this, nullptr);
+    // Clear current focus if it was this widget
+    if (currentFocus_ == widget) {
+        currentFocus_ = nullptr;
+    }
+    
+    // Disconnect signals safely
+    widget->disconnect(this);
     
     focusChainDirty_ = true;
 }
 
 void FocusManager::clearWidgets()
 {
+    QMutexLocker locker(&mutex_);
+    
     // Remove all event filters
     for (const auto& item : focusItems_) {
         if (item.widget) {
             removeEventFilters(item.widget);
-            disconnect(item.widget, nullptr, this, nullptr);
+            item.widget->disconnect(this);
         }
     }
     
     focusItems_.clear();
-    widgetMap_.clear();
+    widgetItemIndices_.clear();
     focusChain_.clear();
     focusHistory_.clear();
+    currentFocus_ = nullptr;
     focusChainDirty_ = true;
+}
+
+void FocusManager::rebuildIndices()
+{
+    widgetItemIndices_.clear();
+    for (int i = 0; i < focusItems_.size(); ++i) {
+        if (focusItems_[i].widget) {
+            widgetItemIndices_[focusItems_[i].widget] = i;
+        }
+    }
 }
 
 void FocusManager::setFocus(QWidget* widget, bool ensureVisible)
@@ -239,34 +276,39 @@ void FocusManager::scrollToWidget(QWidget* widget, bool animate)
 
 void FocusManager::saveScrollPosition(QWidget* widget)
 {
-    if (!widget || !widgetMap_.contains(widget)) return;
+    if (!widget || !widgetItemIndices_.contains(widget)) return;
     
     QAbstractScrollArea* scrollArea = findScrollArea(widget);
     if (!scrollArea) return;
     
-    FocusItem* item = widgetMap_[widget];
-    item->lastScrollPosition = QPoint(
-        scrollArea->horizontalScrollBar()->value(),
-        scrollArea->verticalScrollBar()->value()
-    );
-    item->lastVisibleRect = scrollArea->viewport()->rect();
+    int index = widgetItemIndices_[widget];
+    if (index >= 0 && index < focusItems_.size()) {
+        focusItems_[index].lastScrollPosition = QPoint(
+            scrollArea->horizontalScrollBar()->value(),
+            scrollArea->verticalScrollBar()->value()
+        );
+        focusItems_[index].lastVisibleRect = scrollArea->viewport()->rect();
+    }
 }
 
 void FocusManager::restoreScrollPosition(QWidget* widget)
 {
-    if (!widget || !widgetMap_.contains(widget)) return;
+    if (!widget || !widgetItemIndices_.contains(widget)) return;
     
-    FocusItem* item = widgetMap_[widget];
-    if (!item->restoreScrollPosition) return;
+    int index = widgetItemIndices_[widget];
+    if (index < 0 || index >= focusItems_.size()) return;
+    
+    const FocusItem& item = focusItems_[index];
+    if (!item.restoreScrollPosition) return;
     
     QAbstractScrollArea* scrollArea = findScrollArea(widget);
     if (!scrollArea) return;
     
     if (scrollSettings_.enabled) {
-        animateScroll(scrollArea, item->lastScrollPosition);
+        animateScroll(scrollArea, item.lastScrollPosition);
     } else {
-        scrollArea->horizontalScrollBar()->setValue(item->lastScrollPosition.x());
-        scrollArea->verticalScrollBar()->setValue(item->lastScrollPosition.y());
+        scrollArea->horizontalScrollBar()->setValue(item.lastScrollPosition.x());
+        scrollArea->verticalScrollBar()->setValue(item.lastScrollPosition.y());
     }
 }
 
@@ -327,8 +369,11 @@ QList<QWidget*> FocusManager::widgetsInGroup(const QString& group) const
 
 QString FocusManager::currentFocusGroup() const
 {
-    if (currentFocus_ && widgetMap_.contains(currentFocus_)) {
-        return widgetMap_[currentFocus_]->group;
+    if (currentFocus_ && widgetItemIndices_.contains(currentFocus_)) {
+        int index = widgetItemIndices_[currentFocus_];
+        if (index >= 0 && index < focusItems_.size()) {
+            return focusItems_[index].group;
+        }
     }
     return QString();
 }
@@ -358,13 +403,13 @@ bool FocusManager::eventFilter(QObject* watched, QEvent* event)
             break;
             
         case QEvent::Show:
-            if (autoRestoreFocus_ && widgetMap_.contains(widget)) {
+            if (autoRestoreFocus_ && widgetItemIndices_.contains(widget)) {
                 restoreScrollPosition(widget);
             }
             break;
             
         case QEvent::Hide:
-            if (widgetMap_.contains(widget)) {
+            if (widgetItemIndices_.contains(widget)) {
                 saveScrollPosition(widget);
             }
             break;
@@ -491,10 +536,21 @@ void FocusManager::handleFocusChange(QWidget* oldWidget, QWidget* newWidget)
     currentFocus_ = newWidget;
     
     // Update focus group
-    QString oldGroup = oldWidget && widgetMap_.contains(oldWidget) ? 
-        widgetMap_[oldWidget]->group : QString();
-    QString newGroup = newWidget && widgetMap_.contains(newWidget) ? 
-        widgetMap_[newWidget]->group : QString();
+    QString oldGroup;
+    if (oldWidget && widgetItemIndices_.contains(oldWidget)) {
+        int index = widgetItemIndices_[oldWidget];
+        if (index >= 0 && index < focusItems_.size()) {
+            oldGroup = focusItems_[index].group;
+        }
+    }
+    
+    QString newGroup;
+    if (newWidget && widgetItemIndices_.contains(newWidget)) {
+        int index = widgetItemIndices_[newWidget];
+        if (index >= 0 && index < focusItems_.size()) {
+            newGroup = focusItems_[index].group;
+        }
+    }
     
     if (oldGroup != newGroup) {
         lastFocusGroup_ = oldGroup;
@@ -506,7 +562,7 @@ void FocusManager::handleFocusChange(QWidget* oldWidget, QWidget* newWidget)
     // Smart focus features
     if (smartFocusEnabled_ && newWidget) {
         // Auto-save old position
-        if (oldWidget && widgetMap_.contains(oldWidget)) {
+        if (oldWidget && widgetItemIndices_.contains(oldWidget)) {
             saveScrollPosition(oldWidget);
         }
         
@@ -567,6 +623,9 @@ FocusHighlight::FocusHighlight(QWidget* parent)
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_TransparentForMouseEvents);
+    
+    // Initialize highlight color from theme
+    highlightColor_ = ThemeManager::instance().colors().primary;
     
     // Create animations
     positionAnimation_ = new QPropertyAnimation(this, "pos", this);

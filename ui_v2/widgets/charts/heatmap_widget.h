@@ -211,7 +211,7 @@ private:
     
     // Additional display properties not in HeatmapTheme
     bool showAxes_ = true;
-    QColor gridColor_ = QColor(128, 128, 128, 50);
+    QColor gridColor_;  // Initialized from theme in constructor
     float gridWidth_ = 1.0f;
     int valuePrecision_ = 2;
     float valueFontSize_ = 10.0f;
@@ -219,10 +219,10 @@ private:
     QColor textColor_;  // Will be set from ThemeManager
     bool rotateLabels_ = false;
     bool showColorScale_ = true;
-    QColor selectionColor_ = QColor(0, 120, 215, 100);
+    QColor selectionColor_;  // Initialized from theme in constructor
     bool highlightRow_ = false;
     bool highlightColumn_ = false;
-    QColor highlightColor_ = QColor(255, 255, 0, 50);
+    QColor highlightColor_;  // Initialized from theme in constructor
 };
 
 } // namespace llm_re::ui_v2::charts

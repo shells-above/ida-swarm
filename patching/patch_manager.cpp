@@ -5,20 +5,6 @@
 #include "patching/patch_manager.h"
 #include "core/ida_utils.h"
 #include "core/ida_validators.h"
-#include <ida.hpp>
-#include <bytes.hpp>
-#include <auto.hpp>
-#include <loader.hpp>
-#include <diskio.hpp>
-#include <ua.hpp>
-#include <allins.hpp>
-#include <segment.hpp>
-#include <segregs.hpp>
-#include <funcs.hpp>
-#include <sstream>
-#include <iomanip>
-#include <algorithm>
-#include <cctype>
 
 namespace llm_re {
 
@@ -36,35 +22,6 @@ PatchManager::~PatchManager() {
 bool PatchManager::initialize() {
     // All IDA operations must be in sync wrapper
     return IDAUtils::execute_sync_wrapper([this]() -> bool {
-        // Get the actual binary file path (not the IDB path)
-        char buf[MAXSTR];
-        // get_input_file_path returns the IDB path, we need the actual binary
-        // Use get_path(PATH_TYPE_IDB) and then derive the binary path
-        qstring idb_path = get_path(PATH_TYPE_IDB);
-        
-        // Try to get the actual input file that IDA is analyzing
-        if (get_root_filename(buf, sizeof(buf)) > 0) {
-            // This gives us the input file name, now get the full path
-            char dir_buf[MAXSTR];
-            qdirname(dir_buf, sizeof(dir_buf), idb_path.c_str());
-            input_file_path_ = std::string(dir_buf) + "/" + std::string(buf);
-        } else {
-            // Fallback: use the idb path without extension
-            input_file_path_ = idb_path.c_str();
-            size_t dot_pos = input_file_path_.rfind('.');
-            if (dot_pos != std::string::npos) {
-                input_file_path_ = input_file_path_.substr(0, dot_pos);
-            }
-        }
-        
-        // Create backup path
-        backup_path_ = input_file_path_ + ".bak";
-        
-        // Check if backup already exists
-        if (qfileexist(backup_path_.c_str())) {
-            backup_created_ = true;
-        }
-        
         // Initialize Keystone assembler
         if (!init_keystone()) {
             msg("WARNING: Failed to initialize Keystone assembler. Assembly patching will be unavailable.\n");
@@ -136,16 +93,6 @@ BytePatchResult PatchManager::apply_byte_patch(ea_t address,
         if (patches_.find(address) != patches_.end()) {
             result.error_message = "Address already patched. Revert existing patch first.";
             return result;
-        }
-        
-        // Create backup on first patch
-        if (!backup_created_) {
-            if (!create_backup()) {
-                result.error_message = "Failed to create backup. Check IDA output window for details.";
-                msg("ERROR: Backup creation failed in apply_byte_patch. backup_created_=%d, input_file='%s', backup_path='%s'\n", 
-                    backup_created_, input_file_path_.c_str(), backup_path_.c_str());
-                return result;
-            }
         }
         
         // Apply the patch
@@ -268,18 +215,30 @@ AssemblyPatchResult PatchManager::apply_assembly_patch(ea_t address,
             nops_needed = original_size - new_bytes.size();
             
             // Check if padding would violate alignment
-            if ((PH.id == PLFM_ARM || PH.id == PLFM_PPC || 
-                 PH.id == PLFM_MIPS || PH.id == PLFM_SPARC) && nops_needed % 4 != 0) {
+            if ((PH.id == PLFM_PPC || PH.id == PLFM_MIPS || PH.id == PLFM_SPARC) && nops_needed % 4 != 0) {
                 result.error_message = "Cannot add " + std::to_string(nops_needed) + 
                                      " bytes of NOP padding. This architecture requires padding to be a multiple of 4 bytes. " +
                                      "Original instruction: " + std::to_string(original_size) + 
                                      " bytes, new instruction: " + std::to_string(new_bytes.size()) + " bytes.";
                 return result;
-            } else if (PH.id == PLFM_ARM && !inf_is_64bit() && 
-                      (get_sreg(address, str2reg("T")) & 1) && nops_needed % 2 != 0) {
-                result.error_message = "Cannot add " + std::to_string(nops_needed) + 
-                                     " bytes of NOP padding. ARM Thumb mode requires padding to be a multiple of 2 bytes.";
-                return result;
+            } else if (PH.id == PLFM_ARM) {
+                if (inf_is_64bit() && nops_needed % 4 != 0) {
+                    // ARM64 requires 4-byte alignment
+                    result.error_message = "Cannot add " + std::to_string(nops_needed) + 
+                                         " bytes of NOP padding. ARM64 requires padding to be a multiple of 4 bytes.";
+                    return result;
+                } else if (!inf_is_64bit()) {
+                    bool is_thumb = (get_sreg(address, str2reg("T")) & 1) != 0;
+                    if (is_thumb && nops_needed % 2 != 0) {
+                        result.error_message = "Cannot add " + std::to_string(nops_needed) + 
+                                             " bytes of NOP padding. ARM Thumb mode requires padding to be a multiple of 2 bytes.";
+                        return result;
+                    } else if (!is_thumb && nops_needed % 4 != 0) {
+                        result.error_message = "Cannot add " + std::to_string(nops_needed) + 
+                                             " bytes of NOP padding. ARM mode requires padding to be a multiple of 4 bytes.";
+                        return result;
+                    }
+                }
             }
             
             std::vector<uint8_t> nop_bytes = get_nop_bytes(nops_needed, address);
@@ -294,12 +253,6 @@ AssemblyPatchResult PatchManager::apply_assembly_patch(ea_t address,
         
         // Read original bytes
         std::vector<uint8_t> original_bytes = read_bytes(address, original_size);
-        
-        // Create backup on first patch
-        if (!backup_created_ && !create_backup()) {
-            result.error_message = "Failed to create backup";
-            return result;
-        }
         
         // Apply the patch
         if (!write_bytes(address, new_bytes)) {
@@ -1129,44 +1082,5 @@ void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
     }
 }
 
-// Backup management
-bool PatchManager::create_backup() {
-    if (backup_created_) {
-        return true;
-    }
-    
-    // Check if backup already exists
-    if (qfileexist(backup_path_.c_str())) {
-        backup_created_ = true;
-        msg("Backup file already exists: %s\n", backup_path_.c_str());
-        return true;
-    }
-    
-    // Verify input file exists
-    if (!qfileexist(input_file_path_.c_str())) {
-        msg("ERROR: Input file does not exist: %s\n", input_file_path_.c_str());
-        return false;
-    }
-    
-    // Copy input file to backup
-    if (!qcopyfile(input_file_path_.c_str(), backup_path_.c_str())) {
-        msg("ERROR: Failed to create backup file: %s\n", backup_path_.c_str());
-        return false;
-    }
-    
-    // Verify backup was created
-    if (!qfileexist(backup_path_.c_str())) {
-        msg("ERROR: Backup file was not created successfully\n");
-        return false;
-    }
-    
-    backup_created_ = true;
-    msg("Created backup file: %s\n", backup_path_.c_str());
-    return true;
-}
-
-bool PatchManager::has_backup() const {
-    return qfileexist(backup_path_.c_str());
-}
 
 } // namespace llm_re

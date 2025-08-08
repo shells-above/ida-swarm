@@ -23,382 +23,6 @@ static QString formatDuration(qint64 ms) {
     }
 }
 
-// ExecutionTimelineWidget implementation
-
-ExecutionTimelineWidget::ExecutionTimelineWidget(QWidget* parent)
-    : BaseStyledWidget(parent)
-{
-    setMouseTracking(true);
-    setMinimumHeight(200);
-}
-
-void ExecutionTimelineWidget::setExecutions(const QList<ToolExecution>& executions) {
-    items_.clear();
-    
-    // Find time range
-    if (!executions.isEmpty()) {
-        startTime_ = executions.first().startTime;
-        endTime_ = executions.first().endTime;
-        
-        for (const ToolExecution& exec : executions) {
-            if (exec.startTime < startTime_) {
-                startTime_ = exec.startTime;
-            }
-            if (exec.endTime > endTime_) {
-                endTime_ = exec.endTime;
-            }
-            
-            TimelineItem item;
-            item.execution = exec;
-            item.row = 0; // Will be calculated in layout
-            items_.append(item);
-        }
-        
-        // Add some padding
-        qint64 range = startTime_.msecsTo(endTime_);
-        startTime_ = startTime_.addMSecs(-range * 0.05);
-        endTime_ = endTime_.addMSecs(range * 0.05);
-    }
-    
-    calculateLayout();
-    update();
-}
-
-void ExecutionTimelineWidget::highlightExecution(const QUuid& id) {
-    highlightedId_ = id;
-    update();
-}
-
-void ExecutionTimelineWidget::setTimeRange(const QDateTime& start, const QDateTime& end) {
-    startTime_ = start;
-    endTime_ = end;
-    calculateLayout();
-    update();
-    emit timeRangeChanged(start, end);
-}
-
-void ExecutionTimelineWidget::setZoomLevel(int level) {
-    zoomLevel_ = qBound(10, level, 500);
-    calculateLayout();
-    update();
-}
-
-void ExecutionTimelineWidget::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
-    
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    // Background
-    painter.fillRect(rect(), ThemeManager::instance().colors().surface);
-    
-    // Calculate visible area
-    QRectF visibleRect = rect().translated(-viewOffset_.toPoint());
-    
-    // Draw time axis
-    painter.setPen(ThemeManager::instance().colors().textSecondary);
-    painter.drawLine(margin_, headerHeight_, width() - margin_, headerHeight_);
-    
-    // Draw time labels
-    qint64 totalMs = startTime_.msecsTo(endTime_);
-    int labelCount = width() / 100; // Approximate label spacing
-    
-    for (int i = 0; i <= labelCount; ++i) {
-        qreal x = margin_ + (width() - 2 * margin_) * i / labelCount;
-        qint64 ms = totalMs * i / labelCount;
-        QDateTime time = startTime_.addMSecs(ms);
-        
-        painter.drawLine(x, headerHeight_ - 5, x, headerHeight_ + 5);
-        
-        QRectF labelRect(x - 50, 5, 100, 20);
-        painter.drawText(labelRect, Qt::AlignCenter, time.toString("hh:mm:ss"));
-    }
-    
-    // Draw executions
-    for (const TimelineItem& item : items_) {
-        if (!visibleRect.intersects(item.rect)) {
-            continue; // Skip items outside visible area
-        }
-        
-        // Execution bar
-        QColor color = statusColor(item.execution.state);
-        if (item.execution.id == highlightedId_) {
-            color = color.lighter(120);
-        }
-        if (item.execution.id == hoveredId_) {
-            color = color.lighter(110);
-        }
-        
-        painter.fillRect(item.rect, color);
-        
-        // Progress for running executions
-        if (item.execution.state == ToolExecutionState::Running) {
-            QRectF progressRect = item.rect;
-            progressRect.setWidth(item.rect.width() * item.execution.progress / 100.0);
-            painter.fillRect(progressRect, color.darker(120));
-        }
-        
-        // Border
-        painter.setPen(color.darker(150));
-        painter.drawRect(item.rect);
-        
-        // Label
-        if (item.rect.width() > 50) {
-            painter.setPen(ThemeManager::instance().colors().textPrimary);
-            painter.setFont(QFont("Sans", 9));
-            
-            QString label = item.execution.toolName;
-            if (item.rect.width() > 100) {
-                label += QString(" (%1)").arg(formatDuration(item.execution.getDuration()));
-            }
-            
-            QRectF textRect = item.rect.adjusted(5, 0, -5, 0);
-            painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
-        }
-        
-        // Sub-tasks
-        if (showSubTasks_ && !item.execution.subTasks.isEmpty()) {
-            qreal subTaskY = item.rect.bottom() + 2;
-            for (const ToolExecution::SubTask& subTask : item.execution.subTasks) {
-                QRectF subRect(item.rect.x(), subTaskY, 
-                             item.rect.width() * subTask.progress / 100.0, 5);
-                painter.fillRect(subRect, color.darker(120));
-                subTaskY += 7;
-            }
-        }
-    }
-    
-    // Draw dependencies
-    if (showDependencies_) {
-        painter.setPen(QPen(ThemeManager::instance().colors().primary, 2));
-        for (const TimelineItem& item : items_) {
-            for (const QUuid& depId : item.execution.dependencyIds) {
-                // Find dependency item
-                for (const TimelineItem& depItem : items_) {
-                    if (depItem.execution.id == depId) {
-                        // Draw arrow from dependency to this item
-                        QPointF start(depItem.rect.right(), depItem.rect.center().y());
-                        QPointF end(item.rect.left(), item.rect.center().y());
-                        
-                        painter.drawLine(start, end);
-                        
-                        // Arrow head
-                        qreal angle = std::atan2(end.y() - start.y(), end.x() - start.x());
-                        QPointF arrowP1 = end - QPointF(8 * cos(angle - M_PI/6), 
-                                                       8 * sin(angle - M_PI/6));
-                        QPointF arrowP2 = end - QPointF(8 * cos(angle + M_PI/6), 
-                                                       8 * sin(angle + M_PI/6));
-                        
-                        QPolygonF arrow;
-                        arrow << end << arrowP1 << arrowP2;
-                        painter.setBrush(painter.pen().color());
-                        painter.drawPolygon(arrow);
-                        
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    
-    // Tooltip
-    if (!hoveredId_.isNull()) {
-        for (const TimelineItem& item : items_) {
-            if (item.execution.id == hoveredId_) {
-                QString tooltip = QString("%1\nStatus: %2\nDuration: %3")
-                    .arg(item.execution.toolName)
-                    .arg([&]() {
-                        switch (item.execution.state) {
-                        case ToolExecutionState::Pending: return "Pending";
-                        case ToolExecutionState::Running: return "Running";
-                        case ToolExecutionState::Completed: return "Success";
-                        case ToolExecutionState::Failed: return "Failed";
-                        case ToolExecutionState::Cancelled: return "Cancelled";
-                        default: return "Unknown";
-                        }
-                    }())
-                    .arg(formatDuration(item.execution.getDuration()));
-                
-                if (item.execution.state == ToolExecutionState::Running) {
-                    tooltip += QString("\nProgress: %1%").arg(item.execution.progress);
-                }
-                
-                QFontMetrics fm(painter.font());
-                QRect tooltipRect = fm.boundingRect(tooltip);
-                tooltipRect.adjust(-5, -5, 5, 5);
-                tooltipRect.moveTopLeft(QCursor::pos() - mapToGlobal(QPoint(0, 0)) + QPoint(10, 10));
-                
-                painter.fillRect(tooltipRect, ThemeManager::instance().colors().surface);
-                painter.setPen(ThemeManager::instance().colors().textPrimary);
-                painter.drawText(tooltipRect, Qt::AlignCenter, tooltip);
-                
-                break;
-            }
-        }
-    }
-}
-
-void ExecutionTimelineWidget::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        // Check for execution click
-        for (const TimelineItem& item : items_) {
-            if (item.rect.contains(event->pos())) {
-                emit executionClicked(item.execution.id);
-                break;
-            }
-        }
-    } else if (event->button() == Qt::MiddleButton) {
-        isPanning_ = true;
-        panStartPos_ = event->pos();
-        setCursor(Qt::ClosedHandCursor);
-    }
-}
-
-void ExecutionTimelineWidget::mouseMoveEvent(QMouseEvent* event) {
-    if (isPanning_) {
-        QPointF delta = event->pos() - panStartPos_;
-        panStartPos_ = event->pos();
-        viewOffset_ -= delta;
-        update();
-    } else {
-        // Update hover
-        QUuid oldHovered = hoveredId_;
-        hoveredId_ = QUuid();
-        
-        for (const TimelineItem& item : items_) {
-            if (item.rect.contains(event->pos())) {
-                hoveredId_ = item.execution.id;
-                break;
-            }
-        }
-        
-        if (hoveredId_ != oldHovered) {
-            update();
-        }
-    }
-}
-
-void ExecutionTimelineWidget::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::MiddleButton) {
-        isPanning_ = false;
-        setCursor(Qt::ArrowCursor);
-    }
-}
-
-void ExecutionTimelineWidget::wheelEvent(QWheelEvent* event) {
-    // Zoom with mouse wheel
-    int delta = event->angleDelta().y();
-    if (delta > 0) {
-        setZoomLevel(zoomLevel_ + 10);
-    } else {
-        setZoomLevel(zoomLevel_ - 10);
-    }
-}
-
-void ExecutionTimelineWidget::resizeEvent(QResizeEvent* event) {
-    BaseStyledWidget::resizeEvent(event);
-    calculateLayout();
-}
-
-void ExecutionTimelineWidget::calculateLayout() {
-    if (items_.isEmpty() || !startTime_.isValid() || !endTime_.isValid()) {
-        return;
-    }
-    
-    qint64 totalMs = startTime_.msecsTo(endTime_);
-    if (totalMs <= 0) {
-        return;
-    }
-    
-    qreal scale = (width() - 2 * margin_) * zoomLevel_ / 100.0 / totalMs;
-    
-    // Sort by start time if grouping is disabled
-    if (!groupByTool_) {
-        std::sort(items_.begin(), items_.end(), 
-                 [](const TimelineItem& a, const TimelineItem& b) {
-            return a.execution.startTime < b.execution.startTime;
-        });
-    }
-    
-    // Assign rows to avoid overlaps
-    QHash<QString, int> toolRows;
-    int maxRow = 0;
-    
-    for (TimelineItem& item : items_) {
-        qint64 startMs = startTime_.msecsTo(item.execution.startTime);
-        qint64 endMs = startTime_.msecsTo(item.execution.endTime);
-        
-        qreal x = margin_ + startMs * scale;
-        qreal width = (endMs - startMs) * scale;
-        
-        // Find available row
-        if (groupByTool_) {
-            // Group by tool name
-            if (!toolRows.contains(item.execution.toolName)) {
-                toolRows[item.execution.toolName] = maxRow++;
-            }
-            item.row = toolRows[item.execution.toolName];
-        } else {
-            // Find first available row
-            item.row = 0;
-            bool found = false;
-            while (!found) {
-                found = true;
-                for (const TimelineItem& other : items_) {
-                    if (&other == &item) break;
-                    if (other.row == item.row && 
-                        other.rect.left() < x + width && 
-                        other.rect.right() > x) {
-                        found = false;
-                        item.row++;
-                        break;
-                    }
-                }
-            }
-            maxRow = std::max(maxRow, item.row);
-        }
-        
-        qreal y = headerHeight_ + 10 + item.row * (rowHeight_ + 5);
-        item.rect = QRectF(x, y, width, rowHeight_);
-    }
-    
-    // Update minimum height
-    int requiredHeight = headerHeight_ + 20 + (maxRow + 1) * (rowHeight_ + 5);
-    setMinimumHeight(requiredHeight);
-}
-
-QColor ExecutionTimelineWidget::statusColor(ToolExecutionState state) const {
-    switch (state) {
-    case ToolExecutionState::Pending:
-        return QColor("#9E9E9E");
-    case ToolExecutionState::Running:
-        return QColor("#2196F3");
-    case ToolExecutionState::Completed:
-        return QColor("#4CAF50");
-    case ToolExecutionState::Failed:
-        return QColor("#F44336");
-    case ToolExecutionState::Cancelled:
-        return QColor("#FF9800");
-    default:
-        return QColor("#757575");
-    }
-}
-
-QString ExecutionTimelineWidget::formatDuration(qint64 ms) const {
-    if (ms < 1000) {
-        return QString("%1ms").arg(ms);
-    } else if (ms < 60000) {
-        return QString("%1s").arg(ms / 1000.0, 0, 'f', 1);
-    } else if (ms < 3600000) {
-        int minutes = ms / 60000;
-        int seconds = (ms % 60000) / 1000;
-        return QString("%1m %2s").arg(minutes).arg(seconds);
-    } else {
-        int hours = ms / 3600000;
-        int minutes = (ms % 3600000) / 60000;
-        return QString("%1h %2m").arg(hours).arg(minutes);
-    }
-}
 
 // PerformanceChartWidget implementation
 
@@ -432,8 +56,7 @@ void PerformanceChartWidget::paintEvent(QPaintEvent* event) {
     painter.fillRect(rect(), ThemeManager::instance().colors().surface);
     
     // Calculate layout
-    chartRect_ = rect().adjusted(60, 20, -100, -60);
-    legendRect_ = QRectF(chartRect_.right() + 20, chartRect_.top(), 80, chartRect_.height());
+    chartRect_ = rect().adjusted(60, 20, -20, -60);
     
     // Draw chart based on type
     switch (chartType_) {
@@ -451,8 +74,6 @@ void PerformanceChartWidget::paintEvent(QPaintEvent* event) {
         break;
     }
     
-    // Draw legend
-    drawLegend(&painter);
     
     // Tooltip
     if (hoveredPoint_ >= 0 && hoveredPoint_ < dataPoints_.size()) {
@@ -563,10 +184,7 @@ void PerformanceChartWidget::calculateData() {
     
     // Create data points
     int colorIndex = 0;
-    QList<QColor> colors = {
-        "#2196F3", "#4CAF50", "#FF9800", "#F44336", "#9C27B0",
-        "#00BCD4", "#8BC34A", "#FFC107", "#E91E63", "#3F51B5"
-    };
+    const std::vector<QColor>& colors = ThemeManager::instance().chartSeriesColors();
     
     for (auto it = groupedData.begin(); it != groupedData.end(); ++it) {
         DataPoint point;
@@ -814,31 +432,6 @@ void PerformanceChartWidget::drawAxes(QPainter* painter) {
     }
 }
 
-void PerformanceChartWidget::drawLegend(QPainter* painter) {
-    if (chartType_ == PieChart || dataPoints_.size() > 10) {
-        // Draw legend for pie chart or when many data points
-        qreal y = legendRect_.top();
-        
-        for (int i = 0; i < std::min(10, dataPoints_.size()); ++i) {
-            // Color box
-            QRectF colorRect(legendRect_.left(), y, 12, 12);
-            painter->fillRect(colorRect, dataPoints_[i].color);
-            painter->setPen(dataPoints_[i].color.darker(120));
-            painter->drawRect(colorRect);
-            
-            // Label
-            painter->setPen(ThemeManager::instance().colors().textPrimary);
-            QRectF labelRect(colorRect.right() + 5, y, legendRect_.width() - 17, 12);
-            painter->drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, dataPoints_[i].label);
-            
-            y += 20;
-        }
-        
-        if (dataPoints_.size() > 10) {
-            painter->drawText(legendRect_.left(), y, "...");
-        }
-    }
-}
 
 // formatDuration is now a static utility function above
 
@@ -885,7 +478,7 @@ void ToolExecutionDock::setupUI() {
     
     // Connect tab change signal to update detail panel visibility
     connect(viewTabs_, &QTabWidget::currentChanged, [this](int index) {
-        detailPanel_->setVisible(index < 2); // Only show for list/table views
+        detailPanel_->setVisible(index == 0); // Only show for list view
     });
     
     // Create detail panel
@@ -938,7 +531,7 @@ void ToolExecutionDock::createViews() {
     
     // Create model
     model_ = new ExecutionModel(this);
-    proxyModel_ = new QSortFilterProxyModel(this);
+    proxyModel_ = new ExecutionFilterProxyModel(this);
     proxyModel_->setSourceModel(model_);
     
     // List view (tree)
@@ -947,23 +540,11 @@ void ToolExecutionDock::createViews() {
     treeView_->setAlternatingRowColors(true);
     treeView_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     treeView_->setContextMenuPolicy(Qt::CustomContextMenu);
+    treeView_->setSortingEnabled(true);
     treeView_->header()->setStretchLastSection(true);
+    // Sort by start time column in descending order (newest first)
+    treeView_->sortByColumn(ExecutionModel::StartTimeColumn, Qt::DescendingOrder);
     viewTabs_->addTab(treeView_, tr("List"));
-    
-    // Table view
-    tableView_ = new QTableView(this);
-    tableView_->setModel(proxyModel_);
-    tableView_->setAlternatingRowColors(true);
-    tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    tableView_->setSelectionMode(QAbstractItemView::SingleSelection);
-    tableView_->setContextMenuPolicy(Qt::CustomContextMenu);
-    tableView_->setSortingEnabled(true);
-    tableView_->horizontalHeader()->setStretchLastSection(true);
-    viewTabs_->addTab(tableView_, tr("Table"));
-    
-    // Timeline view
-    timelineWidget_ = new ExecutionTimelineWidget(this);
-    viewTabs_->addTab(timelineWidget_, tr("Timeline"));
     
     // Performance view
     chartWidget_ = new PerformanceChartWidget(this);
@@ -992,11 +573,6 @@ void ToolExecutionDock::createDetailPanel() {
     
     layout->addLayout(infoLayout);
     
-    // Progress
-    detailProgressBar_ = new QProgressBar(this);
-    detailProgressBar_->setTextVisible(true);
-    layout->addWidget(detailProgressBar_);
-    
     // Parameters
     auto* paramsGroup = new QGroupBox(tr("Parameters"), this);
     auto* paramsLayout = new QVBoxLayout(paramsGroup);
@@ -1018,42 +594,11 @@ void ToolExecutionDock::createDetailPanel() {
     outputLayout->addWidget(detailOutputEdit_);
     
     layout->addWidget(outputGroup);
-    
-    // Actions
-    auto* actionsLayout = new QHBoxLayout();
-    
-    retryButton_ = new QPushButton(ThemeManager::instance().themedIcon("view-refresh"), tr("Retry"), this);
-    retryButton_->setEnabled(false);
-    actionsLayout->addWidget(retryButton_);
-    
-    cancelButton_ = new QPushButton(ThemeManager::instance().themedIcon("process-stop"), tr("Cancel"), this);
-    cancelButton_->setEnabled(false);
-    actionsLayout->addWidget(cancelButton_);
-    
-    actionsLayout->addStretch();
-    
-    layout->addLayout(actionsLayout);
     layout->addStretch();
 }
 
 void ToolExecutionDock::createContextMenu() {
     contextMenu_ = new QMenu(this);
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("view-refresh"), tr("Retry"),
-                           [this]() {
-        if (!selectedExecution_.isNull()) {
-            retryExecution(selectedExecution_);
-        }
-    });
-    
-    contextMenu_->addAction(ThemeManager::instance().themedIcon("process-stop"), tr("Cancel"),
-                           [this]() {
-        if (!selectedExecution_.isNull()) {
-            cancelExecution(selectedExecution_);
-        }
-    });
-    
-    contextMenu_->addSeparator();
     
     contextMenu_->addAction(ThemeManager::instance().themedIcon("edit-copy"), tr("Copy Tool Name"),
                            [this]() {
@@ -1119,49 +664,20 @@ void ToolExecutionDock::connectSignals() {
     connect(treeView_, &QTreeView::doubleClicked,
             this, &ToolExecutionDock::onExecutionDoubleClicked);
     
-    connect(tableView_, &QTableView::clicked,
-            this, &ToolExecutionDock::onExecutionClicked);
-    
-    connect(tableView_, &QTableView::doubleClicked,
-            this, &ToolExecutionDock::onExecutionDoubleClicked);
     
     connect(treeView_, &QWidget::customContextMenuRequested,
             this, &ToolExecutionDock::onCustomContextMenu);
     
-    connect(tableView_, &QWidget::customContextMenuRequested,
-            this, &ToolExecutionDock::onCustomContextMenu);
     
     connect(treeView_->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &ToolExecutionDock::onSelectionChanged);
     
-    connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, &ToolExecutionDock::onSelectionChanged);
     
-    // Timeline view
-    connect(timelineWidget_, &ExecutionTimelineWidget::executionClicked,
-            this, &ToolExecutionDock::onTimelineExecutionClicked);
-    
-    connect(timelineWidget_, &ExecutionTimelineWidget::executionDoubleClicked,
-            this, &ToolExecutionDock::showExecution);
     
     // Chart view
     connect(chartWidget_, &PerformanceChartWidget::dataPointClicked,
             this, &ToolExecutionDock::onChartDataPointClicked);
     
-    // Detail panel buttons
-    connect(retryButton_, &QPushButton::clicked,
-            [this]() {
-        if (!selectedExecution_.isNull()) {
-            retryExecution(selectedExecution_);
-        }
-    });
-    
-    connect(cancelButton_, &QPushButton::clicked,
-            [this]() {
-        if (!selectedExecution_.isNull()) {
-            cancelExecution(selectedExecution_);
-        }
-    });
 }
 
 QUuid ToolExecutionDock::startExecution(const QString& toolName, const QJsonObject& parameters) {
@@ -1205,28 +721,6 @@ QUuid ToolExecutionDock::startExecution(const QString& toolName, const QJsonObje
     return exec.id;
 }
 
-void ToolExecutionDock::updateProgress(const QUuid& id, int progress, const QString& message) {
-    if (executionMap_.contains(id)) {
-        ToolExecution& exec = *executionMap_[id];
-        exec.progress = qBound(0, progress, 100);
-        if (!message.isEmpty()) {
-            exec.progressMessage = message;
-        }
-        
-        // Update model
-        model_->updateExecution(id, exec);
-        
-        // Update detail panel if selected
-        if (selectedExecution_ == id) {
-            detailProgressBar_->setValue(progress);
-            if (!message.isEmpty()) {
-                detailProgressBar_->setFormat(message + " %p%");
-            }
-        }
-        
-        emit executionProgress(id, progress);
-    }
-}
 
 void ToolExecutionDock::completeExecution(const QUuid& id, bool success, const QString& output) {
     if (executionMap_.contains(id)) {
@@ -1235,7 +729,6 @@ void ToolExecutionDock::completeExecution(const QUuid& id, bool success, const Q
         exec.duration = exec.startTime.msecsTo(exec.endTime);
         exec.state = success ? ToolExecutionState::Completed : ToolExecutionState::Failed;
         exec.output = output;
-        exec.progress = 100;
         
         if (!success && !output.isEmpty()) {
             exec.errorMessage = output;
@@ -1258,10 +751,19 @@ void ToolExecutionDock::completeExecution(const QUuid& id, bool success, const Q
         if (selectedExecution_ == id) {
             detailStatusLabel_->setText(success ? tr("Success") : tr("Failed"));
             detailDurationLabel_->setText(::llm_re::ui_v2::formatDuration(exec.getDuration()));
-            detailProgressBar_->setValue(100);
-            detailOutputEdit_->setPlainText(output);
-            retryButton_->setEnabled(!success && false);
-            cancelButton_->setEnabled(false);
+            
+            // Format output as JSON
+            QJsonParseError error;
+            QJsonDocument doc = QJsonDocument::fromJson(output.toUtf8(), &error);
+            if (error.error == QJsonParseError::NoError) {
+                detailOutputEdit_->setPlainText(doc.toJson(QJsonDocument::Indented));
+            } else {
+                // If not valid JSON, wrap in a JSON object
+                QJsonObject wrapper;
+                wrapper["raw_output"] = output;
+                QJsonDocument wrapperDoc(wrapper);
+                detailOutputEdit_->setPlainText(wrapperDoc.toJson(QJsonDocument::Indented));
+            }
         }
         
         // Update views
@@ -1291,10 +793,18 @@ void ToolExecutionDock::cancelExecution(const QUuid& id) {
             if (selectedExecution_ == id) {
                 detailStatusLabel_->setText(tr("Cancelled"));
                 detailDurationLabel_->setText(::llm_re::ui_v2::formatDuration(exec.getDuration()));
-                detailProgressBar_->setValue(exec.progress);
-                detailOutputEdit_->setPlainText(exec.output);
-                retryButton_->setEnabled(false);
-                cancelButton_->setEnabled(false);
+                // Format output as JSON
+                QJsonParseError error;
+                QJsonDocument doc = QJsonDocument::fromJson(exec.output.toUtf8(), &error);
+                if (error.error == QJsonParseError::NoError) {
+                    detailOutputEdit_->setPlainText(doc.toJson(QJsonDocument::Indented));
+                } else {
+                    // If not valid JSON, wrap in a JSON object
+                    QJsonObject wrapper;
+                    wrapper["raw_output"] = exec.output;
+                    QJsonDocument wrapperDoc(wrapper);
+                    detailOutputEdit_->setPlainText(wrapperDoc.toJson(QJsonDocument::Indented));
+                }
             }
             
             emit executionCancelled(id);
@@ -1348,55 +858,50 @@ void ToolExecutionDock::showExecution(const QUuid& id) {
             detailDurationLabel_->setText(tr("In progress..."));
         }
         
-        detailProgressBar_->setValue(exec.progress);
-        if (!exec.progressMessage.isEmpty()) {
-            detailProgressBar_->setFormat(exec.progressMessage + " %p%");
-        } else {
-            detailProgressBar_->setFormat("%p%");
-        }
         
         QJsonDocument doc(exec.parameters);
         detailParametersEdit_->setPlainText(doc.toJson(QJsonDocument::Indented));
         
-        detailOutputEdit_->setPlainText(exec.output);
+        // Format output as JSON
+        QJsonParseError error;
+        QJsonDocument outputDoc = QJsonDocument::fromJson(exec.output.toUtf8(), &error);
+        if (error.error == QJsonParseError::NoError) {
+            detailOutputEdit_->setPlainText(outputDoc.toJson(QJsonDocument::Indented));
+        } else {
+            // If not valid JSON, wrap in a JSON object
+            QJsonObject wrapper;
+            wrapper["raw_output"] = exec.output;
+            QJsonDocument wrapperDoc(wrapper);
+            detailOutputEdit_->setPlainText(wrapperDoc.toJson(QJsonDocument::Indented));
+        }
         
-        retryButton_->setEnabled(exec.state == ToolExecutionState::Failed && false);
-        cancelButton_->setEnabled(exec.state == ToolExecutionState::Running);
         
         // Show in current view
         int currentTabIndex = viewTabs_->currentIndex();
-        if (currentTabIndex < 2) {
-            // Tree or table view
+        if (currentTabIndex == 0) {
+            // List view
             QModelIndex index = model_->indexForId(id);
             if (index.isValid()) {
                 QModelIndex proxyIndex = proxyModel_->mapFromSource(index);
-                if (currentTabIndex == 0) {
-                    treeView_->scrollTo(proxyIndex);
-                    treeView_->setCurrentIndex(proxyIndex);
-                } else {
-                    tableView_->scrollTo(proxyIndex);
-                    tableView_->setCurrentIndex(proxyIndex);
-                }
+                treeView_->scrollTo(proxyIndex);
+                treeView_->setCurrentIndex(proxyIndex);
             }
-        } else if (currentTabIndex == 2) {
-            // Timeline view
-            timelineWidget_->highlightExecution(id);
         }
     }
 }
 
 void ToolExecutionDock::setViewMode(const QString& mode) {
     int index = 0;
-    if (mode == "table") index = 1;
-    else if (mode == "timeline") index = 2;
-    else if (mode == "performance") index = 3;
+    if (mode == "performance") index = 1;
     
     viewTabs_->setCurrentIndex(index);
 }
 
 void ToolExecutionDock::setTimeRange(const QDateTime& start, const QDateTime& end) {
-    timelineWidget_->setTimeRange(start, end);
+    timeRangeStart_ = start;
+    timeRangeEnd_ = end;
     chartWidget_->setTimeRange(start, end);
+    applyFilters();
 }
 
 void ToolExecutionDock::setToolFilter(const QStringList& tools) {
@@ -1496,7 +1001,6 @@ QJsonObject ToolExecutionDock::exportState() const {
         execObj["toolName"] = exec.toolName;
         execObj["parameters"] = exec.parameters;
         execObj["state"] = static_cast<int>(exec.state);
-        execObj["progress"] = exec.progress;
         execObj["output"] = exec.output;
         execObj["error"] = exec.errorMessage;
         execObj["startTime"] = exec.startTime.toString(Qt::ISODate);
@@ -1509,7 +1013,7 @@ QJsonObject ToolExecutionDock::exportState() const {
     state["executions"] = executionsArray;
     
     // Export view state
-    const QStringList viewModes = {"list", "table", "timeline", "performance"};
+    const QStringList viewModes = {"list", "performance"};
     int currentTab = viewTabs_->currentIndex();
     state["viewMode"] = (currentTab >= 0 && currentTab < viewModes.size()) ? viewModes[currentTab] : "list";
     state["autoScroll"] = autoScroll_;
@@ -1579,7 +1083,6 @@ void ToolExecutionDock::importState(const QJsonObject& state) {
             exec.toolName = execObj["toolName"].toString();
             exec.parameters = execObj["parameters"].toObject();
             exec.state = static_cast<ToolExecutionState>(execObj["state"].toInt());
-            exec.progress = execObj["progress"].toInt();
             exec.output = execObj["output"].toString();
             exec.errorMessage = execObj["error"].toString();
             exec.startTime = QDateTime::fromString(execObj["startTime"].toString(), Qt::ISODate);
@@ -1678,25 +1181,6 @@ void ToolExecutionDock::importState(const QJsonObject& state) {
     updateMetrics();
 }
 
-void ToolExecutionDock::retryExecution(const QUuid& id) {
-    if (executionMap_.contains(id)) {
-        ToolExecution& exec = *executionMap_[id];
-        if (exec.state == ToolExecutionState::Failed && false) {
-            // retryCount not available in ToolExecution
-            
-            // Start new execution with same parameters
-            QUuid newId = startExecution(exec.toolName, exec.parameters);
-            
-            // Link as retry
-            if (executionMap_.contains(newId)) {
-                executionMap_[newId]->dependencyIds.append(id);
-                // dependents not available in ToolExecution
-            }
-            
-            emit retryRequested(id);
-        }
-    }
-}
 
 void ToolExecutionDock::clearHistory() {
     auto reply = QMessageBox::question(
@@ -1723,8 +1207,6 @@ void ToolExecutionDock::clearHistory() {
 }
 
 void ToolExecutionDock::updateMetrics() {
-    // Update timeline
-    timelineWidget_->setExecutions(executions_);
     
     // Update chart
     chartWidget_->setExecutions(executions_);
@@ -1763,8 +1245,6 @@ void ToolExecutionDock::onSelectionChanged() {
     int currentTabIndex = viewTabs_->currentIndex();
     if (currentTabIndex == 0) {
         selModel = treeView_->selectionModel();
-    } else if (currentTabIndex == 1) {
-        selModel = tableView_->selectionModel();
     }
     
     if (selModel && selModel->hasSelection()) {
@@ -1784,9 +1264,6 @@ void ToolExecutionDock::onCustomContextMenu(const QPoint& pos) {
     }
 }
 
-void ToolExecutionDock::onTimelineExecutionClicked(const QUuid& id) {
-    showExecution(id);
-}
 
 void ToolExecutionDock::onChartDataPointClicked(const QString& label, double value) {
     Q_UNUSED(value);
@@ -1844,8 +1321,6 @@ void ToolExecutionDock::updateRunningExecutions() {
     }
     
     if (hasUpdates) {
-        // Update timeline
-        timelineWidget_->update();
     }
 }
 
@@ -1885,7 +1360,7 @@ void ToolExecutionDock::saveSettings() {
     QSettings settings;
     settings.beginGroup("ToolExecutionDock");
     
-    const QStringList viewModes = {"list", "table", "timeline", "performance"};
+    const QStringList viewModes = {"list", "performance"};
     int currentTab = viewTabs_->currentIndex();
     QString viewMode = (currentTab >= 0 && currentTab < viewModes.size()) ? viewModes[currentTab] : "list";
     settings.setValue("viewMode", viewMode);
@@ -1907,11 +1382,9 @@ void ToolExecutionDock::saveSettings() {
 
 void ToolExecutionDock::applyFilters() {
     // Apply filters to proxy model
-    proxyModel_->setFilterFixedString(""); // Reset
-    
-    // Custom filter logic would go here
-    // For now, just emit signal
-    emit executionStarted(QUuid()); // Trigger update
+    proxyModel_->setToolFilter(toolFilter_);
+    proxyModel_->setStatusFilter(statusFilter_);
+    proxyModel_->setTimeRange(timeRangeStart_, timeRangeEnd_);
 }
 
 // ExecutionModel implementation
@@ -1968,8 +1441,6 @@ QVariant ToolExecutionDock::ExecutionModel::data(const QModelIndex& index, int r
                 case ToolExecutionState::Cancelled: return tr("Cancelled");
             }
             break;
-        case ProgressColumn:
-            return QString("%1%").arg(exec.progress);
         case DurationColumn:
             if (exec.getDuration() > 0) {
                 if (exec.getDuration() < 1000) {
@@ -1994,9 +1465,9 @@ QVariant ToolExecutionDock::ExecutionModel::data(const QModelIndex& index, int r
         }
     } else if (role == Qt::ForegroundRole) {
         if (exec.state == ToolExecutionState::Failed) {
-            return QColor("#F44336");
+            return ThemeColor("statusFailed");
         } else if (exec.state == ToolExecutionState::Completed) {
-            return QColor("#4CAF50");
+            return ThemeColor("statusCompleted");
         }
     } else if (role == ExecutionRole) {
         return QVariant::fromValue(exec);
@@ -2004,8 +1475,6 @@ QVariant ToolExecutionDock::ExecutionModel::data(const QModelIndex& index, int r
         return exec.id;
     } else if (role == StatusRole) {
         return static_cast<int>(exec.state);
-    } else if (role == ProgressRole) {
-        return exec.progress;
     }
     
     return QVariant();
@@ -2019,7 +1488,6 @@ QVariant ToolExecutionDock::ExecutionModel::headerData(int section, Qt::Orientat
     switch (section) {
         case ToolColumn: return tr("Tool");
         case StatusColumn: return tr("Status");
-        case ProgressColumn: return tr("Progress");
         case DurationColumn: return tr("Duration");
         case StartTimeColumn: return tr("Start Time");
         case OutputColumn: return tr("Output");

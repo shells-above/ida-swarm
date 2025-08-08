@@ -1,11 +1,20 @@
 #include "../../core/ui_v2_common.h"
 #include "chart_types.h"
+#include "../../core/theme_manager.h"
+#include "../../core/color_constants.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace llm_re::ui_v2::charts {
+
+// EffectsConfig constructor
+EffectsConfig::EffectsConfig() {
+    // Initialize shadow color from theme or use default
+    const auto& colors = ThemeManager::instance().colors();
+    shadowColor = colors.shadow;
+}
 
 // AnimationState implementation
 float AnimationState::getEasedProgress() const {
@@ -61,6 +70,28 @@ float AnimationState::getEasedProgress() const {
 
 // ColorPalette implementation
 const std::vector<QColor>& ColorPalette::getDefaultPalette() {
+    // Use theme's primary colors to generate a palette
+    static std::vector<QColor> themeBasedPalette;
+    if (themeBasedPalette.empty()) {
+        const auto& colors = ThemeManager::instance().colors();
+        themeBasedPalette = {
+            colors.primary,
+            colors.success,
+            colors.warning,
+            colors.error,
+            colors.info,
+            colors.syntaxKeyword,
+            colors.syntaxString,
+            colors.syntaxFunction,
+            colors.syntaxVariable,
+            colors.syntaxOperator
+        };
+    }
+    if (!themeBasedPalette.empty()) {
+        return themeBasedPalette;
+    }
+    
+    // Fallback to hardcoded palette only if theme doesn't provide colors
     static const std::vector<QColor> palette = {
         QColor(59, 130, 246),     // Blue
         QColor(16, 185, 129),     // Green
@@ -77,6 +108,22 @@ const std::vector<QColor>& ColorPalette::getDefaultPalette() {
 }
 
 const std::vector<QColor>& ColorPalette::getVibrantPalette() {
+    // For vibrant palette, we'll modify the theme colors to be more saturated
+    static std::vector<QColor> vibratedThemeColors;
+    const auto& themeColors = getDefaultPalette();
+    
+    if (!themeColors.empty() && vibratedThemeColors.empty()) {
+        vibratedThemeColors.reserve(themeColors.size());
+        for (const auto& color : themeColors) {
+            // Increase saturation for vibrant effect
+            QColor vibrant = color.toHsv();
+            vibrant.setHsv(vibrant.hue(), 255, vibrant.value());
+            vibratedThemeColors.push_back(vibrant.toRgb());
+        }
+        return vibratedThemeColors;
+    }
+    
+    // Fallback palette
     static const std::vector<QColor> palette = {
         QColor(255, 0, 102),      // Hot pink
         QColor(0, 255, 102),      // Lime
@@ -93,6 +140,25 @@ const std::vector<QColor>& ColorPalette::getVibrantPalette() {
 }
 
 const std::vector<QColor>& ColorPalette::getPastelPalette() {
+    // For pastel palette, we'll modify the theme colors to be lighter
+    static std::vector<QColor> pastelThemeColors;
+    const auto& themeColors = getDefaultPalette();
+    
+    if (!themeColors.empty() && pastelThemeColors.empty()) {
+        pastelThemeColors.reserve(themeColors.size());
+        for (const auto& color : themeColors) {
+            // Create pastel version by mixing with white
+            QColor pastel = QColor(
+                (color.red() + 255 * 2) / 3,
+                (color.green() + 255 * 2) / 3,
+                (color.blue() + 255 * 2) / 3
+            );
+            pastelThemeColors.push_back(pastel);
+        }
+        return pastelThemeColors;
+    }
+    
+    // Fallback palette
     static const std::vector<QColor> palette = {
         QColor(255, 179, 186),    // Pastel pink
         QColor(186, 255, 201),    // Pastel green
@@ -128,7 +194,7 @@ const std::vector<QColor>& ColorPalette::getMonochromaticPalette(const QColor& b
 }
 
 QColor ColorPalette::getColorAt(int index, const std::vector<QColor>& palette) {
-    if (palette.empty()) return Qt::black;
+    if (palette.empty()) return ThemeManager::instance().colors().textPrimary;
     return palette[index % palette.size()];
 }
 
@@ -235,6 +301,11 @@ QColor ChartUtils::lerp(const QColor& a, const QColor& b, double t) {
         static_cast<int>(lerp(a.blue(), b.blue(), t)),
         static_cast<int>(lerp(a.alpha(), b.alpha(), t))
     );
+}
+
+QColor ChartUtils::interpolateColor(const QColor& from, const QColor& to, double t) {
+    // Same as lerp, but provided as an alias for clarity
+    return lerp(from, to, t);
 }
 
 QPointF ChartUtils::calculateBezierPoint(const QPointF& p0, const QPointF& p1, 
@@ -396,7 +467,7 @@ void ChartUtils::drawGlassMorphism(QPainter* painter, const QRectF& rect, const 
     painter->save();
     
     // Create glass effect with semi-transparent background
-    QColor glassColor = Qt::white;
+    QColor glassColor = ThemeManager::instance().colors().surface;
     glassColor.setAlpha(static_cast<int>(effects.glassOpacity * 255));
     
     // Draw background with blur effect simulation
@@ -415,7 +486,7 @@ void ChartUtils::drawGlassMorphism(QPainter* painter, const QRectF& rect, const 
     painter->fillPath(path, glassColor);
     
     // Glass border
-    QPen borderPen(QColor(255, 255, 255, 50));
+    QPen borderPen(ThemeManager::instance().colors().border);
     borderPen.setWidth(1);
     painter->setPen(borderPen);
     painter->drawPath(path);

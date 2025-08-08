@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../core/ui_v2_common.h"
-#include "tool_execution.h"
 
 namespace llm_re::ui_v2 {
 
@@ -18,7 +17,6 @@ enum class MessageType {
     Text,
     Code,
     Analysis,
-    ToolExecution,
     Error,
     Info,
     Warning
@@ -98,11 +96,6 @@ public:
     MessageMetadata& metadata() { return metadata_; }
     const MessageMetadata& metadata() const { return metadata_; }
     
-    // Tool execution
-    bool hasToolExecution() const { return toolExecution_ != nullptr; }
-    ToolExecution* toolExecution() { return toolExecution_.get(); }
-    const ToolExecution* toolExecution() const { return toolExecution_.get(); }
-    void setToolExecution(std::unique_ptr<ToolExecution> execution);
     
     // Analysis
     bool hasAnalysis() const { return !analysisEntries_.empty(); }
@@ -145,7 +138,6 @@ private:
     MessageRole role_ = MessageRole::User;
     MessageType type_ = MessageType::Text;
     MessageMetadata metadata_;
-    std::unique_ptr<ToolExecution> toolExecution_;
     std::vector<AnalysisEntry> analysisEntries_;
     std::vector<MessageAttachment> attachments_;
 };
@@ -168,7 +160,6 @@ public:
         MessageTypeRole,
         MessageIdRole,
         MessageObjectRole,
-        ToolExecutionRole,
         AnalysisRole,
         AttachmentsRole,
         MetadataRole,
@@ -209,12 +200,6 @@ public:
     void addMessages(std::vector<std::unique_ptr<Message>> messages);
     void removeMessages(const QSet<QUuid>& ids);
     
-    // Tool execution updates
-    void updateToolExecution(const QUuid& messageId, 
-                           const std::function<void(ToolExecution*)>& updater);
-    void setToolExecutionState(const QUuid& messageId, ToolExecutionState state);
-    void setToolExecutionProgress(const QUuid& messageId, int value, const QString& text = QString());
-    void addToolExecutionOutput(const QUuid& messageId, const QString& output);
     
     
     // Filtering and search
@@ -244,9 +229,6 @@ public:
         int totalMessages = 0;
         int userMessages = 0;
         int assistantMessages = 0;
-        int toolExecutions = 0;
-        int successfulTools = 0;
-        int failedTools = 0;
         int totalAnalyses = 0;
         QMap<QString, int> analysisByType;
         QMap<QString, int> toolUsageCount;
@@ -262,20 +244,11 @@ public:
     void endBatchUpdate();
     bool isBatchUpdating() const { return batchUpdateCount_ > 0; }
     
-    // Undo/Redo support
-    void setUndoStack(QUndoStack* stack) { undoStack_ = stack; }
-    bool canUndo() const;
-    bool canRedo() const;
-    void undo();
-    void redo();
     
 signals:
     void messageAdded(const QUuid& id);
     void messageRemoved(const QUuid& id);
     void messageUpdated(const QUuid& id);
-    void toolExecutionStarted(const QUuid& messageId);
-    void toolExecutionCompleted(const QUuid& messageId, bool success);
-    void toolExecutionProgress(const QUuid& messageId, int value);
     void searchMatchesChanged(int count);
     void statisticsChanged();
     void conversationCleared();
@@ -308,7 +281,6 @@ private:
     // State
     int batchUpdateCount_ = 0;
     QSet<QUuid> searchMatches_;
-    QUndoStack* undoStack_ = nullptr;
     
     // Performance
     mutable QHash<QUuid, ConversationStats> statsCache_;
@@ -346,8 +318,6 @@ signals:
 private:
     void drawMessageBubble(QPainter* painter, const QStyleOptionViewItem& option,
                           const Message* message, bool isSelected) const;
-    void drawToolExecution(QPainter* painter, const QRect& rect,
-                          const ToolExecution* execution) const;
     void drawAnalysisEntries(QPainter* painter, const QRect& rect,
                            const std::vector<AnalysisEntry>& entries) const;
     void drawAttachments(QPainter* painter, const QRect& rect,

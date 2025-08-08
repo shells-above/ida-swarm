@@ -1,5 +1,6 @@
 #include "ui_v2_common.h"
 #include "ui_utils.h"
+#include "theme_manager.h"
 #include "ui_constants.h"
 
 namespace llm_re::ui_v2 {
@@ -239,8 +240,24 @@ QWidget* UIUtils::findNextFocusWidget(QWidget* current, bool forward) {
 
 QString UIUtils::formatTimestamp(const std::chrono::system_clock::time_point& time) {
     auto time_t = std::chrono::system_clock::to_time_t(time);
+    auto now_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    
+    struct tm time_tm, now_tm;
+    localtime_r(&time_t, &time_tm);
+    localtime_r(&now_t, &now_tm);
+    
     char buffer[100];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", std::localtime(&time_t));
+    
+    // If same day, show only time
+    if (time_tm.tm_year == now_tm.tm_year && 
+        time_tm.tm_mon == now_tm.tm_mon && 
+        time_tm.tm_mday == now_tm.tm_mday) {
+        std::strftime(buffer, sizeof(buffer), "%H:%M:%S", &time_tm);
+    } else {
+        // Otherwise show date and time
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &time_tm);
+    }
+    
     return QString::fromLocal8Bit(buffer);
 }
 
@@ -338,7 +355,8 @@ QColor UIUtils::blendColors(const QColor& color1, const QColor& color2, qreal ra
 }
 
 QColor UIUtils::contrastColor(const QColor& background) {
-    return isColorLight(background) ? Qt::black : Qt::white;
+    ThemeManager &tm = ThemeManager::instance();
+    return isColorLight(background) ? tm.colors().textPrimary : tm.colors().background;
 }
 
 bool UIUtils::isColorLight(const QColor& color) {

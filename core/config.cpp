@@ -1,4 +1,6 @@
 #include "config.h"
+#include <ida.hpp>
+#include <kernwin.hpp>
 
 namespace llm_re {
 
@@ -23,15 +25,12 @@ bool Config::save_to_file(const std::string& path) const {
         // UI settings
         j["ui"]["log_buffer_size"] = ui.log_buffer_size;
         j["ui"]["auto_scroll"] = ui.auto_scroll;
-        j["ui"]["theme"] = ui.theme;
+        j["ui"]["theme_name"] = ui.theme_name;
         j["ui"]["font_size"] = ui.font_size;
         j["ui"]["show_timestamps"] = ui.show_timestamps;
         j["ui"]["show_tool_details"] = ui.show_tool_details;
         
         // Window management
-        j["ui"]["show_tray_icon"] = ui.show_tray_icon;
-        j["ui"]["minimize_to_tray"] = ui.minimize_to_tray;
-        j["ui"]["close_to_tray"] = ui.close_to_tray;
         j["ui"]["start_minimized"] = ui.start_minimized;
         j["ui"]["remember_window_state"] = ui.remember_window_state;
         
@@ -39,12 +38,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["ui"]["auto_save_conversations"] = ui.auto_save_conversations;
         j["ui"]["auto_save_interval"] = ui.auto_save_interval;
         j["ui"]["density_mode"] = ui.density_mode;
-        
-        // Inspector
-        j["ui"]["inspector_follow_cursor"] = ui.inspector_follow_cursor;
-        j["ui"]["inspector_opacity"] = ui.inspector_opacity;
-        j["ui"]["inspector_auto_hide"] = ui.inspector_auto_hide;
-        j["ui"]["inspector_auto_hide_delay"] = ui.inspector_auto_hide_delay;
 
         // Write to file
         std::ofstream file(path);
@@ -90,15 +83,12 @@ bool Config::load_from_file(const std::string& path) {
         if (j.contains("ui")) {
             ui.log_buffer_size = j["ui"].value("log_buffer_size", ui.log_buffer_size);
             ui.auto_scroll = j["ui"].value("auto_scroll", ui.auto_scroll);
-            ui.theme = j["ui"].value("theme", ui.theme);
+            ui.theme_name = j["ui"].value("theme_name", ui.theme_name);
             ui.font_size = j["ui"].value("font_size", ui.font_size);
             ui.show_timestamps = j["ui"].value("show_timestamps", ui.show_timestamps);
             ui.show_tool_details = j["ui"].value("show_tool_details", ui.show_tool_details);
             
             // Window management
-            ui.show_tray_icon = j["ui"].value("show_tray_icon", ui.show_tray_icon);
-            ui.minimize_to_tray = j["ui"].value("minimize_to_tray", ui.minimize_to_tray);
-            ui.close_to_tray = j["ui"].value("close_to_tray", ui.close_to_tray);
             ui.start_minimized = j["ui"].value("start_minimized", ui.start_minimized);
             ui.remember_window_state = j["ui"].value("remember_window_state", ui.remember_window_state);
             
@@ -106,12 +96,6 @@ bool Config::load_from_file(const std::string& path) {
             ui.auto_save_conversations = j["ui"].value("auto_save_conversations", ui.auto_save_conversations);
             ui.auto_save_interval = j["ui"].value("auto_save_interval", ui.auto_save_interval);
             ui.density_mode = j["ui"].value("density_mode", ui.density_mode);
-            
-            // Inspector
-            ui.inspector_follow_cursor = j["ui"].value("inspector_follow_cursor", ui.inspector_follow_cursor);
-            ui.inspector_opacity = j["ui"].value("inspector_opacity", ui.inspector_opacity);
-            ui.inspector_auto_hide = j["ui"].value("inspector_auto_hide", ui.inspector_auto_hide);
-            ui.inspector_auto_hide_delay = j["ui"].value("inspector_auto_hide_delay", ui.inspector_auto_hide_delay);
         }
 
 
@@ -120,6 +104,22 @@ bool Config::load_from_file(const std::string& path) {
         msg("LLM RE: Error loading config: %s\n", e.what());
         return false;
     }
+}
+
+void Config::save() const {
+    // Get default config path
+    char config_path[QMAXPATH];
+    qstrncpy(config_path, get_user_idadir(), sizeof(config_path));
+    qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
+    
+    if (!save_to_file(config_path)) {
+        msg("LLM RE: ERROR - Failed to save configuration to: %s\n", config_path);
+    }
+}
+
+void Config::reset() {
+    // Reset to a freshly constructed Config
+    *this = Config();
 }
 
 } // namespace llm_re

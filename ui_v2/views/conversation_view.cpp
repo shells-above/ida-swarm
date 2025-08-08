@@ -3,11 +3,9 @@
 
 #include "main_window.h"
 #include "memory_dock.h"
-#include "statistics_dock.h"
 #include "tool_execution_dock.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include "../widgets/command_palette.h"
 #include "api/anthropic_api.h"
 #include "ui_v2/core/agent_controller.h"
 
@@ -214,13 +212,6 @@ void ConversationView::createToolBar() {
     auto* spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar_->addWidget(spacer);
-    
-    // Session info
-    auto* sessionLabel = new QLabel(this);
-    sessionLabel->setText(tr("Session: %1").arg(sessionId_.left(8)));
-    sessionLabel->setStyleSheet(QString("color: %1; margin: 0 10px;")
-                              .arg(ThemeManager::instance().colors().textSecondary.name()));
-    toolBar_->addWidget(sessionLabel);
 }
 
 void ConversationView::createMessageArea() {
@@ -301,8 +292,42 @@ void ConversationView::createInputArea() {
     cancelButton_->hide();
     connect(cancelButton_, &QPushButton::clicked, this, &ConversationView::cancelInput);
     
+    // Resume button (hidden by default)
+    resumeButton_ = new QPushButton(tr("Resume"), this);
+    resumeButton_->setIcon(ThemeManager::instance().themedIcon("media-playback-start"));
+    resumeButton_->hide();
+    resumeButton_->setToolTip(tr("Resume paused analysis"));
+    connect(resumeButton_, &QPushButton::clicked, [this]() {
+        // Get agent controller and resume
+        if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+            if (UiController* uiController = mainWindow->uiController()) {
+                if (AgentController* agentController = uiController->agentController()) {
+                    agentController->resumeExecution();
+                }
+            }
+        }
+    });
+    
+    // Stop button (hidden by default)
+    stopButton_ = new QPushButton(tr("Stop"), this);
+    stopButton_->setIcon(ThemeManager::instance().themedIcon("media-playback-stop"));
+    stopButton_->hide();
+    stopButton_->setToolTip(tr("Stop running analysis"));
+    connect(stopButton_, &QPushButton::clicked, [this]() {
+        // Get agent controller and stop
+        if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+            if (UiController* uiController = mainWindow->uiController()) {
+                if (AgentController* agentController = uiController->agentController()) {
+                    agentController->stopExecution();
+                }
+            }
+        }
+    });
+    
     buttonLayout->addWidget(sendButton_);
     buttonLayout->addWidget(cancelButton_);
+    buttonLayout->addWidget(resumeButton_);
+    buttonLayout->addWidget(stopButton_);
     buttonLayout->addStretch();
     
     inputLayout->addWidget(buttonContainer);
@@ -427,11 +452,6 @@ void ConversationView::addSystemMessage(const QString& content) {
 void ConversationView::addToolMessage(const QString& toolName, const QString& content) {
     auto msg = std::make_unique<Message>(content, MessageRole::Tool);
     msg->metadata().author = toolName;
-    
-    auto exec = std::make_unique<ToolExecution>();
-    exec->toolName = toolName;
-    exec->state = ToolExecutionState::Pending;
-    msg->setToolExecution(std::move(exec));
     
     addMessage(std::move(msg));
 }
@@ -558,43 +578,6 @@ void ConversationView::setMaxBubbleWidth(int width) {
 }
 
 
-void ConversationView::startToolExecution(const QUuid& messageId, const QString& toolName) {
-    if (!model_) return;
-    
-    model_->setToolExecutionState(messageId, ToolExecutionState::Running);
-    
-    // Update bubble
-    if (MessageBubble* bubble = bubbleContainer_->getBubble(messageId)) {
-        bubble->updateToolExecution();
-    }
-}
-
-void ConversationView::updateToolProgress(const QUuid& messageId, int progress, const QString& status) {
-    if (!model_) return;
-    
-    model_->setToolExecutionProgress(messageId, progress, status);
-    
-    // Update bubble
-    if (MessageBubble* bubble = bubbleContainer_->getBubble(messageId)) {
-        bubble->updateToolExecution();
-    }
-}
-
-void ConversationView::completeToolExecution(const QUuid& messageId, bool success, const QString& output) {
-    if (!model_) return;
-    
-    model_->setToolExecutionState(messageId, 
-                                 success ? ToolExecutionState::Completed : ToolExecutionState::Failed);
-    
-    if (!output.isEmpty()) {
-        model_->addToolExecutionOutput(messageId, output);
-    }
-    
-    // Update bubble
-    if (MessageBubble* bubble = bubbleContainer_->getBubble(messageId)) {
-        bubble->updateToolExecution();
-    }
-}
 
 void ConversationView::setAutoSaveEnabled(bool enabled) {
     autoSaveEnabled_ = enabled;
@@ -669,36 +652,42 @@ void ConversationView::saveSession(const QString& path) {
     session["conversation"] = conversation;
     
     // Agent state (if agent controller is connected)
-    // TODO: Need to implement agent state saving once AgentController is accessible
-    // Currently UiController doesn't have isRunning(), isPaused(), getAgentState(), getTokenUsage() methods
-    /*
     if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
-        if (AgentController *controller = mainWindow->agentController()) {
-            QJsonObject agentState;
-            agentState["active"] = controller->isRunning() || controller->isPaused();
-            
-            if (controller->isRunning() || controller->isPaused()) {
-                // Get full agent state
-                json state = controller->getAgentState();
-                agentState["state"] = QJsonDocument::fromJson(
-                    QString::fromStdString(state.dump()).toUtf8()).object();
+        if (UiController* uiController = mainWindow->uiController()) {
+            if (AgentController* controller = uiController->agentController()) {
+                QJsonObject agentState;
+                agentState["active"] = controller->isRunning() || controller->isPaused();
+                agentState["paused"] = controller->isPaused();
+                agentState["completed"] = controller->isCompleted();
                 
-                // Get token usage
-                api::TokenUsage usage = controller->getTokenUsage();
-                QJsonObject tokenUsage;
-                tokenUsage["inputTokens"] = usage.input_tokens;
-                tokenUsage["outputTokens"] = usage.output_tokens;
-                tokenUsage["cacheCreationTokens"] = usage.cache_creation_tokens;
-                tokenUsage["cacheReadTokens"] = usage.cache_read_tokens;
-                tokenUsage["model"] = QString::fromStdString(api::model_to_string(usage.model));
-                tokenUsage["estimatedCost"] = usage.estimated_cost();
-                agentState["tokenUsage"] = tokenUsage;
+                if (controller->isRunning() || controller->isPaused()) {
+                    // Get full agent state
+                    json state = controller->getAgentState();
+                    agentState["state"] = QJsonDocument::fromJson(
+                        QString::fromStdString(state.dump()).toUtf8()).object();
+                    
+                    // Get token usage
+                    api::TokenUsage usage = controller->getTokenUsage();
+                    QJsonObject tokenUsage;
+                    tokenUsage["inputTokens"] = usage.input_tokens;
+                    tokenUsage["outputTokens"] = usage.output_tokens;
+                    tokenUsage["cacheCreationTokens"] = usage.cache_creation_tokens;
+                    tokenUsage["cacheReadTokens"] = usage.cache_read_tokens;
+                    tokenUsage["model"] = QString::fromStdString(api::model_to_string(usage.model));
+                    tokenUsage["estimatedCost"] = usage.estimated_cost();
+                    agentState["tokenUsage"] = tokenUsage;
+                    
+                    // Store last error if any
+                    std::string lastError = controller->getLastError();
+                    if (!lastError.empty()) {
+                        agentState["lastError"] = QString::fromStdString(lastError);
+                    }
+                }
+                
+                session["agent"] = agentState;
             }
-            
-            session["agent"] = agentState;
         }
     }
-    */
     
     // UI state
     QJsonObject uiState;
@@ -723,9 +712,6 @@ void ConversationView::saveSession(const QString& path) {
             dockStates["toolExecution"] = toolDock->exportState();
         }
         
-        if (auto statsDock = mainWindow->statsDock()) {
-            dockStates["statistics"] = statsDock->exportState();
-        }
         
         uiState["docks"] = dockStates;
     }
@@ -898,10 +884,6 @@ void ConversationView::loadSession(const QString& path) {
                     if (dockStates.contains("toolExecution") && mainWindow->toolDock()) {
                         mainWindow->toolDock()->importState(dockStates["toolExecution"].toObject());
                     }
-                    
-                    if (dockStates.contains("statistics") && mainWindow->statsDock()) {
-                        mainWindow->statsDock()->importState(dockStates["statistics"].toObject());
-                    }
                 }
             }
             
@@ -958,6 +940,26 @@ void ConversationView::loadSession(const QString& path) {
 void ConversationView::finishInitialization() {
     // Called by MainWindow after all initial setup is complete
     isInitializing_ = false;
+    
+    // Connect to agent controller signals if available
+    if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+        if (UiController* uiController = mainWindow->uiController()) {
+            if (AgentController* agentController = uiController->agentController()) {
+                // Connect agent state change signals
+                connect(agentController, &AgentController::agentStarted, 
+                        this, &ConversationView::onAgentStateChanged);
+                connect(agentController, &AgentController::agentPaused, 
+                        this, &ConversationView::onAgentStateChanged);
+                connect(agentController, &AgentController::agentCompleted, 
+                        this, &ConversationView::onAgentStateChanged);
+                connect(agentController, &AgentController::agentStopped, 
+                        this, &ConversationView::onAgentStateChanged);
+                
+                // Initial button state update
+                updateButtonStates();
+            }
+        }
+    }
 }
 
 void ConversationView::newSession() {
@@ -1037,6 +1039,11 @@ void ConversationView::hideTypingIndicator() {
 
 void ConversationView::updateTheme() {
     // Handled by onThemeChanged
+}
+
+void ConversationView::onAgentStateChanged() {
+    // Update button states when agent state changes
+    updateButtonStates();
 }
 
 void ConversationView::resizeEvent(QResizeEvent* event) {
@@ -1226,7 +1233,7 @@ void ConversationView::onBubbleDeleteRequested(const QUuid& id) {
 }
 
 void ConversationView::onInputTextChanged() {
-    updateSendButtonState();
+    updateButtonStates();
     
     // Update word count
     if (inputArea_) {
@@ -1273,9 +1280,42 @@ void ConversationView::onAutoSaveTimeout() {
     }
 }
 
-void ConversationView::updateSendButtonState() {
+void ConversationView::updateButtonStates() {
     bool hasText = inputArea_ && inputArea_->hasText();
-    sendButton_->setEnabled(hasText);
+    
+    // Get agent controller state if available
+    AgentController* agentController = nullptr;
+    if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
+        if (UiController* uiController = mainWindow->uiController()) {
+            agentController = uiController->agentController();
+        }
+    }
+    
+    // Update button visibility based on agent state
+    if (agentController) {
+        bool isRunning = agentController->isRunning();
+        bool isPaused = agentController->isPaused();
+        
+        // Resume button: shown when agent is paused
+        resumeButton_->setVisible(isPaused);
+        resumeButton_->setEnabled(isPaused);
+        
+        // Stop button: shown when agent is running
+        stopButton_->setVisible(isRunning);
+        stopButton_->setEnabled(isRunning);
+        
+        // Send button: enabled when has text and agent not running
+        sendButton_->setEnabled(hasText && !isRunning);
+        sendButton_->setVisible(!isPaused); // Hide when paused to show resume instead
+        
+        // Cancel button stays hidden unless typing
+        // (existing behavior)
+    } else {
+        // No agent controller, fall back to simple behavior
+        sendButton_->setEnabled(hasText);
+        resumeButton_->hide();
+        stopButton_->hide();
+    }
 }
 
 void ConversationView::handleFileDropped(const QString& filePath) {
@@ -1623,8 +1663,49 @@ void ConversationInputArea::setPlaceholder(const QString& text) {
 }
 
 void ConversationInputArea::setMaxLength(int length) {
-    // For QTextEdit, we'd need to handle this in textChanged signal
-    // Not implementing for now as it's not used
+    // Store max length for later use
+    maxLength_ = length;
+    
+    // Connect to textChanged if not already connected
+    if (length > 0 && !maxLengthConnected_ && textEdit_) {
+        maxLengthConnected_ = true;
+        
+        // Disconnect existing textChanged connections first
+        disconnect(textEdit_, &QTextEdit::textChanged, nullptr, nullptr);
+        
+        // Reconnect with max length enforcement
+        connect(textEdit_, &QTextEdit::textChanged, [this]() {
+            // Check length and truncate if needed
+            QString text = textEdit_->toPlainText();
+            if (maxLength_ > 0 && text.length() > maxLength_) {
+                // Block signals to prevent recursion
+                textEdit_->blockSignals(true);
+                
+                // Preserve cursor position
+                QTextCursor cursor = textEdit_->textCursor();
+                int cursorPos = cursor.position();
+                
+                // Truncate text
+                text = text.left(maxLength_);
+                textEdit_->setPlainText(text);
+                
+                // Restore cursor position (at end if it was beyond max)
+                cursor.setPosition(qMin(cursorPos, text.length()));
+                textEdit_->setTextCursor(cursor);
+                
+                // Show warning
+                QToolTip::showText(textEdit_->mapToGlobal(QPoint(0, 0)), 
+                                  tr("Maximum length of %1 characters reached").arg(maxLength_),
+                                  textEdit_, QRect(), 3000);
+                
+                textEdit_->blockSignals(false);
+            }
+            
+            // Emit signals
+            emit textChanged();
+            adjustHeight();
+        });
+    }
 }
 
 int ConversationInputArea::wordCount() const {
@@ -1692,6 +1773,278 @@ void ConversationInputArea::dropEvent(QDropEvent* event) {
     }
     
     event->acceptProposedAction();
+}
+
+// ConversationSidePanel implementation
+
+ConversationSidePanel::ConversationSidePanel(QWidget* parent)
+    : BaseStyledWidget(parent) {
+    
+    setShadowEnabled(true);
+    setBorderWidth(1);
+    
+    setupUI();
+}
+
+void ConversationSidePanel::setupUI() {
+    auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setSpacing(0);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    
+    // Header with close button
+    auto* header = new QWidget(this);
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(Design::SPACING_MD, Design::SPACING_SM, 
+                                   Design::SPACING_MD, Design::SPACING_SM);
+    
+    auto* titleLabel = new QLabel(tr("Session Info"), this);
+    titleLabel->setFont(ThemeManager::instance().typography().heading3);
+    headerLayout->addWidget(titleLabel, 1);
+    
+    auto* closeButton = new QToolButton(this);
+    closeButton->setIcon(ThemeManager::instance().themedIcon("close"));
+    closeButton->setAutoRaise(true);
+    connect(closeButton, &QToolButton::clicked, [this]() {
+        hide();
+        emit panelClosed();
+    });
+    headerLayout->addWidget(closeButton);
+    
+    mainLayout->addWidget(header);
+    
+    // Tab widget
+    auto* tabWidget = new QTabWidget(this);
+    tabWidget->setDocumentMode(true);
+    
+    // Create panels
+    createInfoPanel();
+    tabWidget->addTab(infoPanel_, tr("Info"));
+    
+    createToolsPanel();
+    tabWidget->addTab(toolsPanel_, tr("Tools"));
+    
+    createHistoryPanel();
+    tabWidget->addTab(historyPanel_, tr("History"));
+    
+    createSettingsPanel();
+    tabWidget->addTab(settingsPanel_, tr("Settings"));
+    
+    mainLayout->addWidget(tabWidget, 1);
+    
+    // Initial size
+    setFixedWidth(300);
+}
+
+void ConversationSidePanel::createInfoPanel() {
+    infoPanel_ = new QWidget(this);
+    auto* layout = new QVBoxLayout(infoPanel_);
+    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
+                              Design::SPACING_MD, Design::SPACING_MD);
+    layout->setSpacing(Design::SPACING_MD);
+    
+    // Statistics section
+    auto* statsGroup = new QGroupBox(tr("Statistics"), this);
+    auto* statsLayout = new QFormLayout(statsGroup);
+    
+    messageCountLabel_ = new QLabel("0", this);
+    statsLayout->addRow(tr("Messages:"), messageCountLabel_);
+    
+    wordCountLabel_ = new QLabel("0", this);
+    statsLayout->addRow(tr("Words:"), wordCountLabel_);
+    
+    durationLabel_ = new QLabel("00:00", this);
+    statsLayout->addRow(tr("Duration:"), durationLabel_);
+    
+    toolCountLabel_ = new QLabel("0", this);
+    statsLayout->addRow(tr("Tools Used:"), toolCountLabel_);
+    
+    layout->addWidget(statsGroup);
+    
+    // Participants section
+    auto* participantsGroup = new QGroupBox(tr("Participants"), this);
+    auto* participantsLayout = new QVBoxLayout(participantsGroup);
+    
+    participantsList_ = new QListWidget(this);
+    participantsList_->setMaximumHeight(100);
+    participantsLayout->addWidget(participantsList_);
+    
+    layout->addWidget(participantsGroup);
+    
+    layout->addStretch();
+}
+
+void ConversationSidePanel::createToolsPanel() {
+    toolsPanel_ = new QWidget(this);
+    auto* layout = new QVBoxLayout(toolsPanel_);
+    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
+                              Design::SPACING_MD, Design::SPACING_MD);
+    layout->setSpacing(Design::SPACING_MD);
+    
+    // Available tools list
+    auto* label = new QLabel(tr("Available Tools"), this);
+    label->setFont(ThemeManager::instance().typography().heading3);
+    layout->addWidget(label);
+    
+    toolsList_ = new QListWidget(this);
+    layout->addWidget(toolsList_, 1);
+    
+    // Add some default tools
+    toolsList_->addItem("Code Analysis");
+    toolsList_->addItem("Memory Search");
+    toolsList_->addItem("Function Tracer");
+    toolsList_->addItem("String Search");
+    
+    runToolButton_ = new QPushButton(tr("Run Selected Tool"), this);
+    runToolButton_->setIcon(ThemeManager::instance().themedIcon("play"));
+    connect(runToolButton_, &QPushButton::clicked, [this]() {
+        if (auto* item = toolsList_->currentItem()) {
+            emit actionRequested("runTool", item->text());
+        }
+    });
+    layout->addWidget(runToolButton_);
+}
+
+void ConversationSidePanel::createHistoryPanel() {
+    historyPanel_ = new QWidget(this);
+    auto* layout = new QVBoxLayout(historyPanel_);
+    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
+                              Design::SPACING_MD, Design::SPACING_MD);
+    layout->setSpacing(Design::SPACING_MD);
+    
+    // Search input
+    historySearchInput_ = new QLineEdit(this);
+    historySearchInput_->setPlaceholderText(tr("Search history..."));
+    layout->addWidget(historySearchInput_);
+    
+    // History list
+    historyList_ = new QListWidget(this);
+    layout->addWidget(historyList_, 1);
+    
+    // Connect search
+    connect(historySearchInput_, &QLineEdit::textChanged, [this](const QString& text) {
+        // Filter history items
+        for (int i = 0; i < historyList_->count(); ++i) {
+            auto* item = historyList_->item(i);
+            item->setHidden(!item->text().contains(text, Qt::CaseInsensitive));
+        }
+    });
+}
+
+void ConversationSidePanel::createSettingsPanel() {
+    settingsPanel_ = new QWidget(this);
+    auto* layout = new QFormLayout(settingsPanel_);
+    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
+                              Design::SPACING_MD, Design::SPACING_MD);
+    layout->setSpacing(Design::SPACING_MD);
+    
+    // Theme selection
+    themeCombo_ = new QComboBox(this);
+    themeCombo_->addItems({"Default", "Dark", "Light"});
+    layout->addRow(tr("Theme:"), themeCombo_);
+    
+    // Bubble style
+    bubbleStyleCombo_ = new QComboBox(this);
+    bubbleStyleCombo_->addItems({"Classic", "Modern", "Minimal", "Terminal", "Paper"});
+    layout->addRow(tr("Bubble Style:"), bubbleStyleCombo_);
+    
+    // Font size
+    fontSizeSlider_ = new QSlider(Qt::Horizontal, this);
+    fontSizeSlider_->setRange(10, 20);
+    fontSizeSlider_->setValue(14);
+    fontSizeSlider_->setTickPosition(QSlider::TicksBelow);
+    fontSizeSlider_->setTickInterval(2);
+    layout->addRow(tr("Font Size:"), fontSizeSlider_);
+    
+    // Options
+    showTimestampsCheck_ = new QCheckBox(tr("Show Timestamps"), this);
+    showTimestampsCheck_->setChecked(true);
+    layout->addRow(showTimestampsCheck_);
+    
+    autoSaveCheck_ = new QCheckBox(tr("Auto-save"), this);
+    autoSaveCheck_->setChecked(true);
+    layout->addRow(autoSaveCheck_);
+    
+    autoSaveIntervalSpin_ = new QSpinBox(this);
+    autoSaveIntervalSpin_->setRange(10, 300);
+    autoSaveIntervalSpin_->setValue(60);
+    autoSaveIntervalSpin_->setSuffix(" seconds");
+    layout->addRow(tr("Auto-save interval:"), autoSaveIntervalSpin_);
+}
+
+void ConversationSidePanel::setModel(ConversationModel* model) {
+    model_ = model;
+    updateStatistics();
+}
+
+void ConversationSidePanel::updateStatistics() {
+    if (!model_) return;
+    
+    // Update message count
+    int messageCount = model_->rowCount();
+    messageCountLabel_->setText(QString::number(messageCount));
+    
+    // Calculate total word count
+    int totalWords = 0;
+    QSet<QString> participants;
+    int toolCount = 0;
+    
+    for (int i = 0; i < model_->rowCount(); ++i) {
+        if (Message* msg = model_->getMessageAt(i)) {
+            // Count words
+            QString content = msg->content();
+            totalWords += content.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts).count();
+            
+            // Track participants
+            participants.insert(msg->metadata().author);
+            
+        }
+    }
+    
+    wordCountLabel_->setText(QString::number(totalWords));
+    toolCountLabel_->setText(QString::number(toolCount));
+    
+    // Update participants list
+    participantsList_->clear();
+    for (const QString& participant : participants) {
+        participantsList_->addItem(participant);
+    }
+    
+    // Calculate duration (if we have timestamps)
+    if (messageCount > 0) {
+        Message* firstMsg = model_->getMessageAt(0);
+        Message* lastMsg = model_->getMessageAt(messageCount - 1);
+        if (firstMsg && lastMsg) {
+            QDateTime firstTime = firstMsg->metadata().timestamp;
+            QDateTime lastTime = lastMsg->metadata().timestamp;
+            qint64 seconds = firstTime.secsTo(lastTime);
+            
+            int hours = seconds / 3600;
+            int minutes = (seconds % 3600) / 60;
+            durationLabel_->setText(QString("%1:%2")
+                                  .arg(hours, 2, 10, QChar('0'))
+                                  .arg(minutes, 2, 10, QChar('0')));
+        }
+    }
+}
+
+void ConversationSidePanel::showPanel(const QString& panelId) {
+    if (panelId == "info" && stack_) {
+        stack_->setCurrentWidget(infoPanel_);
+    } else if (panelId == "tools" && stack_) {
+        stack_->setCurrentWidget(toolsPanel_);
+    } else if (panelId == "history" && stack_) {
+        stack_->setCurrentWidget(historyPanel_);
+    } else if (panelId == "settings" && stack_) {
+        stack_->setCurrentWidget(settingsPanel_);
+    }
+    
+    show();
+    updateStatistics();
+}
+
+void ConversationSidePanel::hidePanel() {
+    hide();
+    emit panelClosed();
 }
 
 } // namespace llm_re::ui_v2

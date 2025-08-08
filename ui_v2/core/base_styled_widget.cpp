@@ -6,6 +6,9 @@ namespace llm_re::ui_v2 {
 BaseStyledWidget::BaseStyledWidget(QWidget* parent)
     : QWidget(parent) {
     
+    // Mark this as a plugin widget to prevent theme bleeding into IDA
+    setProperty("llm_re_widget", true);
+    
     // Connect to theme changes
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &BaseStyledWidget::onThemeManagerChanged);
@@ -389,8 +392,9 @@ void CardWidget::updateElevation() {
     setShadowOffset(offsets[elevation_]);
     
     // Adjust shadow opacity based on theme
-    int alpha = ThemeManager::instance().currentTheme() == ThemeManager::Theme::Dark ? 
-                60 + elevation_ * 10 : 30 + elevation_ * 8;
+    auto currentInfo = ThemeManager::instance().getCurrentThemeInfo();
+    bool isDark = (currentInfo.name == "dark" || currentInfo.metadata.baseTheme == "dark");
+    int alpha = isDark ? 60 + elevation_ * 10 : 30 + elevation_ * 8;
     setShadowColor(ThemeManager::adjustAlpha(ThemeManager::instance().colors().shadow, alpha));
 }
 

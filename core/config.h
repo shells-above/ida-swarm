@@ -7,6 +7,22 @@ namespace llm_re {
 
 // Configuration structure for the plugin
 struct Config {
+    // Singleton instance
+    static Config& instance() {
+        static Config instance;
+        return instance;
+    }
+    
+    // Save configuration
+    void save() const;
+    
+    // Reset to defaults
+    void reset();
+    
+private:
+    Config() = default;
+    
+public:
     struct APISettings {
         std::string api_key;
         std::string base_url = "https://api.anthropic.com/v1/messages";
@@ -26,15 +42,12 @@ struct Config {
     struct UISettings {
         int log_buffer_size = 1000;
         bool auto_scroll = true;
-        int theme = 0;  // 0=default, 1=dark, 2=light
+        std::string theme_name = "dark";  // "default", "dark", "light", or custom theme name
         int font_size = 10;
         bool show_timestamps = true;
         bool show_tool_details = true;
         
         // Window management
-        bool show_tray_icon = true;
-        bool minimize_to_tray = true;
-        bool close_to_tray = false;
         bool start_minimized = false;
         bool remember_window_state = true;
         
@@ -42,12 +55,6 @@ struct Config {
         bool auto_save_conversations = true;
         int auto_save_interval = 60;  // seconds
         int density_mode = 1;  // 0=Compact, 1=Cozy, 2=Spacious
-        
-        // Inspector
-        bool inspector_follow_cursor = true;
-        int inspector_opacity = 80;  // percentage
-        bool inspector_auto_hide = true;
-        int inspector_auto_hide_delay = 3000;  // milliseconds
     } ui;
 
     // Load/save configuration
