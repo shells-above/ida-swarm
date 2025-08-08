@@ -8,26 +8,22 @@
     "temperature": 0.0
   },
   "agent": {
-    "max_iterations": 100,
-    "enable_thinking": false,
+    "max_iterations": 1000,
+    "enable_thinking": true,
     "enable_interleaved_thinking": false,
-    "enable_deep_analysis": false,
-    "verbose_logging": false
+    "enable_deep_analysis": false
   },
   "ui": {
     "log_buffer_size": 1000,
     "auto_scroll": true,
-    "theme": 0,
+    "theme_name": "dark",
     "font_size": 10,
     "show_timestamps": true,
-    "show_tool_details": true
-  },
-  "export": {
-    "path": ".",
-    "auto_export": false,
-    "format": 0,
-    "include_memory": true,
-    "include_logs": true
-  },
-  "debug_mode": false
+    "show_tool_details": true,
+    "start_minimized": false,
+    "remember_window_state": true,
+    "auto_save_conversations": true,
+    "auto_save_interval": 60,
+    "density_mode": 1
+  }
 }

@@ -1,0 +1,345 @@
+#pragma once
+
+#include "../core/ui_v2_common.h"
+
+namespace llm_re::ui_v2 {
+
+// Message types
+enum class MessageRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+    Error
+};
+
+enum class MessageType {
+    Text,
+    Code,
+    Analysis,
+    Error,
+    Info,
+    Warning
+};
+
+// Hash functions for enum classes
+inline uint qHash(MessageRole role, uint seed = 0) {
+    return ::qHash(static_cast<int>(role), seed);
+}
+
+inline uint qHash(MessageType type, uint seed = 0) {
+    return ::qHash(static_cast<int>(type), seed);
+}
+
+// Message metadata
+struct MessageMetadata {
+    QDateTime timestamp;
+    QString author;
+    QStringList tags;
+    bool isEdited = false;
+    QDateTime editedAt;
+    bool isPinned = false;
+    bool isBookmarked = false;
+    QString language; // For code blocks
+    QString fileName; // Associated file
+    int lineNumber = -1; // Associated line
+};
+
+// Analysis entry
+struct AnalysisEntry {
+    QString type; // "note", "finding", "hypothesis", "question", "analysis", "deep_analysis"
+    QString content;
+    QString functionName;
+    quint64 address = 0;
+    int confidence = 0; // 0-100
+    QStringList relatedFunctions;
+    QStringList references;
+    QJsonObject customData;
+};
+
+// Message attachment
+struct MessageAttachment {
+    QString id;
+    QString name;
+    QString mimeType;
+    qint64 size = 0;
+    QByteArray data; // For small attachments
+    QString filePath; // For large attachments
+    QString thumbnailPath;
+    QJsonObject metadata;
+};
+
+// Core message structure
+class Message {
+public:
+    Message();
+    explicit Message(const QString& content, MessageRole role = MessageRole::User);
+    
+    // Identity
+    QUuid id() const { return id_; }
+    void setId(const QUuid& id) { id_ = id; }
+    
+    // Content
+    QString content() const { return content_; }
+    void setContent(const QString& content);
+    QString htmlContent() const { return htmlContent_; }
+    void setHtmlContent(const QString& html) { htmlContent_ = html; }
+    
+    // Properties
+    MessageRole role() const { return role_; }
+    void setRole(MessageRole role) { role_ = role; }
+    
+    MessageType type() const { return type_; }
+    void setType(MessageType type) { type_ = type; }
+    
+    // Metadata
+    MessageMetadata& metadata() { return metadata_; }
+    const MessageMetadata& metadata() const { return metadata_; }
+    
+    
+    // Analysis
+    bool hasAnalysis() const { return !analysisEntries_.empty(); }
+    const std::vector<AnalysisEntry>& analysisEntries() const { return analysisEntries_; }
+    void addAnalysisEntry(const AnalysisEntry& entry);
+    void clearAnalysisEntries() { analysisEntries_.clear(); }
+    
+    // Thinking content
+    bool hasThinking() const { return !thinkingContent_.isEmpty(); }
+    QString thinkingContent() const { return thinkingContent_; }
+    void setThinkingContent(const QString& thinking) { thinkingContent_ = thinking; }
+    
+    // Attachments
+    bool hasAttachments() const { return !attachments_.empty(); }
+    const std::vector<MessageAttachment>& attachments() const { return attachments_; }
+    void addAttachment(const MessageAttachment& attachment);
+    void removeAttachment(const QString& id);
+    
+    
+    // Search and filtering
+    bool matchesSearch(const QString& searchText, bool includeContent = true,
+                      bool includeTags = true, bool includeAttachments = false) const;
+    
+    // Serialization
+    QJsonObject toJson() const;
+    static std::unique_ptr<Message> fromJson(const QJsonObject& json);
+    
+    // Utility
+    QString summary(int maxLength = 100) const;
+    QString roleString() const;
+    QString typeString() const;
+    QIcon roleIcon() const;
+    QColor roleColor() const;
+    
+private:
+    QUuid id_;
+    QString content_;
+    QString htmlContent_;
+    QString thinkingContent_;
+    MessageRole role_ = MessageRole::User;
+    MessageType type_ = MessageType::Text;
+    MessageMetadata metadata_;
+    std::vector<AnalysisEntry> analysisEntries_;
+    std::vector<MessageAttachment> attachments_;
+};
+
+// Conversation model
+class ConversationModel : public QAbstractItemModel {
+    Q_OBJECT
+    
+public:
+    enum Column {
+        ContentColumn = 0,
+        RoleColumn,
+        TimestampColumn,
+        StatusColumn,
+        ColumnCount
+    };
+    
+    enum DataRole {
+        MessageRoleDataRole = Qt::UserRole + 1,
+        MessageTypeRole,
+        MessageIdRole,
+        MessageObjectRole,
+        AnalysisRole,
+        AttachmentsRole,
+        MetadataRole,
+        SearchMatchRole,
+        IsEditedRole,
+        IsPinnedRole,
+        IsBookmarkedRole,
+        ProgressRole
+    };
+    
+    explicit ConversationModel(QObject* parent = nullptr);
+    ~ConversationModel() override;
+    
+    // QAbstractItemModel interface
+    QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
+    QModelIndex parent(const QModelIndex& child) const override;
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+    Qt::ItemFlags flags(const QModelIndex& index) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
+    
+    // Message management
+    void addMessage(std::unique_ptr<Message> message);
+    void insertMessage(int index, std::unique_ptr<Message> message);
+    void removeMessage(const QUuid& id);
+    void updateMessage(const QUuid& id, const QString& newContent);
+    void clearMessages();
+    
+    Message* getMessage(const QUuid& id);
+    const Message* getMessage(const QUuid& id) const;
+    Message* getMessageAt(int index);
+    const Message* getMessageAt(int index) const;
+    int getMessageIndex(const QUuid& id) const;
+    
+    // Bulk operations
+    void addMessages(std::vector<std::unique_ptr<Message>> messages);
+    void removeMessages(const QSet<QUuid>& ids);
+    
+    
+    
+    // Filtering and search
+    void setSearchFilter(const QString& searchText);
+    void setRoleFilter(const QSet<MessageRole>& roles);
+    void setTypeFilter(const QSet<MessageType>& types);
+    void setDateRangeFilter(const QDateTime& start, const QDateTime& end);
+    void clearFilters();
+    bool isFiltered() const { return !searchFilter_.isEmpty() || 
+                                   !roleFilter_.isEmpty() || 
+                                   !typeFilter_.isEmpty() || 
+                                   dateRangeStart_.isValid(); }
+    int getSearchMatchCount() const { return searchMatches_.size(); }
+    
+    // Pinning and bookmarking
+    void setPinned(const QUuid& id, bool pinned);
+    void setBookmarked(const QUuid& id, bool bookmarked);
+    std::vector<const Message*> getPinnedMessages() const;
+    std::vector<const Message*> getBookmarkedMessages() const;
+    
+    
+    void importFromJson(const QJsonDocument& doc, bool append = false);
+    QJsonDocument exportToJson() const;
+    
+    // Statistics
+    struct ConversationStats {
+        int totalMessages = 0;
+        int userMessages = 0;
+        int assistantMessages = 0;
+        int totalAnalyses = 0;
+        QMap<QString, int> analysisByType;
+        QMap<QString, int> toolUsageCount;
+        qint64 totalToolDuration = 0;
+        QDateTime firstMessage;
+        QDateTime lastMessage;
+        int totalTokens = 0; // If available
+    };
+    ConversationStats getStatistics() const;
+    
+    // Batch updates
+    void beginBatchUpdate();
+    void endBatchUpdate();
+    bool isBatchUpdating() const { return batchUpdateCount_ > 0; }
+    
+    
+signals:
+    void messageAdded(const QUuid& id);
+    void messageRemoved(const QUuid& id);
+    void messageUpdated(const QUuid& id);
+    void searchMatchesChanged(int count);
+    void statisticsChanged();
+    void conversationCleared();
+    void filtersChanged();
+    
+private:
+    struct MessageNode {
+        std::unique_ptr<Message> message;
+        bool matchesFilter = true;
+    };
+    
+    void applyFilters();
+    bool messageMatchesFilters(const Message* msg) const;
+    MessageNode* findNode(const QUuid& id) const;
+    void emitDataChangedForMessage(const QUuid& id);
+    QModelIndex indexForMessage(const QUuid& id) const;
+    
+    // Storage
+    std::vector<std::unique_ptr<MessageNode>> nodes_;
+    std::unordered_map<QUuid, MessageNode*, QUuidHash> nodeMap_;
+    std::vector<MessageNode*> visibleNodes_; // Visible messages for display
+    
+    // Filters
+    QString searchFilter_;
+    QSet<MessageRole> roleFilter_;
+    QSet<MessageType> typeFilter_;
+    QDateTime dateRangeStart_;
+    QDateTime dateRangeEnd_;
+    
+    // State
+    int batchUpdateCount_ = 0;
+    QSet<QUuid> searchMatches_;
+    
+    // Performance
+    mutable QHash<QUuid, ConversationStats> statsCache_;
+    mutable bool statsCacheDirty_ = true;
+};
+
+// Custom item delegate for rich message rendering
+class ConversationDelegate : public QStyledItemDelegate {
+    Q_OBJECT
+    
+public:
+    explicit ConversationDelegate(QObject* parent = nullptr);
+    
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override;
+    
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override;
+    
+    bool editorEvent(QEvent* event, QAbstractItemModel* model,
+                     const QStyleOptionViewItem& option,
+                     const QModelIndex& index) override;
+    
+    // Customization
+    void setDensityMode(int mode) { densityMode_ = mode; }  // 0=Compact, 1=Cozy, 2=Spacious
+    void setShowTimestamps(bool show) { showTimestamps_ = show; }
+    void setMaxBubbleWidth(int width) { maxBubbleWidth_ = width; }
+    void setAnimateMessages(bool animate) { animateMessages_ = animate; }
+    
+signals:
+    void linkClicked(const QUrl& url);
+    void attachmentClicked(const QUuid& messageId, const QString& attachmentId);
+    void toolOutputToggled(const QUuid& messageId);
+    
+private:
+    void drawMessageBubble(QPainter* painter, const QStyleOptionViewItem& option,
+                          const Message* message, bool isSelected) const;
+    void drawAnalysisEntries(QPainter* painter, const QRect& rect,
+                           const std::vector<AnalysisEntry>& entries) const;
+    void drawAttachments(QPainter* painter, const QRect& rect,
+                        const std::vector<MessageAttachment>& attachments) const;
+    
+    QRect hitTest(const QPoint& pos, const QStyleOptionViewItem& option,
+                  const QModelIndex& index) const;
+    
+    int densityMode_ = 1;  // 0=Compact, 1=Cozy, 2=Spacious
+    bool showTimestamps_ = true;
+    int maxBubbleWidth_ = 600;
+    bool animateMessages_ = true;
+    
+    mutable QHash<QUuid, QPropertyAnimation*> animations_;
+    mutable QHash<QUuid, QRect> bubbleRects_;
+    mutable QHash<QUuid, QMap<QString, QRect>> hitAreas_;
+};
+
+} // namespace llm_re::ui_v2
+
+// Register types with Qt's meta-type system
+Q_DECLARE_METATYPE(llm_re::ui_v2::Message*)
+Q_DECLARE_METATYPE(const std::vector<llm_re::ui_v2::AnalysisEntry>*)
+Q_DECLARE_METATYPE(const std::vector<llm_re::ui_v2::MessageAttachment>*)
+Q_DECLARE_METATYPE(const llm_re::ui_v2::MessageMetadata*)

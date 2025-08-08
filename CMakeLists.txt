@@ -82,10 +82,10 @@ endif()
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
         set(IDA_LIBDIR "${IDASDK_PATH}/lib/arm64_mac_clang_64")
-        add_definitions(-D__MAC__ -D__EA64__ -D__ARM__)
+        add_definitions(-D__MAC__ -D__EA64__ -D__ARM__ -D__QT__)
     else()
         set(IDA_LIBDIR "${IDASDK_PATH}/lib/x64_mac_clang_64")
-        add_definitions(-D__MAC__ -D__EA64__)
+        add_definitions(-D__MAC__ -D__EA64__ -D__QT__)
     endif()
     set(PLUGIN_EXT ".dylib")
 
@@ -106,7 +106,7 @@ endif()
 
 # Include directories
 include_directories(
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${IDASDK_PATH}/include
         ${IDA_PLUGINS_PATH}/hexrays_sdk/include
         ${CMAKE_CURRENT_BINARY_DIR}  # For MOC generated files
@@ -140,31 +140,129 @@ endif()
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
+# Include Keystone build configuration
+include(cmake/BuildKeystone.cmake)
+
 # Source files
 set(SOURCES
-        src/actions.cpp
-        src/anthropic_api.cpp
-        src/deep_analysis.cpp
-        src/ida_utils.cpp
-        src/main_form.cpp
-        src/memory.cpp
-        src/plugin.cpp
-        src/qt_widgets.cpp
+        core/plugin.cpp
+        core/ida_utils.cpp
+        core/config.cpp
+        api/anthropic_api.cpp
+        analysis/actions.cpp
+        analysis/deep_analysis.cpp
+        analysis/memory.cpp
+        patching/patch_manager.cpp
+        # ui_v2 core
+        ui_v2/core/base_styled_widget.cpp
+        ui_v2/core/theme_manager.cpp
+        ui_v2/core/theme_templates.cpp
+        ui_v2/core/theme_transition_manager.cpp
+        ui_v2/core/theme_undo_manager.cpp
+        ui_v2/core/effects_manager.cpp
+        ui_v2/core/animation_manager.cpp
+        ui_v2/core/focus_manager.cpp
+        ui_v2/core/ui_utils.cpp
+        ui_v2/core/agent_controller.cpp
+        ui_v2/core/settings_manager.cpp
+        ui_v2/core/color_constants.cpp
+        # ui_v2 models
+        ui_v2/models/conversation_model.cpp
+        # ui_v2 views
+        ui_v2/views/main_window.cpp
+        ui_v2/views/conversation_view.cpp
+        ui_v2/views/memory_dock.cpp
+        ui_v2/views/tool_execution_dock.cpp
+        ui_v2/views/console_dock.cpp
+        ui_v2/views/settings_dialog.cpp
+        # ui_v2 theme editor
+        ui_v2/views/theme_editor/theme_editor_dialog.cpp
+        ui_v2/views/theme_editor/widgets/accessibility_tools.cpp
+        ui_v2/views/theme_editor/widgets/animation_config_widget.cpp
+        ui_v2/views/theme_editor/widgets/chart_theme_widget.cpp
+        ui_v2/views/theme_editor/widgets/color_picker_widget.cpp
+        ui_v2/views/theme_editor/widgets/effects_config_widget.cpp
+        ui_v2/views/theme_editor/widgets/theme_preview_widget.cpp
+        ui_v2/views/theme_editor/widgets/theme_template_selector.cpp
+        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.cpp
+        # ui_v2 widgets
+        ui_v2/widgets/message_bubble.cpp
+        ui_v2/widgets/message_group.cpp
+        ui_v2/widgets/markdown_viewer.cpp
+        # ui_v2 custom charts
+        ui_v2/widgets/charts/chart_types.cpp
+        ui_v2/widgets/charts/custom_chart_base.cpp
+        ui_v2/widgets/charts/chart_theme.cpp
+        ui_v2/widgets/charts/line_chart.cpp
+        ui_v2/widgets/charts/circular_chart.cpp
+        ui_v2/widgets/charts/bar_chart.cpp
+        ui_v2/widgets/charts/heatmap_widget.cpp
+        ui_v2/widgets/charts/sparkline_widget.cpp
 )
 
 # Header files
 set(HEADERS
-        src/actions.h
-        src/agent.h
-        src/anthropic_api.h
-        src/common.h
-        src/deep_analysis.h
-        src/ida_utils.h
-        src/main_form.h
-        src/memory.h
-        src/message_types.h
-        src/tool_system.h
-        src/qt_widgets.h
+        core/common_base.h
+        core/common.h
+        core/ida_utils.h
+        core/ida_validators.h
+        core/config.h
+        core/types.h
+        api/anthropic_api.h
+        api/message_types.h
+        analysis/actions.h
+        analysis/deep_analysis.h
+        analysis/memory.h
+        patching/patch_manager.h
+        agent/agent.h
+        agent/tool_system.h
+        # ui_v2 core
+        ui_v2/core/base_styled_widget.h
+        ui_v2/core/theme_manager.h
+        ui_v2/core/theme_constants.h
+        ui_v2/core/theme_transition_manager.h
+        ui_v2/core/theme_undo_manager.h
+        ui_v2/core/effects_manager.h
+        ui_v2/core/animation_manager.h
+        ui_v2/core/focus_manager.h
+        ui_v2/core/ui_constants.h
+        ui_v2/core/ui_utils.h
+        ui_v2/core/agent_controller.h
+        ui_v2/core/settings_manager.h
+        ui_v2/core/ui_v2_common.h
+        ui_v2/core/color_constants.h
+        # ui_v2 models
+        ui_v2/models/conversation_model.h
+        ui_v2/models/tool_execution.h
+        # ui_v2 views
+        ui_v2/views/main_window.h
+        ui_v2/views/conversation_view.h
+        ui_v2/views/memory_dock.h
+        ui_v2/views/tool_execution_dock.h
+        ui_v2/views/settings_dialog.h
+        # ui_v2 theme editor
+        ui_v2/views/theme_editor/theme_editor_dialog.h
+        ui_v2/views/theme_editor/widgets/accessibility_tools.h
+        ui_v2/views/theme_editor/widgets/animation_config_widget.h
+        ui_v2/views/theme_editor/widgets/chart_theme_widget.h
+        ui_v2/views/theme_editor/widgets/color_picker_widget.h
+        ui_v2/views/theme_editor/widgets/effects_config_widget.h
+        ui_v2/views/theme_editor/widgets/theme_preview_widget.h
+        ui_v2/views/theme_editor/widgets/theme_template_selector.h
+        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.h
+        # ui_v2 widgets
+        ui_v2/widgets/message_bubble.h
+        ui_v2/widgets/message_group.h
+        ui_v2/widgets/markdown_viewer.h
+        # ui_v2 custom charts
+        ui_v2/widgets/charts/chart_types.h
+        ui_v2/widgets/charts/custom_chart_base.h
+        ui_v2/widgets/charts/chart_theme.h
+        ui_v2/widgets/charts/line_chart.h
+        ui_v2/widgets/charts/circular_chart.h
+        ui_v2/widgets/charts/bar_chart.h
+        ui_v2/widgets/charts/heatmap_widget.h
+        ui_v2/widgets/charts/sparkline_widget.h
 )
 
 # Create shared library (end in "64", won't be loaded if it doesn't)
@@ -187,6 +285,7 @@ target_link_libraries(ida_llm_agent64
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        keystone
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
@@ -219,15 +318,3 @@ message(STATUS "IDA Plugins Path: ${IDA_PLUGINS_PATH}")
 message(STATUS "Qt Directory: ${QTDIR}")
 message(STATUS "IDA Library Directory: ${IDA_LIBDIR}")
 message(STATUS "Plugin Extension: ${PLUGIN_EXT}")
-
-# Optional sample executable (commented out by default)
-# add_executable(sample_file sample_file.cpp)
-# set_target_properties(sample_file PROPERTIES
-#     CMAKE_BUILD_TYPE Release
-# )
-#
-# target_compile_options(sample_file PRIVATE
-#     -O3          # Optimize
-#     -g0          # No debug info
-#     -DNDEBUG     # Release mode
-# )
