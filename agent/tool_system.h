@@ -5,7 +5,6 @@
 #ifndef TOOL_SYSTEM_H
 #define TOOL_SYSTEM_H
 
-#include "core/common.h"
 #include "api/message_types.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
@@ -26,7 +25,7 @@ struct ToolResult {
         if (error) {
             j["error"] = *error;
         }
-        // Merge data fields into top level for backward compatibility
+        // Merge data fields into top level
         for (auto& [key, value] : data.items()) {
             j[key] = value;
         }

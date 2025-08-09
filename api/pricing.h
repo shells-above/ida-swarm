@@ -39,27 +39,10 @@ public:
     static double calculate_cost(const TokenUsage& usage) {
         ModelPricing pricing = get_pricing(usage.model);
         
-        return (usage.input_tokens / 1000000.0 * pricing.input_price) +
-               (usage.output_tokens / 1000000.0 * pricing.output_price) +
+        return (usage.input_tokens          / 1000000.0 * pricing.input_price) +
+               (usage.output_tokens         / 1000000.0 * pricing.output_price) +
                (usage.cache_creation_tokens / 1000000.0 * pricing.cache_write_price) +
-               (usage.cache_read_tokens / 1000000.0 * pricing.cache_read_price);
-    }
-
-    // Get individual price components (for cache savings calculations)
-    static double get_input_price(Model model) {
-        return get_pricing(model).input_price;
-    }
-
-    static double get_cache_read_price(Model model) {
-        return get_pricing(model).cache_read_price;
-    }
-
-    // Calculate savings from cache usage
-    static double calculate_cache_savings(const TokenUsage& usage) {
-        if (usage.cache_read_tokens <= 0) return 0.0;
-        
-        ModelPricing pricing = get_pricing(usage.model);
-        return usage.cache_read_tokens / 1000000.0 * (pricing.input_price - pricing.cache_read_price);
+               (usage.cache_read_tokens     / 1000000.0 * pricing.cache_read_price);
     }
 };
 

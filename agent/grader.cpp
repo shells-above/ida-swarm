@@ -6,12 +6,11 @@
 namespace llm_re {
 
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
-    
     // Create API client based on auth method
     if (config.api.auth_method == api::AuthMethod::OAUTH) {
         OAuthManager oauth_mgr(config.api.oauth_config_dir);
-        auto oauth_creds = oauth_mgr.get_credentials();
-        
+        std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+
         if (oauth_creds) {
             // Initialize API client with OAuth
             api_client_ = std::make_unique<api::AnthropicClient>(
