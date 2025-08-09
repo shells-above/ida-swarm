@@ -107,13 +107,17 @@ endif()
 # Include directories
 include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${IDASDK_PATH}/include
-        ${IDA_PLUGINS_PATH}/hexrays_sdk/include
         ${CMAKE_CURRENT_BINARY_DIR}  # For MOC generated files
 )
 
-# Qt include directories
-include_directories(
+# Include IDA SDK headers as SYSTEM to suppress warnings
+include_directories(SYSTEM
+        ${IDASDK_PATH}/include
+        ${IDA_PLUGINS_PATH}/hexrays_sdk/include
+)
+
+# Qt include directories (as SYSTEM to suppress warnings)
+include_directories(SYSTEM
         "${QTDIR}/lib/QtCore.framework/Headers"
         "${QTDIR}/lib/QtGui.framework/Headers"
         "${QTDIR}/lib/QtWidgets.framework/Headers"
