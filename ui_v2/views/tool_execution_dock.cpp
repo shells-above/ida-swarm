@@ -1300,10 +1300,10 @@ void ToolExecutionDock::onFilterChanged() {
     
     statusFilter_.clear();
     switch (statusFilterCombo_->currentIndex()) {
-    case 1: statusFilter_.append(ToolExecutionState::Running); break;
-    case 2: statusFilter_.append(ToolExecutionState::Completed); break;
-    case 3: statusFilter_.append(ToolExecutionState::Failed); break;
-    case 4: statusFilter_.append(ToolExecutionState::Cancelled); break;
+        case 1: statusFilter_.append(ToolExecutionState::Running); break;
+        case 2: statusFilter_.append(ToolExecutionState::Completed); break;
+        case 3: statusFilter_.append(ToolExecutionState::Failed); break;
+        case 4: statusFilter_.append(ToolExecutionState::Cancelled); break;
     }
     
     applyFilters();
@@ -1438,30 +1438,30 @@ QVariant ToolExecutionDock::ExecutionModel::data(const QModelIndex& index, int r
     
     if (role == Qt::DisplayRole) {
         switch (index.column()) {
-        case ToolColumn:
-            return exec.toolName;
-        case StatusColumn:
-            switch (exec.state) {
-                case ToolExecutionState::Pending: return tr("Pending");
-                case ToolExecutionState::Running: return tr("Running");
-                case ToolExecutionState::Completed: return tr("Success");
-                case ToolExecutionState::Failed: return tr("Failed");
-                case ToolExecutionState::Cancelled: return tr("Cancelled");
-            }
-            break;
-        case DurationColumn:
-            if (exec.getDuration() > 0) {
-                if (exec.getDuration() < 1000) {
-                    return QString("%1ms").arg(exec.getDuration());
-                } else {
-                    return QString("%1s").arg(exec.getDuration() / 1000.0, 0, 'f', 1);
+            case ToolColumn:
+                return exec.toolName;
+            case StatusColumn:
+                switch (exec.state) {
+                    case ToolExecutionState::Pending: return tr("Pending");
+                    case ToolExecutionState::Running: return tr("Running");
+                    case ToolExecutionState::Completed: return tr("Success");
+                    case ToolExecutionState::Failed: return tr("Failed");
+                    case ToolExecutionState::Cancelled: return tr("Cancelled");
                 }
-            }
-            return tr("--");
-        case StartTimeColumn:
-            return exec.startTime.toString("hh:mm:ss");
-        case OutputColumn:
-            return exec.output.left(100);
+                break;
+            case DurationColumn:
+                if (exec.getDuration() > 0) {
+                    if (exec.getDuration() < 1000) {
+                        return QString("%1ms").arg(exec.getDuration());
+                    } else {
+                        return QString("%1s").arg(exec.getDuration() / 1000.0, 0, 'f', 1);
+                    }
+                }
+                return tr("--");
+            case StartTimeColumn:
+                return exec.startTime.toString("hh:mm:ss");
+            case OutputColumn:
+                return exec.output.left(100);
         }
     } else if (role == Qt::DecorationRole && index.column() == StatusColumn) {
         switch (exec.state) {

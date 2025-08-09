@@ -1,10 +1,9 @@
 #include "ui_v2_common.h"
 #include "agent_controller.h"
-// Now it's safe to include agent.h because ui_v2_common.h already set up Qt + kernwin
-#include "agent/agent.h"
 #include "core/config.h"
-#include "core/oauth_manager.h"
-#include "api/message_types.h"
+#include "json_utils.h"
+#include <set>
+#include <fstream>
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
@@ -13,7 +12,7 @@
 
 namespace llm_re::ui_v2 {
 
-AgentController::AgentController(QObject* parent) 
+AgentController::AgentController(QObject* parent)
     : QObject(parent) {
 }
 
@@ -27,81 +26,49 @@ bool AgentController::initialize(const Config& config) {
     }
     
     try {
-        config_ = std::make_unique<Config>(config);
+        // Create agent directly
+        agent_ = std::make_unique<Agent>(config);
         
-        // Check authentication configuration
-        if (config_->api.use_oauth) {
-            // Try to use OAuth from claude-cpp-sdk
-            OAuthManager oauth_mgr(config_->api.oauth_config_dir);
-            
-            if (!oauth_mgr.has_credentials()) {
-                emit errorOccurred("ERROR: OAuth enabled but no credentials found in " + 
-                                 QString::fromStdString(config_->api.oauth_config_dir) + 
-                                 ". Please run claude-cpp-sdk setup or disable OAuth.");
-                return false;
-            }
-
-            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
-            if (!oauth_creds) {
-                emit errorOccurred("ERROR: Failed to read OAuth credentials: " + 
-                                 QString::fromStdString(oauth_mgr.get_last_error()));
-                return false;
-            }
-            
-            // Check if credentials are expired
-            if (oauth_creds->is_expired()) {
-                emit errorOccurred("WARNING: OAuth token appears to be expired. May need refresh.");
-            }
-            
-            // Update config to use OAuth
-            config_->api.auth_method = api::AuthMethod::OAUTH;
-            
-            msg("LLM RE: Successfully loaded OAuth credentials (expires at %f)\n", oauth_creds->expires_at);
-            emit statusChanged("Using OAuth authentication from claude-cpp-sdk");
-            
-        } else {
-            // Use API key authentication
-            if (config_->api.api_key.empty()) {
-                emit errorOccurred("ERROR: No API key configured! Please set your Anthropic API key in the configuration.");
-                return false;
-            }
-            config_->api.auth_method = api::AuthMethod::API_KEY;
-            emit statusChanged("Using API key authentication");
-        }
-        
-        agent_ = std::make_unique<Agent>(*config_);
-        
-        // Set up the unified message callback
+        // Set the message callback to handle agent messages
         agent_->set_message_callback(
             [this](AgentMessageType type, const json& data) {
-                // Convert to QString for thread safety with Qt
-                QString dataStr = QString::fromStdString(data.dump());
-                QMetaObject::invokeMethod(this, "onAgentMessage", 
-                    Qt::QueuedConnection,
-                    Q_ARG(int, static_cast<int>(type)),
-                    Q_ARG(QString, dataStr));
+                // Marshal to Qt thread if needed
+                QMetaObject::invokeMethod(this, [this, type, data]() {
+                    handleAgentMessage(type, data);
+                }, Qt::QueuedConnection);
             });
         
-        // Start the agent worker thread
+        // Start agent worker thread
         agent_->start();
         
         isInitialized_ = true;
+        emit statusChanged("Agent initialized");
+        
         return true;
         
     } catch (const std::exception& e) {
-        emit errorOccurred(QString("Failed to initialize agent: %1").arg(e.what()));
+        emit errorOccurred(QString("Failed to initialize: %1").arg(e.what()));
         return false;
     }
 }
 
 void AgentController::shutdown() {
+    if (!isInitialized_) {
+        return;
+    }
+    
+    // Stop and cleanup agent
     if (agent_) {
         agent_->stop();
-        agent_->cleanup_thread();
         agent_.reset();
     }
+    
     isInitialized_ = false;
 }
+
+// ============================================================================
+// Agent Control
+// ============================================================================
 
 void AgentController::executeTask(const std::string& task) {
     if (!agent_) {
@@ -109,11 +76,7 @@ void AgentController::executeTask(const std::string& task) {
         return;
     }
     
-    sessionStart_ = std::chrono::steady_clock::now();
-    currentIteration_ = 0;
-    toolIdToMessageId_.clear();
-    
-    // Clear conversation model if connected
+    // Clear conversation if starting fresh
     if (conversationModel_) {
         conversationModel_->clearMessages();
     }
@@ -123,22 +86,22 @@ void AgentController::executeTask(const std::string& task) {
     userMsg->metadata().timestamp = QDateTime::currentDateTime();
     addMessageToConversation(std::move(userMsg));
     
-    // Execute task
+    // Submit task to agent
     agent_->set_task(task);
-    emit agentStarted();
+    
+    // Generate a task ID for tracking
+    currentTaskId_ = QUuid::createUuid().toString();
 }
 
-void AgentController::stopExecution() {
+void AgentController::stopExecution() const {
     if (agent_) {
         agent_->stop();
-        emit agentStopped();
     }
 }
 
-void AgentController::resumeExecution() {
-    if (agent_ && agent_->is_paused()) {
+void AgentController::resumeExecution() const {
+    if (agent_) {
         agent_->resume();
-        emit agentStarted();
     }
 }
 
@@ -153,9 +116,29 @@ void AgentController::continueWithTask(const std::string& additional) {
     userMsg->metadata().timestamp = QDateTime::currentDateTime();
     addMessageToConversation(std::move(userMsg));
     
+    // Continue task
     agent_->continue_with_task(additional);
-    emit agentStarted();
+    currentTaskId_ = QUuid::createUuid().toString();
 }
+
+void AgentController::injectUserMessage(const std::string& message) {
+    if (!agent_ || !isRunning()) {
+        emit errorOccurred("Cannot inject message - agent not running");
+        return;
+    }
+    
+    // Add to UI immediately
+    auto userMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::User);
+    userMsg->metadata().timestamp = QDateTime::currentDateTime();
+    addMessageToConversation(std::move(userMsg));
+    
+    // Inject into agent
+    agent_->inject_user_message(message);
+}
+
+// ============================================================================
+// State Queries
+// ============================================================================
 
 bool AgentController::isRunning() const {
     return agent_ && agent_->is_running();
@@ -174,23 +157,16 @@ bool AgentController::canContinue() const {
 }
 
 std::string AgentController::getLastError() const {
-    return agent_ ? agent_->get_last_error() : "";
-}
-
-void AgentController::injectUserMessage(const std::string& message) {
-    if (!agent_ || !isRunning()) {
-        emit errorOccurred("Cannot inject message - agent not running");
-        return;
+    if (!agent_) {
+        return "";
     }
     
-    // Add to UI immediately
-    auto userMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::User);
-    userMsg->metadata().timestamp = QDateTime::currentDateTime();
-    addMessageToConversation(std::move(userMsg));
-    
-    // Inject into agent's pending queue
-    agent_->inject_user_message(message);
+    return agent_->get_last_error();
 }
+
+// ============================================================================
+// UI Component Connections
+// ============================================================================
 
 void AgentController::connectConversationView(ConversationView* view) {
     conversationView_ = view;
@@ -215,23 +191,51 @@ void AgentController::connectConsoleDock(ConsoleDock* dock) {
     consoleDock_ = dock;
 }
 
+// ============================================================================
+// Configuration
+// ============================================================================
+
 void AgentController::updateConfig(const Config& config) {
-    config_ = std::make_unique<Config>(config);
-    // Note: Agent needs to be reinitialized for config changes to take effect
+    if (agent_) {
+        // Agent doesn't have update_config, would need to restart
+        shutdown();
+        initialize(config);
+    }
 }
 
+// ============================================================================
+// Memory Management
+// ============================================================================
+
 void AgentController::saveMemory(const QString& path) {
-    if (agent_) {
-        agent_->save_memory(path.toStdString());
+    if (agent_ && agent_->get_memory()) {
+        // Export memory snapshot and save to file
+        json snapshot = agent_->get_memory()->export_memory_snapshot();
+        std::ofstream file(path.toStdString());
+        if (file.is_open()) {
+            file << snapshot.dump(2);
+            file.close();
+        }
     }
 }
 
 void AgentController::loadMemory(const QString& path) {
-    if (agent_) {
-        agent_->load_memory(path.toStdString());
-        updateMemoryView();
+    if (agent_ && agent_->get_memory()) {
+        // Load memory snapshot from file
+        std::ifstream file(path.toStdString());
+        if (file.is_open()) {
+            json snapshot;
+            file >> snapshot;
+            file.close();
+            agent_->get_memory()->import_memory_snapshot(snapshot);
+            updateMemoryView();
+        }
     }
 }
+
+// ============================================================================
+// Statistics
+// ============================================================================
 
 api::TokenUsage AgentController::getTokenUsage() const {
     return agent_ ? agent_->get_token_usage() : api::TokenUsage{};
@@ -241,527 +245,9 @@ json AgentController::getAgentState() const {
     return agent_ ? agent_->get_state_json() : json{};
 }
 
-void AgentController::onAgentMessage(int messageType, const QString& dataStr) {
-    try {
-        json data = json::parse(dataStr.toStdString());
-        
-        switch (static_cast<AgentMessageType>(messageType)) {
-            case AgentMessageType::Log:
-                handleLogMessage(data);
-                break;
-            case AgentMessageType::ApiMessage:
-                handleApiMessage(data);
-                break;
-            case AgentMessageType::StateChanged:
-                handleStateChanged(data);
-                break;
-            case AgentMessageType::ToolStarted:
-                handleToolStarted(data);
-                break;
-            case AgentMessageType::ToolExecuted:
-                handleToolExecuted(data);
-                break;
-            case AgentMessageType::FinalReport:
-                handleFinalReport(data);
-                break;
-        }
-    } catch (const std::exception& e) {
-        emit errorOccurred(QString("Error processing agent message: %1").arg(e.what()));
-    }
-}
-
-void AgentController::handleLogMessage(const json& data) {
-    LogLevel level = static_cast<LogLevel>(data["level"].get<int>());
-    std::string message = data["message"];
-    
-    // Send to console dock if available
-    if (consoleDock_) {
-        LogEntry entry;
-        entry.timestamp = QDateTime::currentDateTime();
-        entry.level = static_cast<LogEntry::Level>(static_cast<int>(level));
-        entry.category = "Agent";
-        entry.message = QString::fromStdString(message);
-        
-        // Add metadata if available
-        if (data.contains("metadata")) {
-            QString metadataStr = QString::fromStdString(data["metadata"].dump());
-            entry.metadata = QJsonDocument::fromJson(metadataStr.toUtf8()).object();
-        }
-        
-        consoleDock_->addLog(entry);
-    }
-    
-    // Only show important messages in conversation
-    bool showInConversation = false;
-    
-    switch (level) {
-        case LogLevel::ERROR:
-            showInConversation = true;
-            break;
-        case LogLevel::WARNING:
-            // Only show warnings if they're user-facing
-            showInConversation = message.find("Failed") != std::string::npos ||
-                               message.find("Error") != std::string::npos;
-            break;
-        case LogLevel::INFO:
-            // Only show specific info messages
-            showInConversation = message.find("Starting new task") != std::string::npos ||
-                               message.find("Task completed") != std::string::npos ||
-                               message.find("Final report") != std::string::npos;
-            break;
-        default:
-            break;
-    }
-    
-    if (showInConversation) {
-        auto logMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::System);
-        logMsg->metadata().timestamp = QDateTime::currentDateTime();
-        
-        // Set appropriate message type based on log level
-        switch (level) {
-            case LogLevel::ERROR:
-                logMsg->setType(MessageType::Error);
-                break;
-            case LogLevel::WARNING:
-                logMsg->setType(MessageType::Warning);
-                break;
-            default:
-                logMsg->setType(MessageType::Info);
-                break;
-        }
-        
-        addMessageToConversation(std::move(logMsg));
-    }
-}
-
-void AgentController::handleApiMessage(const json& data) {
-    std::string type = data["type"];
-    json content = data["content"];
-    int iteration = data["iteration"];
-    
-    // Send API info to console
-    if (consoleDock_) {
-        LogEntry entry;
-        entry.timestamp = QDateTime::currentDateTime();
-        entry.level = LogEntry::Debug;
-        entry.category = "API";
-        entry.message = QString("Iteration %1: %2").arg(iteration).arg(QString::fromStdString(type));
-        
-        // Add token usage if available
-        if (content.contains("usage")) {
-            json usage = content["usage"];
-            entry.metadata = QJsonObject{
-                {"iteration", iteration},
-                {"type", QString::fromStdString(type)},
-                {"input_tokens", usage.value("input_tokens", 0)},
-                {"output_tokens", usage.value("output_tokens", 0)},
-                {"cache_read_tokens", usage.value("cache_read_tokens", 0)},
-                {"cache_creation_tokens", usage.value("cache_creation_tokens", 0)},
-                {"estimated_cost", usage.value("estimated_cost", 0.0)}
-            };
-        } else {
-            entry.metadata = QJsonObject{
-                {"iteration", iteration},
-                {"type", QString::fromStdString(type)}
-            };
-        }
-        
-        consoleDock_->addLog(entry);
-    }
-    
-    if (type == "REQUEST" || type == "RESPONSE") {
-        currentIteration_ = iteration;
-        emit iterationChanged(iteration);
-        
-        if (type == "RESPONSE" && content.contains("content")) {
-            // Convert API response to UI message
-            try {
-                // Create an assistant message from the response
-                messages::Message apiMsg(messages::Role::Assistant);
-                
-                // Parse the content array
-                if (content["content"].is_array()) {
-                    for (const auto& item : content["content"]) {
-                        if (!item.contains("type")) continue;
-                        
-                        std::string contentType = item["type"];
-                        if (contentType == "text") {
-                            if (auto text = messages::TextContent::from_json(item)) {
-                                apiMsg.add_content(std::move(text));
-                            }
-                        } else if (contentType == "thinking") {
-                            if (auto thinking = messages::ThinkingContent::from_json(item)) {
-                                apiMsg.add_content(std::move(thinking));
-                            }
-                        } else if (contentType == "tool_use") {
-                            if (auto toolUse = messages::ToolUseContent::from_json(item)) {
-                                apiMsg.add_content(std::move(toolUse));
-                            }
-                        }
-                    }
-                }
-                
-                // Convert to UI message but only log to console, don't add to conversation
-                auto uiMsg = convertApiMessage(apiMsg);
-                if (uiMsg && (!uiMsg->content().isEmpty() || !uiMsg->thinkingContent().isEmpty())) {
-                    // Log to console but don't add to conversation view
-                    if (consoleDock_) {
-                        LogEntry entry;
-                        entry.timestamp = QDateTime::currentDateTime();
-                        entry.level = LogEntry::Debug;
-                        entry.category = "Assistant";
-                        
-                        QString contentToLog = uiMsg->content();
-                        if (contentToLog.isEmpty() && !uiMsg->thinkingContent().isEmpty()) {
-                            contentToLog = "[Thinking] " + uiMsg->thinkingContent();
-                        }
-                        
-                        if (!contentToLog.isEmpty()) {
-                            entry.message = contentToLog;
-                            entry.metadata = QJsonObject{
-                                {"type", static_cast<int>(uiMsg->type())},
-                                {"has_thinking", !uiMsg->thinkingContent().isEmpty()}
-                            };
-                            consoleDock_->addLog(entry);
-                        }
-                    }
-                    // Don't add to conversation view - commented out
-                    // addMessageToConversation(std::move(uiMsg));
-                }
-            } catch (const std::exception& e) {
-                emit errorOccurred(QString("Failed to convert API response: %1").arg(e.what()));
-            }
-        }
-        
-        // Update token usage if available
-        if (content.contains("usage")) {
-            json usage = content["usage"];
-            int inputTokens = usage.value("input_tokens", 0);
-            int outputTokens = usage.value("output_tokens", 0);
-            double cost = usage.value("estimated_cost", 0.0);
-            emit tokenUsageUpdated(inputTokens, outputTokens, cost);
-        }
-    }
-}
-
-void AgentController::handleStateChanged(const json& data) {
-    int status = data["status"];
-    AgentState::Status agentStatus = static_cast<AgentState::Status>(status);
-    
-    QString statusStr;
-    switch (agentStatus) {
-        case AgentState::Status::Idle:
-            statusStr = "Idle";
-            break;
-        case AgentState::Status::Running:
-            statusStr = "Running";
-            emit agentStarted();
-            break;
-        case AgentState::Status::Paused:
-            statusStr = "Paused";
-            emit agentPaused();
-            break;
-        case AgentState::Status::Completed:
-            statusStr = "Completed";
-            emit agentCompleted();
-            break;
-    }
-    
-    emit statusChanged(statusStr);
-}
-
-void AgentController::handleToolStarted(const json& data) {
-    QString toolId = QString::fromStdString(data["tool_id"]);
-    QString toolName = QString::fromStdString(data["tool_name"]);
-    json input = data["input"];
-    
-    // Send detailed info to console
-    if (consoleDock_) {
-        LogEntry entry;
-        entry.timestamp = QDateTime::currentDateTime();
-        entry.level = LogEntry::Info;
-        entry.category = "Tool";
-        entry.message = QString("Executing tool: %1 (ID: %2)").arg(toolName).arg(toolId);
-        
-        // Add input as metadata
-        QString inputStr = QString::fromStdString(input.dump());
-        entry.metadata = QJsonObject{
-            {"tool_id", toolId},
-            {"tool_name", toolName},
-            {"input", QJsonDocument::fromJson(inputStr.toUtf8()).object()}
-        };
-        
-        consoleDock_->addLog(entry);
-    }
-    
-    // Convert json to QJsonObject for tool dock
-    QString jsonStr = QString::fromStdString(input.dump());
-    QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-    
-    // Update tool dock if connected
-    if (toolDock_) {
-        QUuid execId = toolDock_->startExecution(toolName, doc.object());
-        // Store the execution ID for later updates
-        toolIdToExecId_[toolId] = execId;
-    }
-}
-
-void AgentController::handleToolExecuted(const json& data) {
-    QString toolId = QString::fromStdString(data["tool_id"]);
-    QString toolName = QString::fromStdString(data["tool_name"]);
-    json result = data["result"];
-    
-    // Send result to console
-    if (consoleDock_) {
-        LogEntry entry;
-        entry.timestamp = QDateTime::currentDateTime();
-        entry.level = LogEntry::Info;
-        entry.category = "Tool";
-        entry.message = QString("Tool completed: %1 (ID: %2)").arg(toolName).arg(toolId);
-        
-        // Add result as metadata (truncate if too large)
-        QString resultStr = QString::fromStdString(result.dump());
-        if (resultStr.length() > 1000) {
-            resultStr = resultStr.left(997) + "...";
-        }
-        
-        entry.metadata = QJsonObject{
-            {"tool_id", toolId},
-            {"tool_name", toolName},
-            {"result", resultStr}
-        };
-        
-        consoleDock_->addLog(entry);
-    }
-    
-    // Tool execution messages are no longer added to conversation, so no update needed
-    // The tool dock handles its own updates via toolIdToExecId_ mapping
-    
-    // Update tool dock
-    if (toolDock_ && toolIdToExecId_.contains(toolId)) {
-        QUuid execId = toolIdToExecId_[toolId];
-        QString output = QString::fromStdString(result.dump());
-        
-        // Check multiple ways a tool result might indicate failure
-        bool success = true;
-        
-        // Check for success field
-        if (result.contains("success") && result["success"].is_boolean()) {
-            success = result["success"].get<bool>();
-        }
-        // Check for error field (boolean or string)
-        else if (result.contains("error")) {
-            if (result["error"].is_boolean()) {
-                success = !result["error"].get<bool>();
-            } else if (result["error"].is_string()) {
-                // Non-empty error string indicates failure
-                success = result["error"].get<std::string>().empty();
-            }
-        }
-        // Check for failed field
-        else if (result.contains("failed") && result["failed"].is_boolean()) {
-            success = !result["failed"].get<bool>();
-        }
-        
-        toolDock_->completeExecution(execId, success, output);
-    }
-    
-    updateMemoryView();
-}
-
-void AgentController::handleFinalReport(const json& data) {
-    QString report = QString::fromStdString(data["report"]);
-    
-    // Create final report message
-    auto reportMsg = std::make_unique<Message>(report, MessageRole::Assistant);
-    reportMsg->setType(MessageType::Analysis);
-    reportMsg->metadata().timestamp = QDateTime::currentDateTime();
-    reportMsg->metadata().tags << "final-report";
-    
-    addMessageToConversation(std::move(reportMsg));
-    
-    emit finalReportGenerated(report);
-}
-
-std::unique_ptr<Message> AgentController::convertApiMessage(const messages::Message& apiMsg) {
-    auto uiMsg = std::make_unique<Message>();
-    
-    // Set role
-    uiMsg->setRole(convertMessageRole(apiMsg.role()));
-    
-    // Set type
-    uiMsg->setType(inferMessageType(apiMsg));
-    
-    // Set timestamp
-    uiMsg->metadata().timestamp = QDateTime::currentDateTime();
-    
-    // Build content from message parts
-    QString content;
-    QString thinkingContent;
-    QTextStream stream(&content);
-    QTextStream thinkingStream(&thinkingContent);
-    bool hasToolError = false;
-    
-    for (const std::unique_ptr<messages::Content>& contentPtr: apiMsg.contents()) {
-        if (auto text = dynamic_cast<const messages::TextContent*>(contentPtr.get())) {
-            stream << QString::fromStdString(text->text);
-        } else if (auto thinking = dynamic_cast<const messages::ThinkingContent*>(contentPtr.get())) {
-            // Collect thinking content
-            if (!thinkingContent.isEmpty()) {
-                thinkingStream << "\n\n";
-            }
-            thinkingStream << QString::fromStdString(thinking->thinking);
-        }
-        // else if (auto toolUse = dynamic_cast<const messages::ToolUseContent*>(contentPtr.get())) {
-        //     // Add tool use to content stream instead of directly to message
-        //     if (!content.isEmpty()) {
-        //         stream << "\n";
-        //     }
-        //     stream << QString("[Tool: %1]").arg(QString::fromStdString(toolUse->name));
-        // } else if (auto toolResult = dynamic_cast<const messages::ToolResultContent*>(contentPtr.get())) {
-        //     // Add tool result to content stream
-        //     if (!content.isEmpty()) {
-        //         stream << "\n";
-        //     }
-        //     if (toolResult->is_error) {
-        //         stream << QString("[Tool Error: %1]").arg(QString::fromStdString(toolResult->content));
-        //         hasToolError = true;
-        //     } else {
-        //         stream << QString("[Tool Result]");
-        //     }
-        // }
-    }
-    
-    // Always set content, even if empty (message might have only thinking content)
-    uiMsg->setContent(content);
-    
-    if (!thinkingContent.isEmpty()) {
-        uiMsg->setThinkingContent(thinkingContent);
-    }
-    
-    // Set error type if there was a tool error
-    if (hasToolError) {
-        uiMsg->setType(MessageType::Error);
-    }
-    
-    return uiMsg;
-}
-
-MessageRole AgentController::convertMessageRole(messages::Role role) {
-    switch (role) {
-        case messages::Role::User:
-            return MessageRole::User;
-        case messages::Role::Assistant:
-            return MessageRole::Assistant;
-        case messages::Role::System:
-            return MessageRole::System;
-        default:
-            return MessageRole::User;
-    }
-}
-
-MessageType AgentController::inferMessageType(const messages::Message& msg) {
-    // Default based on role
-    if (msg.role() == messages::Role::Assistant) {
-        return MessageType::Analysis;
-    }
-    
-    return MessageType::Text;
-}
-
-// Tool content processing is now handled inline in convertApiMessage
-
-void AgentController::addMessageToConversation(std::unique_ptr<Message> msg) {
-    if (conversationModel_) {
-        // Log assistant messages to console
-        if (consoleDock_ && msg->role() == MessageRole::Assistant) {
-            LogEntry entry;
-            entry.timestamp = QDateTime::currentDateTime();
-            entry.level = LogEntry::Info;
-            entry.category = "Assistant";
-            
-            // Get the actual content to log
-            QString contentToLog = msg->content();
-            
-            // If there's no regular content but there is thinking content, log that
-            if (contentToLog.isEmpty() && !msg->thinkingContent().isEmpty()) {
-                contentToLog = "[Thinking] " + msg->thinkingContent();
-            }
-            
-            // Only log if there's actual content
-            if (!contentToLog.isEmpty()) {
-                entry.message = contentToLog;
-                
-                // Add metadata
-                entry.metadata = QJsonObject{
-                    {"type", static_cast<int>(msg->type())},
-                    {"has_thinking", !msg->thinkingContent().isEmpty()}
-                };
-                
-                consoleDock_->addLog(entry);
-            }
-        }
-        
-        conversationModel_->addMessage(std::move(msg));
-        
-        // Auto-scroll conversation view
-        if (conversationView_) {
-            conversationView_->scrollToBottom();
-        }
-    }
-}
-
-
-void AgentController::updateMemoryView() {
-    if (!memoryDock_ || !agent_) {
-        return;
-    }
-    
-    auto memory = agent_->get_memory();
-    if (memory) {
-        // Get memory snapshot and update dock
-        json snapshot = memory->export_memory_snapshot();
-        
-        // Convert analysis entries to MemoryEntry objects
-        memoryDock_->clearEntries(false);  // Don't show confirmation dialog
-        
-        // The key is "analyses" not "analysis_entries"
-        if (snapshot.contains("analyses") && snapshot["analyses"].is_array()) {
-            for (const auto& entry : snapshot["analyses"]) {
-                MemoryEntry memEntry;
-                memEntry.id = QUuid::createUuid();
-                
-                // Map fields from the actual memory structure
-                // Memory has: key, content, type, address (optional), related_addresses, timestamp
-                
-                // Extract title from key field (memory uses "key" but UI uses "title")
-                QString key = QString::fromStdString(entry.value("key", ""));
-                memEntry.title = key; // Use key as title
-                
-                // Use address if available, otherwise use the key as a fallback
-                if (entry.contains("address") && !entry["address"].is_null() && 
-                    !entry["address"].get<std::string>().empty()) {
-                    memEntry.address = QString::fromStdString(entry["address"]);
-                    } else {
-                        // Empty address - the view will handle this
-                        memEntry.address = "";
-                    }
-                
-                // Content is the actual analysis text
-                memEntry.analysis = QString::fromStdString(entry.value("content", ""));
-                
-                // Use the stored timestamp if available
-                if (entry.contains("timestamp")) {
-                    memEntry.timestamp = QDateTime::fromSecsSinceEpoch(entry["timestamp"]);
-                } else {
-                    memEntry.timestamp = QDateTime::currentDateTime();
-                }
-                
-                memoryDock_->addEntry(memEntry);
-            }
-        }
-    }
-}
+// ============================================================================
+// Manual Tool Execution
+// ============================================================================
 
 QJsonObject AgentController::executeManualTool(const QString& toolName, const QJsonObject& parameters) {
     if (!agent_) {
@@ -771,44 +257,298 @@ QJsonObject AgentController::executeManualTool(const QString& toolName, const QJ
         };
     }
     
-    // Convert QJsonObject to json
-    json params = json::parse(QJsonDocument(parameters).toJson(QJsonDocument::Compact).toStdString());
+    // Direct conversion without string roundtrip
+    json params = JsonUtils::qJsonToJson(parameters);
     
-    // Execute the tool
-    json result = agent_->execute_manual_tool(toolName.toStdString(), params);
-    
-    // Convert result back to QJsonObject
-    QString resultStr = QString::fromStdString(result.dump());
-    QJsonDocument doc = QJsonDocument::fromJson(resultStr.toUtf8());
-    
-    // Log to console
-    if (consoleDock_) {
-        LogEntry entry;
-        entry.timestamp = QDateTime::currentDateTime();
-        entry.level = result.value("success", false) ? LogEntry::Info : LogEntry::Error;
-        entry.category = "Manual Tool";
-        entry.message = QString("Executed %1: %2").arg(toolName).arg(
-            result.value("success", false) ? "Success" : QString::fromStdString(result.value("error", "Unknown error"))
-        );
-        consoleDock_->addLog(entry);
+    // Execute the tool through agent's tool registry
+    try {
+        json result = agent_->execute_manual_tool(toolName.toStdString(), params);
+        return JsonUtils::jsonToQJson(result);
+    } catch (const std::exception& e) {
+        return QJsonObject{
+            {"success", false},
+            {"error", QString::fromStdString(e.what())}
+        };
     }
-    
-    return doc.object();
 }
 
 QJsonArray AgentController::getAvailableTools() const {
     if (!agent_) {
-        return QJsonArray();
+        return QJsonArray{};
     }
     
-    // Get tools from agent
-    json tools = agent_->get_available_tools();
+    QJsonArray tools;
+    // Agent's tool_registry_ is private, would need to add a getter
+    // For now, return empty array
+    return tools;
+}
+
+// ============================================================================
+// Agent Message Handler
+// ============================================================================
+
+void AgentController::handleAgentMessage(AgentMessageType type, const json& data) {
+    switch (type) {
+        case AgentMessageType::Log: {
+            // Handle log messages
+            int level = data.value("level", 0);
+            std::string message = data.value("message", "");
+            
+            LogEntry::Level logLevel = LogEntry::Debug;
+            if (level == 1) logLevel = LogEntry::Info;
+            else if (level == 2) logLevel = LogEntry::Warning;
+            else if (level >= 3) logLevel = LogEntry::Error;
+            
+            logToConsole(logLevel, "Agent", QString::fromStdString(message));
+            break;
+        }
+        
+        case AgentMessageType::ApiMessage: {
+            // Handle API messages (thinking blocks, responses, etc.)
+            std::string msgType = data.value("type", "");
+            json content = data.value("content", json{});
+            
+            if (msgType == "thinking") {
+                // Add thinking message to conversation
+                auto msg = std::make_unique<Message>();
+                msg->setThinkingContent(QString::fromStdString(content.value("text", "")));
+                msg->setRole(MessageRole::Assistant);
+                msg->metadata().timestamp = QDateTime::currentDateTime();
+                addMessageToConversation(std::move(msg));
+            } else if (msgType == "response") {
+                // Add assistant response to conversation
+                auto msg = std::make_unique<Message>();
+                msg->setContent(QString::fromStdString(content.value("text", "")));
+                msg->setRole(MessageRole::Assistant);
+                msg->setType(MessageType::Text);
+                msg->metadata().timestamp = QDateTime::currentDateTime();
+                addMessageToConversation(std::move(msg));
+            } else if (msgType == "token_usage") {
+                // Update token usage
+                int input = content.value("input_tokens", 0);
+                int output = content.value("output_tokens", 0);
+                double cost = content.value("estimated_cost", 0.0);
+                emit tokenUsageUpdated(input, output, cost);
+            }
+            break;
+        }
+        
+        case AgentMessageType::StateChanged: {
+            // Handle state changes
+            int status = data.value("status", 0);
+            AgentState::Status agentStatus = static_cast<AgentState::Status>(status);
+            
+            QString statusStr = agentStatusToString(agentStatus);
+            emit statusChanged(statusStr);
+            
+            switch (agentStatus) {
+                case AgentState::Status::Running:
+                    emit agentStarted();
+                    break;
+                case AgentState::Status::Paused:
+                    emit agentPaused();
+                    break;
+                case AgentState::Status::Completed:
+                    emit agentCompleted();
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+        
+        case AgentMessageType::ToolStarted: {
+            // Handle tool execution started
+            std::string toolId = data.value("tool_id", "");
+            std::string toolName = data.value("tool_name", "");
+            json input = data.value("input", json{});
+            
+            QString qToolId = QString::fromStdString(toolId);
+            QString qToolName = QString::fromStdString(toolName);
+            
+            // Convert parameters
+            QJsonObject paramsObj = JsonUtils::jsonToQJson(input);
+            
+            // Log to console
+            logToConsole(LogEntry::Info, "Tool", 
+                        QString("Executing tool: %1").arg(qToolName));
+            
+            // Update tool dock
+            if (toolDock_) {
+                paramsObj["__tool_id"] = qToolId;
+                QUuid execId = toolDock_->startExecution(qToolName, paramsObj);
+                toolIdToExecId_[qToolId] = execId;
+            }
+            break;
+        }
+        
+        case AgentMessageType::ToolExecuted: {
+            // Handle tool execution completed
+            std::string toolId = data.value("tool_id", "");
+            std::string toolName = data.value("tool_name", "");
+            json result = data.value("result", json{});
+            bool success = !result.contains("error");
+            
+            QString qToolId = QString::fromStdString(toolId);
+            QString qToolName = QString::fromStdString(toolName);
+            
+            // Log to console
+            logToConsole(success ? LogEntry::Info : LogEntry::Warning, "Tool",
+                        QString("Tool %1: %2")
+                            .arg(qToolName)
+                            .arg(success ? "succeeded" : "failed"));
+            
+            // Update tool dock
+            if (toolDock_) {
+                auto it = toolIdToExecId_.find(qToolId);
+                if (it != toolIdToExecId_.end()) {
+                    QString output = QString::fromStdString(result.dump());
+                    toolDock_->completeExecution(it->second, success, output);
+                    toolIdToExecId_.erase(it);
+                }
+            }
+            break;
+        }
+        
+        case AgentMessageType::FinalReport: {
+            // Handle final report
+            std::string report = data.value("report", "");
+            QString qReport = QString::fromStdString(report);
+            
+            // Create final report message
+            auto reportMsg = std::make_unique<Message>(qReport, MessageRole::Assistant);
+            reportMsg->setType(MessageType::Analysis);
+            reportMsg->metadata().timestamp = QDateTime::currentDateTime();
+            reportMsg->metadata().tags << "final-report";
+            
+            addMessageToConversation(std::move(reportMsg));
+            emit finalReportGenerated(qReport);
+            break;
+        }
+    }
     
-    // Convert to QJsonArray
-    QString toolsStr = QString::fromStdString(tools.dump());
-    QJsonDocument doc = QJsonDocument::fromJson(toolsStr.toUtf8());
+    // Check for memory updates
+    static json lastMemorySnapshot;
+    if (agent_ && agent_->get_memory()) {
+        json currentSnapshot = agent_->get_memory()->export_memory_snapshot();
+        if (currentSnapshot != lastMemorySnapshot) {
+            lastMemorySnapshot = currentSnapshot;
+            updateMemoryView();
+        }
+    }
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+void AgentController::addMessageToConversation(std::unique_ptr<Message> msg) {
+    if (conversationModel_) {
+        conversationModel_->addMessage(std::move(msg));
+        
+        // Auto-scroll conversation view
+        if (conversationView_) {
+            conversationView_->scrollToBottom();
+        }
+    }
+}
+
+void AgentController::logToConsole(LogEntry::Level level, const QString& category, 
+                                      const QString& message, const QJsonObject& metadata) {
+    if (!consoleDock_) {
+        return;
+    }
     
-    return doc.array();
+    LogEntry entry;
+    entry.timestamp = QDateTime::currentDateTime();
+    entry.level = level;
+    entry.category = category;
+    entry.message = message;
+    
+    // Only set metadata if it's not empty
+    if (!metadata.isEmpty()) {
+        entry.metadata = metadata;
+    }
+    
+    consoleDock_->addLog(entry);
+}
+
+void AgentController::updateMemoryView() {
+    if (!memoryDock_ || !agent_ || !agent_->get_memory()) {
+        return;
+    }
+    
+    // Get memory directly from BinaryMemory
+    std::shared_ptr<BinaryMemory> memory = agent_->get_memory();
+    
+    // Get all analyses from memory
+    std::vector<llm_re::AnalysisEntry> analyses = memory->get_analysis();
+    
+    // Track which keys are still present
+    std::set<QString> currentKeys;
+    
+    for (const auto& entry : analyses) {
+        QString key = QString::fromStdString(entry.key);
+        currentKeys.insert(key);
+            
+        // Check if this is a new or existing entry
+        auto it = memoryKeyToId_.find(key);
+        
+        MemoryEntry memEntry;
+        if (it != memoryKeyToId_.end()) {
+            // Existing entry - update it
+            memEntry = memoryDock_->entry(it->second);
+            memEntry.title = key;
+        } else {
+            // New entry - create new UUID and add to map
+            memEntry.id = QUuid::createUuid();
+            memEntry.title = key;
+            memoryKeyToId_[key] = memEntry.id;
+        }
+        
+        // Update fields from AnalysisEntry
+        if (entry.address.has_value()) {
+            memEntry.address = QString("0x%1").arg(entry.address.value(), 0, 16);
+        } else {
+            memEntry.address = "";
+        }
+        
+        memEntry.analysis = QString::fromStdString(entry.content);
+        memEntry.timestamp = QDateTime::fromSecsSinceEpoch(entry.timestamp);
+            
+        // Add or update entry
+        if (it != memoryKeyToId_.end()) {
+            memoryDock_->updateEntry(memEntry.id, memEntry);
+        } else {
+            memoryDock_->addEntry(memEntry);
+        }
+    }
+    
+    // Remove entries that are no longer in the snapshot
+    for (auto it = memoryKeyToId_.begin(); it != memoryKeyToId_.end(); ) {
+        if (currentKeys.find(it->first) == currentKeys.end()) {
+            // This key is no longer in the snapshot, remove it
+            memoryDock_->removeEntry(it->second);
+            it = memoryKeyToId_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+QString AgentController::agentStatusToString(AgentState::Status status) const {
+    switch (status) {
+        case AgentState::Status::Idle:
+            return "Idle";
+        case AgentState::Status::Running:
+            return "Running";
+        case AgentState::Status::Paused:
+            return "Paused";
+        case AgentState::Status::Completed:
+            return "Completed";
+        default:
+            return "Unknown";
+    }
 }
 
 } // namespace llm_re::ui_v2

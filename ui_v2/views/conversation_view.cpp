@@ -13,8 +13,7 @@ namespace llm_re::ui_v2 {
 
 // ConversationView implementation
 
-ConversationView::ConversationView(QWidget* parent)
-    : BaseStyledWidget(parent) {
+ConversationView::ConversationView(QWidget* parent) : BaseStyledWidget(parent) {
     
     // Create default model
     model_ = new ConversationModel(this);
@@ -918,8 +917,6 @@ void ConversationView::finishInitialization() {
                 connect(agentController, &AgentController::agentPaused, 
                         this, &ConversationView::onAgentStateChanged);
                 connect(agentController, &AgentController::agentCompleted, 
-                        this, &ConversationView::onAgentStateChanged);
-                connect(agentController, &AgentController::agentStopped, 
                         this, &ConversationView::onAgentStateChanged);
                 
                 // Initial button state update

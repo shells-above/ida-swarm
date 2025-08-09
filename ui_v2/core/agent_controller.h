@@ -2,21 +2,15 @@
 
 #include "ui_v2_common.h"
 #include "../models/conversation_model.h"
+#include "agent/agent.h"
+#include "api/anthropic_api.h"
+#include <memory>
+#include <vector>
 
-// Forward declarations
+#include "ui_v2/views/console_dock.h"
+
 namespace llm_re {
     struct Config;
-    class Agent;
-    namespace api {
-        struct ChatResponse;
-        struct TokenUsage;
-    }
-    namespace messages {
-        class Message;
-        enum class Role;
-        struct ToolUseContent;
-        struct ToolResultContent;
-    }
 }
 
 namespace llm_re::ui_v2 {
@@ -26,7 +20,8 @@ class MemoryDock;
 class ToolExecutionDock;
 class ConsoleDock;
 
-// Controller that bridges between the Agent and ui_v2
+// AgentController that directly uses the Agent class
+// Agent remains UI-agnostic through its callback system
 class AgentController : public QObject {
     Q_OBJECT
     
@@ -38,10 +33,10 @@ public:
     bool initialize(const Config& config);
     void shutdown();
     
-    // Agent control
+    // Agent control - direct Agent methods
     void executeTask(const std::string& task);
-    void stopExecution();
-    void resumeExecution();
+    void stopExecution() const;
+    void resumeExecution() const;
     void continueWithTask(const std::string& additional);
     void injectUserMessage(const std::string& message);
     
@@ -59,7 +54,7 @@ public:
     void connectConsoleDock(ConsoleDock* dock);
     
     // Configuration
-    const Config& config() const { return *config_; }
+    const Config& config() const;
     void updateConfig(const Config& config);
     
     // Memory management
@@ -77,50 +72,34 @@ public:
 signals:
     // Status updates
     void statusChanged(const QString& status);
-    void errorOccurred(const QString& error);
-    
-    // Agent state
     void agentStarted();
-    void agentStopped();
     void agentPaused();
     void agentCompleted();
+    void errorOccurred(const QString& error);
     
-    // Token usage
-    void tokenUsageUpdated(int inputTokens, int outputTokens, double cost);
-    
-    // Iteration updates
+    // Progress updates
     void iterationChanged(int iteration);
-    
-    // Final report
+    void tokenUsageUpdated(int inputTokens, int outputTokens, double estimatedCost);
     void finalReportGenerated(const QString& report);
     
-private slots:
-    void onAgentMessage(int messageType, const QString& dataStr);
-    
 private:
-    // Message handlers
-    void handleLogMessage(const json& data);
-    void handleApiMessage(const json& data);
-    void handleStateChanged(const json& data);
-    void handleToolStarted(const json& data);
-    void handleToolExecuted(const json& data);
-    void handleFinalReport(const json& data);
+    // Agent message callback handler
+    void handleAgentMessage(AgentMessageType type, const nlohmann::json& data);
     
-    // Message conversion
-    std::unique_ptr<Message> convertApiMessage(const messages::Message& apiMsg);
-    MessageRole convertMessageRole(messages::Role role);
-    MessageType inferMessageType(const messages::Message& msg);
-    
-    // UI updates
+    // Helper methods
     void addMessageToConversation(std::unique_ptr<Message> msg);
     void updateMemoryView();
+    QString agentStatusToString(AgentState::Status status) const;
+    
+    // Lightweight logging helper
+    void logToConsole(LogEntry::Level level, const QString& category, const QString& message,
+                      const QJsonObject& metadata = QJsonObject());
     
     // Core components
     std::unique_ptr<Agent> agent_;
-    std::unique_ptr<Config> config_;
-    ConversationModel* conversationModel_ = nullptr;
     
     // Connected UI components
+    ConversationModel* conversationModel_ = nullptr;
     ConversationView* conversationView_ = nullptr;
     MemoryDock* memoryDock_ = nullptr;
     ToolExecutionDock* toolDock_ = nullptr;
@@ -128,9 +107,9 @@ private:
     
     // State tracking
     bool isInitialized_ = false;
-    int currentIteration_ = 0;
-    std::map<QString, QString> toolIdToMessageId_;  // tool_id -> message_id mapping
-    std::map<QString, QUuid> toolIdToExecId_;  // tool_id -> execution_id mapping
+    QString currentTaskId_;
+    std::map<QString, QUuid> toolIdToExecId_;   // tool_id -> execution_id mapping
+    std::map<QString, QUuid> memoryKeyToId_;    // memory_key -> QUuid mapping for incremental updates
     
     // Statistics
     std::chrono::steady_clock::time_point sessionStart_;
