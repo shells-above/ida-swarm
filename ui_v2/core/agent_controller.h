@@ -6,7 +6,7 @@
 // Forward declarations
 namespace llm_re {
     struct Config;
-    class REAgent;
+    class Agent;
     namespace api {
         struct ChatResponse;
         struct TokenUsage;
@@ -26,7 +26,7 @@ class MemoryDock;
 class ToolExecutionDock;
 class ConsoleDock;
 
-// Controller that bridges between the REAgent and ui_v2
+// Controller that bridges between the Agent and ui_v2
 class AgentController : public QObject {
     Q_OBJECT
     
@@ -116,7 +116,7 @@ private:
     void updateMemoryView();
     
     // Core components
-    std::unique_ptr<REAgent> agent_;
+    std::unique_ptr<Agent> agent_;
     std::unique_ptr<Config> config_;
     ConversationModel* conversationModel_ = nullptr;
     

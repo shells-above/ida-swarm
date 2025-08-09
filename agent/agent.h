@@ -13,6 +13,8 @@
 #include "agent/tool_system.h"
 #include "agent/grader.h"
 #include "api/anthropic_api.h"
+#include "api/pricing.h"
+#include "api/token_stats.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
@@ -190,14 +192,14 @@ struct AgentTask {
 };
 
 // Main agent
-class REAgent {
+class Agent {
 private:
     // Core components
     std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     tools::ToolRegistry tool_registry_;                              // registry of tools that use the action executor
-    api::AnthropicClient api_client_;                                // api client
+    api::AnthropicClient api_client_;                                // agent api client
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
 
@@ -208,33 +210,10 @@ private:
     std::string last_error_;
 
     // Token tracking
-    api::TokenTracker token_tracker_;
-    std::vector<api::TokenTracker> tracker_sessions_;  // we add to this the previous token_tracker when we hit context limit
+    api::TokenStats token_stats_;
+    std::vector<api::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
 
     static constexpr int CONTEXT_LIMIT_TOKENS = 180000;  // When to trigger consolidation
-
-    // Cache performance tracking
-    struct CacheStats {
-        int total_cache_hits = 0;      // Total cached tokens read
-        int total_cache_misses = 0;    // Total non-cached input tokens
-        int total_cache_writes = 0;    // Number of cache write operations
-        double total_cache_savings = 0.0;
-
-        double get_hit_rate() const {
-            int total = total_cache_hits + total_cache_misses;
-            return total > 0 ? (double)total_cache_hits / total : 0.0;
-        }
-
-        json to_json() const {
-            return {
-                {"cache_hit_tokens", total_cache_hits},
-                {"cache_miss_tokens", total_cache_misses},
-                {"cache_writes", total_cache_writes},
-                {"hit_rate", get_hit_rate()},
-                {"estimated_savings", total_cache_savings}
-            };
-        }
-    } cache_stats_;
 
     // context management
     struct ContextManagementState {
@@ -393,7 +372,7 @@ What's your next step to complete the reversal?)";
     }
 
 public:
-    REAgent(const Config& config)
+    Agent(const Config& config)
         : config_(config),
           api_client_(create_api_client(config)),
           memory_(std::make_shared<BinaryMemory>()),
@@ -422,7 +401,7 @@ public:
         });
     }
 
-    ~REAgent() {
+    ~Agent() {
         stop();
         cleanup_thread();
         if (task_semaphore_) {
@@ -442,7 +421,7 @@ public:
 
         stop_requested_ = false;
         worker_thread_ = qthread_create([](void* ud) -> int {
-            static_cast<REAgent*>(ud)->worker_loop();
+            static_cast<Agent*>(ud)->worker_loop();
             return 0;
         }, this);
     }
@@ -555,11 +534,11 @@ public:
     // Get current state as JSON
     json get_state_json() const {
         json j;
-        j["status"] = static_cast<int>(state_.get_status());
+        j["status"] = state_.get_status();
         j["current_task"] = state_.get_task();
         j["conversation"] = conversation_.to_json();
-        j["tokens"] = token_tracker_.to_json();
-        j["cache_stats"] = cache_stats_.to_json();
+        j["tokens"] = token_stats_.to_json();
+        // Cache stats now included in token_stats_.to_json()
         j["memory"] = memory_->export_memory_snapshot();
         j["has_saved_state"] = saved_state_.valid;
         if (saved_state_.valid) {
@@ -679,11 +658,11 @@ public:
 
     // Token statistics
     api::TokenUsage get_token_usage() const {
-        return token_tracker_.get_total();
+        return token_stats_.get_total();
     }
 
     void reset_token_usage() {
-        token_tracker_.reset();
+        token_stats_.reset();
     }
 
 private:
@@ -882,7 +861,7 @@ private:
             return false;  // Already consolidating
         }
 
-        api::TokenUsage usage = token_tracker_.get_last_usage();
+        api::TokenUsage usage = token_stats_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         return total_tokens > CONTEXT_LIMIT_TOKENS;
     }
@@ -939,10 +918,10 @@ private:
 
         // Save current task and token stats
         std::string original_task = state_.get_task();
-        api::TokenUsage total_usage_before = token_tracker_.get_total();
+        api::TokenUsage total_usage_before = token_stats_.get_total();
 
         // store old tracker session
-        tracker_sessions_.emplace_back(std::move(token_tracker_));
+        stats_sessions_.emplace_back(std::move(token_stats_));
 
         // Clear conversation
         conversation_.clear();
@@ -1008,9 +987,9 @@ private:
         // We already use 2 for tools and system prompt, so we can only add 2 more
 
         // First, remove any existing cache controls from messages to avoid exceeding limit
-        for (auto& msg : saved_state_.request.messages) {
+        for (messages::Message& msg: saved_state_.request.messages) {
             messages::Message new_msg(msg.role());
-            for (const auto& content : msg.contents()) {
+            for (const std::unique_ptr<messages::Content>& content: msg.contents()) {
                 // Clone content without cache control
                 if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
                     new_msg.add_content(std::make_unique<messages::TextContent>(text->text));
@@ -1047,7 +1026,7 @@ private:
 
             // Clone the message and add cache control to the last tool result
             messages::Message new_msg(msg_to_modify.role());
-            auto& contents = msg_to_modify.contents();
+            const std::vector<std::unique_ptr<messages::Content>>& contents = msg_to_modify.contents();
 
             for (size_t i = 0; i < contents.size(); i++) {
                 if (i == contents.size() - 1) {
@@ -1122,9 +1101,8 @@ private:
             validate_thinking_preservation(response);
 
             // Track token + cache usage
-            token_tracker_.add_usage(response.usage);
+            token_stats_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
-            update_cache_stats(response.usage);
 
             // Add response to conversation and saved state
             // IMPORTANT: We must preserve the entire message including thinking blocks
@@ -1233,44 +1211,6 @@ private:
             send_log(LogLevel::WARNING, "Reached maximum iterations");
             change_state(AgentState::Status::Completed);
         }
-    }
-
-    // Update cache statistics
-    void update_cache_stats(const api::TokenUsage& usage) {
-        if (usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0 || usage.input_tokens > 0) {
-            cache_stats_.total_cache_hits += usage.cache_read_tokens;
-            cache_stats_.total_cache_misses += usage.input_tokens;
-
-            if (usage.cache_creation_tokens > 0) {
-                cache_stats_.total_cache_writes++;
-            }
-
-            // Estimate savings based on the difference in pricing
-            if (usage.cache_read_tokens > 0) {
-                double saved = usage.cache_read_tokens / 1000000.0 * (get_input_price(usage.model) - get_cache_read_price(usage.model));
-                cache_stats_.total_cache_savings += saved;
-            }
-        }
-    }
-
-    double get_input_price(api::Model model) const {
-        switch (model) {
-            case api::Model::Opus41: return 15.0;
-            case api::Model::Sonnet4:
-            case api::Model::Sonnet37: return 3.0;
-            case api::Model::Haiku35: return 0.8;
-        }
-        return 0.0;
-    }
-
-    double get_cache_read_price(api::Model model) const {
-        switch (model) {
-            case api::Model::Opus41: return 1.5;
-            case api::Model::Sonnet4:
-            case api::Model::Sonnet37: return 0.30;
-            case api::Model::Haiku35: return 0.08;
-        }
-        return 0.0;
     }
 
     // Process tool calls from assistant message
@@ -1417,27 +1357,8 @@ private:
     }
     
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
-        api::TokenUsage total = token_tracker_.get_total();
-
-        std::stringstream ss;
-        ss << "[Iteration " << iteration << "] ";
-        ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
-
-        ss << " [" << usage.cache_read_tokens << " cache read, " << usage.cache_creation_tokens << " cache write]";
-
-        ss << " | Total: " << total.input_tokens << " in, " << total.output_tokens << " out";
-        ss << " [" << total.cache_read_tokens << " cache read, " << total.cache_creation_tokens << " cache write]";
-        ss << " | Est. Cost: $" << std::fixed << std::setprecision(4) << total.estimated_cost();
-
-        // Add overall cache statistics
-        if (cache_stats_.total_cache_hits + cache_stats_.total_cache_misses > 0) {
-            ss << " | Overall Cache: " << std::fixed << std::setprecision(1)
-               << (cache_stats_.get_hit_rate() * 100) << "% hit rate";
-            ss << ", $" << std::fixed << std::setprecision(4)
-               << cache_stats_.total_cache_savings << " saved";
-        }
-
-        send_log(LogLevel::INFO, ss.str());
+        std::string summary = token_stats_.get_iteration_summary(usage, iteration);
+        send_log(LogLevel::INFO, summary);
     }
 };
 

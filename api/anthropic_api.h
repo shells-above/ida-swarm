@@ -132,51 +132,20 @@ struct TokenUsage {
         return *this;
     }
 
-    double estimated_cost() const {
-        double price_input, price_output, price_cache_write, price_cache_read;
+    // Delegate to PricingModel for cost calculation
+    double estimated_cost() const;  // Implementation moved to pricing.h to avoid circular dependency
 
-        switch (model) {
-            case Model::Opus41:
-                price_input = 15.0;
-                price_output = 75.0;
-                price_cache_write = 18.75;
-                price_cache_read = 1.5;
-                break;
-            case Model::Sonnet4:
-            case Model::Sonnet37:
-                price_input = 3.0;
-                price_output = 15.0;
-                price_cache_write = 3.75;
-                price_cache_read = 0.30;
-                break;
-            case Model::Haiku35:
-                price_input = 0.8;
-                price_output = 4.0;
-                price_cache_write = 1.0;
-                price_cache_read = 0.08;
-                break;
-        }
-
-        return (input_tokens / 1000000.0 * price_input) +
-               (output_tokens / 1000000.0 * price_output) +
-               (cache_creation_tokens / 1000000.0 * price_cache_write) +
-               (cache_read_tokens / 1000000.0 * price_cache_read);
-    }
-
-    static TokenUsage from_json(const json& j) {
+    static TokenUsage from_json(const json& j, Model model = Model::Sonnet4) {
         TokenUsage usage;
         if (j.contains("input_tokens")) usage.input_tokens = j["input_tokens"];
         if (j.contains("output_tokens")) usage.output_tokens = j["output_tokens"];
         if (j.contains("cache_creation_input_tokens")) usage.cache_creation_tokens = j["cache_creation_input_tokens"];
         if (j.contains("cache_read_input_tokens")) usage.cache_read_tokens = j["cache_read_input_tokens"];
-        if (j.contains("model")) usage.model = model_from_string(j["model"]);
-        return usage;
-    }
-
-    // Fallback method for cases where model isn't in JSON
-    static TokenUsage from_json(const json& j, Model model) {
-        TokenUsage usage = from_json(j);
-        if (!j.contains("model")) {
+        
+        // Use model from JSON if available, otherwise use provided default
+        if (j.contains("model")) {
+            usage.model = model_from_string(j["model"]);
+        } else {
             usage.model = model;
         }
         return usage;
@@ -967,51 +936,7 @@ public:
 };
 
 // Session token tracker
-class TokenTracker {
-    TokenUsage session_total;
-    std::chrono::steady_clock::time_point session_start;
-    std::vector<std::pair<std::chrono::steady_clock::time_point, TokenUsage>> history;
-
-public:
-    TokenTracker() : session_start(std::chrono::steady_clock::now()) {}
-
-    void add_usage(const TokenUsage& usage) {
-        session_total += usage;
-        history.emplace_back(std::chrono::steady_clock::now(), usage);
-    }
-
-    TokenUsage get_total() const {
-        return session_total;
-    }
-
-    TokenUsage get_last_usage() const {
-        if (!history.empty()) {
-            return history.back().second;
-        } else {
-            return TokenUsage();
-        }
-    }
-
-    double get_session_duration_minutes() const {
-        auto now = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::minutes>(now - session_start);
-        return duration.count();
-    }
-
-    json to_json() const {
-        json j;
-        j["session_total"] = session_total.to_json();
-        j["session_duration_minutes"] = get_session_duration_minutes();
-        j["request_count"] = history.size();
-        return j;
-    }
-
-    void reset() {
-        session_total = TokenUsage{};
-        session_start = std::chrono::steady_clock::now();
-        history.clear();
-    }
-};
+// TokenTracker removed - replaced by TokenStats in token_stats.h
 
 } // namespace llm_re::api
 

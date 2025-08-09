@@ -126,7 +126,6 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
     result.analysis = analysis_text;
     result.completed_at = std::chrono::system_clock::now();
     result.token_usage = response.usage;
-    result.cost_estimate = response.usage.estimated_cost();
 
     // Store the result
     store_analysis_result(result);
@@ -151,7 +150,7 @@ void DeepAnalysisManager::store_analysis_result(const DeepAnalysisResult& result
     metadata["task"] = result.task_description;
     metadata["completed_at"] = std::chrono::system_clock::to_time_t(result.completed_at);
     metadata["token_usage"] = result.token_usage.to_json();
-    metadata["cost_estimate"] = result.cost_estimate;
+    // Cost calculated from token_usage when needed
 
     // Store the main analysis
     memory_->store_analysis(
@@ -231,7 +230,7 @@ std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::s
             result.analysis = analysis_entries[0].content;
             result.completed_at = std::chrono::system_clock::from_time_t(metadata["completed_at"]);
             result.token_usage = api::TokenUsage::from_json(metadata["token_usage"]);
-            result.cost_estimate = metadata["cost_estimate"];
+            // Cost calculated from token_usage when needed
 
             return result;
         } catch (...) {

@@ -69,7 +69,7 @@ bool AgentController::initialize(const Config& config) {
             emit statusChanged("Using API key authentication");
         }
         
-        agent_ = std::make_unique<REAgent>(*config_);
+        agent_ = std::make_unique<Agent>(*config_);
         
         // Set up the unified message callback
         agent_->set_message_callback(

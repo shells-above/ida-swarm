@@ -34,7 +34,7 @@ struct DeepAnalysisResult {
     std::string analysis;
     std::chrono::system_clock::time_point completed_at;
     api::TokenUsage token_usage;
-    double cost_estimate;
+    // cost_estimate removed - calculate from token_usage.estimated_cost() instead
 };
 
 // Deep analysis manager
