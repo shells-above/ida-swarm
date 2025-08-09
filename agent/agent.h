@@ -668,7 +668,7 @@ public:
 
         stats["total_thinking_blocks"] = total_thinking_blocks;
         stats["total_redacted_blocks"] = total_redacted_blocks;
-        stats["max_thinking_budget"] = config_.api.max_thinking_tokens;
+        stats["max_thinking_budget"] = config_.agent.max_thinking_tokens;
 
         return stats;
     }
@@ -783,11 +783,11 @@ private:
 
         // Build initial request with cache control on tools and system
         api::ChatRequestBuilder builder;
-        builder.with_model(config_.api.model)
+        builder.with_model(config_.agent.model)
                .with_system_prompt(SYSTEM_PROMPT)
-               .with_max_tokens(config_.api.max_tokens)
-               .with_max_thinking_tokens(config_.api.max_thinking_tokens)
-               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.api.temperature)
+               .with_max_tokens(config_.agent.max_tokens)
+               .with_max_thinking_tokens(config_.agent.max_thinking_tokens)
+               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.agent.temperature)
                .enable_thinking(config_.agent.enable_thinking)
                .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
 
@@ -972,11 +972,11 @@ private:
 
         // Build new request with consolidated context
         api::ChatRequestBuilder builder;
-        builder.with_model(config_.api.model)
+        builder.with_model(config_.agent.model)
                .with_system_prompt(SYSTEM_PROMPT)
-               .with_max_tokens(config_.api.max_tokens)
-               .with_max_thinking_tokens(config_.api.max_thinking_tokens)
-               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.api.temperature)
+               .with_max_tokens(config_.agent.max_tokens)
+               .with_max_thinking_tokens(config_.agent.max_thinking_tokens)
+               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.agent.temperature)
                .enable_thinking(config_.agent.enable_thinking)
                .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
 
