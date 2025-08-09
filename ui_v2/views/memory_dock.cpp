@@ -526,8 +526,8 @@ void MemoryDock::removeEntry(const QUuid& id) {
     model_->removeEntry(id);
 }
 
-void MemoryDock::clearEntries() {
-    if (model_->rowCount() > 0) {
+void MemoryDock::clearEntries(bool showConfirmation) {
+    if (showConfirmation && model_->rowCount() > 0) {
         auto reply = QMessageBox::question(
             this, tr("Clear Entries"),
             tr("Clear all %1 memory entries?").arg(model_->rowCount()),
@@ -536,6 +536,8 @@ void MemoryDock::clearEntries() {
         if (reply == QMessageBox::Yes) {
             model_->clearEntries();
         }
+    } else {
+        model_->clearEntries();
     }
 }
 

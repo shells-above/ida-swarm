@@ -3,6 +3,7 @@
 #include "../core/theme_manager.h"
 #include "../core/ui_constants.h"
 #include "../core/ui_utils.h"
+#include "../core/agent_controller.h"
 
 namespace llm_re::ui_v2 {
 
@@ -518,6 +519,10 @@ void ToolExecutionDock::createToolBar() {
     toolBar_->addSeparator();
     
     // Actions
+    manualExecuteAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("play"), tr("Manual Execute"));
+    
+    toolBar_->addSeparator();
+    
     autoScrollAction_ = toolBar_->addAction(ThemeManager::instance().themedIcon("auto-scroll"), tr("Auto Scroll"));
     autoScrollAction_->setCheckable(true);
     autoScrollAction_->setChecked(autoScroll_);
@@ -651,6 +656,9 @@ void ToolExecutionDock::connectSignals() {
             this, &ToolExecutionDock::onFilterChanged);
     
     // Actions
+    connect(manualExecuteAction_, &QAction::triggered,
+            this, &ToolExecutionDock::onManualExecute);
+    
     connect(autoScrollAction_, &QAction::toggled,
             [this](bool checked) { autoScroll_ = checked; });
     
@@ -1564,6 +1572,355 @@ QModelIndex ToolExecutionDock::ExecutionModel::indexForId(const QUuid& id) const
         return index(row, 0);
     }
     return QModelIndex();
+}
+
+// Helper class for dynamic parameter input
+class ParameterInputWidget : public QWidget {
+public:
+    ParameterInputWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        mainLayout_ = new QVBoxLayout(this);
+        mainLayout_->setSpacing(10);
+    }
+    
+    void setSchema(const QJsonObject& schema) {
+        // Clear existing widgets
+        QLayoutItem* item;
+        while ((item = mainLayout_->takeAt(0)) != nullptr) {
+            delete item->widget();
+            delete item;
+        }
+        parameterWidgets_.clear();
+        
+        // Parse schema
+        QJsonObject properties = schema["properties"].toObject();
+        QJsonArray required = schema["required"].toArray();
+        
+        QSet<QString> requiredSet;
+        for (const QJsonValue& val : required) {
+            requiredSet.insert(val.toString());
+        }
+        
+        // Create sections
+        auto* requiredSection = new QGroupBox(tr("Required Parameters"));
+        auto* requiredLayout = new QFormLayout(requiredSection);
+        
+        auto* optionalSection = new QGroupBox(tr("Optional Parameters"));
+        auto* optionalLayout = new QFormLayout(optionalSection);
+        optionalSection->setCheckable(true);
+        optionalSection->setChecked(false);
+        
+        // Create widgets for each parameter
+        for (auto it = properties.begin(); it != properties.end(); ++it) {
+            QString name = it.key();
+            QJsonObject param = it.value().toObject();
+            QString type = param["type"].toString();
+            QString description = param["description"].toString();
+            
+            QWidget* widget = nullptr;
+            
+            if (type == "integer") {
+                if (name == "address" || name.contains("address", Qt::CaseInsensitive)) {
+                    // Special handling for addresses - use line edit for hex input
+                    auto* lineEdit = new QLineEdit();
+                    lineEdit->setPlaceholderText("0x...");
+                    widget = lineEdit;
+                } else {
+                    auto* spinBox = new QSpinBox();
+                    spinBox->setRange(INT_MIN, INT_MAX);
+                    spinBox->setSpecialValueText("(not set)");
+                    spinBox->setValue(spinBox->minimum());
+                    widget = spinBox;
+                }
+                
+            } else if (type == "string") {
+                auto* lineEdit = new QLineEdit();
+                if (!description.isEmpty()) {
+                    lineEdit->setPlaceholderText(description.left(50));
+                }
+                
+                // Set default empty string for optional parameters
+                if (!requiredSet.contains(name)) {
+                    lineEdit->setText("");
+                }
+                
+                widget = lineEdit;
+                
+            } else if (type == "boolean") {
+                auto* checkBox = new QCheckBox();
+                checkBox->setChecked(false);  // Default to unchecked
+                widget = checkBox;
+                
+            } else if (type == "array") {
+                auto* textEdit = new QTextEdit();
+                textEdit->setMaximumHeight(60);
+                textEdit->setPlaceholderText("JSON array, e.g., [1, 2, 3]");
+                widget = textEdit;
+            }
+            
+            if (widget) {
+                widget->setToolTip(description);
+                parameterWidgets_[name] = widget;
+                
+                // Add to appropriate section
+                if (requiredSet.contains(name)) {
+                    requiredLayout->addRow(name + ":", widget);
+                } else {
+                    optionalLayout->addRow(name + ":", widget);
+                }
+            }
+        }
+        
+        // Add sections to main layout
+        if (requiredLayout->rowCount() > 0) {
+            mainLayout_->addWidget(requiredSection);
+        }
+        
+        if (optionalLayout->rowCount() > 0) {
+            mainLayout_->addWidget(optionalSection);
+        }
+        
+        // Add stretch at bottom
+        mainLayout_->addStretch();
+    }
+    
+    QJsonObject getParameters() const {
+        QJsonObject params;
+        
+        for (auto it = parameterWidgets_.begin(); it != parameterWidgets_.end(); ++it) {
+            QString name = it.key();
+            QWidget* widget = it.value();
+            
+            if (auto* spinBox = qobject_cast<QSpinBox*>(widget)) {
+                if (spinBox->value() != spinBox->minimum()) {
+                    params[name] = spinBox->value();
+                }
+            } else if (auto* lineEdit = qobject_cast<QLineEdit*>(widget)) {
+                QString text = lineEdit->text().trimmed();
+                if (!text.isEmpty()) {
+                    // Special handling for address fields - convert hex to integer
+                    if (name == "address" || name.contains("address", Qt::CaseInsensitive)) {
+                        bool ok;
+                        qlonglong value = text.toLongLong(&ok, 0); // 0 means auto-detect base (0x for hex)
+                        if (ok) {
+                            params[name] = static_cast<qint64>(value);
+                        } else if (!text.isEmpty()) {
+                            params[name] = text;
+                        }
+                    } else {
+                        params[name] = text;
+                    }
+                }
+            } else if (auto* checkBox = qobject_cast<QCheckBox*>(widget)) {
+                // Only include if different from default or is required
+                params[name] = checkBox->isChecked();
+            } else if (auto* textEdit = qobject_cast<QTextEdit*>(widget)) {
+                QString text = textEdit->toPlainText().trimmed();
+                if (!text.isEmpty()) {
+                    // Parse as JSON array
+                    QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
+                    if (doc.isArray()) {
+                        params[name] = doc.array();
+                    }
+                }
+            }
+        }
+        
+        return params;
+    }
+    
+private:
+    QVBoxLayout* mainLayout_;
+    QMap<QString, QWidget*> parameterWidgets_;
+};
+
+void ToolExecutionDock::onManualExecute() {
+    if (!agentController_) {
+        QMessageBox::warning(this, tr("Warning"), tr("Agent controller not set. Cannot execute tools manually."));
+        return;
+    }
+    
+    // Get available tools
+    QJsonArray availableTools = agentController_->getAvailableTools();
+    if (availableTools.isEmpty()) {
+        QMessageBox::information(this, tr("No Tools"), tr("No tools are available for manual execution."));
+        return;
+    }
+    
+    // Create dialog for manual execution
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Manual Tool Execution"));
+    dialog.setMinimumSize(700, 500);
+    
+    auto* layout = new QVBoxLayout(&dialog);
+    
+    // Tool selection
+    auto* toolLayout = new QHBoxLayout();
+    toolLayout->addWidget(new QLabel(tr("Tool:"), &dialog));
+    
+    auto* toolCombo = new QComboBox(&dialog);
+    QMap<QString, QJsonObject> toolSchemas;
+    
+    for (const QJsonValue& toolValue : availableTools) {
+        QJsonObject tool = toolValue.toObject();
+        QString name = tool["name"].toString();
+        QString description = tool["description"].toString();
+        toolCombo->addItem(name, name);
+        toolCombo->setItemData(toolCombo->count() - 1, description, Qt::ToolTipRole);
+        toolSchemas[name] = tool["input_schema"].toObject();
+    }
+    
+    toolLayout->addWidget(toolCombo);
+    layout->addLayout(toolLayout);
+    
+    // Add description label
+    auto* descriptionLabel = new QLabel(&dialog);
+    descriptionLabel->setWordWrap(true);
+    descriptionLabel->setStyleSheet("QLabel { color: gray; margin: 5px 0; }");
+    layout->addWidget(descriptionLabel);
+    
+    // Tab widget for form vs JSON view
+    auto* tabWidget = new QTabWidget(&dialog);
+    
+    // Form tab
+    auto* formTab = new QWidget();
+    auto* formLayout = new QVBoxLayout(formTab);
+    
+    auto* paramWidget = new ParameterInputWidget(formTab);
+    auto* scrollArea = new QScrollArea(formTab);
+    scrollArea->setWidget(paramWidget);
+    scrollArea->setWidgetResizable(true);
+    formLayout->addWidget(scrollArea);
+    
+    tabWidget->addTab(formTab, tr("Form"));
+    
+    // JSON tab (for advanced users)
+    auto* jsonTab = new QWidget();
+    auto* jsonLayout = new QVBoxLayout(jsonTab);
+    
+    auto* parametersEdit = new QTextEdit(jsonTab);
+    parametersEdit->setPlainText("{}");
+    parametersEdit->setFont(QFont("Consolas", 10));
+    jsonLayout->addWidget(parametersEdit);
+    
+    tabWidget->addTab(jsonTab, tr("JSON (Advanced)"));
+    
+    layout->addWidget(tabWidget);
+    
+    // Update form when tool changes
+    auto updateTool = [&]() {
+        QString toolName = toolCombo->currentData().toString();
+        QString description = toolCombo->currentData(Qt::ToolTipRole).toString();
+        descriptionLabel->setText(description);
+        
+        if (toolSchemas.contains(toolName)) {
+            QJsonObject schema = toolSchemas[toolName];
+            paramWidget->setSchema(schema);
+            
+            // Update JSON view with current form values
+            QJsonObject params = paramWidget->getParameters();
+            parametersEdit->setPlainText(QJsonDocument(params).toJson(QJsonDocument::Indented));
+        }
+    };
+    
+    connect(toolCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), updateTool);
+    updateTool();
+    
+    // Sync form and JSON views
+    connect(tabWidget, &QTabWidget::currentChanged, [&](int index) {
+        if (index == 1) { // Switching to JSON tab
+            QJsonObject params = paramWidget->getParameters();
+            parametersEdit->setPlainText(QJsonDocument(params).toJson(QJsonDocument::Indented));
+        }
+    });
+    
+    // Buttons
+    auto* buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+    
+    auto* executeButton = new QPushButton(tr("Execute"), &dialog);
+    executeButton->setIcon(ThemeManager::instance().themedIcon("play"));
+    
+    auto* cancelButton = new QPushButton(tr("Cancel"), &dialog);
+    
+    buttonLayout->addWidget(executeButton);
+    buttonLayout->addWidget(cancelButton);
+    layout->addLayout(buttonLayout);
+    
+    // Connect buttons
+    connect(executeButton, &QPushButton::clicked, [&]() {
+        QString toolName = toolCombo->currentData().toString();
+        QJsonObject parameters;
+        
+        // Get parameters based on active tab
+        if (tabWidget->currentIndex() == 0) { // Form tab
+            parameters = paramWidget->getParameters();
+        } else { // JSON tab
+            QString parametersText = parametersEdit->toPlainText();
+            QJsonDocument doc = QJsonDocument::fromJson(parametersText.toUtf8());
+            if (doc.isNull() || !doc.isObject()) {
+                QMessageBox::warning(&dialog, tr("Invalid JSON"), tr("The parameters must be valid JSON object."));
+                return;
+            }
+            parameters = doc.object();
+        }
+        
+        // Create execution entry
+        ToolExecution exec;
+        exec.id = QUuid::createUuid();
+        exec.toolName = toolName;
+        exec.parameters = parameters;
+        exec.state = ToolExecutionState::Running;
+        exec.source = ToolExecutionSource::Manual;  // Mark as manual execution
+        exec.startTime = QDateTime::currentDateTime();
+        
+        // Add to model
+        addExecution(exec);
+        
+        // Execute the tool
+        QJsonObject result = agentController_->executeManualTool(toolName, parameters);
+        
+        // Update execution with result
+        exec.endTime = QDateTime::currentDateTime();
+        exec.duration = exec.startTime.msecsTo(exec.endTime);
+        
+        if (result["success"].toBool()) {
+            exec.state = ToolExecutionState::Completed;
+            exec.output = QJsonDocument(result).toJson(QJsonDocument::Compact);
+        } else {
+            exec.state = ToolExecutionState::Failed;
+            exec.errorMessage = result["error"].toString();
+            exec.output = QJsonDocument(result).toJson(QJsonDocument::Compact);
+        }
+        
+        // Update model
+        updateExecution(exec.id, exec);
+        
+        // Close dialog - user can see results in the execution window
+        dialog.accept();
+    });
+    
+    connect(cancelButton, &QPushButton::clicked, &dialog, &QDialog::reject);
+    
+    dialog.exec();
+}
+
+void ToolExecutionDock::addExecution(const ToolExecution& execution) {
+    executions_.append(execution);
+    executionMap_[execution.id] = &executions_.last();
+    
+    if (model_) {
+        model_->addExecution(execution);
+    }
+}
+
+void ToolExecutionDock::updateExecution(const QUuid& id, const ToolExecution& execution) {
+    if (executionMap_.contains(id)) {
+        *executionMap_[id] = execution;
+        
+        if (model_) {
+            model_->updateExecution(id, execution);
+        }
+    }
 }
 
 } // namespace llm_re::ui_v2

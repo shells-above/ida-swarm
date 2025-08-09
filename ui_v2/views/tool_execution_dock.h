@@ -6,6 +6,9 @@
 
 namespace llm_re::ui_v2 {
 
+// Forward declaration
+class AgentController;
+
 
 // Performance chart widget
 class PerformanceChartWidget : public BaseStyledWidget {
@@ -142,6 +145,7 @@ private slots:
     void onFilterChanged();
     void updateRunningExecutions();
     void autoSave();
+    void onManualExecute();
     
 private:
     void setupUI();
@@ -153,6 +157,8 @@ private:
     void loadSettings();
     void saveSettings();
     void applyFilters();
+    void addExecution(const ToolExecution& execution);
+    void updateExecution(const QUuid& id, const ToolExecution& execution);
     
     // Models and views
     class ExecutionModel;
@@ -179,6 +185,7 @@ private:
     QComboBox* statusFilterCombo_ = nullptr;
     QAction* clearHistoryAction_ = nullptr;
     QAction* autoScrollAction_ = nullptr;
+    QAction* manualExecuteAction_ = nullptr;
     
     // Context menu
     QMenu* contextMenu_ = nullptr;
@@ -222,6 +229,12 @@ private:
     // Statistics
     int completedCount_ = 0;
     int failedCount_ = 0;
+    
+    // Agent controller reference
+    AgentController* agentController_ = nullptr;
+    
+public:
+    void setAgentController(AgentController* controller) { agentController_ = controller; }
 };
 
 // Execution model

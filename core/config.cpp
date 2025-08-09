@@ -22,6 +22,11 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
 
+        // Grader settings
+        j["grader"]["model"] = api::model_to_string(grader.model);
+        j["grader"]["max_tokens"] = grader.max_tokens;
+        j["grader"]["max_thinking_tokens"] = grader.max_thinking_tokens;
+
         // UI settings
         j["ui"]["log_buffer_size"] = ui.log_buffer_size;
         j["ui"]["auto_scroll"] = ui.auto_scroll;
@@ -77,6 +82,15 @@ bool Config::load_from_file(const std::string& path) {
             agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
             agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
+        }
+
+        // Grader settings
+        if (j.contains("grader")) {
+            if (j["grader"].contains("model")) {
+                grader.model = api::model_from_string(j["grader"]["model"]);
+            }
+            grader.max_tokens = j["grader"].value("max_tokens", grader.max_tokens);
+            grader.max_thinking_tokens = j["grader"].value("max_thinking_tokens", grader.max_thinking_tokens);
         }
 
         // UI settings

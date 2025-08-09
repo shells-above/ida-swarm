@@ -125,7 +125,7 @@ public:
     void addEntry(const MemoryEntry& entry);
     void updateEntry(const QUuid& id, const MemoryEntry& entry);
     void removeEntry(const QUuid& id);
-    void clearEntries();
+    void clearEntries(bool showConfirmation = true);
     
     QList<MemoryEntry> entries() const;
     MemoryEntry entry(const QUuid& id) const;

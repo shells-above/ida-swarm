@@ -152,6 +152,7 @@ set(SOURCES
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory.cpp
+        agent/grader.cpp
         patching/patch_manager.cpp
         # ui_v2 core
         ui_v2/core/base_styled_widget.cpp
@@ -216,6 +217,7 @@ set(HEADERS
         patching/patch_manager.h
         agent/agent.h
         agent/tool_system.h
+        agent/grader.h
         # ui_v2 core
         ui_v2/core/base_styled_widget.h
         ui_v2/core/theme_manager.h

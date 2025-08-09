@@ -10,8 +10,13 @@
   "agent": {
     "max_iterations": 1000,
     "enable_thinking": true,
-    "enable_interleaved_thinking": false,
+    "enable_interleaved_thinking": true,
     "enable_deep_analysis": false
+  },
+  "grader": {
+    "model": "claude-opus-4-1-20250805",
+    "max_tokens": 32000,
+    "max_thinking_tokens": 31999
   },
   "ui": {
     "log_buffer_size": 1000,

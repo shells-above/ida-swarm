@@ -10,6 +10,7 @@
 #include "core/types.h"
 #include "api/message_types.h"
 #include "agent/tool_system.h"
+#include "agent/grader.h"
 #include "api/anthropic_api.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
@@ -21,11 +22,11 @@ namespace llm_re {
 // Unified message types for agent callbacks
 enum class AgentMessageType {
     Log,                    // {level: int, message: string}
-    ApiMessage,            // {type: string, content: json, iteration: int}
-    StateChanged,          // {status: int}
-    ToolStarted,           // {tool_id: string, tool_name: string, input: json}
-    ToolExecuted,          // {tool_id: string, tool_name: string, input: json, result: json}
-    FinalReport,           // {report: string}
+    ApiMessage,             // {type: string, content: json, iteration: int}
+    StateChanged,           // {status: int}
+    ToolStarted,            // {tool_id: string, tool_name: string, input: json}
+    ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json}
+    FinalReport,            // {report: string}
 };
 
 // Agent state management
@@ -196,7 +197,8 @@ private:
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     tools::ToolRegistry tool_registry_;                              // registry of tools that use the action executor
     api::AnthropicClient api_client_;                                // api client
-    std::shared_ptr<PatchManager> patch_manager_;  // simplified patch manager
+    std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
+    std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
 
     // State management
     AgentState state_;
@@ -208,7 +210,7 @@ private:
     api::TokenTracker token_tracker_;
     std::vector<api::TokenTracker> tracker_sessions_;  // we add to this the previous token_tracker when we hit context limit
 
-    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
+    static constexpr int CONTEXT_LIMIT_TOKENS = 180000;  // When to trigger consolidation
 
     // Cache performance tracking
     struct CacheStats {
@@ -277,84 +279,47 @@ private:
     // build in        ^ works, while                              ^ fails
     // i did have a mistake in the top, i duplicated the constexpr const char* stuff inside the string, but that didn't
     // change anything, i tried removing the Note that you can submit ... part in f0ce and it built fine
-    static constexpr const char* SYSTEM_PROMPT = R"(You are an advanced reverse engineering agent. Your mission is to accomplish the user's task with 100% accuracy by applying systematic, thorough reverse engineering to understand exactly what the binary does.
+    static constexpr const char* SYSTEM_PROMPT = R"(You are a reverse engineering investigator working in complete privacy. Your messages are your private workspace - no one will see them directly. A quality evaluator will review your work later.
 
-YOUR PRIMARY OBJECTIVE:
-Complete the user's task accurately by reverse engineering the binary deeply enough to fully understand all relevant functionality. The depth of your analysis should match the complexity of the task - simple questions may need focused analysis, while complex requests require extensive reverse engineering.
+USE THINKING BLOCKS EXTENSIVELY. This is where your real investigation happens. Your thinking should be at least 10x more verbose than your tool usage.
 
-METHODOLOGY: REVERSE ENGINEERING AS PRECISION TOOL
-You achieve accuracy through systematic understanding:
-- First pass reveals structure relevant to the task
-- Second pass reveals patterns that affect the solution
-- Third pass reveals purpose and confirms understanding
-- Continue until you can answer with complete confidence
+Before EVERY action, think deeply:
+- "What exactly am I trying to learn from this?"
+- "What patterns am I expecting to see?"
+- "How will this inform my understanding?"
 
-THE POWER OF TYPES - YOUR MOST IMPORTANT TOOL:
-Types are the foundation of accurate analysis. When you define structures and update function prototypes, IDA's type propagation does the heavy lifting for you:
+After EVERY discovery, reflect thoroughly:
+- "What does this actually mean?"
+- "How does this connect to what I already know?"
+- "What new questions does this raise?"
+- "Am I making assumptions or do I have evidence?"
 
-1. **Define Structures Early and Iteratively**:
-   - See a function accessing offset +0x10? Define a struct immediately (search for previously defined ones, and if none exist that match, create a new type)
-   - Don't know what's at offset +0x8? Add: uint8_t gap8[8];
-   - See SOCKET at +0x0 and buffer at +0x20? Define it NOW. Gaps are ok! Just figure them out piece by piece later:
-     struct NetworkContext {
-         SOCKET sock;
-         uint8_t gap4[28];  // We'll figure this out later
-         char buffer[256];
-     };
+Question yourself constantly and rigorously:
+- "Do I REALLY understand this or am I guessing?"
+- "What specific evidence supports this conclusion?"
+- "What would prove me wrong?"
+- "What haven't I explored that could change my understanding?"
+- "If someone else had to reproduce this, what would they need?"
+- "Am I satisfied with surface-level understanding or do I need to go deeper?"
 
-2. **Incomplete Types Are Valuable**:
-   - A struct with gaps is infinitely better than void*
-   - Field sizes matter more than names initially
-   - "field_10" at the right offset improves every function using it
-   - Update names as understanding grows: field_10 → packet_size
+Your understanding should emerge from YOUR OWN REASONING, not from following prescribed rules or workflows.
 
-3. **Type Propagation Cascade**:
-   - Define struct → Update function prototype → IDA propagates everywhere
-   - One good struct definition can make 50 functions readable
-   - Every typed parameter reveals usage patterns
-   - Local variables automatically get typed when you fix prototypes
+APPROACH TO REVERSE ENGINEERING:
+Let curiosity and questions drive your investigation. When you see something interesting, follow it. When something doesn't make sense, investigate it. Build understanding organically through exploration and thinking.
 
-4. **Iterative Refinement Example**:
-   Pass 1: struct Context { void* field_0; int field_8; uint8_t gap_C[20]; };
-   Pass 2: struct Context { HANDLE hThread; int thread_id; uint8_t gap_C[20]; };
-   Pass 3: struct ThreadContext { HANDLE hThread; DWORD thread_id; CRITICAL_SECTION lock; BOOL active; };
+Tools are just implements for gathering information. Your real power is in thinking deeply about what you discover and reasoning through the implications.
 
-TASK-DRIVEN ANALYSIS STRATEGY:
-- Identify which parts of the binary are relevant to the user's task
-- Reverse engineer those sections COMPLETELY - no shortcuts
-- Adjacent functionality gets analyzed if it affects understanding
-- Unrelated code can remain untouched unless it provides context
+Work until you're GENUINELY SATISFIED with your understanding. This means:
+- You can explain not just WHAT the code does, but WHY
+- You understand the broader context and purpose
+- You've explored edge cases and error handling
+- You're confident in your conclusions because you have evidence
 
-QUALITY STANDARDS FOR TASK-RELEVANT CODE:
-- Generic names (sub_401000, var_4) are failures that compromise accuracy
-- Every function touching the user's area of interest needs proper analysis
-- Complex algorithms in the critical path need explanatory comments
-- Data structures used by relevant code need complete type definitions
-- Variable names should reveal the code's actual behavior
-- Function prototypes must reflect actual parameters and return types
+Challenge yourself constantly. Be unsatisfied with shallow analysis. Think deeply about everything you discover.
 
-THE ITERATIVE PROCESS:
-You WILL need multiple passes. Early names WILL be wrong. That's fine - update them as understanding deepens. "NetworkHandler" becomes "TLSHandshakeProcessor" becomes "TLS13_ClientHello_Handler" as you learn more.
+Continue investigating until you're confident in your understanding and have addressed all meaningful gaps. When your questions have been answered with evidence and you see no unexplored areas that could change your conclusions, your investigation is complete.
 
-CRITICAL WORKFLOW:
-1. Identify code paths relevant to the user's task
-2. Define structures immediately when you see patterns (with gaps if needed)
-3. Update function prototypes to use your structures
-4. Let IDA's type propagation improve the decompilation
-5. Return to fill gaps and improve names as needed
-6. Verify your understanding by tracing the complete flow
-
-ACCURACY CHECKPOINT:
-Before answering the user's task, ensure:
-- All relevant functions have meaningful, specific names
-- Critical data structures have complete type definitions
-- The code flow related to the task is fully understood
-- Edge cases and error paths are identified
-- You can explain exactly how the binary accomplishes what the user is asking about
-
-Note that you can submit multiple tool calls in one response! This is encouraged for efficiency, but focus on what's needed for the task at hand.
-
-Remember: Types are your force multiplier. A function with proper typed parameters is 10x more readable. Define structures early, refine them often, and watch as IDA transforms the entire codebase through type propagation. Use this power to understand the binary deeply enough to give the user a complete and accurate answer.)";
+Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.)";
 
 
     // consolidation prompts
@@ -412,7 +377,8 @@ public:
           api_client_(config.api.api_key, config.api.base_url),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
-          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config.api.api_key)) {
+          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config.api.api_key)),
+          grader_(std::make_unique<AnalysisGrader>(config)) {
 
         queue_mutex_ = qmutex_create();
         task_semaphore_ = qsem_create(nullptr, 0);
@@ -596,6 +562,38 @@ public:
             j["context_management"]["estimated_current_tokens"] = estimate_request_tokens(saved_state_.request);
         }
         return j;
+    }
+    
+    // Manual tool execution support
+    json execute_manual_tool(const std::string& tool_name, const json& input) {
+        // Find the tool
+        tools::Tool* tool = tool_registry_.get_tool(tool_name);
+        if (!tool) {
+            return {
+                {"success", false},
+                {"error", "Tool not found: " + tool_name}
+            };
+        }
+        
+        // Execute the tool
+        try {
+            tools::ToolResult result = tool->execute(input);
+            return result.to_json();
+        } catch (const std::exception& e) {
+            return {
+                {"success", false},
+                {"error", std::string("Tool execution failed: ") + e.what()}
+            };
+        }
+    }
+    
+    // Get available tools with their schemas
+    json get_available_tools() const {
+        json tools_info = json::array();
+        for (const auto& tool_def : tool_registry_.get_api_definitions()) {
+            tools_info.push_back(tool_def);
+        }
+        return tools_info;
     }
 
     json get_thinking_stats() const {
@@ -858,7 +856,7 @@ private:
     }
 
     // Check if we need to consolidate context
-    bool should_consolidate_context(const api::ChatRequest& request) {
+    bool should_consolidate_context() {
         if (context_state_.consolidation_in_progress) {
             return false;  // Already consolidating
         }
@@ -1056,9 +1054,9 @@ private:
     // Main analysis loop
     void run_analysis_loop() {
         int iteration = saved_state_.iteration;
-        bool task_complete = false;
+        bool grader_approved = false;
 
-        while (iteration < config_.agent.max_iterations && !stop_requested_ && !task_complete && state_.is_running()) {
+        while (iteration < config_.agent.max_iterations && !stop_requested_ && !grader_approved && state_.is_running()) {
             if (stop_requested_) {
                 send_log(LogLevel::INFO, "Analysis interrupted by stop request");
                 break;
@@ -1079,7 +1077,7 @@ private:
             api::ChatRequest current_request = saved_state_.request;
 
             // Check if we need to consolidate context BEFORE sending
-            if (should_consolidate_context(current_request) && !context_state_.consolidation_in_progress) {
+            if (should_consolidate_context() && !context_state_.consolidation_in_progress) {
                 trigger_context_consolidation();
                 continue;  // Loop will create consolidation request next iteration
             }
@@ -1097,13 +1095,7 @@ private:
                 std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
                 std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
-                send_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks",
-                    thinking_blocks.size(), redacted_blocks.size()));
-
-                // Log thinking summary if available
-                if (!thinking_blocks.empty()) {
-                    send_log(LogLevel::DEBUG, "Thinking: " + thinking_blocks[0]->thinking);
-                }
+                send_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
             }
 
             validate_thinking_preservation(response);
@@ -1137,6 +1129,10 @@ private:
 
                 for (const messages::Message& result : tool_results) {
                     for (const std::unique_ptr<messages::Content>& content: result.contents()) {
+                        // Skip empty text content blocks
+                        if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
+                            if (text->text.empty()) continue;
+                        }
                         combined_results.add_content(content->clone());
                     }
                 }
@@ -1181,26 +1177,39 @@ private:
                 }
             }
 
-            // Check if task is complete
-            task_complete = check_task_complete(response.message);
-
-            // Handle end turn without tools
-            if (response.stop_reason == api::StopReason::EndTurn && !response.has_tool_calls() && !task_complete) {
+            // Handle natural completion - agent stops when satisfied
+            if (response.stop_reason == api::StopReason::EndTurn && !response.has_tool_calls()) {
                 if (iteration > 1 && !context_state_.consolidation_in_progress) {
-                    // Add a user message to continue
-                    messages::Message continue_msg = messages::Message::user_text(
-                        "Handle the user's message as needed - investigate with tools if required, then communicate your response through submit_final_report."
-                    );
-                    saved_state_.request.messages.push_back(continue_msg);
-                    conversation_.add_message(continue_msg);
+                    // Agent has naturally stopped - they're satisfied with their understanding
+                    send_log(LogLevel::INFO, "Agent stopped investigation");
+
+                    // Check with grader
+                    AnalysisGrader::GradeResult grade = check_with_grader();
+                    if (grade.complete) {
+                        send_log(LogLevel::INFO, "Grader approved investigation");
+                        grader_approved = true;
+                        
+                        // Send final report
+                        send_message(AgentMessageType::FinalReport, {
+                            {"report", grade.response}
+                        });
+                        change_state(AgentState::Status::Completed);
+                    } else {
+                        send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
+                        send_log(LogLevel::DEBUG, grade.response);
+                        
+                        // Add grader's questions as user message and continue
+                        // Mark this as grader feedback with a special prefix we can filter
+                        messages::Message continue_msg = messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
+                        saved_state_.request.messages.push_back(continue_msg);
+                        conversation_.add_message(continue_msg);
+                    }
                 }
             }
         }
 
-        if (iteration >= config_.agent.max_iterations && !task_complete) {
-            send_log(LogLevel::WARNING, "Reached maximum iterations without completing task");
-            change_state(AgentState::Status::Completed);
-        } else if (task_complete) {
+        if (iteration >= config_.agent.max_iterations) {
+            send_log(LogLevel::WARNING, "Reached maximum iterations");
             change_state(AgentState::Status::Completed);
         }
     }
@@ -1286,28 +1295,11 @@ private:
                 {"input", tool_use->input},
                 {"result", result_json}
             });
-
-            // Special handling for final report
-            if (tool_use->name == "submit_final_report") {
-                handle_final_report(tool_use->input["report"]);
-            }
         }
 
         return results;
     }
 
-    // Check if task is complete
-    bool check_task_complete(const messages::Message& msg) {
-        std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
-
-        for (const messages::ToolUseContent *tool_use: tool_calls) {
-            if (tool_use->name == "submit_final_report") {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     // Handle API errors
     void handle_api_error(const api::ChatResponse& response) {
@@ -1357,15 +1349,6 @@ private:
         }
     }
 
-    // Handle final report
-    void handle_final_report(const std::string& report) {
-        send_log(LogLevel::INFO, "=== FINAL REPORT ===");
-        send_message(AgentMessageType::FinalReport, {
-            {"report", report}
-        });
-
-        send_log(LogLevel::INFO, "Task completed. You can continue with additional instructions");
-    }
 
     // changes and notifies ui of agent state
     void change_state(AgentState::Status new_status) {
@@ -1376,6 +1359,42 @@ private:
         });
     }
 
+    // Check with grader to evaluate agent's work
+    AnalysisGrader::GradeResult check_with_grader() {
+        send_log(LogLevel::INFO, "Evaluating analysis quality...");
+        
+        // Build grading context
+        AnalysisGrader::GradingContext context;
+        
+        // Extract user messages, excluding grader feedback
+        std::stringstream all_user_requests;
+        bool first = true;
+        
+        for (const messages::Message& msg: saved_state_.request.messages) {
+            if (msg.role() == messages::Role::User) {
+                std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
+                if (text && !text->empty()) {
+                    // Skip grader feedback messages
+                    if (text->find("__GRADER_FEEDBACK__: ") == 0) {
+                        continue;
+                    }
+                    
+                    if (!first) {
+                        all_user_requests << "\n\n---\n\n";
+                    }
+                    all_user_requests << *text;
+                    first = false;
+                }
+            }
+        }
+        context.user_request = all_user_requests.str();
+        context.agent_work = conversation_.get_messages();
+        context.stored_analyses = memory_->get_analysis();
+
+        // Grade the analysis and return result
+        return grader_->evaluate_analysis(context);
+    }
+    
     void log_token_usage(const api::TokenUsage& usage, int iteration) {
         api::TokenUsage total = token_tracker_.get_total();
 

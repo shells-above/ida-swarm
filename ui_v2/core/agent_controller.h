@@ -70,6 +70,10 @@ public:
     api::TokenUsage getTokenUsage() const;
     json getAgentState() const;
     
+    // Manual tool execution
+    QJsonObject executeManualTool(const QString& toolName, const QJsonObject& parameters);
+    QJsonArray getAvailableTools() const;
+    
 signals:
     // Status updates
     void statusChanged(const QString& status);

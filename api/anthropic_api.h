@@ -402,7 +402,10 @@ struct ChatResponse {
 
                 std::string type = content_item["type"];
                 if (type == "text") {
-                    response.message.add_content(std::make_unique<messages::TextContent>(content_item["text"]));
+                    std::string text = content_item["text"];
+                    if (!text.empty()) {
+                        response.message.add_content(std::make_unique<messages::TextContent>(text));
+                    }
                 } else if (type == "tool_use") {
                     response.message.add_content(std::make_unique<messages::ToolUseContent>(
                         content_item["id"],
@@ -700,6 +703,20 @@ public:
         }
 
         std::string request_body = request_json.dump();
+        
+        // Temporary file logging for debugging
+        {
+            std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+            if (log_file.is_open()) {
+                auto now = std::chrono::system_clock::now();
+                auto time_t = std::chrono::system_clock::to_time_t(now);
+                log_file << "=== REQUEST at " << std::ctime(&time_t);
+                log_file << "Iteration: " << current_iteration << "\n";
+                log_file << "Request Body:\n" << request_json.dump(2) << "\n\n";
+                log_file.close();
+            }
+        }
+        
         std::string response_body;
         std::map<std::string, std::string> response_headers;
         long http_code = 0;
@@ -754,6 +771,18 @@ public:
         // Parse response
         try {
             json response_json = json::parse(response_body);
+
+            // Temporary file logging for debugging - log response too
+            {
+                std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+                if (log_file.is_open()) {
+                    log_file << "=== RESPONSE for iteration " << current_iteration << "\n";
+                    log_file << "HTTP Code: " << http_code << "\n";
+                    log_file << "Response Body:\n" << response_json.dump(2) << "\n";
+                    log_file << "----------------------------------------\n\n";
+                    log_file.close();
+                }
+            }
 
             if (message_logger) {
                 json log_json = sanitize_for_logging(response_json);

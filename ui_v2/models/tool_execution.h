@@ -13,6 +13,12 @@ enum class ToolExecutionState {
     Cancelled
 };
 
+// Tool execution source
+enum class ToolExecutionSource {
+    Agent,      // Executed by the AI agent
+    Manual      // Executed manually by user
+};
+
 // Unified tool execution data structure
 struct ToolExecution {
     // Sub-task definition
@@ -35,6 +41,7 @@ struct ToolExecution {
     
     // Status
     ToolExecutionState state = ToolExecutionState::Pending;
+    ToolExecutionSource source = ToolExecutionSource::Agent;  // Default to agent
     
     // Timing
     QDateTime startTime;

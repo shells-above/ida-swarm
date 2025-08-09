@@ -852,42 +852,6 @@ public:
     }
 };
 
-// Final report submission tool
-class SubmitFinalReportTool : public Tool {
-public:
-    using Tool::Tool;
-
-    std::string name() const override {
-        return "submit_final_report";
-    }
-
-    std::string description() const override {
-        return "Submit your final report on this binary once you have FULLY completed your comprehensive reverse engineering. DO NOT CALL THIS EARLY. "
-                  "Note this will end your analysis, so ONLY use this once you have FULLY reversed EVERYTHING to the specs provided by the system AND the user.";
-    }
-
-    json parameters_schema() const override {
-        return ParameterBuilder()
-            .add_string("report", "Your complete analysis report")
-            .build();
-    }
-
-    ToolResult execute(const json& input) override {
-        try {
-            std::string report = input.at("report");
-
-            json result;
-            result["success"] = true;
-            result["report_received"] = true;
-            result["message"] = "Report submitted successfully";
-
-            return ToolResult::success(result);
-
-        } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
-        }
-    }
-};
 
 // Deep analysis collection tools
 class StartDeepAnalysisCollectionTool : public Tool {
@@ -1516,9 +1480,6 @@ public:
             register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
             register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
         }
-
-        // Special tools
-        register_tool_type<SubmitFinalReportTool>(memory, executor);
 
         // Deep analysis
         if (enable_deep_analysis) {

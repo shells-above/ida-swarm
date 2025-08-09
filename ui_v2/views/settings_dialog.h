@@ -23,6 +23,7 @@ private:
     void setupUI();
     void createAPITab();
     void createAgentTab();
+    void createGraderTab();
     void createUITab();
     void createAdvancedTab();
     
@@ -44,6 +45,11 @@ private:
     QCheckBox* enable_thinking_check_ = nullptr;
     QCheckBox* enable_interleaved_thinking_check_ = nullptr;
     QCheckBox* enable_deep_analysis_check_ = nullptr;
+    
+    // Grader settings widgets
+    QComboBox* grader_model_combo_ = nullptr;
+    QSpinBox* grader_max_tokens_spin_ = nullptr;
+    QSpinBox* grader_max_thinking_tokens_spin_ = nullptr;
 
     // UI settings widgets
     QSpinBox* log_buffer_spin_ = nullptr;

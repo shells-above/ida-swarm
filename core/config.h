@@ -28,16 +28,22 @@ public:
         std::string base_url = "https://api.anthropic.com/v1/messages";
         api::Model model = api::Model::Sonnet4;
         int max_tokens = 8192;
-        int max_thinking_tokens = 2048;
+        int max_thinking_tokens = 4096;
         double temperature = 0.0;
     } api;
 
     struct AgentSettings {
         int max_iterations = 1000;
         bool enable_thinking = true;
-        bool enable_interleaved_thinking = false;
+        bool enable_interleaved_thinking = true;
         bool enable_deep_analysis = false;
     } agent;
+
+    struct GraderSettings {
+        api::Model model = api::Model::Opus41;
+        int max_tokens = 32000;
+        int max_thinking_tokens = 31999;
+    } grader;
 
     struct UISettings {
         int log_buffer_size = 1000;

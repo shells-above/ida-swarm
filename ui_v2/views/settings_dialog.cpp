@@ -30,6 +30,7 @@ void SettingsDialog::setupUI() {
     
     createAPITab();
     createAgentTab();
+    createGraderTab();
     createUITab();
     createAdvancedTab();
     
@@ -234,6 +235,44 @@ void SettingsDialog::createUITab() {
     tab_widget_->addTab(tab, "User Interface");
 }
 
+void SettingsDialog::createGraderTab() {
+    auto* tab = new QWidget();
+    auto* layout = new QFormLayout(tab);
+    
+    // Grader model selection
+    grader_model_combo_ = new QComboBox();
+    grader_model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
+    grader_model_combo_->setToolTip("Model to use for grading agent work");
+    connect(grader_model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsDialog::onSettingChanged);
+    layout->addRow("Grader Model:", grader_model_combo_);
+    
+    // Max tokens
+    grader_max_tokens_spin_ = new QSpinBox();
+    grader_max_tokens_spin_->setRange(1, 200000);
+    grader_max_tokens_spin_->setSingleStep(1024);
+    grader_max_tokens_spin_->setToolTip("Maximum tokens for grader response");
+    connect(grader_max_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    layout->addRow("Max Response Tokens:", grader_max_tokens_spin_);
+    
+    // Max thinking tokens
+    grader_max_thinking_tokens_spin_ = new QSpinBox();
+    grader_max_thinking_tokens_spin_->setRange(1024, 65536);
+    grader_max_thinking_tokens_spin_->setSingleStep(1024);
+    grader_max_thinking_tokens_spin_->setToolTip("Maximum thinking tokens for grader evaluation");
+    connect(grader_max_thinking_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    layout->addRow("Max Thinking Tokens:", grader_max_thinking_tokens_spin_);
+    
+    // Info label
+    auto* info_label = new QLabel(
+        "<i>The grader evaluates whether the agent's analysis is perfect and complete. "
+        "It demands evidence for all claims and sends questions back if anything is incomplete.</i>"
+    );
+    info_label->setWordWrap(true);
+    layout->addRow(info_label);
+    
+    tab_widget_->addTab(tab, "Grader");
+}
+
 void SettingsDialog::createAdvancedTab() {
     auto* tab = new QWidget();
     auto* layout = new QFormLayout(tab);
@@ -278,6 +317,24 @@ void SettingsDialog::loadSettings() {
     enable_thinking_check_->setChecked(config.agent.enable_thinking);
     enable_interleaved_thinking_check_->setChecked(config.agent.enable_interleaved_thinking);
     enable_deep_analysis_check_->setChecked(config.agent.enable_deep_analysis);
+    
+    // Grader settings
+    switch (config.grader.model) {
+        case api::Model::Opus41:
+            grader_model_combo_->setCurrentIndex(0);
+            break;
+        case api::Model::Sonnet4:
+            grader_model_combo_->setCurrentIndex(1);
+            break;
+        case api::Model::Sonnet37:
+            grader_model_combo_->setCurrentIndex(2);
+            break;
+        case api::Model::Haiku35:
+            grader_model_combo_->setCurrentIndex(3);
+            break;
+    }
+    grader_max_tokens_spin_->setValue(config.grader.max_tokens);
+    grader_max_thinking_tokens_spin_->setValue(config.grader.max_thinking_tokens);
 
     // UI settings
     log_buffer_spin_->setValue(config.ui.log_buffer_size);
@@ -329,6 +386,24 @@ void SettingsDialog::applySettings() {
     config.agent.enable_thinking = enable_thinking_check_->isChecked();
     config.agent.enable_interleaved_thinking = enable_interleaved_thinking_check_->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check_->isChecked();
+    
+    // Grader settings
+    switch (grader_model_combo_->currentIndex()) {
+        case 0:
+            config.grader.model = api::Model::Opus41;
+            break;
+        case 1:
+            config.grader.model = api::Model::Sonnet4;
+            break;
+        case 2:
+            config.grader.model = api::Model::Sonnet37;
+            break;
+        case 3:
+            config.grader.model = api::Model::Haiku35;
+            break;
+    }
+    config.grader.max_tokens = grader_max_tokens_spin_->value();
+    config.grader.max_thinking_tokens = grader_max_thinking_tokens_spin_->value();
 
     // UI settings
     config.ui.log_buffer_size = log_buffer_spin_->value();

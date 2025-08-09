@@ -171,6 +171,9 @@ void AgentController::connectMemoryDock(MemoryDock* dock) {
 
 void AgentController::connectToolDock(ToolExecutionDock* dock) {
     toolDock_ = dock;
+    if (toolDock_) {
+        toolDock_->setAgentController(this);
+    }
 }
 
 void AgentController::connectConsoleDock(ConsoleDock* dock) {
@@ -370,7 +373,7 @@ void AgentController::handleApiMessage(const json& data) {
                     if (consoleDock_) {
                         LogEntry entry;
                         entry.timestamp = QDateTime::currentDateTime();
-                        entry.level = LogEntry::Info;
+                        entry.level = LogEntry::Debug;
                         entry.category = "Assistant";
                         
                         QString contentToLog = uiMsg->content();
@@ -685,7 +688,7 @@ void AgentController::updateMemoryView() {
         json snapshot = memory->export_memory_snapshot();
         
         // Convert analysis entries to MemoryEntry objects
-        memoryDock_->clearEntries();
+        memoryDock_->clearEntries(false);  // Don't show confirmation dialog
         
         // The key is "analyses" not "analysis_entries"
         if (snapshot.contains("analyses") && snapshot["analyses"].is_array()) {
@@ -723,6 +726,54 @@ void AgentController::updateMemoryView() {
             }
         }
     }
+}
+
+QJsonObject AgentController::executeManualTool(const QString& toolName, const QJsonObject& parameters) {
+    if (!agent_) {
+        return QJsonObject{
+            {"success", false},
+            {"error", "Agent not initialized"}
+        };
+    }
+    
+    // Convert QJsonObject to json
+    json params = json::parse(QJsonDocument(parameters).toJson(QJsonDocument::Compact).toStdString());
+    
+    // Execute the tool
+    json result = agent_->execute_manual_tool(toolName.toStdString(), params);
+    
+    // Convert result back to QJsonObject
+    QString resultStr = QString::fromStdString(result.dump());
+    QJsonDocument doc = QJsonDocument::fromJson(resultStr.toUtf8());
+    
+    // Log to console
+    if (consoleDock_) {
+        LogEntry entry;
+        entry.timestamp = QDateTime::currentDateTime();
+        entry.level = result.value("success", false) ? LogEntry::Info : LogEntry::Error;
+        entry.category = "Manual Tool";
+        entry.message = QString("Executed %1: %2").arg(toolName).arg(
+            result.value("success", false) ? "Success" : QString::fromStdString(result.value("error", "Unknown error"))
+        );
+        consoleDock_->addLog(entry);
+    }
+    
+    return doc.object();
+}
+
+QJsonArray AgentController::getAvailableTools() const {
+    if (!agent_) {
+        return QJsonArray();
+    }
+    
+    // Get tools from agent
+    json tools = agent_->get_available_tools();
+    
+    // Convert to QJsonArray
+    QString toolsStr = QString::fromStdString(tools.dump());
+    QJsonDocument doc = QJsonDocument::fromJson(toolsStr.toUtf8());
+    
+    return doc.array();
 }
 
 } // namespace llm_re::ui_v2
