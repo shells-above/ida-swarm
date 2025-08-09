@@ -105,38 +105,13 @@ void SettingsDialog::createAPITab() {
     
     layout->addRow(auth_group);
     
-    // API settings section
+    // Connection settings
+    auto* connection_group = new QGroupBox("Connection");
+    auto* connection_layout = new QFormLayout(connection_group);
+    
     base_url_edit_ = new QLineEdit();
     connect(base_url_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Base URL:", base_url_edit_);
-    
-    model_combo_ = new QComboBox();
-    model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
-    connect(model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
-            this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Model:", model_combo_);
-    
-    max_tokens_spin_ = new QSpinBox();
-    max_tokens_spin_->setRange(1000, 200000);
-    max_tokens_spin_->setSingleStep(1000);
-    connect(max_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
-            this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Max Tokens:", max_tokens_spin_);
-    
-    max_thinking_tokens_spin_ = new QSpinBox();
-    max_thinking_tokens_spin_->setRange(0, 50000);
-    max_thinking_tokens_spin_->setSingleStep(1000);
-    connect(max_thinking_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
-            this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Max Thinking Tokens:", max_thinking_tokens_spin_);
-    
-    temperature_spin_ = new QDoubleSpinBox();
-    temperature_spin_->setRange(0.0, 1.0);
-    temperature_spin_->setSingleStep(0.1);
-    temperature_spin_->setDecimals(1);
-    connect(temperature_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), 
-            this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Temperature:", temperature_spin_);
+    connection_layout->addRow("Base URL:", base_url_edit_);
     
     auto* test_layout = new QHBoxLayout();
     test_api_button_ = new QPushButton("Test Connection");
@@ -145,32 +120,75 @@ void SettingsDialog::createAPITab() {
     test_layout->addWidget(test_api_button_);
     test_layout->addWidget(api_status_label_);
     test_layout->addStretch();
-    layout->addRow("", test_layout);
+    connection_layout->addRow("", test_layout);
+    
+    layout->addRow(connection_group);
     
     tab_widget_->addTab(tab, "API");
 }
 
 void SettingsDialog::createAgentTab() {
     auto* tab = new QWidget();
-    auto* layout = new QFormLayout(tab);
+    auto* layout = new QVBoxLayout(tab);
+    
+    // Model Settings section
+    auto* model_group = new QGroupBox("Model Settings");
+    auto* model_layout = new QFormLayout(model_group);
+    
+    model_combo_ = new QComboBox();
+    model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
+    connect(model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
+            this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Model:", model_combo_);
+    
+    max_tokens_spin_ = new QSpinBox();
+    max_tokens_spin_->setRange(1000, 200000);
+    max_tokens_spin_->setSingleStep(1000);
+    connect(max_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
+            this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Max Tokens:", max_tokens_spin_);
+    
+    max_thinking_tokens_spin_ = new QSpinBox();
+    max_thinking_tokens_spin_->setRange(0, 50000);
+    max_thinking_tokens_spin_->setSingleStep(1000);
+    connect(max_thinking_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
+            this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Max Thinking Tokens:", max_thinking_tokens_spin_);
+    
+    temperature_spin_ = new QDoubleSpinBox();
+    temperature_spin_->setRange(0.0, 1.0);
+    temperature_spin_->setSingleStep(0.1);
+    temperature_spin_->setDecimals(1);
+    connect(temperature_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), 
+            this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Temperature:", temperature_spin_);
+    
+    layout->addWidget(model_group);
+    
+    // Agent Settings section
+    auto* agent_group = new QGroupBox("Agent Settings");
+    auto* agent_layout = new QFormLayout(agent_group);
     
     max_iterations_spin_ = new QSpinBox();
     max_iterations_spin_->setRange(1, 10000);
     connect(max_iterations_spin_, QOverload<int>::of(&QSpinBox::valueChanged), 
             this, &SettingsDialog::onSettingChanged);
-    layout->addRow("Max Iterations:", max_iterations_spin_);
+    agent_layout->addRow("Max Iterations:", max_iterations_spin_);
     
     enable_thinking_check_ = new QCheckBox("Enable Thinking Mode");
     connect(enable_thinking_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    layout->addRow(enable_thinking_check_);
+    agent_layout->addRow(enable_thinking_check_);
     
     enable_interleaved_thinking_check_ = new QCheckBox("Enable Interleaved Thinking");
     connect(enable_interleaved_thinking_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    layout->addRow(enable_interleaved_thinking_check_);
+    agent_layout->addRow(enable_interleaved_thinking_check_);
     
     enable_deep_analysis_check_ = new QCheckBox("Enable Deep Analysis");
     connect(enable_deep_analysis_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
-    layout->addRow(enable_deep_analysis_check_);
+    agent_layout->addRow(enable_deep_analysis_check_);
+    
+    layout->addWidget(agent_group);
+    layout->addStretch();
     
     tab_widget_->addTab(tab, "Agent");
 }
