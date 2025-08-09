@@ -93,42 +93,61 @@ public:
     bool is_completed() const { return get_status() == Status::Completed; }
 };
 
-// Conversation state management
-class ConversationState {
-    std::vector<messages::Message> messages_;
+// Unified execution state management
+class AgentExecutionState {
+private:
+    api::ChatRequest request;
+    int iteration = 0;
+    bool valid = false;
+    std::chrono::steady_clock::time_point saved_at;
+    
+    // Tool metadata (formerly in ConversationState)
     std::map<std::string, int> tool_call_iterations_;     // tool_id -> iteration
     std::map<std::string, std::string> tool_call_names_;  // tool_id -> tool_name
+    
     mutable qmutex_t mutex_;
 
 public:
-    ConversationState() {
+    AgentExecutionState() {
         mutex_ = qmutex_create();
     }
 
-    ~ConversationState() {
+    ~AgentExecutionState() {
         if (mutex_) {
             qmutex_free(mutex_);
         }
     }
 
+    // Message operations
     void add_message(const messages::Message& msg) {
         qmutex_locker_t lock(mutex_);
-        messages_.push_back(msg);
-    }
-
-    void add_messages(const std::vector<messages::Message>& msgs) {
-        qmutex_locker_t lock(mutex_);
-        messages_.insert(messages_.end(), msgs.begin(), msgs.end());
+        request.messages.push_back(msg);
     }
 
     std::vector<messages::Message> get_messages() const {
         qmutex_locker_t lock(mutex_);
-        return messages_;
+        return request.messages;
     }
 
-    void track_tool_call(const std::string& tool_id, const std::string& tool_name, int iteration) {
+    size_t message_count() const {
         qmutex_locker_t lock(mutex_);
-        tool_call_iterations_[tool_id] = iteration;
+        return request.messages.size();
+    }
+
+    // Request access
+    api::ChatRequest& get_request() {
+        // Note: caller must handle thread safety if modifying
+        return request;
+    }
+
+    const api::ChatRequest& get_request() const {
+        return request;
+    }
+
+    // Tool tracking
+    void track_tool_call(const std::string& tool_id, const std::string& tool_name, int iter) {
+        qmutex_locker_t lock(mutex_);
+        tool_call_iterations_[tool_id] = iter;
         tool_call_names_[tool_id] = tool_name;
     }
 
@@ -146,23 +165,68 @@ public:
         return std::nullopt;
     }
 
+    // State management
+    int get_iteration() const {
+        qmutex_locker_t lock(mutex_);
+        return iteration;
+    }
+
+    void set_iteration(int iter) {
+        qmutex_locker_t lock(mutex_);
+        iteration = iter;
+    }
+
+    bool is_valid() const {
+        qmutex_locker_t lock(mutex_);
+        return valid;
+    }
+
+    void set_valid(bool v) {
+        qmutex_locker_t lock(mutex_);
+        valid = v;
+        if (v) {
+            saved_at = std::chrono::steady_clock::now();
+        }
+    }
+
+    std::chrono::steady_clock::time_point get_saved_at() const {
+        qmutex_locker_t lock(mutex_);
+        return saved_at;
+    }
+
+    // Clear all state
     void clear() {
         qmutex_locker_t lock(mutex_);
-        messages_.clear();
+        request = api::ChatRequest();
         tool_call_iterations_.clear();
         tool_call_names_.clear();
+        iteration = 0;
+        valid = false;
     }
 
-    size_t message_count() const {
+    // Reset for new task
+    void reset_with_request(const api::ChatRequest& new_request) {
         qmutex_locker_t lock(mutex_);
-        return messages_.size();
+        request = new_request;
+        tool_call_iterations_.clear();
+        tool_call_names_.clear();
+        iteration = 0;
+        valid = true;
+        saved_at = std::chrono::steady_clock::now();
     }
 
+    // Export to JSON
     json to_json() const {
         qmutex_locker_t lock(mutex_);
         json j;
-        j["message_count"] = messages_.size();
+        j["message_count"] = request.messages.size();
         j["tool_calls"] = tool_call_iterations_.size();
+        j["iteration"] = iteration;
+        j["valid"] = valid;
+        if (valid) {
+            auto elapsed = std::chrono::steady_clock::now() - saved_at;
+            j["saved_age_seconds"] = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+        }
         return j;
     }
 };
@@ -205,7 +269,7 @@ private:
 
     // State management
     AgentState state_;
-    ConversationState conversation_;  // stores all Message's with when tools were used
+    AgentExecutionState execution_state_;  // Unified execution and conversation state
     const Config& config_;
     std::string last_error_;
 
@@ -239,14 +303,6 @@ private:
     // User message injection
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
-
-    // Saved state for resume
-    struct SavedState {
-        api::ChatRequest request;
-        int iteration = 0;
-        bool valid = false;
-        std::chrono::steady_clock::time_point saved_at;
-    } saved_state_;
 
     // Single unified callback
     std::function<void(AgentMessageType, const json&)> message_callback_;
@@ -460,8 +516,8 @@ public:
             task_queue_.push(AgentTask::new_task(task));
         }
 
-        // Clear saved state for new task
-        saved_state_.valid = false;
+        // Clear execution state for new task
+        execution_state_.set_valid(false);
 
         // Update state
         state_.set_task(task);
@@ -472,7 +528,7 @@ public:
     }
 
     void resume() {
-        if (!state_.is_paused() || !saved_state_.valid) {
+        if (!state_.is_paused() || !execution_state_.is_valid()) {
             send_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
             return;
         }
@@ -536,15 +592,10 @@ public:
         json j;
         j["status"] = state_.get_status();
         j["current_task"] = state_.get_task();
-        j["conversation"] = conversation_.to_json();
+        j["execution_state"] = execution_state_.to_json();
         j["tokens"] = token_stats_.to_json();
         // Cache stats now included in token_stats_.to_json()
         j["memory"] = memory_->export_memory_snapshot();
-        j["has_saved_state"] = saved_state_.valid;
-        if (saved_state_.valid) {
-            auto elapsed = std::chrono::steady_clock::now() - saved_state_.saved_at;
-            j["saved_state_age_seconds"] = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-        }
 
         j["context_management"] = {
             {"consolidation_count", context_state_.consolidation_count},
@@ -558,8 +609,8 @@ public:
         }
 
         // Add estimated tokens for current conversation
-        if (saved_state_.valid) {
-            j["context_management"]["estimated_current_tokens"] = estimate_request_tokens(saved_state_.request);
+        if (execution_state_.is_valid()) {
+            j["context_management"]["estimated_current_tokens"] = estimate_request_tokens(execution_state_.get_request());
         }
         return j;
     }
@@ -601,11 +652,11 @@ public:
         stats["thinking_enabled"] = config_.agent.enable_thinking;
         stats["interleaved_thinking_possible"] = tool_registry_.has_tools();
 
-        // Get thinking block count from conversation
+        // Get thinking block count from execution state
         int total_thinking_blocks = 0;
         int total_redacted_blocks = 0;
 
-        std::vector<messages::Message> messages = conversation_.get_messages();
+        std::vector<messages::Message> messages = execution_state_.get_messages();
         for (const messages::Message& msg: messages) {
             if (msg.role() == messages::Role::Assistant) {
                 std::vector<const messages::ThinkingContent*> thinking = messages::ContentExtractor::extract_thinking_blocks(msg);
@@ -620,11 +671,6 @@ public:
         stats["max_thinking_budget"] = config_.api.max_thinking_tokens;
 
         return stats;
-    }
-
-    // Conversation access
-    const ConversationState& get_conversation() const {
-        return conversation_;
     }
 
     // Memory management
@@ -731,8 +777,8 @@ private:
     void process_new_task(const std::string& task) {
         send_log(LogLevel::INFO, "Starting new task");
         
-        // Clear conversation for new task
-        conversation_.clear();
+        // Clear execution state for new task
+        execution_state_.clear();
         api_client_.set_iteration(0);
 
         // Build initial request with cache control on tools and system
@@ -755,11 +801,8 @@ private:
 
         api::ChatRequest request = builder.build();
 
-        // Save initial state
-        saved_state_.request = request;
-        saved_state_.iteration = 0;
-        saved_state_.valid = true;
-        saved_state_.saved_at = std::chrono::steady_clock::now();
+        // Initialize execution state with the request
+        execution_state_.reset_with_request(request);
 
         // Run analysis loop
         run_analysis_loop();
@@ -769,13 +812,13 @@ private:
 
     // Process resume
     void process_resume() {
-        if (!saved_state_.valid) {
+        if (!execution_state_.is_valid()) {
             send_log(LogLevel::ERROR, "No valid saved state to resume from");
             change_state(AgentState::Status::Idle);
             return;
         }
 
-        send_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(saved_state_.iteration));
+        send_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
 
         // Continue from saved state
         run_analysis_loop();
@@ -785,22 +828,21 @@ private:
     void process_continue(const std::string& additional) {
         send_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
 
-        if (!saved_state_.valid) {
+        if (!execution_state_.is_valid()) {
             send_log(LogLevel::WARNING, "No saved state found while continuing");
             change_state(AgentState::Status::Idle);
             return;
         }
 
-        // Add user message to saved request
+        // Add user message to execution state
         messages::Message continue_msg = messages::Message::user_text(additional);
 
         // Check for cache invalidation scenario
-        if (saved_state_.request.enable_thinking && has_non_tool_result_content(continue_msg)) {
+        if (execution_state_.get_request().enable_thinking && has_non_tool_result_content(continue_msg)) {
             send_log(LogLevel::WARNING, "Non-tool-result user message will invalidate thinking block cache.");
         }
 
-        saved_state_.request.messages.push_back(continue_msg);
-        conversation_.add_message(saved_state_.request.messages.back());
+        execution_state_.add_message(continue_msg);
 
         // Continue analysis
         run_analysis_loop();
@@ -876,11 +918,10 @@ private:
 
         // Add consolidation message
         messages::Message consolidation_msg = messages::Message::user_text(CONSOLIDATION_PROMPT);
-        saved_state_.request.messages.push_back(consolidation_msg);
-        conversation_.add_message(consolidation_msg);
+        execution_state_.add_message(consolidation_msg);
 
         // Mark that we're in consolidation mode
-        saved_state_.valid = true;
+        execution_state_.set_valid(true);
     }
 
     ConsolidationResult process_consolidation_response(const messages::Message& response_msg, const std::vector<messages::Message>& tool_results) {
@@ -923,8 +964,8 @@ private:
         // store old tracker session
         stats_sessions_.emplace_back(std::move(token_stats_));
 
-        // Clear conversation
-        conversation_.clear();
+        // Clear execution state for rebuild
+        execution_state_.clear();
 
         // Reset token tracker
         reset_token_usage();
@@ -954,14 +995,8 @@ private:
 
         builder.add_message(messages::Message::user_text(continuation_prompt));
 
-        // Reset saved state with new request
-        saved_state_.request = builder.build();
-        saved_state_.iteration = 0;  // Reset iteration count
-        saved_state_.valid = true;
-        saved_state_.saved_at = std::chrono::steady_clock::now();
-
-        // Add initial message to conversation
-        conversation_.add_message(saved_state_.request.messages[0]);
+        // Reset execution state with new request
+        execution_state_.reset_with_request(builder.build());
 
         // Log consolidation stats
         send_log(LogLevel::INFO, std::format(
@@ -979,7 +1014,8 @@ private:
     }
 
     void apply_incremental_caching() {
-        if (saved_state_.request.messages.size() < 2) {
+        api::ChatRequest& request = execution_state_.get_request();
+        if (request.messages.size() < 2) {
             return;
         }
 
@@ -987,7 +1023,7 @@ private:
         // We already use 2 for tools and system prompt, so we can only add 2 more
 
         // First, remove any existing cache controls from messages to avoid exceeding limit
-        for (messages::Message& msg: saved_state_.request.messages) {
+        for (messages::Message& msg: request.messages) {
             messages::Message new_msg(msg.role());
             for (const std::unique_ptr<messages::Content>& content: msg.contents()) {
                 // Clone content without cache control
@@ -1010,8 +1046,8 @@ private:
         // Now add cache control only to the LAST tool result message
         // This creates a single moving cache point for the conversation
         int cache_position = -1;
-        for (int i = saved_state_.request.messages.size() - 1; i >= 0; i--) {
-            const messages::Message& msg = saved_state_.request.messages[i];
+        for (int i = request.messages.size() - 1; i >= 0; i--) {
+            const messages::Message& msg = request.messages[i];
 
             // Find the last user message with tool results
             if (msg.role() == messages::Role::User && has_tool_results(msg)) {
@@ -1022,7 +1058,7 @@ private:
 
         if (cache_position >= 0) {
             // Create a new message with cache control on the last content block
-            messages::Message& msg_to_modify = saved_state_.request.messages[cache_position];
+            messages::Message& msg_to_modify = request.messages[cache_position];
 
             // Clone the message and add cache control to the last tool result
             messages::Message new_msg(msg_to_modify.role());
@@ -1047,13 +1083,13 @@ private:
             }
 
             // Replace the message
-            saved_state_.request.messages[cache_position] = std::move(new_msg);
+            request.messages[cache_position] = std::move(new_msg);
         }
     }
 
     // Main analysis loop
     void run_analysis_loop() {
-        int iteration = saved_state_.iteration;
+        int iteration = execution_state_.get_iteration();
         bool grader_approved = false;
 
         while (iteration < config_.agent.max_iterations && !stop_requested_ && !grader_approved && state_.is_running()) {
@@ -1063,7 +1099,7 @@ private:
             }
 
             iteration++;
-            saved_state_.iteration = iteration;
+            execution_state_.set_iteration(iteration);
             api_client_.set_iteration(iteration);
 
             send_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
@@ -1074,7 +1110,7 @@ private:
             }
 
             // Create request for this iteration
-            api::ChatRequest current_request = saved_state_.request;
+            api::ChatRequest current_request = execution_state_.get_request();
 
             // Check if we need to consolidate context BEFORE sending
             if (should_consolidate_context() && !context_state_.consolidation_in_progress) {
@@ -1104,10 +1140,9 @@ private:
             token_stats_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
 
-            // Add response to conversation and saved state
+            // Add response to execution state
             // IMPORTANT: We must preserve the entire message including thinking blocks
-            saved_state_.request.messages.push_back(response.message);
-            conversation_.add_message(response.message);
+            execution_state_.add_message(response.message);
 
             // Process tool calls
             std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
@@ -1136,8 +1171,7 @@ private:
                     }
                 }
 
-                saved_state_.request.messages.push_back(combined_results);
-                conversation_.add_message(combined_results);
+                execution_state_.add_message(combined_results);
             }
             
             // Check for pending user messages to inject
@@ -1152,9 +1186,10 @@ private:
                         send_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
                         
                         // If we just added tool results, append the user message to them
-                        if (!tool_results.empty() && !saved_state_.request.messages.empty()) {
+                        if (!tool_results.empty() && execution_state_.message_count() > 0) {
                             // Get the last message (should be the combined tool results)
-                            messages::Message& last_msg = saved_state_.request.messages.back();
+                            api::ChatRequest& req = execution_state_.get_request();
+                            messages::Message& last_msg = req.messages.back();
                             if (last_msg.role() == messages::Role::User) {
                                 // Add user text to the existing user message with tool results
                                 last_msg.add_content(std::make_unique<messages::TextContent>(user_msg));
@@ -1163,14 +1198,12 @@ private:
                             } else {
                                 // Create new user message if last wasn't user role
                                 messages::Message user_guidance = messages::Message::user_text(user_msg);
-                                saved_state_.request.messages.push_back(user_guidance);
-                                conversation_.add_message(user_guidance);
+                                execution_state_.add_message(user_guidance);
                             }
                         } else {
                             // No recent tool results, create standalone user message
                             messages::Message user_guidance = messages::Message::user_text(user_msg);
-                            saved_state_.request.messages.push_back(user_guidance);
-                            conversation_.add_message(user_guidance);
+                            execution_state_.add_message(user_guidance);
                         }
                     }
                 }
@@ -1200,8 +1233,7 @@ private:
                         // Add grader's questions as user message and continue
                         // Mark this as grader feedback with a special prefix we can filter
                         messages::Message continue_msg = messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
-                        saved_state_.request.messages.push_back(continue_msg);
-                        conversation_.add_message(continue_msg);
+                        execution_state_.add_message(continue_msg);
                     }
                 }
             }
@@ -1223,7 +1255,7 @@ private:
             send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
 
             // Track tool call
-            conversation_.track_tool_call(tool_use->id, tool_use->name, iteration);
+            execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
 
             // Send tool started message
             send_message(AgentMessageType::ToolStarted, {
@@ -1283,12 +1315,12 @@ private:
         if (api::AnthropicClient::is_recoverable_error(response)) {
             send_log(LogLevel::INFO, "You can resume the analysis");
             change_state(AgentState::Status::Paused);
-            saved_state_.valid = true;
+            execution_state_.set_valid(true);
             last_error_ = "API Error (recoverable): " + error_msg;
         } else {
             send_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
             change_state(AgentState::Status::Idle);
-            saved_state_.valid = false;
+            execution_state_.set_valid(false);
             last_error_ = "API Error: " + error_msg;
         }
     }
@@ -1331,7 +1363,7 @@ private:
         std::stringstream all_user_requests;
         bool first = true;
         
-        for (const messages::Message& msg: saved_state_.request.messages) {
+        for (const messages::Message& msg: execution_state_.get_messages()) {
             if (msg.role() == messages::Role::User) {
                 std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
                 if (text && !text->empty()) {
@@ -1349,7 +1381,7 @@ private:
             }
         }
         context.user_request = all_user_requests.str();
-        context.agent_work = conversation_.get_messages();
+        context.agent_work = execution_state_.get_messages();
         context.stored_analyses = memory_->get_analysis();
 
         // Grade the analysis and return result
