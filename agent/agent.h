@@ -8,12 +8,10 @@
 #include "core/common.h"
 #include "core/config.h"
 #include "core/oauth_manager.h"
-#include "core/types.h"
 #include "api/message_types.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
 #include "api/anthropic_api.h"
-#include "api/pricing.h"
 #include "api/token_stats.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
@@ -594,7 +592,6 @@ public:
         j["current_task"] = state_.get_task();
         j["execution_state"] = execution_state_.to_json();
         j["tokens"] = token_stats_.to_json();
-        // Cache stats now included in token_stats_.to_json()
         j["memory"] = memory_->export_memory_snapshot();
 
         j["context_management"] = {
@@ -606,11 +603,6 @@ public:
             auto elapsed = std::chrono::steady_clock::now() - context_state_.last_consolidation;
             j["context_management"]["minutes_since_last_consolidation"] =
                 std::chrono::duration_cast<std::chrono::minutes>(elapsed).count();
-        }
-
-        // Add estimated tokens for current conversation
-        if (execution_state_.is_valid()) {
-            j["context_management"]["estimated_current_tokens"] = estimate_request_tokens(execution_state_.get_request());
         }
         return j;
     }
@@ -884,17 +876,6 @@ private:
             oss << delimiter << *it;
         }
         return oss.str();
-    }
-
-    // Estimate tokens for a request (rough but sufficient for our needs)
-    int estimate_request_tokens(const api::ChatRequest& request) const {
-        // Convert to JSON and estimate
-        // Rough approximation: ~0.75 tokens per character for JSON
-        json request_json = request.to_json();
-        std::string json_str = request_json.dump();
-
-        // Add some buffer for response
-        return static_cast<int>(json_str.length() * 0.75);
     }
 
     // Check if we need to consolidate context
