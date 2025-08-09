@@ -716,16 +716,34 @@ public:
         stats.total_requests++;
         stats.last_request_time = std::chrono::steady_clock::now();
         
-        // If using OAuth, prepend Claude Code system prompt
+        // If using OAuth, prepend Claude Code system prompt as separate blocks
         if (auth_method == AuthMethod::OAUTH) {
             std::string original_prompt = request.system_prompt.text;
+            
+            // Create multiple system prompts array
+            json system_array = json::array();
+            
+            // Add Claude Code system prompt as first block
+            json claude_code_block = {
+                {"type", "text"},
+                {"text", CLAUDE_CODE_SYSTEM_PROMPT}
+            };
+            system_array.push_back(claude_code_block);
+            
+            // Add original system prompt as second block if it exists
             if (!original_prompt.empty()) {
-                // Prepend Claude Code prompt to existing system prompt
-                request.system_prompt.text = std::string(CLAUDE_CODE_SYSTEM_PROMPT) + "\n\n" + original_prompt;
-            } else {
-                // Just set Claude Code prompt
-                request.system_prompt.text = CLAUDE_CODE_SYSTEM_PROMPT;
+                json user_block = {
+                    {"type", "text"},
+                    {"text", original_prompt},
+                    {"cache_control", {{"type", "ephemeral"}}}
+                };
+                system_array.push_back(user_block);
             }
+            
+            // Set the multiple_system_prompts field
+            request.multiple_system_prompts = system_array;
+            // Clear the single system_prompt to avoid conflicts
+            request.system_prompt.text = "";
         }
 
         json request_json = request.to_json();
