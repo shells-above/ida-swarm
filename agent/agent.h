@@ -101,7 +101,7 @@ private:
     bool valid = false;
     std::chrono::steady_clock::time_point saved_at;
     
-    // Tool metadata (formerly in ConversationState)
+    // Tool metadata
     std::map<std::string, int> tool_call_iterations_;     // tool_id -> iteration
     std::map<std::string, std::string> tool_call_names_;  // tool_id -> tool_name
     

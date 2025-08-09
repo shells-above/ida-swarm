@@ -49,7 +49,6 @@ constexpr const char* STAINLESS_ARCH = "unknown";
 enum class Model {
     Opus41,
     Sonnet4,
-    Sonnet37,
     Haiku35
 };
 
@@ -57,7 +56,6 @@ inline std::string model_to_string(Model model) {
     switch (model) {
         case Model::Opus41: return "claude-opus-4-1-20250805";
         case Model::Sonnet4: return "claude-sonnet-4-20250514";
-        case Model::Sonnet37: return "claude-3-7-sonnet-latest";
         case Model::Haiku35: return "claude-3-5-haiku-latest";
     }
     return "";
@@ -66,7 +64,6 @@ inline std::string model_to_string(Model model) {
 inline Model model_from_string(const std::string& s) {
     if (s.starts_with("claude-opus-4-1-")) return Model::Opus41;
     if (s.starts_with("claude-sonnet-4-")) return Model::Sonnet4;
-    if (s.starts_with("claude-3-7-sonnet-")) return Model::Sonnet37;
     if (s.starts_with("claude-3-5-haiku-")) return Model::Haiku35;
     throw std::runtime_error("Unknown model: " + s);
 }
@@ -243,9 +240,6 @@ public:
         if (enable_interleaved_thinking) {
             if (!enable_thinking) {
                 throw std::runtime_error("enable_interleaved_thinking requires enable_thinking to be true");
-            }
-            if (model == Model::Sonnet37) {
-                throw std::runtime_error("Interleaved thinking is only supported on Claude 4 models (Opus 4, Sonnet 4)");
             }
             if (model == Model::Haiku35) {
                 throw std::runtime_error("Interleaved thinking is only supported on Claude 4 models (Opus 4, Sonnet 4)");

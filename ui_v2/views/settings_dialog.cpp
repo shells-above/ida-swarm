@@ -136,7 +136,7 @@ void SettingsDialog::createAgentTab() {
     auto* model_layout = new QFormLayout(model_group);
     
     model_combo_ = new QComboBox();
-    model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
+    model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Haiku 3.5"});
     connect(model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
             this, &SettingsDialog::onSettingChanged);
     model_layout->addRow("Model:", model_combo_);
@@ -294,7 +294,7 @@ void SettingsDialog::createGraderTab() {
     
     // Grader model selection
     grader_model_combo_ = new QComboBox();
-    grader_model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Sonnet 3.7", "Haiku 3.5"});
+    grader_model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Haiku 3.5"});
     grader_model_combo_->setToolTip("Model to use for grading agent work");
     connect(grader_model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsDialog::onSettingChanged);
     layout->addRow("Grader Model:", grader_model_combo_);
@@ -361,11 +361,8 @@ void SettingsDialog::loadSettings() {
         case api::Model::Sonnet4:
             model_combo_->setCurrentIndex(1);
             break;
-        case api::Model::Sonnet37:
-            model_combo_->setCurrentIndex(2);
-            break;
         case api::Model::Haiku35:
-            model_combo_->setCurrentIndex(3);
+            model_combo_->setCurrentIndex(2);
             break;
     }
     
@@ -387,11 +384,8 @@ void SettingsDialog::loadSettings() {
         case api::Model::Sonnet4:
             grader_model_combo_->setCurrentIndex(1);
             break;
-        case api::Model::Sonnet37:
-            grader_model_combo_->setCurrentIndex(2);
-            break;
         case api::Model::Haiku35:
-            grader_model_combo_->setCurrentIndex(3);
+            grader_model_combo_->setCurrentIndex(2);
             break;
     }
     grader_max_tokens_spin_->setValue(config.grader.max_tokens);
@@ -440,9 +434,6 @@ void SettingsDialog::applySettings() {
             config.agent.model = api::Model::Sonnet4;
             break;
         case 2:
-            config.agent.model = api::Model::Sonnet37;
-            break;
-        case 3:
             config.agent.model = api::Model::Haiku35;
             break;
     }
@@ -466,9 +457,6 @@ void SettingsDialog::applySettings() {
             config.grader.model = api::Model::Sonnet4;
             break;
         case 2:
-            config.grader.model = api::Model::Sonnet37;
-            break;
-        case 3:
             config.grader.model = api::Model::Haiku35;
             break;
     }
