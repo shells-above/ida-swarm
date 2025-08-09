@@ -354,7 +354,7 @@ void SettingsDialog::loadSettings() {
     }
     
     // Map model enum to combo index
-    switch (config.api.model) {
+    switch (config.agent.model) {
         case api::Model::Opus41:
             model_combo_->setCurrentIndex(0);
             break;
@@ -369,9 +369,9 @@ void SettingsDialog::loadSettings() {
             break;
     }
     
-    max_tokens_spin_->setValue(config.api.max_tokens);
-    max_thinking_tokens_spin_->setValue(config.api.max_thinking_tokens);
-    temperature_spin_->setValue(config.api.temperature);
+    max_tokens_spin_->setValue(config.agent.max_tokens);
+    max_thinking_tokens_spin_->setValue(config.agent.max_thinking_tokens);
+    temperature_spin_->setValue(config.agent.temperature);
     
     // Agent settings
     max_iterations_spin_->setValue(config.agent.max_iterations);
@@ -434,22 +434,22 @@ void SettingsDialog::applySettings() {
     // Map combo index to model enum
     switch (model_combo_->currentIndex()) {
         case 0:
-            config.api.model = api::Model::Opus41;
+            config.agent.model = api::Model::Opus41;
             break;
         case 1:
-            config.api.model = api::Model::Sonnet4;
+            config.agent.model = api::Model::Sonnet4;
             break;
         case 2:
-            config.api.model = api::Model::Sonnet37;
+            config.agent.model = api::Model::Sonnet37;
             break;
         case 3:
-            config.api.model = api::Model::Haiku35;
+            config.agent.model = api::Model::Haiku35;
             break;
     }
     
-    config.api.max_tokens = max_tokens_spin_->value();
-    config.api.max_thinking_tokens = max_thinking_tokens_spin_->value();
-    config.api.temperature = temperature_spin_->value();
+    config.agent.max_tokens = max_tokens_spin_->value();
+    config.agent.max_thinking_tokens = max_thinking_tokens_spin_->value();
+    config.agent.temperature = temperature_spin_->value();
     
     // Agent settings
     config.agent.max_iterations = max_iterations_spin_->value();

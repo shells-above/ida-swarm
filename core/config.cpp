@@ -14,12 +14,12 @@ bool Config::save_to_file(const std::string& path) const {
         j["api"]["use_oauth"] = api.use_oauth;
         j["api"]["oauth_config_dir"] = api.oauth_config_dir;
         j["api"]["base_url"] = api.base_url;
-        j["api"]["model"] = api::model_to_string(api.model);
-        j["api"]["max_tokens"] = api.max_tokens;
-        j["api"]["max_thinking_tokens"] = api.max_thinking_tokens;
-        j["api"]["temperature"] = api.temperature;
 
         // Agent settings
+        j["agent"]["model"] = api::model_to_string(agent.model);
+        j["agent"]["max_tokens"] = agent.max_tokens;
+        j["agent"]["max_thinking_tokens"] = agent.max_thinking_tokens;
+        j["agent"]["temperature"] = agent.temperature;
         j["agent"]["max_iterations"] = agent.max_iterations;
         j["agent"]["enable_thinking"] = agent.enable_thinking;
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
@@ -78,18 +78,18 @@ bool Config::load_from_file(const std::string& path) {
             api.use_oauth = j["api"].value("use_oauth", api.use_oauth);
             api.oauth_config_dir = j["api"].value("oauth_config_dir", api.oauth_config_dir);
             
-            // API settings
+            // Connection settings
             api.base_url = j["api"].value("base_url", api.base_url);
-            if (j["api"].contains("model")) {
-                api.model = api::model_from_string(j["api"]["model"]);
-            }
-            api.max_tokens = j["api"].value("max_tokens", api.max_tokens);
-            api.max_thinking_tokens = j["api"].value("max_thinking_tokens", api.max_thinking_tokens);
-            api.temperature = j["api"].value("temperature", api.temperature);
         }
 
         // Agent settings
         if (j.contains("agent")) {
+            if (j["agent"].contains("model")) {
+                agent.model = api::model_from_string(j["agent"]["model"]);
+            }
+            agent.max_tokens = j["agent"].value("max_tokens", agent.max_tokens);
+            agent.max_thinking_tokens = j["agent"].value("max_thinking_tokens", agent.max_thinking_tokens);
+            agent.temperature = j["agent"].value("temperature", agent.temperature);
             agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
             agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
