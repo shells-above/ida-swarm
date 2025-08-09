@@ -7,43 +7,27 @@ namespace llm_re {
 
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     
-    // Create API clients based on auth method
+    // Create API client based on auth method
     if (config.api.auth_method == api::AuthMethod::OAUTH) {
         OAuthManager oauth_mgr(config.api.oauth_config_dir);
         auto oauth_creds = oauth_mgr.get_credentials();
         
         if (oauth_creds) {
-            // Initialize grader client with OAuth
-            grader_client_ = std::make_unique<api::AnthropicClient>(
-                *oauth_creds,
-                config.api.base_url
-            );
-            
-            // Initialize classifier client with OAuth
-            classifier_client_ = std::make_unique<api::AnthropicClient>(
+            // Initialize API client with OAuth
+            api_client_ = std::make_unique<api::AnthropicClient>(
                 *oauth_creds,
                 config.api.base_url
             );
         } else {
             // Fallback to API key
-            grader_client_ = std::make_unique<api::AnthropicClient>(
-                config.api.api_key,
-                config.api.base_url
-            );
-            
-            classifier_client_ = std::make_unique<api::AnthropicClient>(
+            api_client_ = std::make_unique<api::AnthropicClient>(
                 config.api.api_key,
                 config.api.base_url
             );
         }
     } else {
         // Use API key authentication
-        grader_client_ = std::make_unique<api::AnthropicClient>(
-            config.api.api_key,
-            config.api.base_url
-        );
-        
-        classifier_client_ = std::make_unique<api::AnthropicClient>(
+        api_client_ = std::make_unique<api::AnthropicClient>(
             config.api.api_key,
             config.api.base_url
         );
@@ -79,7 +63,7 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     api::ChatRequest request = builder.build();
     
     // Send to grader API
-    api::ChatResponse response = grader_client_->send_request(request);
+    api::ChatResponse response = api_client_->send_request(request);
     
     if (!response.success) {
         // On grader failure (API failure, not grader marking as a failure), send back for more analysis
@@ -187,8 +171,8 @@ Respond with JSON only:
     
     api::ChatRequest request = builder.build();
     
-    // Send to Haiku
-    api::ChatResponse response = classifier_client_->send_request(request);
+    // Send to API for classification
+    api::ChatResponse response = api_client_->send_request(request);
     
     if (!response.success) {
         // On classification failure, default to incomplete (safer)

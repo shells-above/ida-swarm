@@ -38,8 +38,7 @@ public:
     };
 
 private:
-    std::unique_ptr<api::AnthropicClient> grader_client_;
-    std::unique_ptr<api::AnthropicClient> classifier_client_;
+    std::unique_ptr<api::AnthropicClient> api_client_;
     const Config& config_;
     mutable qmutex_t mutex_;
     
