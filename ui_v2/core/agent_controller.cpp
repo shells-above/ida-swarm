@@ -3,6 +3,7 @@
 // Now it's safe to include agent.h because ui_v2_common.h already set up Qt + kernwin
 #include "agent/agent.h"
 #include "core/config.h"
+#include "core/oauth_manager.h"
 #include "api/message_types.h"
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
@@ -28,10 +29,44 @@ bool AgentController::initialize(const Config& config) {
     try {
         config_ = std::make_unique<Config>(config);
         
-        // Check if API key is configured
-        if (config_->api.api_key.empty()) {
-            emit errorOccurred("ERROR: No API key configured! Please set your Anthropic API key in the configuration.");
-            return false;
+        // Check authentication configuration
+        if (config_->api.use_oauth) {
+            // Try to use OAuth from claude-cpp-sdk
+            OAuthManager oauth_mgr(config_->api.oauth_config_dir);
+            
+            if (!oauth_mgr.has_credentials()) {
+                emit errorOccurred("ERROR: OAuth enabled but no credentials found in " + 
+                                 QString::fromStdString(config_->api.oauth_config_dir) + 
+                                 ". Please run claude-cpp-sdk setup or disable OAuth.");
+                return false;
+            }
+
+            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+            if (!oauth_creds) {
+                emit errorOccurred("ERROR: Failed to read OAuth credentials: " + 
+                                 QString::fromStdString(oauth_mgr.get_last_error()));
+                return false;
+            }
+            
+            // Check if credentials are expired
+            if (oauth_creds->is_expired()) {
+                emit errorOccurred("WARNING: OAuth token appears to be expired. May need refresh.");
+            }
+            
+            // Update config to use OAuth
+            config_->api.auth_method = api::AuthMethod::OAUTH;
+            
+            msg("LLM RE: Successfully loaded OAuth credentials (expires at %f)\n", oauth_creds->expires_at);
+            emit statusChanged("Using OAuth authentication from claude-cpp-sdk");
+            
+        } else {
+            // Use API key authentication
+            if (config_->api.api_key.empty()) {
+                emit errorOccurred("ERROR: No API key configured! Please set your Anthropic API key in the configuration.");
+                return false;
+            }
+            config_->api.auth_method = api::AuthMethod::API_KEY;
+            emit statusChanged("Using API key authentication");
         }
         
         agent_ = std::make_unique<REAgent>(*config_);

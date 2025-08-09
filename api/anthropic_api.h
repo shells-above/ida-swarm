@@ -15,6 +15,36 @@ namespace llm_re::tools {
 
 namespace llm_re::api {
 
+// Authentication methods
+enum class AuthMethod {
+    API_KEY,
+    OAUTH
+};
+
+// OAuth constants from claude-cpp-sdk
+constexpr const char* CLAUDE_CODE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
+constexpr const char* CLAUDE_CODE_BETA_HEADER = "claude-code-20250219";
+constexpr const char* OAUTH_BETA_HEADER = "oauth-2025-04-20";
+
+// Stainless SDK headers
+constexpr const char* USER_AGENT = "claude-cli/1.0.64 (external, cli)";
+constexpr const char* STAINLESS_PACKAGE_VERSION = "0.55.1";
+#ifdef __APPLE__
+constexpr const char* STAINLESS_OS = "MacOS";
+#elif _WIN32
+constexpr const char* STAINLESS_OS = "Windows";
+#else
+constexpr const char* STAINLESS_OS = "Linux";
+#endif
+
+#ifdef __aarch64__
+constexpr const char* STAINLESS_ARCH = "arm64";
+#elif __x86_64__
+constexpr const char* STAINLESS_ARCH = "x64";
+#else
+constexpr const char* STAINLESS_ARCH = "unknown";
+#endif
+
 // Model selection
 enum class Model {
     Opus41,
@@ -559,9 +589,28 @@ struct ApiError {
     }
 };
 
+// OAuth credentials structure
+struct OAuthCredentials {
+    std::string access_token;
+    std::string refresh_token;
+    double expires_at = 0;  // Unix timestamp
+    std::string account_uuid;
+    
+    bool is_expired(int buffer_seconds = 300) const {
+        auto now = std::chrono::system_clock::now();
+        auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+            now.time_since_epoch()).count();
+        return now_timestamp + buffer_seconds >= expires_at;
+    }
+};
+
 // Clean API client
 class AnthropicClient {
+    // Authentication
+    AuthMethod auth_method = AuthMethod::API_KEY;
     std::string api_key;
+    OAuthCredentials oauth_creds;
+    
     std::string api_url = "https://api.anthropic.com/v1/messages";
 
     // Logging
@@ -656,11 +705,32 @@ class AnthropicClient {
     }
 
 public:
+    // Constructor for API key authentication
     explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
-        : api_key(key), api_url(base_url) {
+        : auth_method(AuthMethod::API_KEY), api_key(key), api_url(base_url) {
+    }
+    
+    // Constructor for OAuth authentication
+    AnthropicClient(const OAuthCredentials& creds, const std::string& base_url = "https://api.anthropic.com/v1/messages")
+        : auth_method(AuthMethod::OAUTH), oauth_creds(creds), api_url(base_url) {
     }
 
     ~AnthropicClient() {
+    }
+    
+    // Set authentication method and credentials
+    void set_api_key(const std::string& key) {
+        auth_method = AuthMethod::API_KEY;
+        api_key = key;
+    }
+    
+    void set_oauth_credentials(const OAuthCredentials& creds) {
+        auth_method = AuthMethod::OAUTH;
+        oauth_creds = creds;
+    }
+    
+    AuthMethod get_auth_method() const {
+        return auth_method;
     }
 
     void set_message_logger(std::function<void(const std::string&, const json&, int)> logger) {
@@ -679,9 +749,21 @@ public:
         return stats;
     }
 
-    ChatResponse send_request(const ChatRequest& request) {
+    ChatResponse send_request(ChatRequest request) {
         stats.total_requests++;
         stats.last_request_time = std::chrono::steady_clock::now();
+        
+        // If using OAuth, prepend Claude Code system prompt
+        if (auth_method == AuthMethod::OAUTH) {
+            std::string original_prompt = request.system_prompt.text;
+            if (!original_prompt.empty()) {
+                // Prepend Claude Code prompt to existing system prompt
+                request.system_prompt.text = std::string(CLAUDE_CODE_SYSTEM_PROMPT) + "\n\n" + original_prompt;
+            } else {
+                // Just set Claude Code prompt
+                request.system_prompt.text = CLAUDE_CODE_SYSTEM_PROMPT;
+            }
+        }
 
         json request_json = request.to_json();
 
@@ -723,15 +805,55 @@ public:
 
         struct curl_slist* headers = nullptr;
         headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, ("x-api-key: " + api_key).c_str());
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
-
-        // Add interleaved thinking beta header if enabled and tools are being used
-        if (request.enable_interleaved_thinking && request.enable_thinking && !request.tool_definitions.empty()) {
-            headers = curl_slist_append(headers, "anthropic-beta: interleaved-thinking-2025-05-14");
+        
+        // Authentication header
+        if (auth_method == AuthMethod::API_KEY) {
+            headers = curl_slist_append(headers, ("x-api-key: " + api_key).c_str());
+        } else {
+            // OAuth authentication
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + oauth_creds.access_token).c_str());
+            
+            // Add Stainless SDK headers for OAuth
+            headers = curl_slist_append(headers, ("User-Agent: " + std::string(USER_AGENT)).c_str());
+            headers = curl_slist_append(headers, "anthropic-dangerous-direct-browser-access: true");
+            headers = curl_slist_append(headers, ("X-Stainless-Lang: js"));
+            headers = curl_slist_append(headers, ("X-Stainless-Package-Version: " + std::string(STAINLESS_PACKAGE_VERSION)).c_str());
+            headers = curl_slist_append(headers, ("X-Stainless-OS: " + std::string(STAINLESS_OS)).c_str());
+            headers = curl_slist_append(headers, ("X-Stainless-Arch: " + std::string(STAINLESS_ARCH)).c_str());
+            headers = curl_slist_append(headers, "X-Stainless-Runtime: node");
+            headers = curl_slist_append(headers, "X-Stainless-Runtime-Version: v23.11.0");
         }
 
-        curl_easy_setopt(curl, CURLOPT_URL, api_url.c_str());
+        // Build beta headers
+        std::string beta_header;
+        if (auth_method == AuthMethod::OAUTH) {
+            // OAuth requires these beta headers
+            beta_header = std::string(CLAUDE_CODE_BETA_HEADER) + "," + OAUTH_BETA_HEADER;
+        }
+        
+        // Add interleaved thinking beta header if enabled and tools are being used
+        if (request.enable_interleaved_thinking && request.enable_thinking && !request.tool_definitions.empty()) {
+            if (!beta_header.empty()) beta_header += ",";
+            beta_header += "interleaved-thinking-2025-05-14";
+        }
+        
+        if (!beta_header.empty()) {
+            headers = curl_slist_append(headers, ("anthropic-beta: " + beta_header).c_str());
+        }
+
+        // Build final URL - add ?beta=true for OAuth (matching claude-cpp-sdk behavior)
+        std::string final_url = api_url;
+        if (auth_method == AuthMethod::OAUTH) {
+            // Add beta=true query parameter for OAuth
+            if (final_url.find('?') != std::string::npos) {
+                final_url += "&beta=true";
+            } else {
+                final_url += "?beta=true";
+            }
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, final_url.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);

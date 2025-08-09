@@ -9,7 +9,10 @@ bool Config::save_to_file(const std::string& path) const {
         nlohmann::ordered_json j;
 
         // API settings
+        j["api"]["auth_method"] = (api.auth_method == api::AuthMethod::API_KEY) ? "api_key" : "oauth";
         j["api"]["api_key"] = api.api_key;
+        j["api"]["use_oauth"] = api.use_oauth;
+        j["api"]["oauth_config_dir"] = api.oauth_config_dir;
         j["api"]["base_url"] = api.base_url;
         j["api"]["model"] = api::model_to_string(api.model);
         j["api"]["max_tokens"] = api.max_tokens;
@@ -66,7 +69,16 @@ bool Config::load_from_file(const std::string& path) {
 
         // API settings
         if (j.contains("api")) {
+            // Authentication settings
+            if (j["api"].contains("auth_method")) {
+                std::string method = j["api"]["auth_method"];
+                api.auth_method = (method == "oauth") ? api::AuthMethod::OAUTH : api::AuthMethod::API_KEY;
+            }
             api.api_key = j["api"].value("api_key", api.api_key);
+            api.use_oauth = j["api"].value("use_oauth", api.use_oauth);
+            api.oauth_config_dir = j["api"].value("oauth_config_dir", api.oauth_config_dir);
+            
+            // API settings
             api.base_url = j["api"].value("base_url", api.base_url);
             if (j["api"].contains("model")) {
                 api.model = api::model_from_string(j["api"]["model"]);

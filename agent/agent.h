@@ -7,6 +7,7 @@
 
 #include "core/common.h"
 #include "core/config.h"
+#include "core/oauth_manager.h"
 #include "core/types.h"
 #include "api/message_types.h"
 #include "agent/tool_system.h"
@@ -371,13 +372,33 @@ Tips:
 
 What's your next step to complete the reversal?)";
 
+    // Helper function to create AnthropicClient based on config
+    static api::AnthropicClient create_api_client(const Config& config) {
+        if (config.api.auth_method == api::AuthMethod::OAUTH) {
+            // Load OAuth credentials
+            OAuthManager oauth_mgr(config.api.oauth_config_dir);
+            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+            
+            if (!oauth_creds) {
+                msg("LLM RE: WARNING - Failed to load OAuth credentials, falling back to API key\n");
+                return api::AnthropicClient(config.api.api_key, config.api.base_url);
+            }
+            
+            msg("LLM RE: Using OAuth authentication\n");
+            return api::AnthropicClient(*oauth_creds, config.api.base_url);
+        }
+        
+        // Default to API key
+        return api::AnthropicClient(config.api.api_key, config.api.base_url);
+    }
+
 public:
     REAgent(const Config& config)
         : config_(config),
-          api_client_(config.api.api_key, config.api.base_url),
+          api_client_(create_api_client(config)),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
-          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config.api.api_key)),
+          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config)),
           grader_(std::make_unique<AnalysisGrader>(config)) {
 
         queue_mutex_ = qmutex_create();

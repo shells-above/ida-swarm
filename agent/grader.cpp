@@ -1,23 +1,53 @@
 #include "agent/grader.h"
 #include "agent/agent.h"
+#include "core/oauth_manager.h"
 #include <sstream>
 
 namespace llm_re {
 
-AnalysisGrader::AnalysisGrader(const Config& config) 
-    : config_(config) {
+AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     
-    // Initialize grader client with same API key
-    grader_client_ = std::make_unique<api::AnthropicClient>(
-        config.api.api_key,
-        config.api.base_url
-    );
-    
-    // Initialize classifier client (Haiku) for classification
-    classifier_client_ = std::make_unique<api::AnthropicClient>(
-        config.api.api_key,
-        config.api.base_url
-    );
+    // Create API clients based on auth method
+    if (config.api.auth_method == api::AuthMethod::OAUTH) {
+        OAuthManager oauth_mgr(config.api.oauth_config_dir);
+        auto oauth_creds = oauth_mgr.get_credentials();
+        
+        if (oauth_creds) {
+            // Initialize grader client with OAuth
+            grader_client_ = std::make_unique<api::AnthropicClient>(
+                *oauth_creds,
+                config.api.base_url
+            );
+            
+            // Initialize classifier client with OAuth
+            classifier_client_ = std::make_unique<api::AnthropicClient>(
+                *oauth_creds,
+                config.api.base_url
+            );
+        } else {
+            // Fallback to API key
+            grader_client_ = std::make_unique<api::AnthropicClient>(
+                config.api.api_key,
+                config.api.base_url
+            );
+            
+            classifier_client_ = std::make_unique<api::AnthropicClient>(
+                config.api.api_key,
+                config.api.base_url
+            );
+        }
+    } else {
+        // Use API key authentication
+        grader_client_ = std::make_unique<api::AnthropicClient>(
+            config.api.api_key,
+            config.api.base_url
+        );
+        
+        classifier_client_ = std::make_unique<api::AnthropicClient>(
+            config.api.api_key,
+            config.api.base_url
+        );
+    }
     
     mutex_ = qmutex_create();
 }

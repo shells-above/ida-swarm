@@ -1,6 +1,8 @@
 #include "settings_dialog.h"
 #include "../core/settings_manager.h"
 #include "../core/theme_manager.h"
+#include "core/oauth_manager.h"
+#include "core/oauth_authorizer.h"
 #include "../../api/anthropic_api.h"
 
 namespace llm_re::ui_v2 {
@@ -66,11 +68,44 @@ void SettingsDialog::createAPITab() {
     auto* tab = new QWidget();
     auto* layout = new QFormLayout(tab);
     
+    // OAuth settings section
+    auto* auth_group = new QGroupBox("Authentication");
+    auto* auth_layout = new QFormLayout(auth_group);
+    
+    use_oauth_check_ = new QCheckBox("Use OAuth (from claude-cpp-sdk)");
+    use_oauth_check_->setToolTip("Use OAuth credentials from claude-cpp-sdk instead of API key");
+    connect(use_oauth_check_, &QCheckBox::toggled, this, [this](bool checked) {
+        oauth_config_dir_edit_->setEnabled(checked);
+        authorize_button_->setEnabled(checked);
+        api_key_edit_->setEnabled(!checked);
+        onSettingChanged();
+        if (checked) {
+            checkOAuthStatus();
+        }
+    });
+    auth_layout->addRow(use_oauth_check_);
+    
+    oauth_config_dir_edit_ = new QLineEdit();
+    oauth_config_dir_edit_->setPlaceholderText("~/.claude_cpp_sdk");
+    connect(oauth_config_dir_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
+    auth_layout->addRow("OAuth Config Dir:", oauth_config_dir_edit_);
+    
+    oauth_status_label_ = new QLabel();
+    auth_layout->addRow("OAuth Status:", oauth_status_label_);
+    
+    authorize_button_ = new QPushButton("Authorize Account");
+    authorize_button_->setEnabled(false);  // Will be enabled when OAuth is selected
+    connect(authorize_button_, &QPushButton::clicked, this, &SettingsDialog::onAuthorize);
+    auth_layout->addRow("", authorize_button_);
+    
     api_key_edit_ = new QLineEdit();
     api_key_edit_->setEchoMode(QLineEdit::Password);
     connect(api_key_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
-    layout->addRow("API Key:", api_key_edit_);
+    auth_layout->addRow("API Key:", api_key_edit_);
     
+    layout->addRow(auth_group);
+    
+    // API settings section
     base_url_edit_ = new QLineEdit();
     connect(base_url_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
     layout->addRow("Base URL:", base_url_edit_);
@@ -288,9 +323,17 @@ void SettingsDialog::createAdvancedTab() {
 void SettingsDialog::loadSettings() {
     const Config& config = SettingsManager::instance().config();
     
-    // API settings
+    // OAuth/API settings
+    use_oauth_check_->setChecked(config.api.use_oauth);
+    oauth_config_dir_edit_->setText(QString::fromStdString(config.api.oauth_config_dir));
+    oauth_config_dir_edit_->setEnabled(config.api.use_oauth);
     api_key_edit_->setText(QString::fromStdString(config.api.api_key));
+    api_key_edit_->setEnabled(!config.api.use_oauth);
     base_url_edit_->setText(QString::fromStdString(config.api.base_url));
+    
+    if (config.api.use_oauth) {
+        checkOAuthStatus();
+    }
     
     // Map model enum to combo index
     switch (config.api.model) {
@@ -357,9 +400,18 @@ void SettingsDialog::loadSettings() {
 void SettingsDialog::applySettings() {
     Config& config = SettingsManager::instance().config();
     
-    // API settings
+    // OAuth/API settings
+    config.api.use_oauth = use_oauth_check_->isChecked();
+    config.api.oauth_config_dir = oauth_config_dir_edit_->text().toStdString();
     config.api.api_key = api_key_edit_->text().toStdString();
     config.api.base_url = base_url_edit_->text().toStdString();
+    
+    // Update auth method based on checkbox
+    if (config.api.use_oauth) {
+        config.api.auth_method = api::AuthMethod::OAUTH;
+    } else {
+        config.api.auth_method = api::AuthMethod::API_KEY;
+    }
     
     // Map combo index to model enum
     switch (model_combo_->currentIndex()) {
@@ -434,30 +486,54 @@ void SettingsDialog::onTestAPI() {
     test_api_button_->setEnabled(false);
     api_status_label_->setText("Testing...");
     
-    QString apiKey = api_key_edit_->text().trimmed();
-    if (apiKey.isEmpty()) {
-        api_status_label_->setText("<font color='red'>✗ API key required</font>");
-        test_api_button_->setEnabled(true);
-        return;
-    }
-
-    // run request in background thread
-    QThread* thread = QThread::create([this, apiKey]() {
-        bool valid = validateApiKey(apiKey.toStdString());
-
-        // update ui in main thread
-        QMetaObject::invokeMethod(this, [this, valid]() {
-            test_api_button_->setEnabled(true);
-            if (valid) {
-                api_status_label_->setText("<font color='green'>✓ Connected - API key is valid</font>");
-            } else {
-                api_status_label_->setText("<font color='red'>✗ Invalid API key or connection error</font>");
-            }
-        }, Qt::QueuedConnection);
-    });
+    // Check if OAuth is enabled
+    bool useOAuth = use_oauth_check_->isChecked();
     
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    if (useOAuth) {
+        // Test OAuth connection
+        QThread* thread = QThread::create([this]() {
+            bool valid = validateOAuth();
+            
+            // update ui in main thread
+            QMetaObject::invokeMethod(this, [this, valid]() {
+                test_api_button_->setEnabled(true);
+                if (valid) {
+                    api_status_label_->setText("<font color='green'>✓ Connected - OAuth authentication is valid</font>");
+                } else {
+                    api_status_label_->setText("<font color='red'>✗ OAuth authentication failed or connection error</font>");
+                }
+            }, Qt::QueuedConnection);
+        });
+        
+        connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+        thread->start();
+    } else {
+        // Test API key
+        QString apiKey = api_key_edit_->text().trimmed();
+        if (apiKey.isEmpty()) {
+            api_status_label_->setText("<font color='red'>✗ API key required</font>");
+            test_api_button_->setEnabled(true);
+            return;
+        }
+
+        // run request in background thread
+        QThread* thread = QThread::create([this, apiKey]() {
+            bool valid = validateApiKey(apiKey.toStdString());
+
+            // update ui in main thread
+            QMetaObject::invokeMethod(this, [this, valid]() {
+                test_api_button_->setEnabled(true);
+                if (valid) {
+                    api_status_label_->setText("<font color='green'>✓ Connected - API key is valid</font>");
+                } else {
+                    api_status_label_->setText("<font color='red'>✗ Invalid API key or connection error</font>");
+                }
+            }, Qt::QueuedConnection);
+        });
+        
+        connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+        thread->start();
+    }
 }
 
 bool SettingsDialog::validateApiKey(const std::string& apiKey) {
@@ -498,6 +574,125 @@ bool SettingsDialog::validateApiKey(const std::string& apiKey) {
     }
     
     return false;
+}
+
+bool SettingsDialog::validateOAuth() {
+    try {
+        // Load OAuth credentials
+        QString configDir = oauth_config_dir_edit_->text();
+        if (configDir.isEmpty()) {
+            configDir = "~/.claude_cpp_sdk";
+        }
+        
+        OAuthManager oauth_mgr(configDir.toStdString());
+        std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+        
+        if (!oauth_creds) {
+            msg("LLM RE: Failed to load OAuth credentials for validation\n");
+            return false;
+        }
+        
+        // Create client with OAuth credentials
+        api::AnthropicClient client(*oauth_creds, base_url_edit_->text().toStdString());
+        
+        api::ChatRequest request;
+        request.model = api::Model::Haiku35;
+        request.max_tokens = 1;
+        request.temperature = 0;
+        request.enable_thinking = false;
+        
+        request.messages.push_back(messages::Message::user_text("Hi"));
+        
+        api::ChatResponse response = client.send_request(request);
+        
+        if (response.success) {
+            return true;
+        } else if (response.error) {
+            std::string error = response.error.value();
+            msg("LLM RE: OAuth validation error: %s\n", error.c_str());
+            
+            if (error.find("401") != std::string::npos ||
+                error.find("unauthorized") != std::string::npos) {
+                return false;
+            }
+        }
+    } catch (const std::exception& e) {
+        msg("LLM RE: OAuth validation exception: %s\n", e.what());
+    }
+    
+    return false;
+}
+
+void SettingsDialog::checkOAuthStatus() {
+    QString configDir = oauth_config_dir_edit_->text();
+    if (configDir.isEmpty()) {
+        configDir = "~/.claude_cpp_sdk";
+    }
+    
+    OAuthManager oauth_mgr(configDir.toStdString());
+    
+    if (!oauth_mgr.has_credentials()) {
+        oauth_status_label_->setText("<font color='red'>✗ No credentials found</font>");
+        return;
+    }
+    
+    auto creds = oauth_mgr.get_credentials();
+    if (!creds) {
+        oauth_status_label_->setText("<font color='red'>✗ Failed to read credentials</font>");
+        return;
+    }
+    
+    if (creds->is_expired()) {
+        oauth_status_label_->setText("<font color='orange'>⚠ Token expired (may auto-refresh)</font>");
+    } else {
+        // Calculate time until expiry
+        auto now = std::chrono::system_clock::now();
+        auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+            now.time_since_epoch()).count();
+        auto seconds_remaining = creds->expires_at - now_timestamp;
+        auto hours_remaining = seconds_remaining / 3600;
+        
+        if (hours_remaining > 24) {
+            auto days_remaining = hours_remaining / 24;
+            oauth_status_label_->setText(QString("<font color='green'>✓ Valid (%1 days remaining)</font>").arg(days_remaining));
+        } else {
+            oauth_status_label_->setText(QString("<font color='green'>✓ Valid (%1 hours remaining)</font>").arg(hours_remaining));
+        }
+    }
+}
+
+void SettingsDialog::onAuthorize() {
+    // Disable button while authorizing
+    authorize_button_->setEnabled(false);
+    authorize_button_->setText("Authorizing...");
+    oauth_status_label_->setText("<font color='blue'>⟳ Authorizing...</font>");
+    
+    // Run authorization in background thread
+    QThread* thread = QThread::create([this]() {
+        OAuthAuthorizer authorizer;
+        bool success = authorizer.authorize();
+        std::string error = authorizer.getLastError();
+        
+        // Update UI in main thread
+        QMetaObject::invokeMethod(this, [this, success, error]() {
+            authorize_button_->setEnabled(true);
+            authorize_button_->setText("Authorize Account");
+            
+            if (success) {
+                QMessageBox::information(this, "Authorization Successful",
+                                        "Your account has been authorized successfully!");
+                checkOAuthStatus();
+                onSettingChanged();
+            } else {
+                QMessageBox::warning(this, "Authorization Failed",
+                                     QString("Failed to authorize: %1").arg(QString::fromStdString(error)));
+                oauth_status_label_->setText("<font color='red'>✗ Authorization failed</font>");
+            }
+        }, Qt::QueuedConnection);
+    });
+    
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
 }
 
 void SettingsDialog::onResetDefaults() {

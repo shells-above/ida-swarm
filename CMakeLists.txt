@@ -139,6 +139,7 @@ endif()
 # Find required packages
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Include Keystone build configuration
 include(cmake/BuildKeystone.cmake)
@@ -148,6 +149,8 @@ set(SOURCES
         core/plugin.cpp
         core/ida_utils.cpp
         core/config.cpp
+        core/oauth_manager.cpp
+        core/oauth_authorizer.cpp
         api/anthropic_api.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
@@ -208,6 +211,8 @@ set(HEADERS
         core/ida_utils.h
         core/ida_validators.h
         core/config.h
+        core/oauth_manager.h
+        core/oauth_authorizer.h
         core/types.h
         api/anthropic_api.h
         api/message_types.h
@@ -287,6 +292,8 @@ target_link_libraries(ida_llm_agent64
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        OpenSSL::SSL
+        OpenSSL::Crypto
         keystone
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}

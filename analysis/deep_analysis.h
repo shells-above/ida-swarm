@@ -6,6 +6,8 @@
 #define DEEP_ANALYSIS_SYSTEM_H
 
 #include "core/common.h"
+#include "core/config.h"
+#include "core/oauth_manager.h"
 #include "analysis/memory.h"
 #include "api/anthropic_api.h"
 
@@ -46,6 +48,24 @@ private:
     std::unique_ptr<api::AnthropicClient> deep_analysis_client_;
 
 public:
+    // Constructor with Config for OAuth support
+    DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const Config& config) : memory_(memory) {
+        // Create API client based on config
+        if (config.api.auth_method == api::AuthMethod::OAUTH) {
+            OAuthManager oauth_mgr(config.api.oauth_config_dir);
+            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+            if (oauth_creds) {
+                deep_analysis_client_ = std::make_unique<api::AnthropicClient>(*oauth_creds, config.api.base_url);
+            } else {
+                deep_analysis_client_ = std::make_unique<api::AnthropicClient>(config.api.api_key, config.api.base_url);
+            }
+        } else {
+            deep_analysis_client_ = std::make_unique<api::AnthropicClient>(config.api.api_key, config.api.base_url);
+        }
+        mutex_ = qmutex_create();
+    }
+    
+    // Keep backward compatibility constructor
     DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const std::string& api_key)
         : memory_(memory) {
         deep_analysis_client_ = std::make_unique<api::AnthropicClient>(api_key);

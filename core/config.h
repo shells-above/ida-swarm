@@ -24,7 +24,13 @@ private:
     
 public:
     struct APISettings {
+        // Authentication
+        api::AuthMethod auth_method = api::AuthMethod::API_KEY;
         std::string api_key;
+        bool use_oauth = false;  // If true, try to use OAuth from claude-cpp-sdk
+        std::string oauth_config_dir = "~/.claude_cpp_sdk";  // Path to claude-cpp-sdk config
+        
+        // API settings
         std::string base_url = "https://api.anthropic.com/v1/messages";
         api::Model model = api::Model::Sonnet4;
         int max_tokens = 8192;
