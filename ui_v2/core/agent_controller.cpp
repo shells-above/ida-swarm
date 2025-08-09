@@ -277,10 +277,9 @@ QJsonArray AgentController::getAvailableTools() const {
         return QJsonArray{};
     }
     
-    QJsonArray tools;
-    // Agent's tool_registry_ is private, would need to add a getter
-    // For now, return empty array
-    return tools;
+    // Get tools from agent and convert to QJsonArray
+    json tools = agent_->get_available_tools();
+    return JsonUtils::jsonArrayToQJson(tools);
 }
 
 // ============================================================================
