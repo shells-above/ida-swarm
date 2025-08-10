@@ -80,7 +80,9 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
 
 messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) {
     std::stringstream prompt;
-    
+
+    // todo need to handle if this is too much context
+
     prompt << "USER REQUEST:\n";
     prompt << context.user_request << "\n\n";
     
@@ -105,6 +107,7 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
             }
             
             // Get tool calls
+            // shows the grader that the agent actually did the tool calls, and didn't hallucinate that it did
             std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
             for (const messages::ToolUseContent* tool_call: tool_calls) {
                 prompt << "[TOOL_CALL]\n";
