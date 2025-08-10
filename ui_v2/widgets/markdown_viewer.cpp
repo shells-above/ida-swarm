@@ -32,6 +32,13 @@ void MarkdownViewer::setupTextBrowser() {
     textBrowser_->setOpenExternalLinks(false);
     textBrowser_->setOpenLinks(false);
     
+    // Disable scrollbars - we want the widget to expand to content
+    textBrowser_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    textBrowser_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    
+    // Set size policy to expand with content
+    textBrowser_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
+    
     // Connect signals
     connect(textBrowser_, &QTextBrowser::anchorClicked, 
             this, &MarkdownViewer::onLinkClicked);
@@ -907,6 +914,37 @@ void MarkdownViewer::keyPressEvent(QKeyEvent* event) {
 void MarkdownViewer::onThemeChanged() {
     BaseStyledWidget::onThemeChanged();
     updateTheme();
+}
+
+QSize MarkdownViewer::sizeHint() const {
+    if (!textBrowser_ || !textBrowser_->document()) {
+        return BaseStyledWidget::sizeHint();
+    }
+    
+    // Get the document's ideal size
+    QSizeF docSize = textBrowser_->document()->size();
+    
+    // Add margins and padding
+    int padding = 8;
+    int margins = 2 * (borderWidth() + padding);
+    
+    return QSize(
+        qMin(int(docSize.width()) + margins, maximumWidth()),
+        int(docSize.height()) + margins
+    );
+}
+
+QSize MarkdownViewer::minimumSizeHint() const {
+    // Minimum height should be at least one line of text
+    if (!textBrowser_) {
+        return BaseStyledWidget::minimumSizeHint();
+    }
+    
+    QFontMetrics fm(textBrowser_->font());
+    int padding = 8;
+    int minHeight = fm.height() * 2 + 2 * (borderWidth() + padding);
+    
+    return QSize(200, minHeight);
 }
 
 void MarkdownViewer::onLinkClicked(const QUrl& url) {

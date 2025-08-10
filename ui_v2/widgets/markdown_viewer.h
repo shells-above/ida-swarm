@@ -101,6 +101,8 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void onThemeChanged() override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 private slots:
     void onLinkClicked(const QUrl& url);

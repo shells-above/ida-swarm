@@ -40,6 +40,9 @@ MessageBubble::MessageBubble(UIMessage* message, QWidget* parent)
     setFocusPolicy(Qt::NoFocus);
     setContextMenuPolicy(Qt::DefaultContextMenu);
     
+    // Set size policy to expand vertically with content
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
+    
     // Disable hover effects to prevent resizing
     setHoverEnabled(false);
     
@@ -485,8 +488,11 @@ MessageBubbleContainer::MessageBubbleContainer(QWidget* parent)
     auto* vboxLayout = new QVBoxLayout(this);
     vboxLayout->setSpacing(spacing_);
     vboxLayout->setContentsMargins(0, 0, 0, 0);
-    vboxLayout->setAlignment(Qt::AlignTop);  // Prevent messages from spreading out
+    // Remove alignment to allow natural expansion
     setLayout(vboxLayout);
+    
+    // Set size policy to expand with content
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
     
     // Setup layout timer for batched updates
     layoutTimer_ = new QTimer(this);
