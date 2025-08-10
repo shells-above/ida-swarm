@@ -31,10 +31,25 @@ bool AgentController::initialize(const Config& config) {
         
         // Set the message callback to handle agent messages
         agent_->set_message_callback(
-            [this](AgentMessageType type, const json& data) {
-                // Marshal to Qt thread if needed
-                QMetaObject::invokeMethod(this, [this, type, data]() {
-                    handleAgentMessage(type, data);
+            [this](AgentMessageType type, const Agent::CallbackData& data) {
+                // Create a safe copy of the callback data for queued execution
+                // Copy the message if present to avoid dangling pointers
+                Agent::CallbackData safeCopy;
+                safeCopy.json_data = data.json_data;
+                
+                // Deep copy the message if it exists
+                std::shared_ptr<messages::Message> messageCopy;
+                if (data.message) {
+                    messageCopy = std::make_shared<messages::Message>(*data.message);
+                }
+                
+                // Marshal to Qt thread with the safe copy
+                QMetaObject::invokeMethod(this, [this, type, safeCopy, messageCopy]() {
+                    Agent::CallbackData localData = safeCopy;
+                    if (messageCopy) {
+                        localData.message = messageCopy.get();
+                    }
+                    handleAgentMessage(type, localData);
                 }, Qt::QueuedConnection);
             });
         
@@ -82,9 +97,9 @@ void AgentController::executeTask(const std::string& task) {
     }
     
     // Add user message to conversation
-    auto userMsg = std::make_unique<Message>(QString::fromStdString(task), MessageRole::User);
-    userMsg->metadata().timestamp = QDateTime::currentDateTime();
-    addMessageToConversation(std::move(userMsg));
+    auto userMsg = std::make_shared<messages::Message>(messages::Role::User);
+    userMsg->add_content(std::make_unique<messages::TextContent>(task));
+    addMessageToConversation(userMsg);
     
     // Submit task to agent
     agent_->set_task(task);
@@ -112,9 +127,9 @@ void AgentController::continueWithTask(const std::string& additional) {
     }
     
     // Add user message
-    auto userMsg = std::make_unique<Message>(QString::fromStdString(additional), MessageRole::User);
-    userMsg->metadata().timestamp = QDateTime::currentDateTime();
-    addMessageToConversation(std::move(userMsg));
+    auto userMsg = std::make_shared<messages::Message>(messages::Role::User);
+    userMsg->add_content(std::make_unique<messages::TextContent>(additional));
+    addMessageToConversation(userMsg);
     
     // Continue task
     agent_->continue_with_task(additional);
@@ -128,9 +143,9 @@ void AgentController::injectUserMessage(const std::string& message) {
     }
     
     // Add to UI immediately
-    auto userMsg = std::make_unique<Message>(QString::fromStdString(message), MessageRole::User);
-    userMsg->metadata().timestamp = QDateTime::currentDateTime();
-    addMessageToConversation(std::move(userMsg));
+    auto userMsg = std::make_shared<messages::Message>(messages::Role::User);
+    userMsg->add_content(std::make_unique<messages::TextContent>(message));
+    addMessageToConversation(userMsg);
     
     // Inject into agent
     agent_->inject_user_message(message);
@@ -286,55 +301,61 @@ QJsonArray AgentController::getAvailableTools() const {
 // Agent Message Handler
 // ============================================================================
 
-void AgentController::handleAgentMessage(AgentMessageType type, const json& data) {
+void AgentController::handleAgentMessage(AgentMessageType type, const Agent::CallbackData& data) {
     switch (type) {
         case AgentMessageType::Log: {
-            // Handle log messages
-            int level = data.value("level", 0);
-            std::string message = data.value("message", "");
-            
-            LogEntry::Level logLevel = LogEntry::Debug;
-            if (level == 1) logLevel = LogEntry::Info;
-            else if (level == 2) logLevel = LogEntry::Warning;
-            else if (level >= 3) logLevel = LogEntry::Error;
-            
-            logToConsole(logLevel, "Agent", QString::fromStdString(message));
+            // Log messages are special - they're system messages with log content
+            if (data.message && !data.message->contents().empty()) {
+                if (auto* text = dynamic_cast<const messages::TextContent*>(data.message->contents()[0].get())) {
+                    // Parse log level from the text (format: "[LOG:level] message")
+                    QString logText = QString::fromStdString(text->text);
+                    LogEntry::Level logLevel = LogEntry::Info;
+                    
+                    if (logText.startsWith("[LOG:")) {
+                        int endIdx = logText.indexOf(']');
+                        if (endIdx > 5) {
+                            int level = logText.mid(5, endIdx - 5).toInt();
+                            if (level == 0) logLevel = LogEntry::Debug;
+                            else if (level == 1) logLevel = LogEntry::Info;
+                            else if (level == 2) logLevel = LogEntry::Warning;
+                            else if (level >= 3) logLevel = LogEntry::Error;
+                            logText = logText.mid(endIdx + 2); // Skip "] "
+                        }
+                    }
+                    
+                    logToConsole(logLevel, "Agent", logText);
+                }
+            }
             break;
         }
         
-        case AgentMessageType::ApiMessage: {
-            // Handle API messages (thinking blocks, responses, etc.)
-            std::string msgType = data.value("type", "");
-            json content = data.value("content", json{});
-            
-            if (msgType == "thinking") {
-                // Add thinking message to conversation
-                auto msg = std::make_unique<Message>();
-                msg->setThinkingContent(QString::fromStdString(content.value("text", "")));
-                msg->setRole(MessageRole::Assistant);
-                msg->metadata().timestamp = QDateTime::currentDateTime();
-                addMessageToConversation(std::move(msg));
-            } else if (msgType == "response") {
-                // Add assistant response to conversation
-                auto msg = std::make_unique<Message>();
-                msg->setContent(QString::fromStdString(content.value("text", "")));
-                msg->setRole(MessageRole::Assistant);
-                msg->setType(MessageType::Text);
-                msg->metadata().timestamp = QDateTime::currentDateTime();
-                addMessageToConversation(std::move(msg));
-            } else if (msgType == "token_usage") {
-                // Update token usage
-                int input = content.value("input_tokens", 0);
-                int output = content.value("output_tokens", 0);
-                double cost = content.value("estimated_cost", 0.0);
-                emit tokenUsageUpdated(input, output, cost);
+        case AgentMessageType::NewMessage: {
+            // Direct message from agent - log to console but DON'T add to conversation UI
+            // (we only want final grader output in the conversation)
+            if (data.message) {
+                // Log ALL content to console for debugging
+                for (const auto& content : data.message->contents()) {
+                    // Log thinking blocks
+                    if (auto* thinking = dynamic_cast<const messages::ThinkingContent*>(content.get())) {
+                        logToConsole(LogEntry::Debug, "Thinking", 
+                                   QString::fromStdString(thinking->thinking));
+                    }
+                    // Log text content
+                    else if (auto* text = dynamic_cast<const messages::TextContent*>(content.get())) {
+                        if (!text->text.empty()) {
+                            QString role = data.message->role() == messages::Role::Assistant ? "Assistant" : "Agent";
+                            logToConsole(LogEntry::Info, role,
+                                       QString::fromStdString(text->text));
+                        }
+                    }
+                }
             }
             break;
         }
         
         case AgentMessageType::StateChanged: {
             // Handle state changes
-            int status = data.value("status", 0);
+            int status = data.json_data.value("status", 0);
             AgentState::Status agentStatus = static_cast<AgentState::Status>(status);
             
             QString statusStr = agentStatusToString(agentStatus);
@@ -358,9 +379,9 @@ void AgentController::handleAgentMessage(AgentMessageType type, const json& data
         
         case AgentMessageType::ToolStarted: {
             // Handle tool execution started
-            std::string toolId = data.value("tool_id", "");
-            std::string toolName = data.value("tool_name", "");
-            json input = data.value("input", json{});
+            std::string toolId = data.json_data.value("tool_id", "");
+            std::string toolName = data.json_data.value("tool_name", "");
+            json input = data.json_data.value("input", json{});
             
             QString qToolId = QString::fromStdString(toolId);
             QString qToolName = QString::fromStdString(toolName);
@@ -383,9 +404,9 @@ void AgentController::handleAgentMessage(AgentMessageType type, const json& data
         
         case AgentMessageType::ToolExecuted: {
             // Handle tool execution completed
-            std::string toolId = data.value("tool_id", "");
-            std::string toolName = data.value("tool_name", "");
-            json result = data.value("result", json{});
+            std::string toolId = data.json_data.value("tool_id", "");
+            std::string toolName = data.json_data.value("tool_name", "");
+            json result = data.json_data.value("result", json{});
             bool success = !result.contains("error");
             
             QString qToolId = QString::fromStdString(toolId);
@@ -411,27 +432,31 @@ void AgentController::handleAgentMessage(AgentMessageType type, const json& data
         
         case AgentMessageType::FinalReport: {
             // Handle final report
-            std::string report = data.value("report", "");
+            std::string report = data.json_data.value("report", "");
             QString qReport = QString::fromStdString(report);
             
-            // Create final report message
-            auto reportMsg = std::make_unique<Message>(qReport, MessageRole::Assistant);
-            reportMsg->setType(MessageType::Analysis);
-            reportMsg->metadata().timestamp = QDateTime::currentDateTime();
-            reportMsg->metadata().tags << "final-report";
+            // Create final report message using API message type
+            auto reportMsg = std::make_shared<messages::Message>(messages::Role::Assistant);
+            reportMsg->add_content(std::make_unique<messages::TextContent>(report));
             
-            addMessageToConversation(std::move(reportMsg));
+            // Create metadata for the report
+            MessageMetadata metadata;
+            metadata.id = QUuid::createUuid();
+            metadata.timestamp = QDateTime::currentDateTime();
+
+            if (conversationModel_) {
+                conversationModel_->addMessage(reportMsg, metadata);
+            }
             emit finalReportGenerated(qReport);
             break;
         }
     }
     
-    // Check for memory updates
-    static json lastMemorySnapshot;
+    // Check for memory updates efficiently using version counter
     if (agent_ && agent_->get_memory()) {
-        json currentSnapshot = agent_->get_memory()->export_memory_snapshot();
-        if (currentSnapshot != lastMemorySnapshot) {
-            lastMemorySnapshot = currentSnapshot;
+        uint64_t currentVersion = agent_->get_memory()->get_version();
+        if (currentVersion != lastMemoryVersion_) {
+            lastMemoryVersion_ = currentVersion;
             updateMemoryView();
         }
     }
@@ -441,9 +466,13 @@ void AgentController::handleAgentMessage(AgentMessageType type, const json& data
 // Helper Methods
 // ============================================================================
 
-void AgentController::addMessageToConversation(std::unique_ptr<Message> msg) {
+void AgentController::addMessageToConversation(std::shared_ptr<messages::Message> msg) {
     if (conversationModel_) {
-        conversationModel_->addMessage(std::move(msg));
+        MessageMetadata metadata;
+        metadata.id = QUuid::createUuid();
+        metadata.timestamp = QDateTime::currentDateTime();
+        
+        conversationModel_->addMessage(msg, metadata);
         
         // Auto-scroll conversation view
         if (conversationView_) {

@@ -12,17 +12,17 @@ class MessageGroup : public BaseStyledWidget {
     Q_OBJECT
 
 public:
-    explicit MessageGroup(Message* firstMessage, QWidget* parent = nullptr);
+    explicit MessageGroup(UIMessage* firstMessage, QWidget* parent = nullptr);
     ~MessageGroup() override;
 
     // Message management
-    bool canAddMessage(Message* message) const;
-    void addMessage(Message* message);
+    bool canAddMessage(UIMessage* message) const;
+    void addMessage(UIMessage* message);
     void removeMessage(const QUuid& id);
-    QList<Message*> messages() const;
+    QList<UIMessage*> messages() const;
     
     // Get the sender info
-    MessageRole role() const { return role_; }
+    Role role() const { return role_; }
     QString author() const { return author_; }
     QDateTime firstTimestamp() const { return firstTimestamp_; }
     QDateTime lastTimestamp() const { return lastTimestamp_; }
@@ -72,9 +72,9 @@ private:
     MessageBubble* getBubbleAt(const QPoint& pos) const;
     
     // Message data
-    QList<Message*> messages_;
+    QList<UIMessage*> messages_;
     QHash<QUuid, MessageBubble*> bubbleMap_;
-    MessageRole role_;
+    messages::Role role_;
     QString author_;
     QDateTime firstTimestamp_;
     QDateTime lastTimestamp_;

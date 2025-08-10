@@ -549,10 +549,21 @@ public:
         for (const auto& content : msg.contents()) {
             content->accept(extractor);
         }
-        if (!extractor.get_texts().empty()) {
-            return extractor.get_texts()[0]->text;
+        
+        const auto& texts = extractor.get_texts();
+        if (texts.empty()) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        
+        // Concatenate ALL text blocks
+        std::string combined;
+        for (size_t i = 0; i < texts.size(); ++i) {
+            if (i > 0) {
+                combined += "\n";  // Add separator between blocks
+            }
+            combined += texts[i]->text;
+        }
+        return combined;
     }
 
     static std::vector<const ThinkingContent*> extract_thinking_blocks(const Message& msg) {

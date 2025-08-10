@@ -29,7 +29,7 @@ public:
     void addDataPoint(const ChartDataPoint& point);
     void updateDataPoint(int index, const ChartDataPoint& point);
     void removeDataPoint(int index);
-    void clearData();
+    void clearData() override;
     
     // Configuration
     void setTheme(const CircularChartTheme& theme);

@@ -323,7 +323,7 @@ void llm_plugin_t::register_actions() {
         attach_action_to_toolbar("AnalysisToolBar", registered_actions[0].c_str());
     }
 
-    msg("LLM RE: Registered %d actions\n", registered_actions.size());
+    msg("LLM RE: Registered %zu actions\n", registered_actions.size());
 }
 
 void llm_plugin_t::unregister_actions() {

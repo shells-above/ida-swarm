@@ -37,6 +37,7 @@ void BinaryMemory::store_analysis(const std::string& key, const std::string& con
     entry.timestamp = std::time(nullptr);
 
     analyses[actual_key] = entry;
+    version_counter.fetch_add(1);  // Increment version on change
 }
 
 std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern) const {
@@ -135,6 +136,7 @@ void BinaryMemory::import_memory_snapshot(const json& snapshot) {
 
     // Clear existing data
     analyses.clear();
+    version_counter.fetch_add(1);  // Increment version on import
 
     // Import analyses
     if (snapshot.contains("analyses")) {

@@ -21,7 +21,12 @@ enum class AuthMethod {
     OAUTH
 };
 
-// OAuth constants from claude-cpp-sdk
+// OAuth constants
+constexpr int OAUTH_REDIRECT_PORT = 54545;
+constexpr const char* OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+constexpr const char* OAUTH_AUTH_URL = "https://claude.ai/oauth/authorize";
+constexpr const char* OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
+constexpr const char* OAUTH_SUCCESS_URL = "https://console.anthropic.com/oauth/code/success";
 constexpr const char* CLAUDE_CODE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
 constexpr const char* CLAUDE_CODE_BETA_HEADER = "claude-code-20250219";
 constexpr const char* OAUTH_BETA_HEADER = "oauth-2025-04-20";
@@ -334,20 +339,6 @@ struct ChatResponse {
         auto thinking_blocks = get_thinking_blocks();
         auto redacted_blocks = get_redacted_thinking_blocks();
         return !thinking_blocks.empty() || !redacted_blocks.empty();
-    }
-
-    // Get combined thinking text (for backward compatibility)
-    std::optional<std::string> get_thinking_text() const {
-        auto thinking_blocks = get_thinking_blocks();
-        if (!thinking_blocks.empty()) {
-            std::string combined;
-            for (const auto* block : thinking_blocks) {
-                if (!combined.empty()) combined += "\n\n";
-                combined += block->thinking;
-            }
-            return combined;
-        }
-        return std::nullopt;
     }
 
     // Create an assistant message with preserved thinking blocks for tool use continuation
@@ -823,7 +814,7 @@ public:
             headers = curl_slist_append(headers, ("anthropic-beta: " + beta_header).c_str());
         }
 
-        // Build final URL - add ?beta=true for OAuth (matching claude-cpp-sdk behavior)
+        // Build final URL - add ?beta=true for OAuth
         std::string final_url = api_url;
         if (auth_method == AuthMethod::OAUTH) {
             // Add beta=true query parameter for OAuth

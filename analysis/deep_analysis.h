@@ -7,7 +7,7 @@
 
 #include "core/common.h"
 #include "core/config.h"
-#include "core/oauth_manager.h"
+#include "api/oauth_manager.h"
 #include "analysis/memory.h"
 #include "api/anthropic_api.h"
 
@@ -62,13 +62,6 @@ public:
         } else {
             deep_analysis_client_ = std::make_unique<api::AnthropicClient>(config.api.api_key, config.api.base_url);
         }
-        mutex_ = qmutex_create();
-    }
-    
-    // Keep backward compatibility constructor
-    DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const std::string& api_key)
-        : memory_(memory) {
-        deep_analysis_client_ = std::make_unique<api::AnthropicClient>(api_key);
         mutex_ = qmutex_create();
     }
 

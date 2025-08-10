@@ -26,7 +26,7 @@ public:
     void setData(const HeatmapData& data);
     void setData(const std::vector<std::vector<double>>& values);
     void updateCell(int row, int col, double value);
-    void clearData();
+    void clearData() override;
     
     // Labels
     void setRowLabels(const QStringList& labels);
@@ -125,7 +125,7 @@ private:
     void drawRowLabels(QPainter* painter);
     void drawColumnLabels(QPainter* painter);
     void drawColorScale(QPainter* painter);
-    void drawSelection(QPainter* painter);
+    void drawSelection(QPainter* painter) override;
     void drawHighlight(QPainter* painter);
     void drawMemoryOverlay(QPainter* painter);
     

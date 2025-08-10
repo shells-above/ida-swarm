@@ -61,10 +61,6 @@ void ConversationView::setupUI() {
     contentLayout->setSpacing(0);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     
-    createSearchBar();
-    contentLayout->addWidget(searchBar_);
-    searchBar_->hide();
-    
     createMessageArea();
     contentLayout->addWidget(scrollArea_, 1);
     
@@ -128,15 +124,7 @@ void ConversationView::createToolBar() {
         });
     
     toolBar_->addSeparator();
-    
-    // Search
-    searchAction_ = toolBar_->addAction(
-        ThemeManager::instance().themedIcon("search"),
-        tr("Search"), this, &ConversationView::showSearchBar);
-    searchAction_->setShortcut(QKeySequence::Find);
-    
-    toolBar_->addSeparator();
-    
+
     // View options
     auto* viewButton = new QToolButton(this);
     viewButton->setIcon(ThemeManager::instance().themedIcon("view"));
@@ -231,18 +219,12 @@ void ConversationView::createMessageArea() {
             this, &ConversationView::onBubbleClicked);
     connect(bubbleContainer_, &MessageBubbleContainer::bubbleContextMenu,
             this, &ConversationView::onBubbleContextMenu);
-    connect(bubbleContainer_, &MessageBubbleContainer::linkClicked,
-            this, &ConversationView::onBubbleLinkClicked);
     connect(bubbleContainer_, &MessageBubbleContainer::selectionChanged,
             this, &ConversationView::selectionChanged);
     
     // Monitor scroll position
     connect(scrollArea_->verticalScrollBar(), &QScrollBar::valueChanged,
             this, &ConversationView::onScrollPositionChanged);
-    
-    // Typing indicator
-    typingIndicator_ = new TypingIndicator(this);
-    typingIndicator_->hide();
 }
 
 void ConversationView::createInputArea() {
@@ -337,19 +319,6 @@ void ConversationView::createInputArea() {
     // Shortcuts are now handled by ConversationInputArea internally
 }
 
-void ConversationView::createSearchBar() {
-    searchBar_ = new ConversationSearchBar(this);
-    
-    connect(searchBar_, &ConversationSearchBar::searchTextChanged,
-            this, &ConversationView::onSearchTextChanged);
-    connect(searchBar_, &ConversationSearchBar::findNextRequested,
-            this, &ConversationView::findNext);
-    connect(searchBar_, &ConversationSearchBar::findPreviousRequested,
-            this, &ConversationView::findPrevious);
-    connect(searchBar_, &ConversationSearchBar::closeRequested,
-            this, &ConversationView::hideSearchBar);
-}
-
 void ConversationView::createStatusBar() {
     statusBar_ = new QWidget(this);
     statusBar_->setFixedHeight(24);
@@ -401,9 +370,7 @@ void ConversationView::setModel(ConversationModel* model) {
 
 void ConversationView::connectModelSignals() {
     if (!model_) return;
-    
-    connect(model_, &ConversationModel::dataChanged,
-            this, &ConversationView::onModelDataChanged);
+
     connect(model_, &ConversationModel::rowsInserted,
             this, &ConversationView::onModelRowsInserted);
     connect(model_, &ConversationModel::rowsRemoved,
@@ -423,36 +390,50 @@ void ConversationView::disconnectModelSignals() {
     disconnect(model_, nullptr, this, nullptr);
 }
 
-void ConversationView::addMessage(std::unique_ptr<Message> message) {
+
+void ConversationView::addUserMessage(const QString& content) {
     if (!model_) return;
     
-    model_->addMessage(std::move(message));
+    auto msg = std::make_shared<messages::Message>(messages::Role::User);
+    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    
+    MessageMetadata metadata;
+    metadata.id = QUuid::createUuid();
+    metadata.timestamp = QDateTime::currentDateTime();
+    metadata.author = tr("User");
+    
+    model_->addMessage(msg, metadata);
     markUnsavedChanges();
 }
 
-void ConversationView::addUserMessage(const QString& content) {
-    auto msg = std::make_unique<Message>(content, MessageRole::User);
-    msg->metadata().author = tr("User");
-    addMessage(std::move(msg));
-}
-
 void ConversationView::addAssistantMessage(const QString& content) {
-    auto msg = std::make_unique<Message>(content, MessageRole::Assistant);
-    msg->metadata().author = tr("Assistant");
-    addMessage(std::move(msg));
+    if (!model_) return;
+    
+    auto msg = std::make_shared<messages::Message>(messages::Role::Assistant);
+    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    
+    MessageMetadata metadata;
+    metadata.id = QUuid::createUuid();
+    metadata.timestamp = QDateTime::currentDateTime();
+    metadata.author = tr("Assistant");
+    
+    model_->addMessage(msg, metadata);
+    markUnsavedChanges();
 }
 
 void ConversationView::addSystemMessage(const QString& content) {
-    auto msg = std::make_unique<Message>(content, MessageRole::System);
-    msg->metadata().author = tr("System");
-    addMessage(std::move(msg));
-}
-
-void ConversationView::addToolMessage(const QString& toolName, const QString& content) {
-    auto msg = std::make_unique<Message>(content, MessageRole::Tool);
-    msg->metadata().author = toolName;
+    if (!model_) return;
     
-    addMessage(std::move(msg));
+    auto msg = std::make_shared<messages::Message>(messages::Role::System);
+    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    
+    MessageMetadata metadata;
+    metadata.id = QUuid::createUuid();
+    metadata.timestamp = QDateTime::currentDateTime();
+    metadata.author = tr("System");
+    
+    model_->addMessage(msg, metadata);
+    markUnsavedChanges();
 }
 
 void ConversationView::clearConversation() {
@@ -481,30 +462,6 @@ void ConversationView::focusInput() {
     }
 }
 
-void ConversationView::showSearchBar() {
-    searchBar_->show();
-    searchBar_->focusSearch();
-    
-    // Apply current search to bubbles
-    if (!searchBar_->searchText().isEmpty()) {
-        bubbleContainer_->setSearchFilter(searchBar_->searchText());
-    }
-}
-
-void ConversationView::hideSearchBar() {
-    searchBar_->hide();
-    bubbleContainer_->clearSearchFilter();
-    focusInput();
-}
-
-void ConversationView::findNext() {
-    bubbleContainer_->highlightNextMatch();
-}
-
-void ConversationView::findPrevious() {
-    bubbleContainer_->highlightPreviousMatch();
-}
-
 void ConversationView::selectMessage(const QUuid& id) {
     bubbleContainer_->selectBubble(id);
 }
@@ -517,8 +474,8 @@ void ConversationView::clearSelection() {
     bubbleContainer_->clearSelection();
 }
 
-QList<Message*> ConversationView::selectedMessages() const {
-    QList<Message*> messages;
+QList<UIMessage*> ConversationView::selectedMessages() const {
+    QList<UIMessage*> messages;
     for (MessageBubble* bubble : bubbleContainer_->getSelectedBubbles()) {
         if (bubble->message()) {
             messages.append(bubble->message());
@@ -530,8 +487,8 @@ QList<Message*> ConversationView::selectedMessages() const {
 
 void ConversationView::copySelectedMessages() {
     QStringList texts;
-    for (Message* msg : selectedMessages()) {
-        texts.append(QString("%1: %2").arg(msg->roleString()).arg(msg->content()));
+    for (UIMessage* msg : selectedMessages()) {
+        texts.append(QString("%1: %2").arg(msg->roleString()).arg(msg->getDisplayText()));
     }
     
     if (!texts.isEmpty()) {
@@ -635,21 +592,6 @@ void ConversationView::saveSession(const QString& path) {
     metadata["idbPath"] = QString::fromStdString(get_path(PATH_TYPE_IDB));
     session["metadata"] = metadata;
     
-    // Conversation data
-    QJsonObject conversation;
-    QJsonDocument messagesDoc = model_->exportToJson();
-    conversation["messages"] = messagesDoc.object()["messages"];
-    
-    // ConversationView settings
-    QJsonObject convSettings;
-    convSettings["bubbleStyle"] = bubbleStyle_;
-    convSettings["densityMode"] = densityMode_;
-    convSettings["showTimestamps"] = showTimestamps_;
-    convSettings["maxBubbleWidth"] = maxBubbleWidth_;
-    conversation["settings"] = convSettings;
-    
-    session["conversation"] = conversation;
-    
     // Agent state (if agent controller is connected)
     if (auto mainWindow = qobject_cast<MainWindow*>(window())) {
         if (UiController* uiController = mainWindow->uiController()) {
@@ -714,25 +656,7 @@ void ConversationView::saveSession(const QString& path) {
         scrollPos["horizontal"] = scrollArea_->horizontalScrollBar()->value();
         viewStates["scrollPosition"] = scrollPos;
     }
-    
-    // Search state
-    if (searchBar_ && searchBar_->isVisible()) {
-        QJsonObject searchState;
-        searchState["visible"] = true;
-        searchState["text"] = searchBar_->searchText();
-        searchState["caseSensitive"] = searchBar_->isCaseSensitive();
-        searchState["wholeWords"] = searchBar_->isWholeWords();
-        searchState["regex"] = searchBar_->isRegex();
-        viewStates["search"] = searchState;
-    }
-    
-    // Filter state
-    if (model_->isFiltered()) {
-        QJsonObject filterState;
-        // Add filter state from model if available
-        viewStates["filters"] = filterState;
-    }
-    
+
     uiState["viewStates"] = viewStates;
     session["ui"] = uiState;
     
@@ -789,29 +713,6 @@ void ConversationView::loadSession(const QString& path) {
     // Load creation time
     if (session.contains("created")) {
         sessionCreatedTime_ = QDateTime::fromString(session["created"].toString(), Qt::ISODate);
-    }
-
-    // Load conversation data
-    if (session.contains("conversation")) {
-        QJsonObject conversation = session["conversation"].toObject();
-
-        // Load messages
-        if (conversation.contains("messages")) {
-            QJsonDocument messagesDoc;
-            QJsonObject messagesObj;
-            messagesObj["messages"] = conversation["messages"];
-            messagesDoc.setObject(messagesObj);
-            model_->importFromJson(messagesDoc);
-        }
-
-        // Load ConversationView settings
-        if (conversation.contains("settings")) {
-            QJsonObject settings = conversation["settings"].toObject();
-            setBubbleStyle(static_cast<MessageBubble::BubbleStyle>(
-                settings["bubbleStyle"].toInt()));
-            setShowTimestamps(settings["showTimestamps"].toBool());
-            setMaxBubbleWidth(settings["maxBubbleWidth"].toInt());
-        }
     }
 
     // Restore UI state
@@ -871,18 +772,6 @@ void ConversationView::loadSession(const QString& path) {
                         scrollArea_->horizontalScrollBar()->setValue(hPos);
                     }
                 });
-            }
-
-            // Restore search state
-            if (viewStates.contains("search")) {
-                QJsonObject searchState = viewStates["search"].toObject();
-                if (searchState["visible"].toBool() && searchBar_) {
-                    searchBar_->setSearchText(searchState["text"].toString());
-                    searchBar_->setCaseSensitive(searchState["caseSensitive"].toBool());
-                    searchBar_->setWholeWords(searchState["wholeWords"].toBool());
-                    searchBar_->setRegex(searchState["regex"].toBool());
-                    searchBar_->show();
-                }
             }
         }
     }
@@ -979,28 +868,6 @@ void ConversationView::cancelInput() {
     cancelButton_->hide();
 }
 
-void ConversationView::showTypingIndicator(const QString& user) {
-    if (!typingIndicator_) return;
-    
-    typingIndicator_->setTypingUser(user.isEmpty() ? tr("Assistant") : user);
-    typingIndicator_->startAnimation();
-    
-    // Add to bubble container
-    bubbleContainer_->showTypingIndicator(user);
-    
-    scrollToBottom(true);
-}
-
-void ConversationView::hideTypingIndicator() {
-    if (!typingIndicator_) return;
-    
-    typingIndicator_->stopAnimation();
-    typingIndicator_->hide();
-    
-    // Hide in bubble container
-    bubbleContainer_->hideTypingIndicator();
-}
-
 void ConversationView::updateTheme() {
     // Handled by onThemeChanged
 }
@@ -1053,7 +920,6 @@ void ConversationView::dropEvent(QDropEvent* event) {
 void ConversationView::keyPressEvent(QKeyEvent* event) {
     // Global shortcuts
     if (event->matches(QKeySequence::Find)) {
-        showSearchBar();
         event->accept();
         return;
     }
@@ -1082,25 +948,12 @@ bool ConversationView::eventFilter(QObject* watched, QEvent* event) {
     return BaseStyledWidget::eventFilter(watched, event);
 }
 
-void ConversationView::onModelDataChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight) {
-    // Update affected bubbles
-    for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
-        Message* msg = model_->getMessageAt(row);
-        if (msg) {
-            MessageBubble* bubble = bubbleContainer_->getBubble(msg->id());
-            if (bubble) {
-                bubble->updateMessage();
-            }
-        }
-    }
-}
-
 void ConversationView::onModelRowsInserted(const QModelIndex& parent, int first, int last) {
     Q_UNUSED(parent)
     
     // Add new bubbles
     for (int row = first; row <= last; ++row) {
-        Message* msg = model_->getMessageAt(row);
+        UIMessage* msg = model_->getMessageAt(row);
         if (msg) {
             bubbleContainer_->addMessage(msg, true);
         }
@@ -1125,75 +978,16 @@ void ConversationView::onBubbleClicked(const QUuid& id) {
 }
 
 void ConversationView::onBubbleContextMenu(const QUuid& id, const QPoint& pos) {
-    Message* msg = model_->getMessage(id);
+    UIMessage* msg = model_->getMessage(id);
     if (!msg) return;
     
     QMenu menu(this);
     
     menu.addAction(ThemeManager::instance().themedIcon("copy"), tr("Copy"), [this, msg]() {
-        QApplication::clipboard()->setText(msg->content());
+        QApplication::clipboard()->setText(msg->getDisplayText());
     });
-    
-    if (msg->role() == MessageRole::User) {
-        menu.addAction(ThemeManager::instance().themedIcon("edit"), tr("Edit"), [this, id]() {
-            onBubbleEditRequested(id);
-        });
-    }
-    
-    menu.addSeparator();
-    
-    
-    auto* pinAction = menu.addAction(ThemeManager::instance().themedIcon("pin"), 
-                                    msg->metadata().isPinned ? tr("Unpin") : tr("Pin"));
-    connect(pinAction, &QAction::triggered, [this, id, msg]() {
-        model_->setPinned(id, !msg->metadata().isPinned);
-    });
-    
-    auto* bookmarkAction = menu.addAction(ThemeManager::instance().themedIcon("bookmark"),
-                                         msg->metadata().isBookmarked ? tr("Remove Bookmark") : tr("Bookmark"));
-    connect(bookmarkAction, &QAction::triggered, [this, id, msg]() {
-        model_->setBookmarked(id, !msg->metadata().isBookmarked);
-    });
-    
-    menu.addSeparator();
-    
-    menu.addAction(ThemeManager::instance().themedIcon("delete"), tr("Delete"), [this, id]() {
-        onBubbleDeleteRequested(id);
-    });
-    
+
     menu.exec(pos);
-}
-
-void ConversationView::onBubbleLinkClicked(const QUrl& url) {
-    emit linkClicked(url);
-}
-
-
-void ConversationView::onBubbleEditRequested(const QUuid& id) {
-    Message* msg = model_->getMessage(id);
-    if (!msg || msg->role() != MessageRole::User) return;
-    
-    // Put message content in input for editing
-    if (inputArea_) {
-        inputArea_->setText(msg->content());
-        inputArea_->focus();
-        inputArea_->selectAll();
-    }
-    
-    // Delete original message
-    model_->removeMessage(id);
-}
-
-void ConversationView::onBubbleDeleteRequested(const QUuid& id) {
-    int ret = QMessageBox::question(
-        this, tr("Delete Message"),
-        tr("Are you sure you want to delete this message?"),
-        QMessageBox::Yes | QMessageBox::No);
-    
-    if (ret == QMessageBox::Yes) {
-        model_->removeMessage(id);
-        markUnsavedChanges();
-    }
 }
 
 void ConversationView::onInputTextChanged() {
@@ -1205,24 +999,6 @@ void ConversationView::onInputTextChanged() {
         int chars = inputArea_->charCount();
         wordCountLabel_->setText(tr("%1 words, %2 chars").arg(words).arg(chars));
     }
-}
-
-void ConversationView::onSearchTextChanged(const QString& text) {
-    currentSearchText_ = text;
-    
-    if (text.isEmpty()) {
-        bubbleContainer_->clearSearchFilter();
-        model_->clearFilters();
-    } else {
-        bubbleContainer_->setSearchFilter(text);
-        model_->setSearchFilter(text);
-        
-        // Update search status
-        int matches = model_->getSearchMatchCount();
-        searchBar_->setMatchCount(currentSearchIndex_ + 1, matches);
-    }
-    
-    emit searchRequested(text);
 }
 
 void ConversationView::onScrollPositionChanged() {
@@ -1313,7 +1089,7 @@ void ConversationView::updateMessageBubbles() {
     bubbleContainer_->clearMessages(false);
     
     for (int i = 0; i < model_->rowCount(); ++i) {
-        Message* msg = model_->getMessageAt(i);
+        UIMessage* msg = model_->getMessageAt(i);
         if (msg) {
             bubbleContainer_->addMessage(msg, false);
         }
@@ -1355,168 +1131,6 @@ void ConversationView::clearUnsavedChanges() {
 void ConversationView::generateSessionId() {
     sessionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     sessionCreatedTime_ = QDateTime::currentDateTime();
-}
-
-// ConversationSearchBar implementation
-
-ConversationSearchBar::ConversationSearchBar(QWidget* parent)
-    : BaseStyledWidget(parent) {
-    
-    setupUI();
-    
-    setShadowEnabled(false);
-    setBorderWidth(0);
-    setBackgroundColor(ThemeManager::instance().colors().surface);
-}
-
-void ConversationSearchBar::setupUI() {
-    auto* layout = new QHBoxLayout(this);
-    layout->setSpacing(Design::SPACING_SM);
-    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_SM, 
-                              Design::SPACING_MD, Design::SPACING_SM);
-    
-    // Search input
-    searchInput_ = new QLineEdit(this);
-    searchInput_->setPlaceholderText(tr("Find in conversation..."));
-    searchInput_->setClearButtonEnabled(true);
-    connect(searchInput_, &QLineEdit::textChanged,
-            this, &ConversationSearchBar::searchTextChanged);
-    
-    layout->addWidget(searchInput_, 1);
-    
-    // Match count label
-    matchLabel_ = new QLabel(this);
-    matchLabel_->setFont(ThemeManager::instance().typography().caption);
-    layout->addWidget(matchLabel_);
-    
-    // Navigation buttons
-    prevButton_ = new QToolButton(this);
-    prevButton_->setIcon(ThemeManager::instance().themedIcon("arrow-up"));
-    prevButton_->setToolTip(tr("Previous match (Shift+F3)"));
-    prevButton_->setAutoRaise(true);
-    connect(prevButton_, &QToolButton::clicked,
-            this, &ConversationSearchBar::findPreviousRequested);
-    layout->addWidget(prevButton_);
-    
-    nextButton_ = new QToolButton(this);
-    nextButton_->setIcon(ThemeManager::instance().themedIcon("arrow-down"));
-    nextButton_->setToolTip(tr("Next match (F3)"));
-    nextButton_->setAutoRaise(true);
-    connect(nextButton_, &QToolButton::clicked,
-            this, &ConversationSearchBar::findNextRequested);
-    layout->addWidget(nextButton_);
-    
-    layout->addSpacing(Design::SPACING_SM);
-    
-    // Options
-    caseSensitiveButton_ = new QToolButton(this);
-    caseSensitiveButton_->setText("Aa");
-    caseSensitiveButton_->setToolTip(tr("Case sensitive"));
-    caseSensitiveButton_->setCheckable(true);
-    caseSensitiveButton_->setAutoRaise(true);
-    connect(caseSensitiveButton_, &QToolButton::toggled,
-            this, &ConversationSearchBar::caseSensitivityChanged);
-    layout->addWidget(caseSensitiveButton_);
-    
-    wholeWordButton_ = new QToolButton(this);
-    wholeWordButton_->setText("W");
-    wholeWordButton_->setToolTip(tr("Whole word"));
-    wholeWordButton_->setCheckable(true);
-    wholeWordButton_->setAutoRaise(true);
-    connect(wholeWordButton_, &QToolButton::toggled,
-            this, &ConversationSearchBar::wholeWordChanged);
-    layout->addWidget(wholeWordButton_);
-    
-    regexButton_ = new QToolButton(this);
-    regexButton_->setText(".*");
-    regexButton_->setToolTip(tr("Regular expression"));
-    regexButton_->setCheckable(true);
-    regexButton_->setAutoRaise(true);
-    connect(regexButton_, &QToolButton::toggled,
-            this, &ConversationSearchBar::regexChanged);
-    layout->addWidget(regexButton_);
-    
-    layout->addSpacing(Design::SPACING_SM);
-    
-    // Close button
-    closeButton_ = new QToolButton(this);
-    closeButton_->setIcon(ThemeManager::instance().themedIcon("close"));
-    closeButton_->setToolTip(tr("Close (Escape)"));
-    closeButton_->setAutoRaise(true);
-    connect(closeButton_, &QToolButton::clicked,
-            this, &ConversationSearchBar::closeRequested);
-    layout->addWidget(closeButton_);
-    
-    // Keyboard shortcuts
-    auto* findNextShortcut = new QShortcut(QKeySequence("F3"), this);
-    connect(findNextShortcut, &QShortcut::activated,
-            this, &ConversationSearchBar::findNextRequested);
-    
-    auto* findPrevShortcut = new QShortcut(QKeySequence("Shift+F3"), this);
-    connect(findPrevShortcut, &QShortcut::activated,
-            this, &ConversationSearchBar::findPreviousRequested);
-}
-
-void ConversationSearchBar::setSearchText(const QString& text) {
-    searchInput_->setText(text);
-}
-
-QString ConversationSearchBar::searchText() const {
-    return searchInput_->text();
-}
-
-void ConversationSearchBar::setMatchCount(int current, int total) {
-    if (total == 0) {
-        matchLabel_->setText(tr("No matches"));
-        prevButton_->setEnabled(false);
-        nextButton_->setEnabled(false);
-    } else {
-        matchLabel_->setText(tr("%1 of %2").arg(current).arg(total));
-        prevButton_->setEnabled(true);
-        nextButton_->setEnabled(true);
-    }
-}
-
-void ConversationSearchBar::focusSearch() {
-    searchInput_->setFocus();
-    searchInput_->selectAll();
-}
-
-void ConversationSearchBar::showMessage(const QString& message, int timeout) {
-    matchLabel_->setText(message);
-    if (timeout > 0) {
-        QTimer::singleShot(timeout, [this]() {
-            matchLabel_->clear();
-        });
-    }
-}
-
-void ConversationSearchBar::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape) {
-        emit closeRequested();
-        event->accept();
-        return;
-    }
-    
-    BaseStyledWidget::keyPressEvent(event);
-}
-
-void ConversationSearchBar::setCaseSensitive(bool enabled) {
-    caseSensitive_ = enabled;
-    caseSensitiveButton_->setChecked(enabled);
-    emit caseSensitivityChanged(enabled);
-}
-
-void ConversationSearchBar::setWholeWords(bool enabled) {
-    wholeWord_ = enabled;
-    wholeWordButton_->setChecked(enabled);
-    emit wholeWordChanged(enabled);
-}
-
-void ConversationSearchBar::setRegex(bool enabled) {
-    useRegex_ = enabled;
-    regexButton_->setChecked(enabled);
-    emit regexChanged(enabled);
 }
 
 // ConversationInputArea implementation
@@ -1692,11 +1306,45 @@ bool ConversationInputArea::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::KeyPress && watched == textEdit_) {
         QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
         
-        // Ctrl+Enter (or Cmd+Enter on Mac) to submit
-        if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) &&
-            (keyEvent->modifiers() & Qt::ControlModifier)) {
-            emit submitRequested();
-            return true;
+        // Handle Ctrl+Left and Ctrl+Right for word navigation
+        // This prevents IDA from intercepting these shortcuts
+        if (keyEvent->modifiers() & Qt::ControlModifier) {
+            QTextCursor::MoveMode moveMode = (keyEvent->modifiers() & Qt::ShiftModifier) 
+                ? QTextCursor::KeepAnchor : QTextCursor::MoveAnchor;
+            
+            if (keyEvent->key() == Qt::Key_Left) {
+                // Move cursor to beginning of previous word
+                QTextCursor cursor = textEdit_->textCursor();
+                cursor.movePosition(QTextCursor::PreviousWord, moveMode);
+                textEdit_->setTextCursor(cursor);
+                return true; // Consume the event
+            }
+            else if (keyEvent->key() == Qt::Key_Right) {
+                // Move cursor to beginning of next word
+                QTextCursor cursor = textEdit_->textCursor();
+                cursor.movePosition(QTextCursor::NextWord, moveMode);
+                textEdit_->setTextCursor(cursor);
+                return true; // Consume the event
+            }
+            else if (keyEvent->key() == Qt::Key_Home) {
+                // Move cursor to beginning of document
+                QTextCursor cursor = textEdit_->textCursor();
+                cursor.movePosition(QTextCursor::Start, moveMode);
+                textEdit_->setTextCursor(cursor);
+                return true; // Consume the event
+            }
+            else if (keyEvent->key() == Qt::Key_End) {
+                // Move cursor to end of document
+                QTextCursor cursor = textEdit_->textCursor();
+                cursor.movePosition(QTextCursor::End, moveMode);
+                textEdit_->setTextCursor(cursor);
+                return true; // Consume the event
+            }
+            // Ctrl+Enter (or Cmd+Enter on Mac) to submit
+            else if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+                emit submitRequested();
+                return true;
+            }
         }
         // Plain Enter creates new line
         else if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
@@ -1737,278 +1385,6 @@ void ConversationInputArea::dropEvent(QDropEvent* event) {
     }
     
     event->acceptProposedAction();
-}
-
-// ConversationSidePanel implementation
-
-ConversationSidePanel::ConversationSidePanel(QWidget* parent)
-    : BaseStyledWidget(parent) {
-    
-    setShadowEnabled(true);
-    setBorderWidth(1);
-    
-    setupUI();
-}
-
-void ConversationSidePanel::setupUI() {
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(0);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    
-    // Header with close button
-    auto* header = new QWidget(this);
-    auto* headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(Design::SPACING_MD, Design::SPACING_SM, 
-                                   Design::SPACING_MD, Design::SPACING_SM);
-    
-    auto* titleLabel = new QLabel(tr("Session Info"), this);
-    titleLabel->setFont(ThemeManager::instance().typography().heading3);
-    headerLayout->addWidget(titleLabel, 1);
-    
-    auto* closeButton = new QToolButton(this);
-    closeButton->setIcon(ThemeManager::instance().themedIcon("close"));
-    closeButton->setAutoRaise(true);
-    connect(closeButton, &QToolButton::clicked, [this]() {
-        hide();
-        emit panelClosed();
-    });
-    headerLayout->addWidget(closeButton);
-    
-    mainLayout->addWidget(header);
-    
-    // Tab widget
-    auto* tabWidget = new QTabWidget(this);
-    tabWidget->setDocumentMode(true);
-    
-    // Create panels
-    createInfoPanel();
-    tabWidget->addTab(infoPanel_, tr("Info"));
-    
-    createToolsPanel();
-    tabWidget->addTab(toolsPanel_, tr("Tools"));
-    
-    createHistoryPanel();
-    tabWidget->addTab(historyPanel_, tr("History"));
-    
-    createSettingsPanel();
-    tabWidget->addTab(settingsPanel_, tr("Settings"));
-    
-    mainLayout->addWidget(tabWidget, 1);
-    
-    // Initial size
-    setFixedWidth(300);
-}
-
-void ConversationSidePanel::createInfoPanel() {
-    infoPanel_ = new QWidget(this);
-    auto* layout = new QVBoxLayout(infoPanel_);
-    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
-                              Design::SPACING_MD, Design::SPACING_MD);
-    layout->setSpacing(Design::SPACING_MD);
-    
-    // Statistics section
-    auto* statsGroup = new QGroupBox(tr("Statistics"), this);
-    auto* statsLayout = new QFormLayout(statsGroup);
-    
-    messageCountLabel_ = new QLabel("0", this);
-    statsLayout->addRow(tr("Messages:"), messageCountLabel_);
-    
-    wordCountLabel_ = new QLabel("0", this);
-    statsLayout->addRow(tr("Words:"), wordCountLabel_);
-    
-    durationLabel_ = new QLabel("00:00", this);
-    statsLayout->addRow(tr("Duration:"), durationLabel_);
-    
-    toolCountLabel_ = new QLabel("0", this);
-    statsLayout->addRow(tr("Tools Used:"), toolCountLabel_);
-    
-    layout->addWidget(statsGroup);
-    
-    // Participants section
-    auto* participantsGroup = new QGroupBox(tr("Participants"), this);
-    auto* participantsLayout = new QVBoxLayout(participantsGroup);
-    
-    participantsList_ = new QListWidget(this);
-    participantsList_->setMaximumHeight(100);
-    participantsLayout->addWidget(participantsList_);
-    
-    layout->addWidget(participantsGroup);
-    
-    layout->addStretch();
-}
-
-void ConversationSidePanel::createToolsPanel() {
-    toolsPanel_ = new QWidget(this);
-    auto* layout = new QVBoxLayout(toolsPanel_);
-    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
-                              Design::SPACING_MD, Design::SPACING_MD);
-    layout->setSpacing(Design::SPACING_MD);
-    
-    // Available tools list
-    auto* label = new QLabel(tr("Available Tools"), this);
-    label->setFont(ThemeManager::instance().typography().heading3);
-    layout->addWidget(label);
-    
-    toolsList_ = new QListWidget(this);
-    layout->addWidget(toolsList_, 1);
-    
-    // Add some default tools
-    toolsList_->addItem("Code Analysis");
-    toolsList_->addItem("Memory Search");
-    toolsList_->addItem("Function Tracer");
-    toolsList_->addItem("String Search");
-    
-    runToolButton_ = new QPushButton(tr("Run Selected Tool"), this);
-    runToolButton_->setIcon(ThemeManager::instance().themedIcon("play"));
-    connect(runToolButton_, &QPushButton::clicked, [this]() {
-        if (auto* item = toolsList_->currentItem()) {
-            emit actionRequested("runTool", item->text());
-        }
-    });
-    layout->addWidget(runToolButton_);
-}
-
-void ConversationSidePanel::createHistoryPanel() {
-    historyPanel_ = new QWidget(this);
-    auto* layout = new QVBoxLayout(historyPanel_);
-    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
-                              Design::SPACING_MD, Design::SPACING_MD);
-    layout->setSpacing(Design::SPACING_MD);
-    
-    // Search input
-    historySearchInput_ = new QLineEdit(this);
-    historySearchInput_->setPlaceholderText(tr("Search history..."));
-    layout->addWidget(historySearchInput_);
-    
-    // History list
-    historyList_ = new QListWidget(this);
-    layout->addWidget(historyList_, 1);
-    
-    // Connect search
-    connect(historySearchInput_, &QLineEdit::textChanged, [this](const QString& text) {
-        // Filter history items
-        for (int i = 0; i < historyList_->count(); ++i) {
-            auto* item = historyList_->item(i);
-            item->setHidden(!item->text().contains(text, Qt::CaseInsensitive));
-        }
-    });
-}
-
-void ConversationSidePanel::createSettingsPanel() {
-    settingsPanel_ = new QWidget(this);
-    auto* layout = new QFormLayout(settingsPanel_);
-    layout->setContentsMargins(Design::SPACING_MD, Design::SPACING_MD,
-                              Design::SPACING_MD, Design::SPACING_MD);
-    layout->setSpacing(Design::SPACING_MD);
-    
-    // Theme selection
-    themeCombo_ = new QComboBox(this);
-    themeCombo_->addItems({"Default", "Dark", "Light"});
-    layout->addRow(tr("Theme:"), themeCombo_);
-    
-    // Bubble style
-    bubbleStyleCombo_ = new QComboBox(this);
-    bubbleStyleCombo_->addItems({"Classic", "Modern", "Minimal", "Terminal", "Paper"});
-    layout->addRow(tr("Bubble Style:"), bubbleStyleCombo_);
-    
-    // Font size
-    fontSizeSlider_ = new QSlider(Qt::Horizontal, this);
-    fontSizeSlider_->setRange(10, 20);
-    fontSizeSlider_->setValue(14);
-    fontSizeSlider_->setTickPosition(QSlider::TicksBelow);
-    fontSizeSlider_->setTickInterval(2);
-    layout->addRow(tr("Font Size:"), fontSizeSlider_);
-    
-    // Options
-    showTimestampsCheck_ = new QCheckBox(tr("Show Timestamps"), this);
-    showTimestampsCheck_->setChecked(true);
-    layout->addRow(showTimestampsCheck_);
-    
-    autoSaveCheck_ = new QCheckBox(tr("Auto-save"), this);
-    autoSaveCheck_->setChecked(true);
-    layout->addRow(autoSaveCheck_);
-    
-    autoSaveIntervalSpin_ = new QSpinBox(this);
-    autoSaveIntervalSpin_->setRange(10, 300);
-    autoSaveIntervalSpin_->setValue(60);
-    autoSaveIntervalSpin_->setSuffix(" seconds");
-    layout->addRow(tr("Auto-save interval:"), autoSaveIntervalSpin_);
-}
-
-void ConversationSidePanel::setModel(ConversationModel* model) {
-    model_ = model;
-    updateStatistics();
-}
-
-void ConversationSidePanel::updateStatistics() {
-    if (!model_) return;
-    
-    // Update message count
-    int messageCount = model_->rowCount();
-    messageCountLabel_->setText(QString::number(messageCount));
-    
-    // Calculate total word count
-    int totalWords = 0;
-    QSet<QString> participants;
-    int toolCount = 0;
-    
-    for (int i = 0; i < model_->rowCount(); ++i) {
-        if (Message* msg = model_->getMessageAt(i)) {
-            // Count words
-            QString content = msg->content();
-            totalWords += content.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts).count();
-            
-            // Track participants
-            participants.insert(msg->metadata().author);
-            
-        }
-    }
-    
-    wordCountLabel_->setText(QString::number(totalWords));
-    toolCountLabel_->setText(QString::number(toolCount));
-    
-    // Update participants list
-    participantsList_->clear();
-    for (const QString& participant : participants) {
-        participantsList_->addItem(participant);
-    }
-    
-    // Calculate duration (if we have timestamps)
-    if (messageCount > 0) {
-        Message* firstMsg = model_->getMessageAt(0);
-        Message* lastMsg = model_->getMessageAt(messageCount - 1);
-        if (firstMsg && lastMsg) {
-            QDateTime firstTime = firstMsg->metadata().timestamp;
-            QDateTime lastTime = lastMsg->metadata().timestamp;
-            qint64 seconds = firstTime.secsTo(lastTime);
-            
-            int hours = seconds / 3600;
-            int minutes = (seconds % 3600) / 60;
-            durationLabel_->setText(QString("%1:%2")
-                                  .arg(hours, 2, 10, QChar('0'))
-                                  .arg(minutes, 2, 10, QChar('0')));
-        }
-    }
-}
-
-void ConversationSidePanel::showPanel(const QString& panelId) {
-    if (panelId == "info" && stack_) {
-        stack_->setCurrentWidget(infoPanel_);
-    } else if (panelId == "tools" && stack_) {
-        stack_->setCurrentWidget(toolsPanel_);
-    } else if (panelId == "history" && stack_) {
-        stack_->setCurrentWidget(historyPanel_);
-    } else if (panelId == "settings" && stack_) {
-        stack_->setCurrentWidget(settingsPanel_);
-    }
-    
-    show();
-    updateStatistics();
-}
-
-void ConversationSidePanel::hidePanel() {
-    hide();
-    emit panelClosed();
 }
 
 } // namespace llm_re::ui_v2

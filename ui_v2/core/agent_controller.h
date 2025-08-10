@@ -83,17 +83,16 @@ signals:
     void finalReportGenerated(const QString& report);
     
 private:
-    // Agent message callback handler
-    void handleAgentMessage(AgentMessageType type, const nlohmann::json& data);
+    // Agent message callback handler - receives both messages and JSON
+    void handleAgentMessage(AgentMessageType type, const Agent::CallbackData& data);
     
     // Helper methods
-    void addMessageToConversation(std::unique_ptr<Message> msg);
+    void addMessageToConversation(std::shared_ptr<messages::Message> msg);
     void updateMemoryView();
     QString agentStatusToString(AgentState::Status status) const;
     
     // Lightweight logging helper
-    void logToConsole(LogEntry::Level level, const QString& category, const QString& message,
-                      const QJsonObject& metadata = QJsonObject());
+    void logToConsole(LogEntry::Level level, const QString& category, const QString& message, const QJsonObject& metadata = QJsonObject());
     
     // Core components
     std::unique_ptr<Agent> agent_;
@@ -110,6 +109,7 @@ private:
     QString currentTaskId_;
     std::map<QString, QUuid> toolIdToExecId_;   // tool_id -> execution_id mapping
     std::map<QString, QUuid> memoryKeyToId_;    // memory_key -> QUuid mapping for incremental updates
+    uint64_t lastMemoryVersion_ = 0;            // Track memory version for efficient change detection
     
     // Statistics
     std::chrono::steady_clock::time_point sessionStart_;

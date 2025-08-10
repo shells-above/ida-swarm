@@ -23,6 +23,9 @@ ExternalProject_Add(keystone_external
     GIT_REPOSITORY https://github.com/gaasedelen/keystone.git
     GIT_TAG master
     PREFIX ${KEYSTONE_PREFIX}
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching CMake files for CMake 4.0 compatibility" &&
+                  ${CMAKE_COMMAND} -DFILE_PATH=CMakeLists.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchKeystone.cmake &&
+                  ${CMAKE_COMMAND} -DFILE_PATH=llvm/CMakeLists.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchKeystone.cmake
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${KEYSTONE_INSTALL_DIR}
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}

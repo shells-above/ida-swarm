@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common_base.h"
-#include "api/anthropic_api.h"
+#include "core/common_base.h"
+#include "anthropic_api.h"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -36,12 +36,7 @@ private:
     };
     
     // OAuth configuration
-    static constexpr const char* CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-    static constexpr const char* AUTH_URL = "https://claude.ai/oauth/authorize";
-    static constexpr const char* TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
-    static constexpr const char* SUCCESS_URL = "https://console.anthropic.com/oauth/code/success?app=ida-re-agent";
-    static constexpr int REDIRECT_PORT = 54545;
-    static constexpr int TIMEOUT_SECONDS = 300; // 5 minutes
+    static constexpr int TIMEOUT_SECONDS = 300;
     
     // State
     std::atomic<bool> is_authorizing_{false};

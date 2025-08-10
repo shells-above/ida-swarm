@@ -1,4 +1,5 @@
 #include "oauth_manager.h"
+#include "oauth_flow.h"
 #include <fstream>
 #include <sstream>
 #include <openssl/evp.h>
@@ -519,7 +520,6 @@ std::optional<json> OAuthManager::parse_credentials_json(const std::string& decr
 api::OAuthCredentials OAuthManager::extract_oauth_credentials(const json& creds_json) const {
     api::OAuthCredentials creds;
     
-    // The credentials JSON structure from claude-cpp-sdk:
     // {
     //   "version": 1,
     //   "api_key": null or string,
@@ -587,6 +587,78 @@ api::OAuthCredentials OAuthManager::extract_oauth_credentials(const json& creds_
     // msg("LLM RE: Successfully loaded OAuth credentials for provider: %s\n", provider.c_str());
     
     return creds;
+}
+
+bool OAuthManager::needs_refresh() {
+    // First check cache
+    auto creds = get_cached_credentials();
+    if (!creds) {
+        // Cache is empty, try to load credentials
+        creds = get_credentials();
+        if (!creds) {
+            return false;
+        }
+    }
+    
+    // Check if expired or will expire in the next 5 minutes
+    bool needs_it = creds->is_expired(300);
+    if (needs_it) {
+        msg("LLM RE: OAuth token needs refresh (expired or expires in < 5 min)\n");
+    }
+    return needs_it;
+}
+
+std::optional<api::OAuthCredentials> OAuthManager::refresh_if_needed() {
+    // Check if refresh is needed
+    if (!needs_refresh()) {
+        return get_cached_credentials();
+    }
+    
+    msg("LLM RE: Refreshing OAuth token...\n");
+    return force_refresh();
+}
+
+std::optional<api::OAuthCredentials> OAuthManager::force_refresh() {
+    // Get current credentials
+    auto current_creds = get_credentials();
+    if (!current_creds) {
+        last_error = "No OAuth credentials available to refresh";
+        return std::nullopt;
+    }
+    
+    // Check if we have a refresh token
+    if (current_creds->refresh_token.empty()) {
+        last_error = "No refresh token available";
+        return std::nullopt;
+    }
+    
+    try {
+        OAuthFlow oauth_flow;
+        
+        // Attempt to refresh the token
+        api::OAuthCredentials new_creds = oauth_flow.refresh_token(
+            current_creds->refresh_token,
+            current_creds->account_uuid
+        );
+        
+        // Save the updated credentials
+        if (!save_credentials(new_creds)) {
+            last_error = "Failed to save refreshed credentials";
+            return std::nullopt;
+        }
+        
+        // Update cache
+        cached_credentials = new_creds;
+        cache_time = std::chrono::steady_clock::now();
+        
+        msg("LLM RE: OAuth token refreshed successfully\n");
+        return new_creds;
+        
+    } catch (const std::exception& e) {
+        last_error = std::string("Token refresh failed: ") + e.what();
+        msg("LLM RE: OAuth token refresh failed: %s\n", e.what());
+        return std::nullopt;
+    }
 }
 
 } // namespace llm_re

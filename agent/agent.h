@@ -7,7 +7,7 @@
 
 #include "core/common.h"
 #include "core/config.h"
-#include "core/oauth_manager.h"
+#include "api/oauth_manager.h"
 #include "api/message_types.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
@@ -17,17 +17,18 @@
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
+#include <fstream>
 
 namespace llm_re {
 
 // Unified message types for agent callbacks
 enum class AgentMessageType {
-    Log,                    // {level: int, message: string}
-    ApiMessage,             // {type: string, content: json, iteration: int}
-    StateChanged,           // {status: int}
-    ToolStarted,            // {tool_id: string, tool_name: string, input: json}
-    ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json}
-    FinalReport,            // {report: string}
+    Log,                    // Special: passes messages::Message* with log text
+    NewMessage,             // Direct message: passes messages::Message*
+    StateChanged,           // {status: int} - still uses JSON for now
+    ToolStarted,            // {tool_id: string, tool_name: string, input: json} - still uses JSON
+    ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json} - still uses JSON
+    FinalReport             // {report: string} - still uses JSON
 };
 
 // Agent state management
@@ -255,12 +256,20 @@ struct AgentTask {
 
 // Main agent
 class Agent {
+public:
+    // Single unified callback - supports both messages and JSON for transition
+    struct CallbackData {
+        const messages::Message* message = nullptr;
+        json json_data;
+    };
+
 private:
     // Core components
     std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     tools::ToolRegistry tool_registry_;                              // registry of tools that use the action executor
+    std::unique_ptr<OAuthManager> oauth_manager_;                    // OAuth credential manager for token refresh
     api::AnthropicClient api_client_;                                // agent api client
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
@@ -275,7 +284,7 @@ private:
     api::TokenStats token_stats_;
     std::vector<api::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
 
-    static constexpr int CONTEXT_LIMIT_TOKENS = 180000;  // When to trigger consolidation
+    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
 
     // context management
     struct ContextManagementState {
@@ -302,8 +311,8 @@ private:
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
 
-    // Single unified callback
-    std::function<void(AgentMessageType, const json&)> message_callback_;
+    // Callback for messages
+    std::function<void(AgentMessageType, const CallbackData&)> message_callback_;
 
     // System prompt
     // note that if you start getting errors about Qt MOC making a llm_re::llm_re:: namespace it probably
@@ -406,33 +415,65 @@ Tips:
 What's your next step to complete the reversal?)";
 
     // Helper function to create AnthropicClient based on config
-    static api::AnthropicClient create_api_client(const Config& config) {
-        if (config.api.auth_method == api::AuthMethod::OAUTH) {
-            // Load OAuth credentials
-            OAuthManager oauth_mgr(config.api.oauth_config_dir);
-            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+    static api::AnthropicClient create_api_client(const Config& config, OAuthManager* oauth_mgr = nullptr) {
+        if (config.api.auth_method == api::AuthMethod::OAUTH && oauth_mgr) {
+            // Try to refresh if needed (checks expiry and refreshes automatically)
+            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr->refresh_if_needed();
             
             if (!oauth_creds) {
-                msg("LLM RE: WARNING - Failed to load OAuth credentials, falling back to API key\n");
+                // Fallback to getting credentials without refresh
+                oauth_creds = oauth_mgr->get_credentials();
+            }
+            
+            if (!oauth_creds) {
+                msg("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n", 
+                    oauth_mgr->get_last_error().c_str());
+                msg("LLM RE: WARNING - Falling back to API key authentication\n");
+                msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
                 return api::AnthropicClient(config.api.api_key, config.api.base_url);
             }
             
-            msg("LLM RE: Using OAuth authentication\n");
             return api::AnthropicClient(*oauth_creds, config.api.base_url);
         }
         
         // Default to API key
         return api::AnthropicClient(config.api.api_key, config.api.base_url);
     }
+    
+    // Refresh OAuth tokens and update API client
+    bool refresh_oauth_credentials() {
+        if (!oauth_manager_ || config_.api.auth_method != api::AuthMethod::OAUTH) {
+            return false;
+        }
+        
+        auto refreshed_creds = oauth_manager_->force_refresh();
+        if (!refreshed_creds) {
+            send_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
+            return false;
+        }
+        
+        // Update the API client with new credentials
+        api_client_.set_oauth_credentials(*refreshed_creds);
+        send_log(LogLevel::INFO, "Successfully refreshed OAuth token");
+        return true;
+    }
 
 public:
     Agent(const Config& config)
         : config_(config),
-          api_client_(create_api_client(config)),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config)),
+          oauth_manager_(config.api.auth_method == api::AuthMethod::OAUTH ? std::make_unique<OAuthManager>(config.api.oauth_config_dir) : nullptr),
+          api_client_(create_api_client(config, oauth_manager_.get())),
           grader_(std::make_unique<AnalysisGrader>(config)) {
+
+        // Clear the API request log file on startup
+        std::ofstream clear_log("/tmp/anthropic_requests.log", std::ios::trunc);
+        if (clear_log.is_open()) {
+            clear_log.close();
+            msg("LLM RE: Cleared API request log\n");
+        }
 
         queue_mutex_ = qmutex_create();
         task_semaphore_ = qsem_create(nullptr, 0);
@@ -565,17 +606,10 @@ public:
     }
 
     // Single callback setter
-    void set_message_callback(std::function<void(AgentMessageType, const json&)> callback) {
+    void set_message_callback(std::function<void(AgentMessageType, const CallbackData&)> callback) {
         message_callback_ = callback;
-
-        // Also set the API client's message logger
-        api_client_.set_message_logger([this](const std::string& type, const json& content, int iteration) {
-            send_message(AgentMessageType::ApiMessage, {
-                {"type", type},
-                {"content", content},
-                {"iteration", iteration}
-            });
-        });
+        
+        // We'll remove the API client message logger - we'll handle messages directly after responses
     }
 
     // State queries
@@ -705,17 +739,51 @@ public:
 
 private:
     // Helper to send messages through callback
-    void send_message(AgentMessageType type, const json& data) {
+    void send_api_message(const messages::Message* msg) {
         if (message_callback_) {
-            message_callback_(type, data);
+            CallbackData data;
+            data.message = msg;
+            message_callback_(AgentMessageType::NewMessage, data);
         }
     }
-
+    
+    // Helper to send grader messages to console only (not conversation UI)
+    void send_grader_message_to_console(const messages::Message& msg) {
+        // Log grader thinking blocks
+        for (const auto& content : msg.contents()) {
+            if (auto* thinking = dynamic_cast<const messages::ThinkingContent*>(content.get())) {
+                send_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
+            }
+        }
+        
+        // Log grader text content
+        std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
+        if (text && !text->empty()) {
+            send_log(LogLevel::INFO, "[Grader Response] " + *text);
+        }
+    }
+    
     void send_log(LogLevel level, const std::string& msg) {
-        send_message(AgentMessageType::Log, {
-            {"level", static_cast<int>(level)},
-            {"message", msg}
-        });
+        // For now, logs still need some way to be sent - create a temporary message
+        // TODO: separate log callback
+        messages::Message log_msg(messages::Role::System);
+        log_msg.add_content(std::make_unique<messages::TextContent>(
+            std::format("[LOG:{}] {}", static_cast<int>(level), msg)
+        ));
+        if (message_callback_) {
+            CallbackData data;
+            data.message = &log_msg;
+            message_callback_(AgentMessageType::Log, data);
+        }
+    }
+    
+    // Helper for JSON messages (for tool messages, state changes, etc.)
+    void send_json_message(AgentMessageType type, const json& json_data) {
+        if (message_callback_) {
+            CallbackData data;
+            data.json_data = json_data;
+            message_callback_(type, data);
+        }
     }
 
     // Worker thread main loop
@@ -1099,13 +1167,31 @@ private:
                 continue;  // Loop will create consolidation request next iteration
             }
 
-            // Send request
+            // Send request with retry on OAuth expiry
             api::ChatResponse response = api_client_.send_request(current_request);
+
+            // Check for OAuth token expiry (401 authentication error)
+            if (!response.success && response.error && 
+                response.error->find("OAuth token has expired") != std::string::npos) {
+                
+                send_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
+                
+                if (refresh_oauth_credentials()) {
+                    // Retry the request with refreshed credentials
+                    send_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
+                    response = api_client_.send_request(current_request);
+                } else {
+                    send_log(LogLevel::ERROR, "Failed to refresh OAuth token");
+                }
+            }
 
             if (!response.success) {
                 handle_api_error(response);
                 break;
             }
+
+            // Send the response message directly to the UI!
+            send_api_message(&response.message);
 
             // Log thinking information
             if (response.has_thinking()) {
@@ -1198,18 +1284,21 @@ private:
 
                     // Check with grader
                     AnalysisGrader::GradeResult grade = check_with_grader();
+                    
+                    // Log grader's full response (with thinking) to console
+                    send_grader_message_to_console(grade.fullMessage);
+                    
                     if (grade.complete) {
                         send_log(LogLevel::INFO, "Grader approved investigation");
                         grader_approved = true;
                         
-                        // Send final report
-                        send_message(AgentMessageType::FinalReport, {
+                        // Send final report - this will be shown in conversation UI
+                        send_json_message(AgentMessageType::FinalReport, {
                             {"report", grade.response}
                         });
                         change_state(AgentState::Status::Completed);
                     } else {
                         send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
-                        send_log(LogLevel::DEBUG, grade.response);
                         
                         // Add grader's questions as user message and continue
                         // Mark this as grader feedback with a special prefix we can filter
@@ -1239,7 +1328,7 @@ private:
             execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
 
             // Send tool started message
-            send_message(AgentMessageType::ToolStarted, {
+            send_json_message(AgentMessageType::ToolStarted, {
                 {"tool_id", tool_use->id},
                 {"tool_name", tool_use->name},
                 {"input", tool_use->input}
@@ -1263,7 +1352,7 @@ private:
             }
 
             // Send tool executed message
-            send_message(AgentMessageType::ToolExecuted, {
+            send_json_message(AgentMessageType::ToolExecuted, {
                 {"tool_id", tool_use->id},
                 {"tool_name", tool_use->name},
                 {"input", tool_use->input},
@@ -1328,7 +1417,7 @@ private:
     void change_state(AgentState::Status new_status) {
         state_.set_status(new_status);
 
-        send_message(AgentMessageType::StateChanged, {
+        send_json_message(AgentMessageType::StateChanged, {
             {"status", static_cast<int>(new_status)}
         });
     }

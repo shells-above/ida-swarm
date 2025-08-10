@@ -30,7 +30,7 @@ public:
     void setData(const std::vector<double>& values);
     void appendValue(double value);
     void prependValue(double value);
-    void clearData();
+    void clearData() override;
     
     // Real-time data
     void setMaxDataPoints(int max);

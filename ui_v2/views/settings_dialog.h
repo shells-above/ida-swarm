@@ -35,6 +35,7 @@ private:
     QLineEdit* oauth_config_dir_edit_ = nullptr;
     QLabel* oauth_status_label_ = nullptr;
     QPushButton* authorize_button_ = nullptr;
+    QPushButton* refresh_token_button_ = nullptr;
     QLineEdit* api_key_edit_ = nullptr;
     QLineEdit* base_url_edit_ = nullptr;
     QComboBox* model_combo_ = nullptr;
@@ -90,6 +91,7 @@ private slots:
     void onTestAPI();
     void checkOAuthStatus();
     void onAuthorize();
+    void onRefreshToken();
     void onResetDefaults();
     void onSettingChanged();
     void onOK();

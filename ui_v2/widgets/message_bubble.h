@@ -7,9 +7,6 @@
 
 namespace llm_re::ui_v2 {
 
-// Forward declarations
-class TypingIndicator;
-
 // Modern message bubble widget with animations and rich content support
 class MessageBubble : public CardWidget {
     Q_OBJECT
@@ -34,13 +31,12 @@ public:
         Paper         // Note paper style
     };
     
-    explicit MessageBubble(Message* message, QWidget* parent = nullptr);
+    explicit MessageBubble(UIMessage* message, QWidget* parent = nullptr);
     ~MessageBubble() override;
     
     // Message access
-    Message* message() { return message_; }
-    const Message* message() const { return message_; }
-    void updateMessage();
+    UIMessage* message() { return message_; }
+    const UIMessage* message() const { return message_; }
     
     // Appearance
     void setBubbleStyle(BubbleStyle style);
@@ -48,7 +44,6 @@ public:
     
     void setMaxWidth(int width) { maxWidth_ = width; }
     int maxWidth() const { return maxWidth_; }
-    
     
     void setShowTimestamp(bool show);
     bool showTimestamp() const { return showTimestamp_; }
@@ -81,11 +76,6 @@ public:
     bool isExpanded() const { return isExpanded_; }
     void toggleExpanded() { setExpanded(!isExpanded_); }
     
-    
-    // Search
-    void setSearchHighlight(const QString& text);
-    void clearSearchHighlight();
-    
     // Text access
     QString toPlainText() const;
     
@@ -106,12 +96,6 @@ public:
 signals:
     void clicked();
     void doubleClicked();
-    void contextMenuRequested(const QPoint& pos);
-    void linkClicked(const QUrl& url);
-    void editRequested();
-    void deleteRequested();
-    void attachmentClicked(const MessageAttachment& attachment);
-    void toolOutputToggled();
     void copyRequested();
     void selectionChanged(bool selected);
     void expansionChanged(bool expanded);
@@ -119,8 +103,7 @@ signals:
     
 public slots:
     void updateTheme();
-    void refresh();
-    
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void paintContent(QPainter* painter) override;
@@ -128,62 +111,38 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
-    void contextMenuEvent(QContextMenuEvent* event) override;
     void enterEvent(QEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void onThemeChanged() override;
     
 private slots:
-    void onContentLinkClicked(const QUrl& url);
     void onCopyAction();
-    void onEditAction();
-    void onDeleteAction();
-    void onPinAction();
-    void onBookmarkAction();
     void onAnimationFinished();
     
 private:
     void setupUI();
     void createHeader();
     void createContent();
-    void createFooter();
-    void createAnalysisWidget();
-    void createAttachmentsWidget();
-    void createContextMenu();
     void updateLayout();
-    void updateContentDisplay();
-    void updateAnalysisDisplay();
-    void updateAttachmentsDisplay();
     void applyBubbleStyle();
-    void startAnimation();
-    QRect calculateBubbleRect() const;
-    void paintStatusIndicator(QPainter* painter, const QRect& rect);
     void paintSelectionOverlay(QPainter* painter);
     
     // Core data
-    Message* message_;
+    UIMessage* message_;
     BubbleStyle bubbleStyle_ = BubbleStyle::Modern;
     AnimationType animationType_ = AnimationType::FadeIn;
     
     // Layout components
     QWidget* headerWidget_ = nullptr;
     QWidget* contentWidget_ = nullptr;
-    QWidget* footerWidget_ = nullptr;
-    QWidget* analysisWidget_ = nullptr;
-    QWidget* attachmentsWidget_ = nullptr;
-    
+
     // Header components
     QLabel* nameLabel_ = nullptr;
     QLabel* timestampLabel_ = nullptr;
-    QToolButton* menuButton_ = nullptr;
-    
+
     // Content components
     MarkdownViewer* contentViewer_ = nullptr;
     QLabel* plainTextLabel_ = nullptr;
-    
-    
-    // Footer components
-    QToolButton* shareButton_ = nullptr;
     
     // State
     bool isSelected_ = false;
@@ -193,25 +152,12 @@ private:
     bool showHeader_ = true;
     bool interactive_ = true;
     int maxWidth_ = 600;
-    QString searchHighlight_;
-    
+
     // Animation
     qreal expandProgress_ = 1.0;
     qreal fadeProgress_ = 1.0;
     int typewriterPosition_ = -1;
     QPropertyAnimation* currentAnimation_ = nullptr;
-    
-    // Context menu
-    QMenu* contextMenu_ = nullptr;
-    QAction* copyAction_ = nullptr;
-    QAction* editAction_ = nullptr;
-    QAction* deleteAction_ = nullptr;
-    QAction* pinAction_ = nullptr;
-    QAction* bookmarkAction_ = nullptr;
-    
-    // Metrics cache
-    mutable QSize cachedSize_;
-    mutable bool sizeCacheDirty_ = true;
 };
 
 // Forward declaration
@@ -225,14 +171,9 @@ public:
     explicit MessageBubbleContainer(QWidget* parent = nullptr);
     
     // Message management
-    void addMessage(Message* message, bool animated = true);
-    void insertMessage(int index, Message* message, bool animated = true);
-    void removeMessage(const QUuid& id, bool animated = true);
+    void addMessage(UIMessage* message, bool animated = true);
+    void insertMessage(int index, UIMessage* message, bool animated = true);
     void clearMessages(bool animated = false);
-    
-    // Typing indicator
-    void showTypingIndicator(const QString& user = QString());
-    void hideTypingIndicator();
     
     MessageBubble* getBubble(const QUuid& id) const;
     QList<MessageBubble*> getAllBubbles() const;
@@ -247,12 +188,6 @@ public:
     void scrollToMessage(const QUuid& id, bool animated = true);
     void scrollToBottom(bool animated = true);
     void scrollToTop(bool animated = true);
-    
-    // Search
-    void setSearchFilter(const QString& text);
-    void clearSearchFilter();
-    void highlightNextMatch();
-    void highlightPreviousMatch();
     
     // Appearance
     void setBubbleStyle(MessageBubble::BubbleStyle style);
@@ -271,7 +206,6 @@ signals:
     void bubbleDoubleClicked(const QUuid& id);
     void bubbleContextMenu(const QUuid& id, const QPoint& pos);
     void selectionChanged();
-    void linkClicked(const QUrl& url);
     void scrollRequested();
     
 protected:
@@ -310,12 +244,7 @@ private:
     int densityMode_ = 1; // 0=Compact, 1=Cozy, 2=Spacious
     int maxBubbleWidth_ = 600;
     int spacing_ = Design::SPACING_MD;
-    QString searchFilter_;
-    int currentSearchMatch_ = -1;
-    
-    // Typing indicator
-    TypingIndicator* typingIndicator_ = nullptr;
-    
+
     // Batch update
     int batchUpdateCount_ = 0;
     bool layoutPending_ = false;
@@ -325,36 +254,5 @@ private:
     QSet<MessageBubble*> visibleBubbles_;
     QTimer* layoutTimer_ = nullptr;
 };
-
-// Typing indicator widget
-class TypingIndicator : public BaseStyledWidget {
-    Q_OBJECT
-    Q_PROPERTY(qreal animationPhase READ animationPhase WRITE setAnimationPhase)
     
-public:
-    explicit TypingIndicator(QWidget* parent = nullptr);
-    
-    void setTypingUser(const QString& user);
-    QString typingUser() const { return typingUser_; }
-    
-    void startAnimation();
-    void stopAnimation();
-    bool isAnimating() const { return animationTimer_ != nullptr; }
-    
-    qreal animationPhase() const { return animationPhase_; }
-    void setAnimationPhase(qreal phase);
-    
-    QSize sizeHint() const override;
-    
-protected:
-    void paintContent(QPainter* painter) override;
-    
-private:
-    QString typingUser_;
-    qreal animationPhase_ = 0.0;
-    QTimer* animationTimer_ = nullptr;
-    QPropertyAnimation* phaseAnimation_ = nullptr;
-};
-
-
 } // namespace llm_re::ui_v2

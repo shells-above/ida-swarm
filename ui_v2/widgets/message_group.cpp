@@ -4,14 +4,14 @@
 
 namespace llm_re::ui_v2 {
 
-MessageGroup::MessageGroup(Message* firstMessage, QWidget* parent)
+MessageGroup::MessageGroup(UIMessage* firstMessage, QWidget* parent)
     : BaseStyledWidget(parent) {
     
     if (firstMessage) {
         role_ = firstMessage->role();
-        author_ = firstMessage->metadata().author.isEmpty() ? 
-                  firstMessage->roleString() : firstMessage->metadata().author;
-        firstTimestamp_ = firstMessage->metadata().timestamp;
+        author_ = firstMessage->metadata.author.isEmpty() ? 
+                  firstMessage->roleString() : firstMessage->metadata.author;
+        firstTimestamp_ = firstMessage->metadata.timestamp;
         lastTimestamp_ = firstTimestamp_;
     }
     
@@ -63,17 +63,14 @@ void MessageGroup::createHeader() {
     const auto& colors = ThemeManager::instance().colors();
     QColor authorColor;
     switch (role_) {
-        case MessageRole::User:
+        case messages::Role::User:
             authorColor = colors.primary;
             break;
-        case MessageRole::Assistant:
+        case messages::Role::Assistant:
             authorColor = colors.textPrimary;
             break;
-        case MessageRole::System:
+        case messages::Role::System:
             authorColor = colors.textSecondary;
-            break;
-        case MessageRole::Tool:
-            authorColor = colors.warning;
             break;
     }
     authorLabel_->setStyleSheet(QString("color: %1; font-weight: 600;").arg(authorColor.name()));
@@ -108,26 +105,26 @@ void MessageGroup::updateHeader() {
     timestampLabel_->setVisible(showTimestamp_);
 }
 
-bool MessageGroup::canAddMessage(Message* message) const {
+bool MessageGroup::canAddMessage(UIMessage* message) const {
     if (!message || messages_.isEmpty()) return false;
     
     // Check if same sender
     if (message->role() != role_) return false;
     
-    QString messageAuthor = message->metadata().author.isEmpty() ? 
-                           message->roleString() : message->metadata().author;
+    QString messageAuthor = message->metadata.author.isEmpty() ? 
+                           message->roleString() : message->metadata.author;
     if (messageAuthor != author_) return false;
     
     // Check if within time window
-    qint64 timeDiff = lastTimestamp_.secsTo(message->metadata().timestamp);
+    qint64 timeDiff = lastTimestamp_.secsTo(message->metadata.timestamp);
     return timeDiff >= 0 && timeDiff <= GROUP_TIMEOUT_SECONDS;
 }
 
-void MessageGroup::addMessage(Message* message) {
+void MessageGroup::addMessage(UIMessage* message) {
     if (!message) return;
     
     messages_.append(message);
-    lastTimestamp_ = message->metadata().timestamp;
+    lastTimestamp_ = message->metadata.timestamp;
     
     // Create bubble without header (group already has header)
     auto* bubble = new MessageBubble(message, this);
@@ -142,11 +139,7 @@ void MessageGroup::addMessage(Message* message) {
     connect(bubble, &MessageBubble::doubleClicked, [this, message]() {
         emit messageDoubleClicked(message->id());
     });
-    connect(bubble, &MessageBubble::contextMenuRequested, [this, message](const QPoint& pos) {
-        emit contextMenuRequested(message->id(), pos);
-    });
-    connect(bubble, &MessageBubble::linkClicked, this, &MessageGroup::linkClicked);
-    
+
     bubbleMap_[message->id()] = bubble;
     messagesLayout_->addWidget(bubble);
     
@@ -156,7 +149,7 @@ void MessageGroup::addMessage(Message* message) {
 
 void MessageGroup::removeMessage(const QUuid& id) {
     auto it = std::find_if(messages_.begin(), messages_.end(),
-                          [&id](Message* msg) { return msg->id() == id; });
+                          [&id](UIMessage* msg) { return msg->id() == id; });
     
     if (it != messages_.end()) {
         messages_.erase(it);
@@ -167,14 +160,14 @@ void MessageGroup::removeMessage(const QUuid& id) {
         
         // Update timestamps
         if (!messages_.isEmpty()) {
-            firstTimestamp_ = messages_.first()->metadata().timestamp;
-            lastTimestamp_ = messages_.last()->metadata().timestamp;
+            firstTimestamp_ = messages_.first()->metadata.timestamp;
+            lastTimestamp_ = messages_.last()->metadata.timestamp;
             updateHeader();
         }
     }
 }
 
-QList<Message*> MessageGroup::messages() const {
+QList<UIMessage*> MessageGroup::messages() const {
     return messages_;
 }
 

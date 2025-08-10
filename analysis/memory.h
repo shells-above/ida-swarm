@@ -23,6 +23,7 @@ struct AnalysisEntry {
 class BinaryMemory {
 private:
     mutable qmutex_t memory_mutex;
+    mutable std::atomic<uint64_t> version_counter{0};  // Track changes efficiently
 
     // Core memory storage
     std::map<std::string, AnalysisEntry> analyses;  // Unified storage
@@ -45,6 +46,9 @@ public:
     // Memory efficiency
     json export_memory_snapshot() const;
     void import_memory_snapshot(const json& snapshot);
+    
+    // Version tracking for efficient change detection
+    uint64_t get_version() const { return version_counter.load(); }
 };
 
 } // namespace llm_re

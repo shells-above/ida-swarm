@@ -366,14 +366,6 @@ void MainWindow::createActions() {
     selectAllAction_->setShortcut(QKeySequence::SelectAll);
     connect(selectAllAction_, &QAction::triggered, this, &MainWindow::onEditSelectAll);
     
-    findAction_ = new QAction(ThemeManager::instance().themedIcon("edit-find"), tr("&Find..."), this);
-    findAction_->setShortcut(QKeySequence::Find);
-    connect(findAction_, &QAction::triggered, this, &MainWindow::onEditFind);
-    
-    replaceAction_ = new QAction(ThemeManager::instance().themedIcon("edit-find-replace"), tr("&Replace..."), this);
-    replaceAction_->setShortcut(QKeySequence(tr("Ctrl+H")));
-    connect(replaceAction_, &QAction::triggered, this, &MainWindow::onEditReplace);
-    
     preferencesAction_ = new QAction(ThemeManager::instance().themedIcon("preferences-system"), tr("&Preferences..."), this);
     preferencesAction_->setShortcut(QKeySequence::Preferences);
     connect(preferencesAction_, &QAction::triggered, this, &MainWindow::onEditPreferences);
@@ -471,9 +463,6 @@ void MainWindow::createMenus() {
     editMenu_ = menuBar()->addMenu(tr("&Edit"));
     editMenu_->addAction(selectAllAction_);
     editMenu_->addSeparator();
-    editMenu_->addAction(findAction_);
-    editMenu_->addAction(replaceAction_);
-    editMenu_->addSeparator();
     editMenu_->addAction(preferencesAction_);
     
     // View menu
@@ -537,16 +526,7 @@ void MainWindow::createMenus() {
     windowMenu_ = menuBar()->addMenu(tr("&Window"));
     connect(windowMenu_, &QMenu::aboutToShow, [this]() {
         windowMenu_->clear();
-        
-        // Split actions
-        windowMenu_->addAction(tr("Split &Horizontally"), this, &MainWindow::splitHorizontally);
-        windowMenu_->addAction(tr("Split &Vertically"), this, &MainWindow::splitVertically);
-        windowMenu_->addAction(tr("&Remove Split"), this, &MainWindow::removeSplit);
-        windowMenu_->addSeparator();
-        windowMenu_->addAction(tr("Focus &Next Split"), this, &MainWindow::focusNextSplit);
-        windowMenu_->addAction(tr("Focus &Previous Split"), this, &MainWindow::focusPreviousSplit);
-        windowMenu_->addSeparator();
-        
+
         // List open conversation views
         int index = 1;
         for (auto* view : conversationViews_) {
@@ -680,23 +660,8 @@ void MainWindow::createDockWindows() {
 
 void MainWindow::connectSignals() {
     // Conversation view signals
-    connect(conversationView_, &ConversationView::toolExecutionRequested,
-            [this](const QString& toolName, const QJsonObject& params) {
-                controller_->routeToolExecution(toolName, params);
-                if (toolDockWidget_ && !toolDockWidget_->isVisible()) {
-                    toolDockWidget_->show();
-                }
-            });
     connect(conversationView_, &ConversationView::unsavedChangesChanged,
             this, &MainWindow::onSessionModified);
-    
-    
-    // Link handling
-    connect(conversationView_, &ConversationView::linkClicked,
-            [this](const QUrl& url) {
-                // Link handling can be added here if needed
-                Q_UNUSED(url);
-            });
 }
 
 
@@ -718,26 +683,6 @@ void MainWindow::setupShortcuts() {
         "focus.tools", QKeySequence(tr("Alt+3")),
         tr("Focus tools panel"),
         [this]() { controller_->focusTools(); }
-    );
-    
-    
-    // Quick split shortcuts
-    shortcutManager_->registerShortcut(
-        "split.horizontal", QKeySequence(tr("Ctrl+Shift+H")),
-        tr("Split horizontally"),
-        [this]() { splitHorizontally(); }
-    );
-    
-    shortcutManager_->registerShortcut(
-        "split.vertical", QKeySequence(tr("Ctrl+Shift+V")),
-        tr("Split vertically"),
-        [this]() { splitVertically(); }
-    );
-    
-    shortcutManager_->registerShortcut(
-        "split.close", QKeySequence(tr("Ctrl+Shift+W")),
-        tr("Close current split"),
-        [this]() { removeSplit(); }
     );
 }
 
@@ -850,177 +795,6 @@ void MainWindow::applyTheme(const QString& theme) {
         ThemeManager::instance().loadTheme("dark");
     }
     emit themeChanged(theme);
-}
-
-void MainWindow::splitHorizontally() {
-    createSplitView(Qt::Horizontal);
-}
-
-void MainWindow::splitVertically() {
-    createSplitView(Qt::Vertical);
-}
-
-void MainWindow::createSplitView(Qt::Orientation orientation) {
-    if (conversationViews_.size() >= 4) {
-        showStatusMessage(tr("Maximum number of splits reached"));
-        return;
-    }
-    
-    // Create new conversation view
-    auto* newView = createConversationView();
-    conversationViews_.append(newView);
-    controller_->registerConversationView(newView);
-    
-    // Get current widget and its parent splitter
-    QWidget* current = conversationView_;
-    QSplitter* parentSplitter = qobject_cast<QSplitter*>(current->parent());
-    
-    if (!parentSplitter) {
-        // This shouldn't happen, but handle it gracefully
-        delete newView;
-        conversationViews_.removeLast();
-        return;
-    }
-    
-    // Create new splitter
-    auto* newSplitter = new QSplitter(orientation, this);
-    
-    // Get index of current widget in parent
-    int index = parentSplitter->indexOf(current);
-    
-    // Remove current widget from parent
-    current->setParent(nullptr);
-    
-    // Add both widgets to new splitter
-    newSplitter->addWidget(current);
-    newSplitter->addWidget(newView);
-    
-    // Insert new splitter at the same position
-    parentSplitter->insertWidget(index, newSplitter);
-    
-    // Set equal sizes
-    QList<int> sizes;
-    int totalSize = (orientation == Qt::Horizontal) 
-        ? newSplitter->width() : newSplitter->height();
-    sizes << totalSize / 2 << totalSize / 2;
-    newSplitter->setSizes(sizes);
-    
-    // Focus new view
-    newView->setFocus();
-    newView->focusInput();
-    
-    emit splitViewCreated();
-    showStatusMessage(tr("Split view created"));
-}
-
-void MainWindow::removeSplit() {
-    if (conversationViews_.size() <= 1) {
-        showStatusMessage(tr("Cannot remove the last view"));
-        return;
-    }
-    
-    // Find current focused view
-    ConversationView* viewToRemove = nullptr;
-    for (auto* view : conversationViews_) {
-        if (view->hasFocus() || view->isAncestorOf(QApplication::focusWidget())) {
-            viewToRemove = view;
-            break;
-        }
-    }
-    
-    if (!viewToRemove || viewToRemove == conversationView_) {
-        // Don't remove the main view
-        viewToRemove = conversationViews_.last();
-    }
-    
-    // Check for unsaved changes
-    if (viewToRemove->hasUnsavedChanges()) {
-        auto reply = QMessageBox::question(
-            this, tr("Unsaved Changes"),
-            tr("This view has unsaved changes. Close anyway?"),
-            QMessageBox::Yes | QMessageBox::No
-        );
-        if (reply != QMessageBox::Yes) {
-            return;
-        }
-    }
-    
-    // Remove from controller
-    controller_->unregisterConversationView(viewToRemove);
-    conversationViews_.removeOne(viewToRemove);
-    
-    // Handle splitter cleanup
-    QSplitter* parentSplitter = qobject_cast<QSplitter*>(viewToRemove->parent());
-    if (parentSplitter && parentSplitter->count() == 2) {
-        // Get the other widget
-        QWidget* otherWidget = nullptr;
-        for (int i = 0; i < parentSplitter->count(); ++i) {
-            if (parentSplitter->widget(i) != viewToRemove) {
-                otherWidget = parentSplitter->widget(i);
-                break;
-            }
-        }
-        
-        if (otherWidget) {
-            // Get grandparent splitter
-            QSplitter* grandParent = qobject_cast<QSplitter*>(parentSplitter->parent());
-            if (grandParent) {
-                int index = grandParent->indexOf(parentSplitter);
-                otherWidget->setParent(nullptr);
-                grandParent->insertWidget(index, otherWidget);
-                delete parentSplitter;
-            }
-        }
-    }
-    
-    // Delete the view
-    viewToRemove->deleteLater();
-    
-    // Focus another view
-    if (!conversationViews_.isEmpty()) {
-        conversationViews_.first()->setFocus();
-    }
-    
-    emit splitViewRemoved();
-    showStatusMessage(tr("Split view removed"));
-}
-
-void MainWindow::focusNextSplit() {
-    if (conversationViews_.size() <= 1) return;
-    
-    // Find current focused view
-    int currentIndex = -1;
-    for (int i = 0; i < conversationViews_.size(); ++i) {
-        if (conversationViews_[i]->hasFocus() || 
-            conversationViews_[i]->isAncestorOf(QApplication::focusWidget())) {
-            currentIndex = i;
-            break;
-        }
-    }
-    
-    // Focus next view
-    int nextIndex = (currentIndex + 1) % conversationViews_.size();
-    conversationViews_[nextIndex]->setFocus();
-    conversationViews_[nextIndex]->focusInput();
-}
-
-void MainWindow::focusPreviousSplit() {
-    if (conversationViews_.size() <= 1) return;
-    
-    // Find current focused view
-    int currentIndex = -1;
-    for (int i = 0; i < conversationViews_.size(); ++i) {
-        if (conversationViews_[i]->hasFocus() || 
-            conversationViews_[i]->isAncestorOf(QApplication::focusWidget())) {
-            currentIndex = i;
-            break;
-        }
-    }
-    
-    // Focus previous view
-    int prevIndex = (currentIndex - 1 + conversationViews_.size()) % conversationViews_.size();
-    conversationViews_[prevIndex]->setFocus();
-    conversationViews_[prevIndex]->focusInput();
 }
 
 void MainWindow::newSession() {
@@ -1380,20 +1154,6 @@ void MainWindow::changeEvent(QEvent* event) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* event) {
-    // Global key handling
-    if (event->modifiers() == Qt::ControlModifier) {
-        switch (event->key()) {
-        case Qt::Key_Tab:
-            focusNextSplit();
-            event->accept();
-            return;
-        case Qt::Key_Backtab:
-            focusPreviousSplit();
-            event->accept();
-            return;
-        }
-    }
-    
     QMainWindow::keyPressEvent(event);
 }
 
@@ -1462,8 +1222,6 @@ void MainWindow::onFileExit() {
     close();
 }
 
-
-
 void MainWindow::onEditSelectAll() {
     if (auto* focusWidget = QApplication::focusWidget()) {
         if (auto* textEdit = qobject_cast<QTextEdit*>(focusWidget)) {
@@ -1474,17 +1232,6 @@ void MainWindow::onEditSelectAll() {
             conversationView_->selectAll();
         }
     }
-}
-
-void MainWindow::onEditFind() {
-    if (conversationView_) {
-        conversationView_->showSearchBar();
-    }
-}
-
-void MainWindow::onEditReplace() {
-    // Show replace dialog if implemented
-    showStatusMessage(tr("Replace functionality coming soon"));
 }
 
 void MainWindow::onEditPreferences() {
@@ -1618,7 +1365,6 @@ void MainWindow::updateActions() {
                        qobject_cast<QLineEdit*>(focusWidget);
 
     selectAllAction_->setEnabled(isTextWidget || hasSession);
-    findAction_->setEnabled(hasSession);
 }
 
 void MainWindow::saveWindowState() {

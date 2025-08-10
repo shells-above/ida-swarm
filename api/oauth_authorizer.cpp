@@ -1,5 +1,6 @@
 #include "oauth_authorizer.h"
 #include "oauth_manager.h"
+#include "anthropic_api.h"
 #include <curl/curl.h>
 #include <openssl/sha.h>
 #include <openssl/rand.h>
@@ -189,10 +190,10 @@ bool OAuthAuthorizer::startCallbackServer() {
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(REDIRECT_PORT);
+    addr.sin_port = htons(api::OAUTH_REDIRECT_PORT);
     
     if (bind(server_socket_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        last_error_ = "Failed to bind to port " + std::to_string(REDIRECT_PORT) + 
+        last_error_ = "Failed to bind to port " + std::to_string(api::OAUTH_REDIRECT_PORT) + 
                      " (is another instance running?)";
 #ifdef _WIN32
         closesocket(server_socket_);
@@ -314,7 +315,7 @@ void OAuthAuthorizer::handleRequest(int client_socket) {
                 
                 // Send success response with redirect
                 std::string response = "HTTP/1.1 302 Found\r\n";
-                response += "Location: " + std::string(SUCCESS_URL) + "\r\n";
+                response += "Location: " + std::string(api::OAUTH_SUCCESS_URL) + "\r\n";
                 response += "Content-Length: 0\r\n";
                 response += "\r\n";
                 
@@ -376,10 +377,10 @@ std::string OAuthAuthorizer::waitForAuthCode() {
 
 std::string OAuthAuthorizer::buildAuthorizationUrl(const PKCEParams& params) {
     std::ostringstream url;
-    url << AUTH_URL << "?";
-    url << "client_id=" << CLIENT_ID;
+    url << api::OAUTH_AUTH_URL << "?";
+    url << "client_id=" << api::OAUTH_CLIENT_ID;
     url << "&response_type=code";
-    url << "&redirect_uri=" << urlEncode("http://localhost:" + std::to_string(REDIRECT_PORT) + "/callback");
+    url << "&redirect_uri=" << urlEncode("http://localhost:" + std::to_string(api::OAUTH_REDIRECT_PORT) + "/callback");
     url << "&scope=" << urlEncode("user:profile user:inference");
     url << "&code_challenge=" << params.code_challenge;
     url << "&code_challenge_method=S256";
@@ -416,8 +417,8 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     json request_data = {
         {"grant_type", "authorization_code"},
         {"code", code},
-        {"redirect_uri", "http://localhost:" + std::to_string(REDIRECT_PORT) + "/callback"},
-        {"client_id", CLIENT_ID},
+        {"redirect_uri", "http://localhost:" + std::to_string(api::OAUTH_REDIRECT_PORT) + "/callback"},
+        {"client_id", api::OAUTH_CLIENT_ID},
         {"code_verifier", pkce_params_.code_verifier},
         {"state", pkce_params_.state}
     };
@@ -430,7 +431,7 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     headers = curl_slist_append(headers, "Content-Type: application/json");
     headers = curl_slist_append(headers, ("User-Agent: " + std::string(api::USER_AGENT)).c_str());
     
-    curl_easy_setopt(curl, CURLOPT_URL, TOKEN_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, api::OAUTH_TOKEN_URL);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, request_body.length());

@@ -8,12 +8,33 @@ namespace llm_re::ui_v2 {
 
 // MessageBubble implementation
 
-MessageBubble::MessageBubble(Message* message, QWidget* parent)
+MessageBubble::MessageBubble(UIMessage* message, QWidget* parent)
     : CardWidget(parent), message_(message) {
     
     setupUI();
-    updateMessage();
     applyBubbleStyle();
+    
+    // Set initial content from message
+    if (message_) {
+        // Set header information
+        if (nameLabel_) {
+            nameLabel_->setText(message_->roleString());
+        }
+        if (timestampLabel_) {
+            timestampLabel_->setText(message_->metadata.timestamp.toString("hh:mm"));
+        }
+        
+        // Set message content
+        QString content = message_->getDisplayText();
+        if (!content.isEmpty()) {
+            if (contentViewer_) {
+                contentViewer_->setMarkdown(content);
+            } else if (plainTextLabel_) {
+                plainTextLabel_->setText(content);
+                plainTextLabel_->setVisible(true);
+            }
+        }
+    }
     
     // Set initial properties
     setFocusPolicy(Qt::NoFocus);
@@ -41,16 +62,10 @@ void MessageBubble::setupUI() {
     // Create components
     createHeader();
     createContent();
-    createFooter();
-    
+
     // Add to layout
     if (headerWidget_) mainLayout->addWidget(headerWidget_);
     if (contentWidget_) mainLayout->addWidget(contentWidget_);
-    if (analysisWidget_) mainLayout->addWidget(analysisWidget_);
-    if (attachmentsWidget_) mainLayout->addWidget(attachmentsWidget_);
-    if (footerWidget_) mainLayout->addWidget(footerWidget_);
-    
-    createContextMenu();
 }
 
 void MessageBubble::createHeader() {
@@ -74,20 +89,6 @@ void MessageBubble::createHeader() {
     timestampLabel_->setStyleSheet(QString("color: %1;").arg(
         ThemeManager::instance().colors().textTertiary.name()));
     layout->addWidget(timestampLabel_);
-    
-    // Menu button
-    menuButton_ = new QToolButton(this);
-    menuButton_->setIcon(ThemeManager::instance().themedIcon("more"));
-    menuButton_->setIconSize(QSize(16, 16));
-    menuButton_->setAutoRaise(true);
-    menuButton_->setPopupMode(QToolButton::InstantPopup);
-    connect(menuButton_, &QToolButton::clicked, [this]() {
-        if (contextMenu_) {
-            contextMenu_->popup(menuButton_->mapToGlobal(
-                QPoint(0, menuButton_->height())));
-        }
-    });
-    layout->addWidget(menuButton_);
 }
 
 void MessageBubble::createContent() {
@@ -102,9 +103,6 @@ void MessageBubble::createContent() {
     contentViewer_->setBorderWidth(0);
     contentViewer_->setBackgroundColor(Qt::transparent);
     
-    connect(contentViewer_, &MarkdownViewer::linkClicked,
-            this, &MessageBubble::onContentLinkClicked);
-    
     layout->addWidget(contentViewer_);
     
     // Alternative plain text label for simple messages
@@ -115,299 +113,6 @@ void MessageBubble::createContent() {
     plainTextLabel_->setVisible(false);
     layout->addWidget(plainTextLabel_);
 }
-
-void MessageBubble::createFooter() {
-    footerWidget_ = new QWidget(this);
-    auto* layout = new QHBoxLayout(footerWidget_);
-    layout->setSpacing(Design::SPACING_SM);
-    layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, Design::SPACING_SM);
-    
-    
-    
-    // Share button
-    shareButton_ = new QToolButton(this);
-    shareButton_->setIcon(ThemeManager::instance().themedIcon("share"));
-    shareButton_->setToolTip(tr("Share"));
-    shareButton_->setAutoRaise(true);
-    layout->addWidget(shareButton_);
-    
-    layout->addStretch();
-    
-    // Initially hidden
-    footerWidget_->setVisible(false);
-}
-
-
-void MessageBubble::createAnalysisWidget() {
-    if (!analysisWidget_) {
-        analysisWidget_ = new QWidget(this);
-        auto* layout = new QVBoxLayout(analysisWidget_);
-        layout->setSpacing(Design::SPACING_XS);
-        layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, 0);
-        
-        // Analysis entries will be created dynamically
-        
-        // Insert after content
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
-            int index = mainLayout->indexOf(contentWidget_) + 1;
-            mainLayout->insertWidget(index, analysisWidget_);
-        }
-    }
-    
-    analysisWidget_->setVisible(message_ && message_->hasAnalysis());
-}
-
-void MessageBubble::createAttachmentsWidget() {
-    if (!attachmentsWidget_) {
-        attachmentsWidget_ = new QWidget(this);
-        auto* layout = new QHBoxLayout(attachmentsWidget_);
-        layout->setSpacing(Design::SPACING_SM);
-        layout->setContentsMargins(Design::SPACING_MD, 0, Design::SPACING_MD, 0);
-        
-        // Attachment previews will be created dynamically
-        
-        // Insert before footer
-        if (auto* mainLayout = qobject_cast<QVBoxLayout*>(this->layout())) {
-            int index = footerWidget_ ? mainLayout->indexOf(footerWidget_) : mainLayout->count();
-            mainLayout->insertWidget(index, attachmentsWidget_);
-        }
-    }
-    
-    attachmentsWidget_->setVisible(message_ && message_->hasAttachments());
-}
-
-
-void MessageBubble::createContextMenu() {
-    contextMenu_ = new QMenu(this);
-    
-    copyAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("copy"), 
-                                          tr("Copy"), this, &MessageBubble::onCopyAction);
-    copyAction_->setShortcut(QKeySequence::Copy);
-    
-    if (message_ && message_->role() == MessageRole::User) {
-        editAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("edit"),
-                                             tr("Edit"), this, &MessageBubble::onEditAction);
-    }
-    
-    contextMenu_->addSeparator();
-    
-    
-    contextMenu_->addSeparator();
-    
-    pinAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("pin"),
-                                        tr("Pin"), this, &MessageBubble::onPinAction);
-    pinAction_->setCheckable(true);
-    
-    bookmarkAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("bookmark"),
-                                             tr("Bookmark"), this, &MessageBubble::onBookmarkAction);
-    bookmarkAction_->setCheckable(true);
-    
-    contextMenu_->addSeparator();
-    
-    deleteAction_ = contextMenu_->addAction(ThemeManager::instance().themedIcon("delete"),
-                                           tr("Delete"), this, &MessageBubble::onDeleteAction);
-    deleteAction_->setShortcut(QKeySequence::Delete);
-}
-
-void MessageBubble::updateMessage() {
-    if (!message_) return;
-    
-    sizeCacheDirty_ = true;
-    
-    // Update header
-    if (nameLabel_) {
-        nameLabel_->setText(message_->metadata().author.isEmpty() ? 
-                           message_->roleString() : message_->metadata().author);
-    }
-    
-    if (timestampLabel_) {
-        // Convert QDateTime to std::chrono::system_clock::time_point
-        auto timestamp = std::chrono::system_clock::from_time_t(
-            message_->metadata().timestamp.toSecsSinceEpoch());
-        timestampLabel_->setText(UIUtils::formatTimestamp(timestamp));
-        timestampLabel_->setVisible(showTimestamp_);
-    }
-    
-    // Apply role-specific styling
-    const auto& colors = ThemeManager::instance().colors();
-    switch (message_->role()) {
-        case MessageRole::User:
-            setBackgroundColor(colors.primary.lighter(180));
-            break;
-        case MessageRole::Assistant:
-            setBackgroundColor(colors.surface);
-            break;
-        case MessageRole::System:
-            setBackgroundColor(colors.surfaceHover);
-            break;
-        case MessageRole::Tool:
-            setBackgroundColor(colors.warning.lighter(180));
-            break;
-    }
-    
-    // Update content
-    updateContentDisplay();
-    
-    // Update analysis
-    if (message_->hasAnalysis()) {
-        createAnalysisWidget();
-        updateAnalysisDisplay();
-    }
-    
-    // Update attachments
-    if (message_->hasAttachments()) {
-        createAttachmentsWidget();
-        updateAttachmentsDisplay();
-    }
-    
-    
-    // Update context menu state
-    if (pinAction_) {
-        pinAction_->setChecked(message_->metadata().isPinned);
-    }
-    if (bookmarkAction_) {
-        bookmarkAction_->setChecked(message_->metadata().isBookmarked);
-    }
-    
-    updateLayout();
-}
-
-void MessageBubble::updateContentDisplay() {
-    if (!message_) return;
-    
-    QString content;
-    
-    // Add thinking content if present (for assistant messages)
-    if (message_->hasThinking() && message_->role() == MessageRole::Assistant) {
-        QString thinking = message_->thinkingContent();
-        
-        // Apply search highlighting to thinking if needed
-        if (!searchHighlight_.isEmpty()) {
-            thinking = UIUtils::highlightText(thinking, searchHighlight_, "search-highlight");
-        }
-        
-        // Format thinking content in italics with darker color
-        // Use theme secondary text color for thinking content
-        const auto& colors = ThemeManager::instance().colors();
-        QString secondaryColorHex = colors.textSecondary.name();
-        content = QString("*<span style='color: %1;'>Thinking:</span>*\n\n").arg(secondaryColorHex);
-        content += QString("*<span style='color: %1;'>%2</span>*\n\n").arg(secondaryColorHex).arg(thinking.replace("\n", "\n> "));
-    }
-    
-    // Add regular content
-    QString mainContent = message_->content();
-    
-    // Apply search highlighting if needed
-    if (!searchHighlight_.isEmpty()) {
-        mainContent = UIUtils::highlightText(mainContent, searchHighlight_, "search-highlight");
-    }
-    
-    content += mainContent;
-    
-    // Use markdown viewer for rich content
-    if (message_->type() == MessageType::Code || 
-        content.contains("```") || 
-        content.contains("**") ||
-        content.contains("[]()") ||
-        message_->hasThinking()) {  // Always use markdown if has thinking
-        
-        contentViewer_->setMarkdown(content);
-        contentViewer_->setVisible(true);
-        plainTextLabel_->setVisible(false);
-        
-    } else {
-        // Use plain text for simple messages
-        plainTextLabel_->setText(content);
-        plainTextLabel_->setVisible(true);
-        contentViewer_->setVisible(false);
-    }
-}
-
-
-void MessageBubble::updateAnalysisDisplay() {
-    if (!message_ || !message_->hasAnalysis() || !analysisWidget_) return;
-    
-    // Clear existing entries
-    QLayoutItem* item;
-    while ((item = analysisWidget_->layout()->takeAt(0))) {
-        delete item->widget();
-        delete item;
-    }
-    
-    const auto& colors = ThemeManager::instance().colors();
-    
-    for (const auto& entry : message_->analysisEntries()) {
-        auto* entryWidget = new QWidget(this);
-        auto* layout = new QHBoxLayout(entryWidget);
-        layout->setSpacing(Design::SPACING_SM);
-        layout->setContentsMargins(0, 0, 0, 0);
-        
-        // Type indicator
-        auto* indicator = new QWidget(this);
-        indicator->setFixedSize(4, 40);
-        
-        QColor typeColor;
-        if (entry.type == "note") typeColor = colors.analysisNote;
-        else if (entry.type == "finding") typeColor = colors.analysisFinding;
-        else if (entry.type == "hypothesis") typeColor = colors.analysisHypothesis;
-        else if (entry.type == "question") typeColor = colors.analysisQuestion;
-        else if (entry.type == "analysis") typeColor = colors.analysisAnalysis;
-        else if (entry.type == "deep_analysis") typeColor = colors.analysisDeepAnalysis;
-        else typeColor = colors.textSecondary;
-        
-        indicator->setStyleSheet(QString("background-color: %1; border-radius: 2px;")
-                               .arg(typeColor.name()));
-        layout->addWidget(indicator);
-        
-        // Content
-        auto* contentLabel = new QLabel(this);
-        contentLabel->setText(entry.content);
-        contentLabel->setWordWrap(true);
-        contentLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        layout->addWidget(contentLabel, 1);
-        
-        analysisWidget_->layout()->addWidget(entryWidget);
-    }
-}
-
-void MessageBubble::updateAttachmentsDisplay() {
-    if (!message_ || !message_->hasAttachments() || !attachmentsWidget_) return;
-    
-    // Clear existing attachments
-    QLayoutItem* item;
-    while ((item = attachmentsWidget_->layout()->takeAt(0))) {
-        delete item->widget();
-        delete item;
-    }
-    
-    for (const auto& attachment : message_->attachments()) {
-        auto* attachButton = new QToolButton(this);
-        attachButton->setFixedSize(80, 80);
-        attachButton->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        attachButton->setText(attachment.name);
-        attachButton->setToolTip(QString("%1\n%2")
-                               .arg(attachment.name)
-                               .arg(UIUtils::humanizeBytes(attachment.size)));
-        
-        // Set icon based on mime type
-        if (attachment.mimeType.startsWith("image/")) {
-            attachButton->setIcon(ThemeManager::instance().themedIcon("image"));
-        } else if (attachment.mimeType.startsWith("text/")) {
-            attachButton->setIcon(ThemeManager::instance().themedIcon("document"));
-        } else {
-            attachButton->setIcon(ThemeManager::instance().themedIcon("attachment"));
-        }
-        
-        connect(attachButton, &QToolButton::clicked, [this, attachment]() {
-            emit attachmentClicked(attachment);
-        });
-        
-        attachmentsWidget_->layout()->addWidget(attachButton);
-    }
-    
-    qobject_cast<QHBoxLayout*>(attachmentsWidget_->layout())->addStretch();
-}
-
 
 void MessageBubble::setBubbleStyle(BubbleStyle style) {
     if (bubbleStyle_ != style) {
@@ -458,11 +163,6 @@ void MessageBubble::applyBubbleStyle() {
             setShadowOffset(QPointF(2, 4));
             break;
     }
-    
-    // Set background color based on role
-    if (message_) {
-        setBackgroundColor(message_->roleColor());
-    }
 }
 
 
@@ -509,7 +209,7 @@ void MessageBubble::animateIn() {
         
         case AnimationType::SlideIn: {
             // Slide from right for user, left for others
-            int startX = message_ && message_->role() == MessageRole::User ?
+            int startX = message_ && message_->role() == Role::User ?
                         qobject_cast<QWidget*>(parent())->width() : -(this->width());
             move(startX, y());
             
@@ -529,9 +229,9 @@ void MessageBubble::animateIn() {
                 // Animate text appearing character by character
                 setTypewriterPosition(0);
                 auto* anim = new QPropertyAnimation(this, "typewriterPosition", this);
-                anim->setDuration(message_->content().length() * 20); // 20ms per char
+                anim->setDuration(message_->getDisplayText().length() * 20); // 20ms per char
                 anim->setStartValue(0);
-                anim->setEndValue(message_->content().length());
+                anim->setEndValue(message_->getDisplayText().length());
                 anim->setEasingCurve(QEasingCurve::Linear);
                 connect(anim, &QPropertyAnimation::finished,
                         this, &MessageBubble::onAnimationFinished);
@@ -627,31 +327,15 @@ void MessageBubble::setExpanded(bool expanded, bool animated) {
     emit expansionChanged(expanded);
 }
 
-void MessageBubble::setSearchHighlight(const QString& text) {
-    if (searchHighlight_ != text) {
-        searchHighlight_ = text;
-        updateContentDisplay();
-    }
-}
-
-void MessageBubble::clearSearchHighlight() {
-    setSearchHighlight(QString());
-}
-
 QString MessageBubble::toPlainText() const {
     if (!message_) return QString();
-    return message_->content();
+    return message_->getDisplayText();
 }
 
 
 void MessageBubble::setExpandProgress(qreal progress) {
     expandProgress_ = progress;
-    
-    // Update visibility of collapsible elements
-    bool showFull = progress > 0.5;
-    if (analysisWidget_) analysisWidget_->setVisible(showFull && message_->hasAnalysis());
-    if (attachmentsWidget_) attachmentsWidget_->setVisible(showFull && message_->hasAttachments());
-    
+
     updateLayout();
     update();
 }
@@ -666,7 +350,7 @@ void MessageBubble::setTypewriterPosition(int position) {
     typewriterPosition_ = position;
     
     if (position >= 0 && message_) {
-        QString visibleText = message_->content().left(position);
+        QString visibleText = message_->getDisplayText().left(position);
         if (contentViewer_) {
             contentViewer_->setMarkdown(visibleText);
         } else if (plainTextLabel_) {
@@ -676,21 +360,13 @@ void MessageBubble::setTypewriterPosition(int position) {
 }
 
 QSize MessageBubble::sizeHint() const {
-    if (!sizeCacheDirty_ && cachedSize_.isValid()) {
-        return cachedSize_;
-    }
-    
     QSize size = CardWidget::sizeHint();
     
     // Limit width
     if (size.width() > maxWidth_) {
         size.setWidth(maxWidth_);
     }
-    
-    // Cache the size
-    cachedSize_ = size;
-    sizeCacheDirty_ = false;
-    
+
     return size;
 }
 
@@ -700,11 +376,6 @@ QSize MessageBubble::minimumSizeHint() const {
 
 void MessageBubble::updateTheme() {
     applyBubbleStyle();
-    updateMessage();
-}
-
-void MessageBubble::refresh() {
-    updateMessage();
 }
 
 void MessageBubble::paintContent(QPainter* painter) {
@@ -714,14 +385,10 @@ void MessageBubble::paintContent(QPainter* painter) {
     if (isSelected_) {
         paintSelectionOverlay(painter);
     }
-    
-    // Paint status indicators
-    paintStatusIndicator(painter, rect());
 }
 
 void MessageBubble::resizeEvent(QResizeEvent* event) {
     CardWidget::resizeEvent(event);
-    sizeCacheDirty_ = true;
     updateLayout();
 }
 
@@ -742,13 +409,6 @@ void MessageBubble::mouseDoubleClickEvent(QMouseEvent* event) {
         emit doubleClicked();
     }
     CardWidget::mouseDoubleClickEvent(event);
-}
-
-void MessageBubble::contextMenuEvent(QContextMenuEvent* event) {
-    if (contextMenu_ && interactive_) {
-        contextMenu_->popup(event->globalPos());
-        emit contextMenuRequested(event->pos());
-    }
 }
 
 void MessageBubble::paintEvent(QPaintEvent* event) {
@@ -784,38 +444,10 @@ void MessageBubble::onThemeChanged() {
     updateTheme();
 }
 
-void MessageBubble::onContentLinkClicked(const QUrl& url) {
-    emit linkClicked(url);
-}
-
 void MessageBubble::onCopyAction() {
     QApplication::clipboard()->setText(toPlainText());
     emit copyRequested();
 }
-
-
-void MessageBubble::onEditAction() {
-    emit editRequested();
-}
-
-void MessageBubble::onDeleteAction() {
-    emit deleteRequested();
-}
-
-void MessageBubble::onPinAction() {
-    if (message_) {
-        message_->metadata().isPinned = !message_->metadata().isPinned;
-        pinAction_->setChecked(message_->metadata().isPinned);
-    }
-}
-
-void MessageBubble::onBookmarkAction() {
-    if (message_) {
-        message_->metadata().isBookmarked = !message_->metadata().isBookmarked;
-        bookmarkAction_->setChecked(message_->metadata().isBookmarked);
-    }
-}
-
 
 void MessageBubble::onAnimationFinished() {
     currentAnimation_ = nullptr;
@@ -832,32 +464,6 @@ void MessageBubble::updateLayout() {
     
     // Update size hint
     updateGeometry();
-}
-
-
-void MessageBubble::paintStatusIndicator(QPainter* painter, const QRect& rect) {
-    if (!message_) return;
-    
-    const auto& colors = ThemeManager::instance().colors();
-    int indicatorSize = 8;
-    int margin = 4;
-    
-    // Draw pin indicator
-    if (message_->metadata().isPinned) {
-        QRect pinRect(rect.right() - indicatorSize - margin, 
-                     rect.top() + margin, indicatorSize, indicatorSize);
-        painter->setBrush(colors.primary);
-        painter->setPen(Qt::NoPen);
-        painter->drawEllipse(pinRect);
-    }
-    
-    // Draw edit indicator
-    if (message_->metadata().isEdited) {
-        painter->setPen(colors.textTertiary);
-        painter->setFont(ThemeManager::instance().typography().caption);
-        painter->drawText(rect.adjusted(margin, 0, -margin, -margin),
-                         Qt::AlignBottom | Qt::AlignLeft, tr("(edited)"));
-    }
 }
 
 void MessageBubble::paintSelectionOverlay(QPainter* painter) {
@@ -889,7 +495,7 @@ MessageBubbleContainer::MessageBubbleContainer(QWidget* parent)
     connect(layoutTimer_, &QTimer::timeout, this, &MessageBubbleContainer::performLayout);
 }
 
-void MessageBubbleContainer::addMessage(Message* message, bool animated) {
+void MessageBubbleContainer::addMessage(UIMessage* message, bool animated) {
     // Check if we can add to current group
     if (currentGroup_ && currentGroup_->canAddMessage(message)) {
         currentGroup_->addMessage(message);
@@ -923,8 +529,7 @@ void MessageBubbleContainer::addMessage(Message* message, bool animated) {
         connect(group, &MessageGroup::contextMenuRequested, [this](const QUuid& id, const QPoint& pos) {
             emit bubbleContextMenu(id, pos);
         });
-        connect(group, &MessageGroup::linkClicked, this, &MessageBubbleContainer::linkClicked);
-        
+
         // Add to layout with spacing
         if (groups_.size() > 1) {
             // Add spacing between groups
@@ -950,7 +555,7 @@ void MessageBubbleContainer::addMessage(Message* message, bool animated) {
     }
 }
 
-void MessageBubbleContainer::insertMessage(int index, Message* message, bool animated) {
+void MessageBubbleContainer::insertMessage(int index, UIMessage* message, bool animated) {
     auto* bubble = new MessageBubble(message, this);
     setupBubble(bubble);
     
@@ -961,25 +566,6 @@ void MessageBubbleContainer::insertMessage(int index, Message* message, bool ani
         animateInsertion(bubble, index);
     } else {
         qobject_cast<QVBoxLayout*>(layout())->insertWidget(index, bubble);
-    }
-    
-    if (!batchUpdateCount_) {
-        updateLayout();
-    }
-}
-
-void MessageBubbleContainer::removeMessage(const QUuid& id, bool animated) {
-    MessageBubble* bubble = bubbleMap_.value(id);
-    if (!bubble) return;
-    
-    bubbles_.removeOne(bubble);
-    bubbleMap_.remove(id);
-    selectedBubbles_.remove(bubble);
-    
-    if (animated && !batchUpdateCount_) {
-        animateRemoval(bubble);
-    } else {
-        cleanupBubble(bubble);
     }
     
     if (!batchUpdateCount_) {
@@ -1007,32 +593,6 @@ void MessageBubbleContainer::clearMessages(bool animated) {
     
     if (!batchUpdateCount_) {
         updateLayout();
-    }
-}
-
-void MessageBubbleContainer::showTypingIndicator(const QString& user) {
-    if (!typingIndicator_) {
-        typingIndicator_ = new TypingIndicator(this);
-        layout()->addWidget(typingIndicator_);
-    }
-    
-    typingIndicator_->setTypingUser(user.isEmpty() ? tr("Assistant") : user);
-    typingIndicator_->startAnimation();
-    typingIndicator_->show();
-    
-    // Scroll to bottom to show typing indicator
-    if (auto* scrollArea = qobject_cast<QScrollArea*>(parentWidget())) {
-        QTimer::singleShot(100, [scrollArea]() {
-            scrollArea->verticalScrollBar()->setValue(
-                scrollArea->verticalScrollBar()->maximum());
-        });
-    }
-}
-
-void MessageBubbleContainer::hideTypingIndicator() {
-    if (typingIndicator_) {
-        typingIndicator_->stopAnimation();
-        typingIndicator_->hide();
     }
 }
 
@@ -1140,63 +700,6 @@ void MessageBubbleContainer::scrollToTop(bool animated) {
     }
     
     emit scrollRequested();
-}
-
-void MessageBubbleContainer::setSearchFilter(const QString& text) {
-    searchFilter_ = text;
-    
-    for (MessageBubble* bubble : bubbles_) {
-        bubble->setSearchHighlight(text);
-    }
-}
-
-void MessageBubbleContainer::clearSearchFilter() {
-    searchFilter_.clear();
-    currentSearchMatch_ = -1;
-    
-    for (MessageBubble* bubble : bubbles_) {
-        bubble->clearSearchHighlight();
-    }
-}
-
-void MessageBubbleContainer::highlightNextMatch() {
-    if (searchFilter_.isEmpty() || bubbles_.isEmpty()) return;
-    
-    currentSearchMatch_++;
-    if (currentSearchMatch_ >= bubbles_.size()) {
-        currentSearchMatch_ = 0;
-    }
-    
-    // Find next matching bubble
-    for (int i = currentSearchMatch_; i < bubbles_.size(); ++i) {
-        if (bubbles_[i]->message() && 
-            bubbles_[i]->message()->matchesSearch(searchFilter_)) {
-            currentSearchMatch_ = i;
-            bubbles_[i]->setHighlighted(true);
-            scrollToMessage(bubbles_[i]->message()->id());
-            break;
-        }
-    }
-}
-
-void MessageBubbleContainer::highlightPreviousMatch() {
-    if (searchFilter_.isEmpty() || bubbles_.isEmpty()) return;
-    
-    currentSearchMatch_--;
-    if (currentSearchMatch_ < 0) {
-        currentSearchMatch_ = bubbles_.size() - 1;
-    }
-    
-    // Find previous matching bubble
-    for (int i = currentSearchMatch_; i >= 0; --i) {
-        if (bubbles_[i]->message() && 
-            bubbles_[i]->message()->matchesSearch(searchFilter_)) {
-            currentSearchMatch_ = i;
-            bubbles_[i]->setHighlighted(true);
-            scrollToMessage(bubbles_[i]->message()->id());
-            break;
-        }
-    }
 }
 
 void MessageBubbleContainer::setBubbleStyle(MessageBubble::BubbleStyle style) {
@@ -1332,12 +835,8 @@ void MessageBubbleContainer::setupBubble(MessageBubble* bubble) {
             this, &MessageBubbleContainer::onBubbleClicked);
     connect(bubble, &MessageBubble::doubleClicked,
             this, &MessageBubbleContainer::onBubbleDoubleClicked);
-    connect(bubble, &MessageBubble::contextMenuRequested,
-            this, &MessageBubbleContainer::onBubbleContextMenu);
     connect(bubble, &MessageBubble::selectionChanged,
             this, &MessageBubbleContainer::onBubbleSelectionChanged);
-    connect(bubble, &MessageBubble::linkClicked,
-            this, &MessageBubbleContainer::linkClicked);
 }
 
 void MessageBubbleContainer::animateInsertion(MessageBubble* bubble, int index) {
@@ -1359,7 +858,7 @@ QRect MessageBubbleContainer::calculateBubbleGeometry(MessageBubble* bubble, int
     int x = 0;
     if (bubble->message()) {
         // Align based on message role
-        if (bubble->message()->role() == MessageRole::User) {
+        if (bubble->message()->role() == Role::User) {
             x = width() - bubbleWidth - Design::SPACING_MD;
         } else {
             x = Design::SPACING_MD;
@@ -1389,84 +888,5 @@ void MessageBubbleContainer::performLayout() {
     
     updateVisibleBubbles();
 }
-
-// TypingIndicator implementation
-
-TypingIndicator::TypingIndicator(QWidget* parent)
-    : BaseStyledWidget(parent) {
-    
-    setShadowEnabled(false);
-    setBorderWidth(0);
-    setBackgroundColor(ThemeManager::instance().colors().surface);
-    setFixedHeight(40);
-}
-
-void TypingIndicator::setTypingUser(const QString& user) {
-    typingUser_ = user;
-    update();
-}
-
-void TypingIndicator::startAnimation() {
-    if (!animationTimer_) {
-        animationTimer_ = new QTimer(this);
-        animationTimer_->setInterval(50);
-        connect(animationTimer_, &QTimer::timeout, [this]() {
-            animationPhase_ += 0.1;
-            if (animationPhase_ > 2 * M_PI) {
-                animationPhase_ -= 2 * M_PI;
-            }
-            update();
-        });
-    }
-    animationTimer_->start();
-}
-
-void TypingIndicator::stopAnimation() {
-    if (animationTimer_) {
-        animationTimer_->stop();
-    }
-}
-
-void TypingIndicator::setAnimationPhase(qreal phase) {
-    animationPhase_ = phase;
-    update();
-}
-
-QSize TypingIndicator::sizeHint() const {
-    return QSize(200, 40);
-}
-
-void TypingIndicator::paintContent(QPainter* painter) {
-    const auto& colors = ThemeManager::instance().colors();
-    
-    painter->setRenderHint(QPainter::Antialiasing);
-    
-    // Draw user name
-    if (!typingUser_.isEmpty()) {
-        painter->setPen(colors.textSecondary);
-        painter->setFont(ThemeManager::instance().typography().caption);
-        painter->drawText(rect().adjusted(Design::SPACING_MD, 0, 0, 0),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         typingUser_ + " is typing");
-    }
-    
-    // Draw animated dots
-    int dotSize = 8;
-    int dotSpacing = 12;
-    int startX = rect().center().x() - dotSpacing;
-    int y = rect().center().y();
-    
-    for (int i = 0; i < 3; ++i) {
-        qreal phase = animationPhase_ + i * M_PI / 3;
-        qreal scale = 0.5 + 0.5 * sin(phase);
-        
-        painter->setBrush(colors.textTertiary);
-        painter->setPen(Qt::NoPen);
-        
-        int size = dotSize * scale;
-        painter->drawEllipse(QPoint(startX + i * dotSpacing, y), size/2, size/2);
-    }
-}
-
 
 } // namespace llm_re::ui_v2

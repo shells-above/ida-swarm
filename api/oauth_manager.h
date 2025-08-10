@@ -1,14 +1,14 @@
 #pragma once
 
-#include "common_base.h"
-#include "api/anthropic_api.h"
+#include "core/common_base.h"
+#include "anthropic_api.h"
 #include <filesystem>
 #include <optional>
 #include <chrono>
 
 namespace llm_re {
 
-// OAuth manager to read credentials from claude-cpp-sdk storage
+// OAuth manager to read credentials storage
 class OAuthManager {
 public:
     // Constructor with optional config directory override
@@ -28,6 +28,16 @@ public:
     
     // Save OAuth credentials (encrypts and stores)
     bool save_credentials(const api::OAuthCredentials& creds);
+    
+    // Refresh OAuth tokens if expired or about to expire
+    // Returns updated credentials on success, nullopt on failure
+    std::optional<api::OAuthCredentials> refresh_if_needed();
+    
+    // Force refresh OAuth tokens
+    std::optional<api::OAuthCredentials> force_refresh();
+    
+    // Check if current credentials need refresh
+    bool needs_refresh();
     
     // Get error message if last operation failed
     std::string get_last_error() const { return last_error; }

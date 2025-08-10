@@ -201,9 +201,6 @@ public:
     // Unified name setter
     static bool set_addr_name(ea_t address, const std::string& name);
 
-    // Data operations (kept for compatibility)
-    static std::pair<std::string, std::string> get_data(ea_t address);
-
     // Comment operations (kept as is)
     static bool add_disassembly_comment(ea_t address, const std::string& comment);
     static bool add_pseudocode_comment(ea_t address, const std::string& comment);

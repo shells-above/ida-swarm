@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../core/ui_v2_common.h"
-#include "../core/base_styled_widget.h"
 #include "conversation_view.h"
 
 namespace llm_re::ui_v2 {
@@ -46,20 +45,12 @@ public:
     // Theme
     void applyTheme(const QString& theme);
     
-    // Split views
-    void splitHorizontally();
-    void splitVertically();
-    void removeSplit();
-    void focusNextSplit();
-    void focusPreviousSplit();
-    
     // Session management
     void newSession();
     void openSession(const QString& path = QString());
     void saveSession(const QString& path = QString());
     void saveSessionAs();
     bool hasUnsavedChanges() const;
-    
     
     // Settings
     void showSettings();
@@ -82,13 +73,10 @@ signals:
     void layoutChanged(const QString& layout);
     void themeChanged(const QString& theme);
     void sessionChanged(const QString& sessionPath);
-    void splitViewCreated();
-    void splitViewRemoved();
     void fullScreenChanged(bool fullScreen);
     
 public slots:
-    void showNotification(const QString& title, const QString& message, 
-                         const QString& type = "info", int duration = 5000);
+    void showNotification(const QString& title, const QString& message, const QString& type = "info", int duration = 5000);
     void showStatusMessage(const QString& message, int timeout = 2000);
     void updateWindowTitle();
     void toggleFullScreen();
@@ -109,8 +97,6 @@ private slots:
     void onFileSaveAs();
     void onFileExit();
     void onEditSelectAll();
-    void onEditFind();
-    void onEditReplace();
     void onEditPreferences();
     void onViewToggleSidebar();
     void onViewToggleToolBar();
@@ -150,7 +136,6 @@ private:
     void updateRecentFiles();
     void setCurrentFile(const QString& fileName);
     QString strippedName(const QString& fullFileName);
-    void createSplitView(Qt::Orientation orientation);
     ConversationView* createConversationView();
     
     // UI Controller
@@ -198,8 +183,6 @@ private:
     QAction* saveAsAction_ = nullptr;
     QAction* exitAction_ = nullptr;
     QAction* selectAllAction_ = nullptr;
-    QAction* findAction_ = nullptr;
-    QAction* replaceAction_ = nullptr;
     QAction* preferencesAction_ = nullptr;
     QAction* toggleSidebarAction_ = nullptr;
     QAction* toggleToolBarAction_ = nullptr;
@@ -218,7 +201,6 @@ private:
     // Recent files
     QList<QAction*> recentFileActions_;
     static constexpr int MaxRecentFiles = 10;
-    
     
     // State
     QString currentFile_;

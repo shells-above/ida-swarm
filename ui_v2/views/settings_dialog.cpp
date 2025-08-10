@@ -1,8 +1,8 @@
 #include "settings_dialog.h"
 #include "../core/settings_manager.h"
 #include "../core/theme_manager.h"
-#include "core/oauth_manager.h"
-#include "core/oauth_authorizer.h"
+#include "api/oauth_manager.h"
+#include "api/oauth_authorizer.h"
 #include "../../api/anthropic_api.h"
 
 namespace llm_re::ui_v2 {
@@ -72,11 +72,12 @@ void SettingsDialog::createAPITab() {
     auto* auth_group = new QGroupBox("Authentication");
     auto* auth_layout = new QFormLayout(auth_group);
     
-    use_oauth_check_ = new QCheckBox("Use OAuth (from claude-cpp-sdk)");
-    use_oauth_check_->setToolTip("Use OAuth credentials from claude-cpp-sdk instead of API key");
+    use_oauth_check_ = new QCheckBox("Use OAuth");
+    use_oauth_check_->setToolTip("Use OAuth credentials instead of API key");
     connect(use_oauth_check_, &QCheckBox::toggled, this, [this](bool checked) {
         oauth_config_dir_edit_->setEnabled(checked);
         authorize_button_->setEnabled(checked);
+        refresh_token_button_->setEnabled(checked);
         api_key_edit_->setEnabled(!checked);
         onSettingChanged();
         if (checked) {
@@ -97,6 +98,11 @@ void SettingsDialog::createAPITab() {
     authorize_button_->setEnabled(false);  // Will be enabled when OAuth is selected
     connect(authorize_button_, &QPushButton::clicked, this, &SettingsDialog::onAuthorize);
     auth_layout->addRow("", authorize_button_);
+    
+    refresh_token_button_ = new QPushButton("Refresh Token");
+    refresh_token_button_->setEnabled(false);  // Will be enabled when OAuth is selected and credentials exist
+    connect(refresh_token_button_, &QPushButton::clicked, this, &SettingsDialog::onRefreshToken);
+    auth_layout->addRow("", refresh_token_button_);
     
     api_key_edit_ = new QLineEdit();
     api_key_edit_->setEchoMode(QLineEdit::Password);
@@ -648,8 +654,11 @@ void SettingsDialog::checkOAuthStatus() {
         return;
     }
     
+    // Enable refresh button when we have credentials
+    refresh_token_button_->setEnabled(use_oauth_check_->isChecked());
+    
     if (creds->is_expired()) {
-        oauth_status_label_->setText("<font color='orange'>⚠ Token expired (may auto-refresh)</font>");
+        oauth_status_label_->setText("<font color='red'>✗ Token expired</font>");
     } else {
         // Calculate time until expiry
         auto now = std::chrono::system_clock::now();
@@ -693,6 +702,44 @@ void SettingsDialog::onAuthorize() {
                 QMessageBox::warning(this, "Authorization Failed",
                                      QString("Failed to authorize: %1").arg(QString::fromStdString(error)));
                 oauth_status_label_->setText("<font color='red'>✗ Authorization failed</font>");
+            }
+        }, Qt::QueuedConnection);
+    });
+    
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
+void SettingsDialog::onRefreshToken() {
+    // Disable button while refreshing
+    refresh_token_button_->setEnabled(false);
+    refresh_token_button_->setText("Refreshing...");
+    oauth_status_label_->setText("<font color='blue'>⟳ Refreshing token...</font>");
+    
+    // Get OAuth config dir
+    std::string oauth_config_dir = oauth_config_dir_edit_->text().toStdString();
+    
+    // Run refresh in background thread
+    QThread* thread = QThread::create([this, oauth_config_dir]() {
+        OAuthManager oauth_mgr(oauth_config_dir);
+        auto refreshed_creds = oauth_mgr.force_refresh();
+        bool success = refreshed_creds.has_value();
+        std::string error = oauth_mgr.get_last_error();
+        
+        // Update UI in main thread
+        QMetaObject::invokeMethod(this, [this, success, error]() {
+            refresh_token_button_->setEnabled(use_oauth_check_->isChecked());
+            refresh_token_button_->setText("Refresh Token");
+            
+            if (success) {
+                QMessageBox::information(this, "Token Refreshed",
+                                        "OAuth token has been refreshed successfully!");
+                checkOAuthStatus();
+                onSettingChanged();
+            } else {
+                QMessageBox::warning(this, "Refresh Failed",
+                                     QString("Failed to refresh token: %1").arg(QString::fromStdString(error)));
+                oauth_status_label_->setText("<font color='red'>✗ Token refresh failed</font>");
             }
         }, Qt::QueuedConnection);
     });

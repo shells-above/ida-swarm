@@ -1,6 +1,6 @@
 #include "agent/grader.h"
 #include "agent/agent.h"
-#include "core/oauth_manager.h"
+#include "api/oauth_manager.h"
 #include <sstream>
 
 namespace llm_re {
@@ -72,8 +72,10 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
         return result;
     }
     
-    // Parse the grader's response
-    return parse_grader_response(response.message);
+    // Parse the grader's response and include the full message
+    GradeResult result = parse_grader_response(response.message);
+    result.fullMessage = response.message;  // Store the complete message with thinking
+    return result;
 }
 
 messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) {
@@ -111,8 +113,8 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
     }
     
     prompt << "---\n\n";
-    prompt << "Evaluate if this investigation PERFECTLY and COMPLETELY answers the user's request.\n";
-    prompt << "Remember: The bar is perfection. Any doubt or incompleteness means it goes back.\n";
+    prompt << "Evaluate whether this investigation provides what the user asked for.\n";
+    prompt << "Think deeply about what the user requested and whether the investigation delivers that.\n";
     
     return messages::Message::user_text(prompt.str());
 }
@@ -190,7 +192,7 @@ Respond with JSON only:
         json result = json::parse(*text);
         return result.value("is_complete", false);
     } catch (const json::exception& e) {
-        msg(std::format("WARNING: Failed to parse classification JSON: {}", e.what()).c_str());
+        msg("%s", std::format("WARNING: Failed to parse classification JSON: {}", e.what()).c_str());
         return false;
     }
 }
