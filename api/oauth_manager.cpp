@@ -11,6 +11,7 @@
 #include <openssl/buffer.h>
 #include <iomanip>
 #include <algorithm>
+#include <sys/stat.h>
 
 namespace llm_re {
 
@@ -123,9 +124,9 @@ OAuthManager::OAuthManager(const std::string& config_dir_override) {
         config_dir = expand_home_directory(config_dir_override);
     } else {
         // Default to ~/.claude_cpp_sdk
-        qstring home_path;
-        if (qgetenv("HOME", &home_path)) {
-            config_dir = std::filesystem::path(home_path.c_str()) / ".claude_cpp_sdk";
+        const char* home_env = std::getenv("HOME");
+        if (home_env) {
+            config_dir = std::filesystem::path(home_env) / ".claude_cpp_sdk";
         } else {
             last_error = "Could not determine home directory";
             return;
@@ -142,12 +143,12 @@ std::filesystem::path OAuthManager::expand_home_directory(const std::string& pat
         return path;
     }
     
-    qstring home_path;
-    if (!qgetenv("HOME", &home_path)) {
+    const char* home_env = std::getenv("HOME");
+    if (!home_env) {
         return path;
     }
     
-    return std::filesystem::path(home_path.c_str()) / path.substr(2);  // Skip "~/"
+    return std::filesystem::path(home_env) / path.substr(2);  // Skip "~/"
 }
 
 bool OAuthManager::has_credentials() const {
@@ -599,13 +600,8 @@ bool OAuthManager::needs_refresh() {
             return false;
         }
     }
-    
-    // Check if expired or will expire in the next 5 minutes
-    bool needs_it = creds->is_expired(300);
-    if (needs_it) {
-        msg("LLM RE: OAuth token needs refresh (expired or expires in < 5 min)\n");
-    }
-    return needs_it;
+
+    return creds->is_expired(300);
 }
 
 std::optional<api::OAuthCredentials> OAuthManager::refresh_if_needed() {
@@ -614,7 +610,6 @@ std::optional<api::OAuthCredentials> OAuthManager::refresh_if_needed() {
         return get_cached_credentials();
     }
     
-    msg("LLM RE: Refreshing OAuth token...\n");
     return force_refresh();
 }
 
@@ -651,12 +646,10 @@ std::optional<api::OAuthCredentials> OAuthManager::force_refresh() {
         cached_credentials = new_creds;
         cache_time = std::chrono::steady_clock::now();
         
-        msg("LLM RE: OAuth token refreshed successfully\n");
         return new_creds;
         
     } catch (const std::exception& e) {
         last_error = std::string("Token refresh failed: ") + e.what();
-        msg("LLM RE: OAuth token refresh failed: %s\n", e.what());
         return std::nullopt;
     }
 }

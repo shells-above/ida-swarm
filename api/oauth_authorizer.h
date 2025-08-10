@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common_base.h"
+#include "api/api_common.h"
 #include "anthropic_api.h"
 #include <thread>
 #include <mutex>

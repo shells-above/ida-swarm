@@ -8,6 +8,7 @@
 
 // Include base common header (IDA SDK without kernwin, std lib, json)
 #include "common_base.h"
+#include "api/api_common.h"  // For LogLevel enum
 
 // Only include kernwin.hpp if we haven't already included Qt headers
 // This allows UI files to include this after ui_v2_common.h

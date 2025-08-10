@@ -5,7 +5,7 @@
 #ifndef MESSAGE_TYPES_H
 #define MESSAGE_TYPES_H
 
-#include "core/common_base.h"
+#include "api/api_common.h"
 
 // Forward declaration for ChatResponse
 namespace llm_re::api {

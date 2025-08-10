@@ -5,9 +5,21 @@
 #ifndef ANTHROPIC_API_H
 #define ANTHROPIC_API_H
 
-#include "core/common_base.h"
+#include "api/api_common.h"
 #include "api/message_types.h"
 #include "api/tool_registry.h"
+#include <string>
+#include <vector>
+#include <map>
+#include <functional>
+#include <chrono>
+#include <optional>
+#include <stdexcept>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <ctime>
+#include <curl/curl.h>
 
 namespace llm_re::api {
 

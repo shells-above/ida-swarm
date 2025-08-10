@@ -184,15 +184,4 @@ namespace nlohmann {
 
 using json = nlohmann::json;
 
-// Type definitions
-namespace llm_re {
-    // Logging
-    enum class LogLevel {
-        DEBUG,
-        INFO,
-        WARNING,
-        ERROR
-    };
-} // namespace llm_re
-
 #endif //COMMON_BASE_H

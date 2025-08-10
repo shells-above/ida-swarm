@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common_base.h"
+#include "api/api_common.h"
 #include "anthropic_api.h"
 #include <string>
 #include <optional>
@@ -19,8 +19,7 @@ public:
     // Refresh an OAuth token
     // Returns updated credentials with new access token and updated expiry
     // Throws std::runtime_error on failure
-    api::OAuthCredentials refresh_token(const std::string& refresh_token,
-                                       const std::optional<std::string>& account_uuid = std::nullopt);
+    api::OAuthCredentials refresh_token(const std::string& refresh_token, const std::optional<std::string>& account_uuid = std::nullopt);
     
     // Check if credentials are expired or will expire soon
     static bool needs_refresh(const api::OAuthCredentials& creds, int buffer_seconds = 300);

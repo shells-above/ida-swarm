@@ -3,8 +3,8 @@
 // Provides portable tool interfaces and registry for managing tools
 //
 
-#ifndef API_TOOL_REGISTRY_H
-#define API_TOOL_REGISTRY_H
+#ifndef TOOL_REGISTRY_H
+#define TOOL_REGISTRY_H
 
 #include "message_types.h"
 #include <string>
@@ -269,6 +269,6 @@ public:
     }
 };
 
-} // namespace llm_re::api
+} // namespace llm_re::tools
 
-#endif // API_TOOL_REGISTRY_H
+#endif // TOOL_REGISTRY_H
