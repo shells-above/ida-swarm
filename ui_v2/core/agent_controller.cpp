@@ -192,7 +192,9 @@ void AgentController::connectConversationView(ConversationView* view) {
 
 void AgentController::connectMemoryDock(MemoryDock* dock) {
     memoryDock_ = dock;
-    updateMemoryView();
+    if (memoryDock_ && agent_ && agent_->get_memory()) {
+        memoryDock_->setMemory(agent_->get_memory());
+    }
 }
 
 void AgentController::connectToolDock(ToolExecutionDock* dock) {
@@ -243,7 +245,9 @@ void AgentController::loadMemory(const QString& path) {
             file >> snapshot;
             file.close();
             agent_->get_memory()->import_memory_snapshot(snapshot);
-            updateMemoryView();
+            if (memoryDock_) {
+                memoryDock_->refresh();
+            }
         }
     }
 }
@@ -453,11 +457,11 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
     }
     
     // Check for memory updates efficiently using version counter
-    if (agent_ && agent_->get_memory()) {
+    if (agent_ && agent_->get_memory() && memoryDock_) {
         uint64_t currentVersion = agent_->get_memory()->get_version();
         if (currentVersion != lastMemoryVersion_) {
             lastMemoryVersion_ = currentVersion;
-            updateMemoryView();
+            memoryDock_->refresh();
         }
     }
 }
@@ -506,62 +510,8 @@ void AgentController::updateMemoryView() {
         return;
     }
     
-    // Get memory directly from BinaryMemory
-    std::shared_ptr<BinaryMemory> memory = agent_->get_memory();
-    
-    // Get all analyses from memory
-    std::vector<llm_re::AnalysisEntry> analyses = memory->get_analysis();
-    
-    // Track which keys are still present
-    std::set<QString> currentKeys;
-    
-    for (const auto& entry : analyses) {
-        QString key = QString::fromStdString(entry.key);
-        currentKeys.insert(key);
-            
-        // Check if this is a new or existing entry
-        auto it = memoryKeyToId_.find(key);
-        
-        MemoryEntry memEntry;
-        if (it != memoryKeyToId_.end()) {
-            // Existing entry - update it
-            memEntry = memoryDock_->entry(it->second);
-            memEntry.title = key;
-        } else {
-            // New entry - create new UUID and add to map
-            memEntry.id = QUuid::createUuid();
-            memEntry.title = key;
-            memoryKeyToId_[key] = memEntry.id;
-        }
-        
-        // Update fields from AnalysisEntry
-        if (entry.address.has_value()) {
-            memEntry.address = QString("0x%1").arg(entry.address.value(), 0, 16);
-        } else {
-            memEntry.address = "";
-        }
-        
-        memEntry.analysis = QString::fromStdString(entry.content);
-        memEntry.timestamp = QDateTime::fromSecsSinceEpoch(entry.timestamp);
-            
-        // Add or update entry
-        if (it != memoryKeyToId_.end()) {
-            memoryDock_->updateEntry(memEntry.id, memEntry);
-        } else {
-            memoryDock_->addEntry(memEntry);
-        }
-    }
-    
-    // Remove entries that are no longer in the snapshot
-    for (auto it = memoryKeyToId_.begin(); it != memoryKeyToId_.end(); ) {
-        if (currentKeys.find(it->first) == currentKeys.end()) {
-            // This key is no longer in the snapshot, remove it
-            memoryDock_->removeEntry(it->second);
-            it = memoryKeyToId_.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    // Simply refresh the memory dock - it will pull data directly from BinaryMemory
+    memoryDock_->refresh();
 }
 
 QString AgentController::agentStatusToString(AgentState::Status status) const {

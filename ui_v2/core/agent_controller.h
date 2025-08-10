@@ -108,7 +108,6 @@ private:
     bool isInitialized_ = false;
     QString currentTaskId_;
     std::map<QString, QUuid> toolIdToExecId_;   // tool_id -> execution_id mapping
-    std::map<QString, QUuid> memoryKeyToId_;    // memory_key -> QUuid mapping for incremental updates
     uint64_t lastMemoryVersion_ = 0;            // Track memory version for efficient change detection
     
     // Statistics

@@ -2,49 +2,25 @@
 
 #include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
+#include "analysis/memory.h"
+#include <memory>
 
 namespace llm_re::ui_v2 {
-
-// Simplified memory entry for analysis
-struct MemoryEntry {
-    QUuid id;
-    QString address;
-    QString title;  // The key/identifier for this analysis
-    QString analysis;
-    QDateTime timestamp;
-    
-    // Constructor
-    MemoryEntry() : id(QUuid::createUuid()), timestamp(QDateTime::currentDateTime()) {}
-    
-    // Equality operator for QList operations
-    bool operator==(const MemoryEntry& other) const {
-        return id == other.id;
-    }
-    
-    // Convert to JSON for display (matches session file format)
-    QJsonObject toJson() const {
-        QJsonObject obj;
-        obj["address"] = address;
-        obj["content"] = analysis;
-        obj["timestamp"] = timestamp.toString(Qt::ISODate);
-        obj["title"] = title;
-        return obj;
-    }
-};
 
 // Beautiful dialog for viewing memory entries
 class MemoryEntryViewer : public QDialog {
     Q_OBJECT
     
 public:
-    explicit MemoryEntryViewer(const MemoryEntry& entry, QWidget* parent = nullptr);
+    explicit MemoryEntryViewer(const llm_re::AnalysisEntry& entry, QWidget* parent = nullptr);
     
 private:
     void setupUI();
     QString renderMarkdown(const QString& text);
     QString formatJson(const QJsonObject& obj);
+    QJsonObject entryToJson() const;
     
-    MemoryEntry entry_;
+    llm_re::AnalysisEntry entry_;
     
     // UI elements
     QTextBrowser* markdownView_ = nullptr;
@@ -75,6 +51,9 @@ public:
 
     explicit MemoryTableModel(QObject* parent = nullptr);
     
+    // Set the memory source
+    void setMemory(std::shared_ptr<llm_re::BinaryMemory> memory);
+    
     // QAbstractTableModel interface
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -83,34 +62,32 @@ public:
     Qt::ItemFlags flags(const QModelIndex& index) const override;
     
     // Data management
-    void addEntry(const MemoryEntry& entry);
-    void updateEntry(int row, const MemoryEntry& entry);
-    void removeEntry(int row);
-    void removeEntry(const QUuid& id);
+    void refresh();  // Refresh from memory
     void clearEntries();
     
-    MemoryEntry entry(int row) const;
-    MemoryEntry entry(const QUuid& id) const;
-    QList<MemoryEntry> entries() const { return entries_; }
-    int findEntry(const QUuid& id) const;
+    // Get entry by row or key
+    llm_re::AnalysisEntry entry(int row) const;
+    llm_re::AnalysisEntry entry(const QString& key) const;
+    std::vector<llm_re::AnalysisEntry> allEntries() const;
+    int findEntry(const QString& key) const;
+    QString keyAt(int row) const;
     
     // Search/Filter
     void setSearchFilter(const QString& text);
     void clearFilters();
     
 signals:
-    void entryAdded(const QUuid& id);
-    void entryUpdated(const QUuid& id);
-    void entryRemoved(const QUuid& id);
+    void dataRefreshed();
     
 private:
-    QList<MemoryEntry> entries_;
-    QList<MemoryEntry> filteredEntries_;
+    std::shared_ptr<llm_re::BinaryMemory> memory_;
+    std::vector<std::string> keys_;  // Ordered list of keys for display
+    std::vector<std::string> filteredKeys_;  // Filtered keys
     QString searchText_;
     bool isFiltered_ = false;
     
     void applyFilters();
-    bool matchesFilter(const MemoryEntry& entry) const;
+    bool matchesFilter(const llm_re::AnalysisEntry& entry) const;
 };
 
 // Main memory dock widget - simplified
@@ -121,14 +98,15 @@ public:
     explicit MemoryDock(QWidget* parent = nullptr);
     ~MemoryDock() override;
     
+    // Set the memory source
+    void setMemory(std::shared_ptr<llm_re::BinaryMemory> memory);
+    
     // Data management
-    void addEntry(const MemoryEntry& entry);
-    void updateEntry(const QUuid& id, const MemoryEntry& entry);
-    void removeEntry(const QUuid& id);
+    void refresh();  // Refresh display from memory
     void clearEntries(bool showConfirmation = true);
     
-    QList<MemoryEntry> entries() const;
-    MemoryEntry entry(const QUuid& id) const;
+    std::vector<llm_re::AnalysisEntry> entries() const;
+    llm_re::AnalysisEntry entry(const QString& key) const;
     
     // Import
     void importFromLLMRESession(const QString& path = QString());
@@ -138,11 +116,8 @@ public:
     void importState(const QJsonObject& state);
     
 signals:
-    void entryDoubleClicked(const QUuid& id);
+    void entryDoubleClicked(const QString& key);
     void navigateToAddress(const QString& address);
-    
-protected:
-    void onThemeChanged() override;
     
 private slots:
     void onSearchTextChanged(const QString& text);
@@ -151,7 +126,6 @@ private slots:
     void onTableDoubleClicked(const QModelIndex& index);
     void onContextMenuRequested(const QPoint& pos);
     void onCopyAddress();
-    void onDeleteEntry();
     void onViewEntry();
     
 private:
@@ -159,7 +133,7 @@ private:
     void createActions();
     void connectSignals();
     void updateStatusText();
-    void showEntryViewer(const QUuid& id);
+    void showEntryViewer(const QString& key);
     
     // UI elements
     QTableView* tableView_ = nullptr;
@@ -171,17 +145,16 @@ private:
     QAction* importAction_ = nullptr;
     QAction* clearAction_ = nullptr;
     QAction* copyAddressAction_ = nullptr;
-    QAction* deleteAction_ = nullptr;
     QAction* viewAction_ = nullptr;
     
     // Context menu
     QMenu* contextMenu_ = nullptr;
     
     // Current selection
-    QUuid selectedEntryId_;
+    QString selectedEntryKey_;
+    
+    // Memory source
+    std::shared_ptr<llm_re::BinaryMemory> memory_;
 };
 
 } // namespace llm_re::ui_v2
-
-// Register MemoryEntry with Qt's meta-type system
-Q_DECLARE_METATYPE(llm_re::ui_v2::MemoryEntry)

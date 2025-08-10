@@ -10,7 +10,7 @@ namespace llm_re::ui_v2 {
 
 // ========== MemoryEntryViewer Implementation ==========
 
-MemoryEntryViewer::MemoryEntryViewer(const MemoryEntry& entry, QWidget* parent)
+MemoryEntryViewer::MemoryEntryViewer(const llm_re::AnalysisEntry& entry, QWidget* parent)
     : QDialog(parent), entry_(entry) {
     setupUI();
     
@@ -34,17 +34,20 @@ void MemoryEntryViewer::setupUI() {
     // Simple header - title, address, timestamp on one line
     auto* headerLayout = new QHBoxLayout();
     
-    titleLabel_ = new QLabel(entry_.title.isEmpty() ? tr("(no title)") : entry_.title, this);
+    QString title = QString::fromStdString(entry_.key);
+    titleLabel_ = new QLabel(title.isEmpty() ? tr("(no title)") : title, this);
     QFont titleFont = titleLabel_->font();
     titleFont.setWeight(QFont::DemiBold);
     titleLabel_->setFont(titleFont);
     headerLayout->addWidget(titleLabel_);
     
-    if (!entry_.address.isEmpty()) {
-        headerLayout->addWidget(new QLabel(entry_.address, this));
+    if (entry_.address) {
+        QString addressStr = QString("0x%1").arg(*entry_.address, 0, 16);
+        headerLayout->addWidget(new QLabel(addressStr, this));
     }
     
-    headerLayout->addWidget(new QLabel(entry_.timestamp.toString("yyyy-MM-dd hh:mm"), this));
+    QDateTime timestamp = QDateTime::fromSecsSinceEpoch(entry_.timestamp);
+    headerLayout->addWidget(new QLabel(timestamp.toString("yyyy-MM-dd hh:mm"), this));
     headerLayout->addStretch();
     
     mainLayout->addLayout(headerLayout);
@@ -75,7 +78,7 @@ void MemoryEntryViewer::setupUI() {
     
     markdownView_ = new QTextBrowser(this);
     markdownView_->setOpenExternalLinks(false);
-    markdownView_->setPlainText(entry_.analysis);
+    markdownView_->setPlainText(QString::fromStdString(entry_.content));
     leftLayout->addWidget(markdownView_);
     
     // Right panel - JSON view
@@ -98,7 +101,7 @@ void MemoryEntryViewer::setupUI() {
     
     jsonView_ = new QTextEdit(this);
     jsonView_->setReadOnly(true);
-    jsonView_->setPlainText(formatJson(entry_.toJson()));
+    jsonView_->setPlainText(formatJson(entryToJson()));
     jsonView_->setFont(QFont("Menlo, Consolas, Monaco, monospace", 11));
     rightLayout->addWidget(jsonView_);
     
@@ -135,8 +138,20 @@ QString MemoryEntryViewer::formatJson(const QJsonObject& obj) {
     return doc.toJson(QJsonDocument::Indented);
 }
 
+QJsonObject MemoryEntryViewer::entryToJson() const {
+    QJsonObject obj;
+    obj["key"] = QString::fromStdString(entry_.key);
+    obj["content"] = QString::fromStdString(entry_.content);
+    obj["type"] = QString::fromStdString(entry_.type);
+    if (entry_.address) {
+        obj["address"] = QString("0x%1").arg(*entry_.address, 0, 16);
+    }
+    obj["timestamp"] = QDateTime::fromSecsSinceEpoch(entry_.timestamp).toString(Qt::ISODate);
+    return obj;
+}
+
 void MemoryEntryViewer::onCopyMarkdown() {
-    QApplication::clipboard()->setText(entry_.analysis);
+    QApplication::clipboard()->setText(QString::fromStdString(entry_.content));
     
     // Visual feedback
     copyMarkdownBtn_->setText(tr("Copied!"));
@@ -146,7 +161,7 @@ void MemoryEntryViewer::onCopyMarkdown() {
 }
 
 void MemoryEntryViewer::onCopyJson() {
-    QJsonDocument doc(entry_.toJson());
+    QJsonDocument doc(entryToJson());
     QApplication::clipboard()->setText(doc.toJson(QJsonDocument::Indented));
     
     // Visual feedback
@@ -161,9 +176,16 @@ void MemoryEntryViewer::onCopyJson() {
 MemoryTableModel::MemoryTableModel(QObject* parent)
     : QAbstractTableModel(parent) {}
 
+void MemoryTableModel::setMemory(std::shared_ptr<llm_re::BinaryMemory> memory) {
+    beginResetModel();
+    memory_ = memory;
+    refresh();
+    endResetModel();
+}
+
 int MemoryTableModel::rowCount(const QModelIndex& parent) const {
     Q_UNUSED(parent);
-    return isFiltered_ ? filteredEntries_.size() : entries_.size();
+    return isFiltered_ ? filteredKeys_.size() : keys_.size();
 }
 
 int MemoryTableModel::columnCount(const QModelIndex& parent) const {
@@ -172,31 +194,39 @@ int MemoryTableModel::columnCount(const QModelIndex& parent) const {
 }
 
 QVariant MemoryTableModel::data(const QModelIndex& index, int role) const {
-    if (!index.isValid() || index.row() >= rowCount())
+    if (!index.isValid() || index.row() >= rowCount() || !memory_)
         return QVariant();
     
-    const MemoryEntry& entry = isFiltered_ ? 
-        filteredEntries_.at(index.row()) : entries_.at(index.row());
+    const std::string& key = isFiltered_ ? 
+        filteredKeys_.at(index.row()) : keys_.at(index.row());
+    
+    // Get the entry from memory
+    auto analyses = memory_->get_analysis(key);
+    if (analyses.empty())
+        return QVariant();
+    
+    const llm_re::AnalysisEntry& entry = analyses[0];
     
     if (role == Qt::DisplayRole || role == Qt::EditRole) {
         switch (index.column()) {
         case AddressColumn:
-            return entry.address.isEmpty() ? "-" : entry.address;
+            return entry.address ? QString("0x%1").arg(*entry.address, 0, 16) : QString("-");
         case FunctionColumn:
-            return entry.title.isEmpty() ? "Analysis Entry" : entry.title;
+            return QString::fromStdString(entry.key);
         case TimestampColumn:
-            return entry.timestamp.toString("yyyy-MM-dd hh:mm");
+            return QDateTime::fromSecsSinceEpoch(entry.timestamp).toString("yyyy-MM-dd hh:mm");
         }
     } else if (role == Qt::ToolTipRole) {
         // Show first few lines of analysis as tooltip
-        QString preview = entry.analysis.left(200);
-        if (entry.analysis.length() > 200) {
+        QString content = QString::fromStdString(entry.content);
+        QString preview = content.left(200);
+        if (content.length() > 200) {
             preview += "...";
         }
         return preview;
     } else if (role == Qt::UserRole) {
-        // Store the entry ID for easy retrieval
-        return entry.id;
+        // Store the key for easy retrieval
+        return QString::fromStdString(key);
     } else if (role == Qt::TextAlignmentRole) {
         if (index.column() == TimestampColumn) {
             return Qt::AlignCenter;
@@ -214,7 +244,7 @@ QVariant MemoryTableModel::headerData(int section, Qt::Orientation orientation, 
     case AddressColumn:
         return tr("Address");
     case FunctionColumn:
-        return tr("Title");
+        return tr("Key/Function");
     case TimestampColumn:
         return tr("Timestamp");
     }
@@ -229,115 +259,72 @@ Qt::ItemFlags MemoryTableModel::flags(const QModelIndex& index) const {
     return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
-void MemoryTableModel::addEntry(const MemoryEntry& entry) {
-    if (isFiltered_) {
-        // Add to main list
-        entries_.append(entry);
-        
-        // Check if it matches filter
-        if (matchesFilter(entry)) {
-            beginInsertRows(QModelIndex(), filteredEntries_.size(), filteredEntries_.size());
-            filteredEntries_.append(entry);
-            endInsertRows();
-        }
-    } else {
-        beginInsertRows(QModelIndex(), entries_.size(), entries_.size());
-        entries_.append(entry);
-        endInsertRows();
+void MemoryTableModel::refresh() {
+    if (!memory_) return;
+    
+    // Get all analyses from memory
+    auto allAnalyses = memory_->get_analysis();
+    
+    // Extract unique keys
+    keys_.clear();
+    for (const auto& entry : allAnalyses) {
+        keys_.push_back(entry.key);
     }
     
-    emit entryAdded(entry.id);
-}
-
-void MemoryTableModel::updateEntry(int row, const MemoryEntry& entry) {
-    if (row < 0 || row >= rowCount())
-        return;
+    // Apply filters if any
+    applyFilters();
     
-    if (isFiltered_) {
-        filteredEntries_[row] = entry;
-        // Update in main list
-        for (MemoryEntry& e : entries_) {
-            if (e.id == entry.id) {
-                e = entry;
-                break;
-            }
-        }
-    } else {
-        entries_[row] = entry;
-    }
-    
-    emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
-    emit entryUpdated(entry.id);
-}
-
-void MemoryTableModel::removeEntry(int row) {
-    if (row < 0 || row >= rowCount())
-        return;
-    
-    QUuid id;
-    
-    if (isFiltered_) {
-        id = filteredEntries_.at(row).id;
-        
-        beginRemoveRows(QModelIndex(), row, row);
-        filteredEntries_.removeAt(row);
-        endRemoveRows();
-        
-        // Remove from main list
-        for (int i = 0; i < entries_.size(); ++i) {
-            if (entries_[i].id == id) {
-                entries_.removeAt(i);
-                break;
-            }
-        }
-    } else {
-        id = entries_.at(row).id;
-        
-        beginRemoveRows(QModelIndex(), row, row);
-        entries_.removeAt(row);
-        endRemoveRows();
-    }
-    
-    emit entryRemoved(id);
-}
-
-void MemoryTableModel::removeEntry(const QUuid& id) {
-    int row = findEntry(id);
-    if (row >= 0) {
-        removeEntry(row);
-    }
+    emit dataRefreshed();
 }
 
 void MemoryTableModel::clearEntries() {
     beginResetModel();
-    entries_.clear();
-    filteredEntries_.clear();
+    keys_.clear();
+    filteredKeys_.clear();
     endResetModel();
 }
 
-MemoryEntry MemoryTableModel::entry(int row) const {
-    if (row < 0 || row >= rowCount())
-        return MemoryEntry();
+llm_re::AnalysisEntry MemoryTableModel::entry(int row) const {
+    if (row < 0 || row >= rowCount() || !memory_)
+        return llm_re::AnalysisEntry{};
     
-    return isFiltered_ ? filteredEntries_.at(row) : entries_.at(row);
+    const std::string& key = isFiltered_ ? filteredKeys_.at(row) : keys_.at(row);
+    auto analyses = memory_->get_analysis(key);
+    return analyses.empty() ? llm_re::AnalysisEntry{} : analyses[0];
 }
 
-MemoryEntry MemoryTableModel::entry(const QUuid& id) const {
-    for (const MemoryEntry& e : entries_) {
-        if (e.id == id)
-            return e;
-    }
-    return MemoryEntry();
+llm_re::AnalysisEntry MemoryTableModel::entry(const QString& key) const {
+    if (!memory_)
+        return llm_re::AnalysisEntry{};
+    
+    auto analyses = memory_->get_analysis(key.toStdString());
+    return analyses.empty() ? llm_re::AnalysisEntry{} : analyses[0];
 }
 
-int MemoryTableModel::findEntry(const QUuid& id) const {
-    const QList<MemoryEntry>& list = isFiltered_ ? filteredEntries_ : entries_;
+std::vector<llm_re::AnalysisEntry> MemoryTableModel::allEntries() const {
+    if (!memory_)
+        return {};
     
-    for (int i = 0; i < list.size(); ++i) {
-        if (list.at(i).id == id)
+    return memory_->get_analysis();
+}
+
+int MemoryTableModel::findEntry(const QString& key) const {
+    const std::vector<std::string>& list = isFiltered_ ? filteredKeys_ : keys_;
+    std::string keyStr = key.toStdString();
+    
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i] == keyStr)
             return i;
     }
     return -1;
+}
+
+QString MemoryTableModel::keyAt(int row) const {
+    if (row < 0 || row >= rowCount())
+        return QString();
+    
+    const std::string& key = isFiltered_ ? filteredKeys_.at(row) : keys_.at(row);
+    return QString::fromStdString(key);
 }
 
 void MemoryTableModel::setSearchFilter(const QString& text) {
@@ -355,14 +342,17 @@ void MemoryTableModel::applyFilters() {
     
     if (searchText_.isEmpty()) {
         isFiltered_ = false;
-        filteredEntries_.clear();
+        filteredKeys_.clear();
     } else {
         isFiltered_ = true;
-        filteredEntries_.clear();
+        filteredKeys_.clear();
         
-        for (const MemoryEntry& entry : entries_) {
-            if (matchesFilter(entry)) {
-                filteredEntries_.append(entry);
+        if (memory_) {
+            for (const std::string& key : keys_) {
+                auto analyses = memory_->get_analysis(key);
+                if (!analyses.empty() && matchesFilter(analyses[0])) {
+                    filteredKeys_.push_back(key);
+                }
             }
         }
     }
@@ -370,12 +360,17 @@ void MemoryTableModel::applyFilters() {
     endResetModel();
 }
 
-bool MemoryTableModel::matchesFilter(const MemoryEntry& entry) const {
+bool MemoryTableModel::matchesFilter(const llm_re::AnalysisEntry& entry) const {
     if (!searchText_.isEmpty()) {
         QString searchLower = searchText_.toLower();
-        return entry.address.toLower().contains(searchLower) ||
-               entry.title.toLower().contains(searchLower) ||
-               entry.analysis.toLower().contains(searchLower);
+        QString keyStr = QString::fromStdString(entry.key).toLower();
+        QString contentStr = QString::fromStdString(entry.content).toLower();
+        QString addressStr = entry.address ? 
+            QString("0x%1").arg(*entry.address, 0, 16).toLower() : QString();
+        
+        return keyStr.contains(searchLower) ||
+               contentStr.contains(searchLower) ||
+               (!addressStr.isEmpty() && addressStr.contains(searchLower));
     }
     return true;
 }
@@ -394,327 +389,203 @@ MemoryDock::~MemoryDock() {
 }
 
 void MemoryDock::setupUI() {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(Design::SPACING_SM, Design::SPACING_SM, 
+                                    Design::SPACING_SM, Design::SPACING_SM);
+    mainLayout->setSpacing(Design::SPACING_SM);
     
-    // Toolbar
-    auto* toolbar = new QWidget(this);
-    toolbar->setObjectName("MemoryToolbar");
-    auto* toolbarLayout = new QHBoxLayout(toolbar);
-    toolbarLayout->setContentsMargins(8, 4, 8, 4);
+    // Search bar
+    auto* searchLayout = new QHBoxLayout();
+    searchLayout->setSpacing(Design::SPACING_SM);
     
-    // Search box
     searchEdit_ = new QLineEdit(this);
     searchEdit_->setPlaceholderText(tr("Search memory entries..."));
     searchEdit_->setClearButtonEnabled(true);
-    toolbarLayout->addWidget(searchEdit_);
+    searchLayout->addWidget(searchEdit_);
     
-    // Import button
-    auto* importBtn = new QPushButton(tr("Import"), this);
-    importBtn->setIcon(ThemeManager::instance().themedIcon("document-import"));
-    toolbarLayout->addWidget(importBtn);
-    
-    // Clear button
-    auto* clearBtn = new QPushButton(tr("Clear"), this);
-    clearBtn->setIcon(ThemeManager::instance().themedIcon("edit-clear"));
-    toolbarLayout->addWidget(clearBtn);
-    
-    toolbarLayout->addStretch();
-    
-    layout->addWidget(toolbar);
+    mainLayout->addLayout(searchLayout);
     
     // Table view
-    model_ = new MemoryTableModel(this);
-    
     tableView_ = new QTableView(this);
+    model_ = new MemoryTableModel(this);
     tableView_->setModel(model_);
+    
+    // Table appearance
     tableView_->setAlternatingRowColors(true);
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView_->setSelectionMode(QAbstractItemView::SingleSelection);
-    tableView_->setContextMenuPolicy(Qt::CustomContextMenu);
     tableView_->setSortingEnabled(false);
+    tableView_->setWordWrap(false);
     tableView_->horizontalHeader()->setStretchLastSection(true);
+    tableView_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    tableView_->verticalHeader()->setVisible(false);
+    tableView_->setContextMenuPolicy(Qt::CustomContextMenu);
     
     // Set column widths
-    tableView_->setColumnWidth(MemoryTableModel::AddressColumn, 150);
-    tableView_->setColumnWidth(MemoryTableModel::FunctionColumn, 350);
+    tableView_->setColumnWidth(MemoryTableModel::AddressColumn, 120);
+    tableView_->setColumnWidth(MemoryTableModel::FunctionColumn, 300);
     tableView_->setColumnWidth(MemoryTableModel::TimestampColumn, 150);
     
-    // Make function column stretch
-    tableView_->horizontalHeader()->setSectionResizeMode(
-        MemoryTableModel::FunctionColumn, QHeaderView::Stretch);
-    
-    
-    layout->addWidget(tableView_);
+    mainLayout->addWidget(tableView_, 1);
     
     // Status bar
-    statusLabel_ = new QLabel(this);
-    statusLabel_->setContentsMargins(8, 4, 8, 4);
-    layout->addWidget(statusLabel_);
+    statusLabel_ = new QLabel(tr("No entries"), this);
+    statusLabel_->setProperty("class", "status-text");
+    mainLayout->addWidget(statusLabel_);
     
     updateStatusText();
-    
-    // Connect button signals
-    connect(importBtn, &QPushButton::clicked, this, &MemoryDock::onImportClicked);
-    connect(clearBtn, &QPushButton::clicked, this, &MemoryDock::onClearClicked);
 }
 
 void MemoryDock::createActions() {
-    // Context menu actions
-    viewAction_ = new QAction(tr("View Entry"), this);
-    viewAction_->setIcon(ThemeManager::instance().themedIcon("document-open"));
+    importAction_ = new QAction(tr("Import Session..."), this);
+    importAction_->setShortcut(QKeySequence("Ctrl+I"));
+    
+    clearAction_ = new QAction(tr("Clear All"), this);
+    clearAction_->setShortcut(QKeySequence("Ctrl+Shift+X"));
     
     copyAddressAction_ = new QAction(tr("Copy Address"), this);
-    copyAddressAction_->setIcon(ThemeManager::instance().themedIcon("edit-copy"));
+    copyAddressAction_->setShortcut(QKeySequence::Copy);
     
-    deleteAction_ = new QAction(tr("Delete Entry"), this);
-    deleteAction_->setIcon(ThemeManager::instance().themedIcon("edit-delete"));
-    deleteAction_->setShortcut(QKeySequence::Delete);
+    viewAction_ = new QAction(tr("View Entry"), this);
+    viewAction_->setShortcut(Qt::Key_Return);
     
-    // Create context menu
+    // Context menu
     contextMenu_ = new QMenu(this);
     contextMenu_->addAction(viewAction_);
     contextMenu_->addSeparator();
     contextMenu_->addAction(copyAddressAction_);
-    contextMenu_->addSeparator();
-    contextMenu_->addAction(deleteAction_);
 }
 
 void MemoryDock::connectSignals() {
-    // Search
     connect(searchEdit_, &QLineEdit::textChanged,
             this, &MemoryDock::onSearchTextChanged);
     
-    // Table
     connect(tableView_, &QTableView::doubleClicked,
             this, &MemoryDock::onTableDoubleClicked);
     
-    connect(tableView_, &QWidget::customContextMenuRequested,
+    connect(tableView_, &QTableView::customContextMenuRequested,
             this, &MemoryDock::onContextMenuRequested);
     
-    // Model
-    connect(model_, &MemoryTableModel::entryAdded,
-            [this]() { updateStatusText(); });
+    connect(importAction_, &QAction::triggered,
+            this, &MemoryDock::onImportClicked);
     
-    connect(model_, &MemoryTableModel::entryRemoved,
-            [this]() { updateStatusText(); });
-    
-    // Context menu actions
-    connect(viewAction_, &QAction::triggered,
-            this, &MemoryDock::onViewEntry);
+    connect(clearAction_, &QAction::triggered,
+            this, &MemoryDock::onClearClicked);
     
     connect(copyAddressAction_, &QAction::triggered,
             this, &MemoryDock::onCopyAddress);
     
-    connect(deleteAction_, &QAction::triggered,
-            this, &MemoryDock::onDeleteEntry);
+    connect(viewAction_, &QAction::triggered,
+            this, &MemoryDock::onViewEntry);
+    
+    connect(model_, &MemoryTableModel::dataRefreshed,
+            this, &MemoryDock::updateStatusText);
 }
 
-void MemoryDock::addEntry(const MemoryEntry& entry) {
-    model_->addEntry(entry);
+void MemoryDock::setMemory(std::shared_ptr<llm_re::BinaryMemory> memory) {
+    memory_ = memory;
+    model_->setMemory(memory);
+    updateStatusText();
 }
 
-void MemoryDock::updateEntry(const QUuid& id, const MemoryEntry& entry) {
-    int row = model_->findEntry(id);
-    if (row >= 0) {
-        model_->updateEntry(row, entry);
+void MemoryDock::refresh() {
+    if (model_) {
+        model_->refresh();
+        updateStatusText();
     }
-}
-
-void MemoryDock::removeEntry(const QUuid& id) {
-    model_->removeEntry(id);
 }
 
 void MemoryDock::clearEntries(bool showConfirmation) {
-    if (showConfirmation && model_->rowCount() > 0) {
-        auto reply = QMessageBox::question(
-            this, tr("Clear Entries"),
-            tr("Clear all %1 memory entries?").arg(model_->rowCount()),
-            QMessageBox::Yes | QMessageBox::No);
-        
-        if (reply == QMessageBox::Yes) {
-            model_->clearEntries();
-        }
-    } else {
-        model_->clearEntries();
-    }
-}
-
-QList<MemoryEntry> MemoryDock::entries() const {
-    return model_->entries();
-}
-
-MemoryEntry MemoryDock::entry(const QUuid& id) const {
-    return model_->entry(id);
-}
-
-void MemoryDock::importFromLLMRESession(const QString& path) {
-    QString fileName = path;
-    if (fileName.isEmpty()) {
-        fileName = QFileDialog::getOpenFileName(
-            this, tr("Import Session"),
-            "",
-            tr("LLMRE Session Files (*.llmre);;All Files (*)"));
-    }
-    
-    if (fileName.isEmpty())
-        return;
-    
-    QFile file(fileName);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("Import Failed"),
-                           tr("Could not open file for reading."));
-        return;
-    }
-    
-    QTextStream stream(&file);
-    QString content = stream.readAll();
-    file.close();
-    
-    QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
-    if (!doc.isObject()) {
-        QMessageBox::warning(this, tr("Import Failed"),
-                           tr("Invalid session file format."));
-        return;
-    }
-    
-    QJsonObject session = doc.object();
-    
-    // Check IDB path
-    QString sessionIdbPath;
-    if (session.contains("metadata")) {
-        sessionIdbPath = session["metadata"].toObject()["idbPath"].toString();
-    }
-    
-    QString currentIdbPath = QString::fromStdString(get_path(PATH_TYPE_IDB));
-    
-    if (!sessionIdbPath.isEmpty() && sessionIdbPath != currentIdbPath) {
-        int ret = QMessageBox::warning(this, tr("IDB Mismatch"),
-            tr("This session is from a different IDA database:\n%1\n\nImport anyway?")
-            .arg(sessionIdbPath),
-            QMessageBox::Yes | QMessageBox::No);
-        
-        if (ret != QMessageBox::Yes) {
+    // doesn't actually clear BinaryMemory, just the UI view
+    if (showConfirmation) {
+        QMessageBox::StandardButton reply;
+        reply = QMessageBox::question(this, tr("Clear Memory"),
+                                     tr("Clear all memory entries? This cannot be undone."),
+                                     QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes) {
             return;
         }
     }
     
-    // Extract memory entries from UI state
-    int importedCount = 0;
+    model_->clearEntries();
+    updateStatusText();
+}
+
+std::vector<llm_re::AnalysisEntry> MemoryDock::entries() const {
+    return model_->allEntries();
+}
+
+llm_re::AnalysisEntry MemoryDock::entry(const QString& key) const {
+    return model_->entry(key);
+}
+
+void MemoryDock::importFromLLMRESession(const QString& path) {
+    // handles actually importing entries into BinaryMemory
+    QString filePath = path;
     
-    if (session.contains("ui")) {
-        QJsonObject ui = session["ui"].toObject();
-        if (ui.contains("docks")) {
-            QJsonObject docks = ui["docks"].toObject();
-            if (docks.contains("memory")) {
-                QJsonObject memoryState = docks["memory"].toObject();
-                if (memoryState.contains("entries")) {
-                    QJsonArray entriesArray = memoryState["entries"].toArray();
+    if (filePath.isEmpty()) {
+        filePath = QFileDialog::getOpenFileName(this,
+            tr("Import LLM RE Session"),
+            QString(),
+            tr("LLM RE Sessions (*.llmre);;All Files (*)"));
+    }
+    
+    if (!filePath.isEmpty()) {
+        QFile file(filePath);
+        if (file.open(QIODevice::ReadOnly)) {
+            QByteArray data = file.readAll();
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            
+            if (doc.isObject()) {
+                QJsonObject root = doc.object();
+                
+                // Import memory snapshot if present
+                if (root.contains("memory") && memory_) {
+                    QJsonObject memObj = root["memory"].toObject();
                     
-                    for (const QJsonValue& val : entriesArray) {
-                        QJsonObject obj = val.toObject();
-                        
-                        MemoryEntry entry;
-                        
-                        // Try to use existing ID or generate new one
-                        QString idStr = obj["id"].toString();
-                        entry.id = idStr.isEmpty() ? QUuid::createUuid() : QUuid(idStr);
-                        
-                        // Extract address
-                        entry.address = obj["address"].toString();
-                        
-                        // Extract title field (which is the key/identifier)
-                        entry.title = obj["title"].toString();
-                        
-                        // Extract content field
-                        entry.analysis = obj["content"].toString();
-                        
-                        // Extract timestamp
-                        QString timestampStr = obj["timestamp"].toString();
-                        entry.timestamp = QDateTime::fromString(timestampStr, Qt::ISODate);
-                        if (!entry.timestamp.isValid()) {
-                            entry.timestamp = QDateTime::currentDateTime();
-                        }
-                        
-                        // Add entry if it has some content
-                        if (!entry.address.isEmpty() || !entry.title.isEmpty() || !entry.analysis.isEmpty()) {
-                            addEntry(entry);
-                            importedCount++;
-                        }
-                    }
+                    // Convert QJsonObject to nlohmann::json for import
+                    // This is a bit hacky but works for now
+                    std::string jsonStr = QJsonDocument(memObj).toJson(QJsonDocument::Compact).toStdString();
+                    json snapshot = json::parse(jsonStr);
+                    memory_->import_memory_snapshot(snapshot);
+                    
+                    // Refresh display
+                    refresh();
                 }
             }
         }
-    }
-    
-    if (importedCount == 0) {
-        QMessageBox::warning(this, tr("Import Failed"),
-                           tr("No memory entries found in session file."));
     }
 }
 
 QJsonObject MemoryDock::exportState() const {
     QJsonObject state;
     
-    // Export all entries using the same toJson() format
+    // Export all entries using entryToJson format
     QJsonArray entriesArray;
-    for (const MemoryEntry& entry : entries()) {
-        entriesArray.append(entry.toJson());
+    for (const AnalysisEntry& entry: entries()) {
+        QJsonObject obj;
+        obj["key"] = QString::fromStdString(entry.key);
+        obj["content"] = QString::fromStdString(entry.content);
+        obj["type"] = QString::fromStdString(entry.type);
+        if (entry.address) {
+            obj["address"] = QString("0x%1").arg(*entry.address, 0, 16);
+        }
+        obj["timestamp"] = QDateTime::fromSecsSinceEpoch(entry.timestamp).toString(Qt::ISODate);
+        entriesArray.append(obj);
     }
     state["entries"] = entriesArray;
-    
-    // Export current search
-    state["searchText"] = searchEdit_->text();
     
     return state;
 }
 
 void MemoryDock::importState(const QJsonObject& state) {
-    // Clear existing entries
-    model_->clearEntries();
+    // Note: This doesn't directly import into BinaryMemory
+    // That should be done through the agent/memory interface
+    // This is just for UI state restoration if needed
     
-    // Import entries
     if (state.contains("entries")) {
-        QJsonArray entriesArray = state["entries"].toArray();
-        for (const QJsonValue& val : entriesArray) {
-            QJsonObject obj = val.toObject();
-            
-            MemoryEntry entry;
-            
-            QString idStr = obj["id"].toString();
-            entry.id = idStr.isEmpty() ? QUuid::createUuid() : QUuid(idStr);
-            
-            entry.address = obj["address"].toString();
-            
-            // Extract title field
-            entry.title = obj["title"].toString();
-            
-            // Try content field first (actual format), fallback to analysis
-            entry.analysis = obj["content"].toString();
-            if (entry.analysis.isEmpty()) {
-                entry.analysis = obj["analysis"].toString();
-            }
-            
-            QString timestampStr = obj["timestamp"].toString();
-            entry.timestamp = QDateTime::fromString(timestampStr, Qt::ISODate);
-            if (!entry.timestamp.isValid()) {
-                entry.timestamp = QDateTime::currentDateTime();
-            }
-            
-            addEntry(entry);
-        }
+        refresh();
     }
-    
-    // Restore search text
-    if (state.contains("searchText")) {
-        searchEdit_->setText(state["searchText"].toString());
-    }
-}
-
-void MemoryDock::onThemeChanged() {
-    // Update icons if needed
-    updateStatusText();
 }
 
 void MemoryDock::onSearchTextChanged(const QString& text) {
@@ -731,70 +602,64 @@ void MemoryDock::onClearClicked() {
 }
 
 void MemoryDock::onTableDoubleClicked(const QModelIndex& index) {
-    if (index.isValid()) {
-        QUuid id = index.data(Qt::UserRole).toUuid();
-        showEntryViewer(id);
+    if (!index.isValid())
+        return;
+    
+    QString key = index.data(Qt::UserRole).toString();
+    if (!key.isEmpty()) {
+        showEntryViewer(key);
+        emit entryDoubleClicked(key);
     }
 }
 
 void MemoryDock::onContextMenuRequested(const QPoint& pos) {
     QModelIndex index = tableView_->indexAt(pos);
-    if (index.isValid()) {
-        selectedEntryId_ = index.data(Qt::UserRole).toUuid();
-        
+    if (!index.isValid())
+        return;
+    
+    selectedEntryKey_ = index.data(Qt::UserRole).toString();
+    
+    if (!selectedEntryKey_.isEmpty()) {
         // Enable/disable actions based on entry
-        MemoryEntry entry = model_->entry(selectedEntryId_);
-        copyAddressAction_->setEnabled(!entry.address.isEmpty());
+        llm_re::AnalysisEntry entry = model_->entry(selectedEntryKey_);
+        copyAddressAction_->setEnabled(entry.address.has_value());
         
         contextMenu_->exec(tableView_->mapToGlobal(pos));
     }
 }
 
 void MemoryDock::onCopyAddress() {
-    if (!selectedEntryId_.isNull()) {
-        MemoryEntry entry = model_->entry(selectedEntryId_);
-        if (!entry.address.isEmpty()) {
-            QApplication::clipboard()->setText(entry.address);
+    if (!selectedEntryKey_.isEmpty()) {
+        llm_re::AnalysisEntry entry = model_->entry(selectedEntryKey_);
+        if (entry.address) {
+            QString addressStr = QString("0x%1").arg(*entry.address, 0, 16);
+            QApplication::clipboard()->setText(addressStr);
         }
-    }
-}
-
-void MemoryDock::onDeleteEntry() {
-    if (!selectedEntryId_.isNull()) {
-        model_->removeEntry(selectedEntryId_);
-        selectedEntryId_ = QUuid();
     }
 }
 
 void MemoryDock::onViewEntry() {
-    if (!selectedEntryId_.isNull()) {
-        showEntryViewer(selectedEntryId_);
+    if (!selectedEntryKey_.isEmpty()) {
+        showEntryViewer(selectedEntryKey_);
     }
 }
 
-void MemoryDock::showEntryViewer(const QUuid& id) {
-    MemoryEntry entry = model_->entry(id);
-    if (!entry.id.isNull()) {
-        auto* viewer = new MemoryEntryViewer(entry, this);
-        viewer->setAttribute(Qt::WA_DeleteOnClose);
-        viewer->show();
-        
-        // Also emit signal for navigation if address exists
-        if (!entry.address.isEmpty()) {
-            emit navigateToAddress(entry.address);
-        }
-        emit entryDoubleClicked(id);
+void MemoryDock::showEntryViewer(const QString& key) {
+    llm_re::AnalysisEntry entry = model_->entry(key);
+    if (!entry.key.empty()) {
+        MemoryEntryViewer viewer(entry, this);
+        viewer.exec();
     }
 }
 
 void MemoryDock::updateStatusText() {
-    int total = model_->entries().size();
-    int shown = model_->rowCount();
-    
-    if (total == shown) {
-        statusLabel_->setText(tr("%1 entries").arg(total));
+    int count = model_->rowCount();
+    if (count == 0) {
+        statusLabel_->setText(tr("No entries"));
+    } else if (count == 1) {
+        statusLabel_->setText(tr("1 entry"));
     } else {
-        statusLabel_->setText(tr("Showing %1 of %2 entries").arg(shown).arg(total));
+        statusLabel_->setText(tr("%1 entries").arg(count));
     }
 }
 
