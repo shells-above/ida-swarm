@@ -222,6 +222,7 @@ set(HEADERS
         api/oauth_manager.h
         api/oauth_flow.h
         api/oauth_authorizer.h
+        api/tool_registry.h
         analysis/actions.h
         analysis/deep_analysis.h
         analysis/memory.h

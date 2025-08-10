@@ -7,11 +7,7 @@
 
 #include "core/common_base.h"
 #include "api/message_types.h"
-
-// Forward declaration
-namespace llm_re::tools {
-    class ToolRegistry;
-}
+#include "api/tool_registry.h"
 
 namespace llm_re::api {
 

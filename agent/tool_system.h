@@ -5,7 +5,7 @@
 #ifndef TOOL_SYSTEM_H
 #define TOOL_SYSTEM_H
 
-#include "api/message_types.h"
+#include "api/tool_registry.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
@@ -13,128 +13,23 @@
 
 namespace llm_re::tools {
 
-// Base tool result type
-struct ToolResult {
-    bool wasSuccess = true;
-    std::optional<std::string> error;
-    json data;
-
-    json to_json() const {
-        json j;
-        j["success"] = wasSuccess;
-        if (error) {
-            j["error"] = *error;
-        }
-        // Merge data fields into top level
-        for (auto& [key, value] : data.items()) {
-            j[key] = value;
-        }
-        return j;
-    }
-
-    static ToolResult success(json data) {
-        return {true, std::nullopt, std::move(data)};
-    }
-
-    static ToolResult failure(const std::string& error) {
-        return {false, error, json::object()};
-    }
-};
-
-// Base tool interface
-class Tool {
+// IDA-specific base tool that extends the api Tool interface
+class IDAToolBase : public Tool {
 protected:
     std::shared_ptr<BinaryMemory> memory;
     std::shared_ptr<ActionExecutor> executor;
 
 public:
-    Tool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec)
+    IDAToolBase(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec)
         : memory(mem), executor(exec) {}
 
-    virtual ~Tool() = default;
-
-    // Tool metadata
-    virtual std::string name() const = 0;
-    virtual std::string description() const = 0;
-    virtual json parameters_schema() const = 0;
-
-    // Execution
-    virtual ToolResult execute(const json& input) = 0;
-
-    // Helper to create tool definition for API
-    json to_api_definition() const {
-        return {
-            {"name", name()},
-            {"description", description()},
-            {"input_schema", parameters_schema()}
-        };
-    }
-};
-
-// Type-safe parameter builder
-class ParameterBuilder {
-    json schema;
-    json properties;
-    std::vector<std::string> required_fields;
-
-public:
-    ParameterBuilder() {
-        schema["type"] = "object";
-    }
-
-    ParameterBuilder& add_integer(const std::string& name, const std::string& description = "", bool required = true) {
-        properties[name] = {{"type", "integer"}};
-        if (!description.empty()) {
-            properties[name]["description"] = description;
-        }
-        if (required) required_fields.push_back(name);
-        return *this;
-    }
-
-    ParameterBuilder& add_string(const std::string& name, const std::string& description = "", bool required = true) {
-        properties[name] = {{"type", "string"}};
-        if (!description.empty()) {
-            properties[name]["description"] = description;
-        }
-        if (required) required_fields.push_back(name);
-        return *this;
-    }
-
-    ParameterBuilder& add_boolean(const std::string& name, const std::string& description = "", bool required = true) {
-        properties[name] = {{"type", "boolean"}};
-        if (!description.empty()) {
-            properties[name]["description"] = description;
-        }
-        if (required) required_fields.push_back(name);
-        return *this;
-    }
-
-    ParameterBuilder& add_array(const std::string& name, const std::string& item_type, const std::string& description = "", bool required = true) {
-        properties[name] = {
-            {"type", "array"},
-            {"items", {{"type", item_type}}}
-        };
-        if (!description.empty()) {
-            properties[name]["description"] = description;
-        }
-        if (required) required_fields.push_back(name);
-        return *this;
-    }
-
-    json build() const {
-        json result = schema;
-        result["properties"] = properties;
-        if (!required_fields.empty()) {
-            result["required"] = required_fields;
-        }
-        return result;
-    }
+    virtual ~IDAToolBase() = default;
 };
 
 // Unified search functions tool
-class SearchFunctionsTool : public Tool {
+class SearchFunctionsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "search_functions";
@@ -166,9 +61,9 @@ public:
 };
 
 // Unified search globals tool
-class SearchGlobalsTool : public Tool {
+class SearchGlobalsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "search_globals";
@@ -198,9 +93,9 @@ public:
 };
 
 // Unified search strings tool
-class SearchStringsTool : public Tool {
+class SearchStringsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "search_strings";
@@ -232,9 +127,9 @@ public:
 };
 
 // Get comprehensive function info tool
-class GetFunctionInfoTool : public Tool {
+class GetFunctionInfoTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_function_info";
@@ -261,9 +156,9 @@ public:
 };
 
 // Get comprehensive data info tool
-class GetDataInfoTool : public Tool {
+class GetDataInfoTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_data_info";
@@ -292,9 +187,9 @@ public:
 };
 
 // Dump data tool
-class DumpDataTool : public Tool {
+class DumpDataTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "dump_data";
@@ -334,9 +229,9 @@ public:
 };
 
 // Analyze function tool (replaces decompilation/disassembly tools)
-class AnalyzeFunctionTool : public Tool {
+class AnalyzeFunctionTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "analyze_function";
@@ -373,9 +268,9 @@ public:
 };
 
 // Store analysis tool (unified knowledge storage)
-class StoreAnalysisTool : public Tool {
+class StoreAnalysisTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "store_analysis";
@@ -422,9 +317,9 @@ public:
 };
 
 // Get analysis tool
-class GetAnalysisTool : public Tool {
+class GetAnalysisTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_analysis";
@@ -464,9 +359,9 @@ public:
 };
 
 // Cross-reference tool
-class GetXrefsTool : public Tool {
+class GetXrefsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_xrefs";
@@ -496,9 +391,9 @@ public:
 };
 
 // Set name tool (functions + data)
-class SetNameTool : public Tool {
+class SetNameTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "set_name";
@@ -531,9 +426,9 @@ public:
 };
 
 // Comment tool
-class SetCommentTool : public Tool {
+class SetCommentTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "set_comment";
@@ -566,9 +461,9 @@ public:
 };
 
 // Get imports tool
-class GetImportsTool : public Tool {
+class GetImportsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_imports";
@@ -595,9 +490,9 @@ public:
 };
 
 // Get entry points tool
-class GetEntryPointsTool : public Tool {
+class GetEntryPointsTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_entry_points";
@@ -623,9 +518,9 @@ public:
 };
 
 // Function prototype tools
-class GetFunctionPrototypeTool : public Tool {
+class GetFunctionPrototypeTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_function_prototype";
@@ -651,9 +546,9 @@ public:
     }
 };
 
-class SetFunctionPrototypeTool : public Tool {
+class SetFunctionPrototypeTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "set_function_prototype";
@@ -686,9 +581,9 @@ public:
 };
 
 // Local type tools
-class SearchLocalTypesTool : public Tool {
+class SearchLocalTypesTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "search_local_types";
@@ -721,9 +616,9 @@ public:
     }
 };
 
-class GetLocalTypeTool : public Tool {
+class GetLocalTypeTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_local_type";
@@ -749,9 +644,9 @@ public:
     }
 };
 
-class SetLocalTypeTool : public Tool {
+class SetLocalTypeTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "set_local_type";
@@ -784,9 +679,9 @@ public:
 };
 
 // Local variable tools
-class GetVariablesTool : public Tool {
+class GetVariablesTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "get_variables";
@@ -814,9 +709,9 @@ public:
     }
 };
 
-class SetVariableTool : public Tool {
+class SetVariableTool : public IDAToolBase {
 public:
-    using Tool::Tool;
+    using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
         return "set_variable";
@@ -853,11 +748,11 @@ public:
 
 
 // Deep analysis collection tools
-class StartDeepAnalysisCollectionTool : public Tool {
+class StartDeepAnalysisCollectionTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    StartDeepAnalysisCollectionTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+    StartDeepAnalysisCollectionTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "start_deep_analysis_collection";
@@ -899,11 +794,11 @@ public:
     }
 };
 
-class AddToDeepAnalysisTool : public Tool {
+class AddToDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    AddToDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+    AddToDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "add_to_deep_analysis";
@@ -954,11 +849,11 @@ public:
     }
 };
 
-class RequestDeepAnalysisTool : public Tool {
+class RequestDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    RequestDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+    RequestDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "request_deep_analysis";
@@ -1010,11 +905,11 @@ public:
     }
 };
 
-class ListDeepAnalysesTool : public Tool {
+class ListDeepAnalysesTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    ListDeepAnalysesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+    ListDeepAnalysesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "list_deep_analyses";
@@ -1053,11 +948,11 @@ public:
     }
 };
 
-class GetDeepAnalysisTool : public Tool {
+class GetDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    GetDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : Tool(mem, exec), deep_analysis_manager(dam) {}
+    GetDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "get_deep_analysis";
@@ -1099,12 +994,12 @@ public:
     }
 };
 
-// Patch bytes tool - requires original bytes verification
-class PatchBytesTool : public Tool {
+// Patch bytes tool
+class PatchBytesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
     
 public:
-    PatchBytesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<PatchManager> pm) : Tool(mem, exec), patch_manager_(pm) {}
+    PatchBytesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<PatchManager> pm) : IDAToolBase(mem, exec), patch_manager_(pm) {}
     
     std::string name() const override {
         return "patch_bytes";
@@ -1167,15 +1062,15 @@ public:
     }
 };
 
-// Patch assembly tool - requires original assembly verification
-class PatchAssemblyTool : public Tool {
+// Patch assembly tool
+class PatchAssemblyTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
     
 public:
     PatchAssemblyTool(std::shared_ptr<BinaryMemory> mem,
                       std::shared_ptr<ActionExecutor> exec,
                       std::shared_ptr<PatchManager> pm)
-        : Tool(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(mem, exec), patch_manager_(pm) {}
     
     std::string name() const override {
         return "patch_assembly";
@@ -1244,14 +1139,14 @@ public:
 };
 
 // Revert patches tool
-class RevertPatchTool : public Tool {
+class RevertPatchTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
     
 public:
     RevertPatchTool(std::shared_ptr<BinaryMemory> mem,
                     std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
-        : Tool(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(mem, exec), patch_manager_(pm) {}
     
     std::string name() const override {
         return "revert_patch";
@@ -1310,14 +1205,14 @@ public:
 };
 
 // List patches tool
-class ListPatchesTool : public Tool {
+class ListPatchesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
     
 public:
     ListPatchesTool(std::shared_ptr<BinaryMemory> mem,
                     std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
-        : Tool(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(mem, exec), patch_manager_(pm) {}
     
     std::string name() const override {
         return "list_patches";
@@ -1405,193 +1300,63 @@ public:
     }
 };
 
-// Tool registry with type safety
-class ToolRegistry {
-public:
-    // Tool usage statistics
-    struct ToolStats {
-        int execution_count = 0;
-        int success_count = 0;
-        int failure_count = 0;
-        double total_duration_ms = 0.0;
-        std::chrono::steady_clock::time_point last_used;
-    };
+inline void register_all_tools(tools::ToolRegistry& registry,
+                               std::shared_ptr<BinaryMemory> memory,
+                               std::shared_ptr<ActionExecutor> executor,
+                               std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,
+                               std::shared_ptr<PatchManager> patch_manager) {
+    // Core navigation and info tools
+    registry.register_tool_type<GetXrefsTool>(memory, executor);
+    registry.register_tool_type<GetFunctionInfoTool>(memory, executor);
+    registry.register_tool_type<GetDataInfoTool>(memory, executor);
+    registry.register_tool_type<DumpDataTool>(memory, executor);
+    registry.register_tool_type<AnalyzeFunctionTool>(memory, executor);
 
-private:
-    std::unordered_map<std::string, std::unique_ptr<Tool>> tools;
-    std::vector<std::string> tool_order;  // Maintain registration order
-    std::unordered_map<std::string, ToolStats> tool_stats;
+    // Search tools
+    registry.register_tool_type<SearchFunctionsTool>(memory, executor);
+    registry.register_tool_type<SearchGlobalsTool>(memory, executor);
+    registry.register_tool_type<SearchStringsTool>(memory, executor);
 
-public:
-    void register_tool(std::unique_ptr<Tool> tool) {
-        std::string name = tool->name();
-        if (tools.find(name) == tools.end()) {
-            tool_order.push_back(name);
-        }
-        tools[name] = std::move(tool);
+    // Modification tools
+    registry.register_tool_type<SetNameTool>(memory, executor);
+    registry.register_tool_type<SetCommentTool>(memory, executor);
+
+    // Analysis tools
+    registry.register_tool_type<StoreAnalysisTool>(memory, executor);
+    registry.register_tool_type<GetAnalysisTool>(memory, executor);
+
+    // Binary info tools
+    registry.register_tool_type<GetImportsTool>(memory, executor);
+    registry.register_tool_type<GetEntryPointsTool>(memory, executor);
+
+    // Updating decompilation tools
+    registry.register_tool_type<GetFunctionPrototypeTool>(memory, executor);
+    registry.register_tool_type<SetFunctionPrototypeTool>(memory, executor);
+    registry.register_tool_type<GetVariablesTool>(memory, executor);
+    registry.register_tool_type<SetVariableTool>(memory, executor);
+
+    // Local type tools
+    registry.register_tool_type<SearchLocalTypesTool>(memory, executor);
+    registry.register_tool_type<GetLocalTypeTool>(memory, executor);
+    registry.register_tool_type<SetLocalTypeTool>(memory, executor);
+
+    // Patch tools
+    if (patch_manager) {
+        registry.register_tool_type<PatchBytesTool>(memory, executor, patch_manager);
+        registry.register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
+        registry.register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
+        registry.register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
     }
 
-    template<typename ToolType, typename... Args>
-    void register_tool_type(Args&&... args) {
-        register_tool(std::make_unique<ToolType>(std::forward<Args>(args)...));
+    // Deep analysis
+    if (deep_analysis_manager) {
+        registry.register_tool_type<StartDeepAnalysisCollectionTool>(memory, executor, deep_analysis_manager);
+        registry.register_tool_type<AddToDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+        registry.register_tool_type<RequestDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+        registry.register_tool_type<ListDeepAnalysesTool>(memory, executor, deep_analysis_manager);
+        registry.register_tool_type<GetDeepAnalysisTool>(memory, executor, deep_analysis_manager);
     }
-
-    void register_all_tools(std::shared_ptr<BinaryMemory> memory, std::shared_ptr<ActionExecutor> executor, bool enable_deep_analysis, std::shared_ptr<DeepAnalysisManager> deep_analysis_manager = nullptr, std::shared_ptr<PatchManager> patch_manager = nullptr) {
-        // Core navigation and info tools
-        register_tool_type<GetXrefsTool>(memory, executor);
-        register_tool_type<GetFunctionInfoTool>(memory, executor);
-        register_tool_type<GetDataInfoTool>(memory, executor);
-        register_tool_type<DumpDataTool>(memory, executor);
-        register_tool_type<AnalyzeFunctionTool>(memory, executor);
-
-        // Search tools
-        register_tool_type<SearchFunctionsTool>(memory, executor);
-        register_tool_type<SearchGlobalsTool>(memory, executor);
-        register_tool_type<SearchStringsTool>(memory, executor);
-
-        // Modification tools
-        register_tool_type<SetNameTool>(memory, executor);
-        register_tool_type<SetCommentTool>(memory, executor);
-
-        // Analysis tools
-        register_tool_type<StoreAnalysisTool>(memory, executor);
-        register_tool_type<GetAnalysisTool>(memory, executor);
-
-        // Binary info tools
-        register_tool_type<GetImportsTool>(memory, executor);
-        register_tool_type<GetEntryPointsTool>(memory, executor);
-
-        // Updating decompilation tools
-        register_tool_type<GetFunctionPrototypeTool>(memory, executor);
-        register_tool_type<SetFunctionPrototypeTool>(memory, executor);
-        register_tool_type<GetVariablesTool>(memory, executor);
-        register_tool_type<SetVariableTool>(memory, executor);
-
-        // Local type tools
-        register_tool_type<SearchLocalTypesTool>(memory, executor);
-        register_tool_type<GetLocalTypeTool>(memory, executor);
-        register_tool_type<SetLocalTypeTool>(memory, executor);
-
-        // Patch tools
-        if (patch_manager) {
-            register_tool_type<PatchBytesTool>(memory, executor, patch_manager);
-            register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
-            register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
-            register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
-        }
-
-        // Deep analysis
-        if (enable_deep_analysis) {
-            register_tool_type<StartDeepAnalysisCollectionTool>(memory, executor, deep_analysis_manager);
-            register_tool_type<AddToDeepAnalysisTool>(memory, executor, deep_analysis_manager);
-            register_tool_type<RequestDeepAnalysisTool>(memory, executor, deep_analysis_manager);
-            register_tool_type<ListDeepAnalysesTool>(memory, executor, deep_analysis_manager);
-            register_tool_type<GetDeepAnalysisTool>(memory, executor, deep_analysis_manager);
-        }
-    }
-
-    Tool* get_tool(const std::string& name) {
-        auto it = tools.find(name);
-        return it != tools.end() ? it->second.get() : nullptr;
-    }
-
-    bool has_tools() const {
-        return !tools.empty();
-    }
-
-    std::vector<json> get_api_definitions() const {
-        std::vector<json> defs;
-        // Use ordered list to maintain consistent tool order
-        // necessary for prompt caching
-        for (const std::string &name: tool_order) {
-            auto it = tools.find(name);
-            if (it != tools.end()) {
-                defs.push_back(it->second->to_api_definition());
-            }
-        }
-        return defs;
-    }
-
-    // Execute tool and return formatted message
-    messages::Message execute_tool_call(const messages::ToolUseContent& tool_use) {
-        Tool* tool = get_tool(tool_use.name);
-        if (!tool) {
-            json error_result;
-            error_result["success"] = false;
-            error_result["error"] = "Unknown tool: " + tool_use.name;
-            return messages::Message::tool_result(tool_use.id, error_result.dump());
-        }
-
-        // Track execution start time
-        auto start_time = std::chrono::steady_clock::now();
-        
-        // Execute the tool
-        ToolResult result = tool->execute(tool_use.input);
-        
-        // Track execution end time
-        auto end_time = std::chrono::steady_clock::now();
-        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-        
-        // Update statistics
-        ToolStats& stats = tool_stats[tool_use.name];
-        stats.execution_count++;
-        stats.total_duration_ms += duration_ms;
-        stats.last_used = end_time;
-        
-        if (result.wasSuccess) {
-            stats.success_count++;
-        } else {
-            stats.failure_count++;
-        }
-        
-        return messages::Message::tool_result(tool_use.id, result.to_json().dump());
-    }
-
-    // Get tool names for logging
-    std::vector<std::string> get_tool_names() const {
-        return tool_order;
-    }
-    
-    // Direct access to tool statistics
-    const std::unordered_map<std::string, ToolStats>& get_tool_stats() const {
-        return tool_stats;
-    }
-    
-    // Get tool usage statistics
-    json get_tool_statistics() const {
-        json stats = json::array();
-        
-        for (const auto& tool_name : tool_order) {
-            auto it = tool_stats.find(tool_name);
-            if (it != tool_stats.end() && it->second.execution_count > 0) {
-                const ToolStats& tool_stat = it->second;
-                
-                json stat;
-                stat["name"] = tool_name;
-                stat["execution_count"] = tool_stat.execution_count;
-                stat["success_count"] = tool_stat.success_count;
-                stat["failure_count"] = tool_stat.failure_count;
-                stat["success_rate"] = (tool_stat.execution_count > 0) 
-                    ? (double)tool_stat.success_count / tool_stat.execution_count 
-                    : 0.0;
-                stat["average_duration_ms"] = (tool_stat.execution_count > 0)
-                    ? tool_stat.total_duration_ms / tool_stat.execution_count
-                    : 0.0;
-                
-                // Add time since last use
-                if (tool_stat.last_used.time_since_epoch().count() > 0) {
-                    auto now = std::chrono::steady_clock::now();
-                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - tool_stat.last_used);
-                    stat["seconds_since_last_use"] = duration.count();
-                }
-                
-                stats.push_back(stat);
-            }
-        }
-        
-        return stats;
-    }
-};
+}
 
 } // namespace llm_re::tools
 

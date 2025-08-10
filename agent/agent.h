@@ -268,15 +268,15 @@ private:
     std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
-    tools::ToolRegistry tool_registry_;                              // registry of tools that use the action executor
-    std::unique_ptr<OAuthManager> oauth_manager_;                    // OAuth credential manager for token refresh
-    api::AnthropicClient api_client_;                                // agent api client
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
+    std::unique_ptr<OAuthManager> oauth_manager_;                    // OAuth credential manager for token refresh
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
+    tools::ToolRegistry tool_registry_;                              // registry for tools
+    api::AnthropicClient api_client_;                                // agent api client
 
     // State management
     AgentState state_;
-    AgentExecutionState execution_state_;  // Unified execution and conversation state
+    AgentExecutionState execution_state_;  // Execution and conversation state
     const Config& config_;
     std::string last_error_;
 
@@ -463,7 +463,7 @@ public:
         : config_(config),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
-          deep_analysis_manager_(std::make_shared<DeepAnalysisManager>(memory_, config)),
+          deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
           oauth_manager_(config.api.auth_method == api::AuthMethod::OAUTH ? std::make_unique<OAuthManager>(config.api.oauth_config_dir) : nullptr),
           api_client_(create_api_client(config, oauth_manager_.get())),
           grader_(std::make_unique<AnalysisGrader>(config)) {
@@ -487,8 +487,8 @@ public:
             patch_manager_ = nullptr;
         }
 
-        // Register all tools including patch tools
-        tool_registry_.register_all_tools(memory_, executor_, config.agent.enable_deep_analysis, deep_analysis_manager_, patch_manager_);
+        // Register tools
+        tools::register_all_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {

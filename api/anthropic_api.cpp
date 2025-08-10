@@ -3,10 +3,6 @@
 //
 
 #include "api/anthropic_api.h"
-#include "agent/tool_system.h"
-
-// have to make a c++ file because of circular dependency tool_system -> deep analysis -> anthropic api -> ...
-// could just organize differently
 
 namespace llm_re::api {
 
