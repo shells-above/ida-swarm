@@ -104,6 +104,14 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
                 prompt << "[THINKING]\n" << block->thinking << "\n\n";
             }
             
+            // Get tool calls
+            std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
+            for (const messages::ToolUseContent* tool_call: tool_calls) {
+                prompt << "[TOOL_CALL]\n";
+                prompt << "Tool: " << tool_call->name << "\n";
+                prompt << "Parameters: " << tool_call->input.dump() << "\n\n";
+            }
+            
             // Get text content
             std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
             if (text && !text->empty()) {
@@ -114,7 +122,8 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
     
     prompt << "---\n\n";
     prompt << "Evaluate whether this investigation provides what the user asked for.\n";
-    prompt << "Think deeply about what the user requested and whether the investigation delivers that.\n";
+    prompt << "If complete, synthesize the findings into a final report for the user.\n";
+    prompt << "If incomplete, identify what specific investigation is still needed.\n";
     
     return messages::Message::user_text(prompt.str());
 }
