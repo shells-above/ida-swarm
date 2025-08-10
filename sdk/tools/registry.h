@@ -3,10 +3,10 @@
 // Provides portable tool interfaces and registry for managing tools
 //
 
-#ifndef TOOL_REGISTRY_H
-#define TOOL_REGISTRY_H
+#ifndef CLAUDE_TOOLS_REGISTRY_H
+#define CLAUDE_TOOLS_REGISTRY_H
 
-#include "message_types.h"
+#include "../messages/types.h"
 #include <string>
 #include <memory>
 #include <optional>
@@ -15,7 +15,7 @@
 #include <chrono>
 #include <nlohmann/json.hpp>
 
-namespace llm_re::tools {
+namespace claude::tools {
 
 using json = nlohmann::json;
 
@@ -269,6 +269,6 @@ public:
     }
 };
 
-} // namespace llm_re::tools
+} // namespace claude::tools
 
-#endif // TOOL_REGISTRY_H
+#endif // CLAUDE_TOOLS_REGISTRY_H

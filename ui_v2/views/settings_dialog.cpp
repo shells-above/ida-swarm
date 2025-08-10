@@ -1,9 +1,7 @@
 #include "settings_dialog.h"
 #include "../core/settings_manager.h"
-#include "../core/theme_manager.h"
-#include "api/oauth_manager.h"
-#include "api/oauth_authorizer.h"
-#include "../../api/anthropic_api.h"
+#include "sdk/auth/oauth_authorizer.h"
+#include "sdk/auth/oauth_manager.h"
 
 namespace llm_re::ui_v2 {
 
@@ -361,13 +359,13 @@ void SettingsDialog::loadSettings() {
     
     // Map model enum to combo index
     switch (config.agent.model) {
-        case api::Model::Opus41:
+        case claude::Model::Opus41:
             model_combo_->setCurrentIndex(0);
             break;
-        case api::Model::Sonnet4:
+        case claude::Model::Sonnet4:
             model_combo_->setCurrentIndex(1);
             break;
-        case api::Model::Haiku35:
+        case claude::Model::Haiku35:
             model_combo_->setCurrentIndex(2);
             break;
     }
@@ -384,13 +382,13 @@ void SettingsDialog::loadSettings() {
     
     // Grader settings
     switch (config.grader.model) {
-        case api::Model::Opus41:
+        case claude::Model::Opus41:
             grader_model_combo_->setCurrentIndex(0);
             break;
-        case api::Model::Sonnet4:
+        case claude::Model::Sonnet4:
             grader_model_combo_->setCurrentIndex(1);
             break;
-        case api::Model::Haiku35:
+        case claude::Model::Haiku35:
             grader_model_combo_->setCurrentIndex(2);
             break;
     }
@@ -426,21 +424,21 @@ void SettingsDialog::applySettings() {
     
     // Update auth method based on checkbox
     if (config.api.use_oauth) {
-        config.api.auth_method = api::AuthMethod::OAUTH;
+        config.api.auth_method = claude::AuthMethod::OAUTH;
     } else {
-        config.api.auth_method = api::AuthMethod::API_KEY;
+        config.api.auth_method = claude::AuthMethod::API_KEY;
     }
     
     // Map combo index to model enum
     switch (model_combo_->currentIndex()) {
         case 0:
-            config.agent.model = api::Model::Opus41;
+            config.agent.model = claude::Model::Opus41;
             break;
         case 1:
-            config.agent.model = api::Model::Sonnet4;
+            config.agent.model = claude::Model::Sonnet4;
             break;
         case 2:
-            config.agent.model = api::Model::Haiku35;
+            config.agent.model = claude::Model::Haiku35;
             break;
     }
     
@@ -457,13 +455,13 @@ void SettingsDialog::applySettings() {
     // Grader settings
     switch (grader_model_combo_->currentIndex()) {
         case 0:
-            config.grader.model = api::Model::Opus41;
+            config.grader.model = claude::Model::Opus41;
             break;
         case 1:
-            config.grader.model = api::Model::Sonnet4;
+            config.grader.model = claude::Model::Sonnet4;
             break;
         case 2:
-            config.grader.model = api::Model::Haiku35;
+            config.grader.model = claude::Model::Haiku35;
             break;
     }
     config.grader.max_tokens = grader_max_tokens_spin_->value();
@@ -550,17 +548,17 @@ void SettingsDialog::onTestAPI() {
 
 bool SettingsDialog::validateApiKey(const std::string& apiKey) {
     try {
-        api::AnthropicClient client(apiKey);
+        claude::Client client(apiKey);
         
-        api::ChatRequest request;
-        request.model = api::Model::Haiku35;
+        claude::ChatRequest request;
+        request.model = claude::Model::Haiku35;
         request.max_tokens = 1;
         request.temperature = 0;
         request.enable_thinking = false;
         
-        request.messages.push_back(messages::Message::user_text("Hi"));
+        request.messages.push_back(claude::messages::Message::user_text("Hi"));
         
-        api::ChatResponse response = client.send_request(request);
+        claude::ChatResponse response = client.send_request(request);
         
         if (response.success) {
             return true;
@@ -596,8 +594,8 @@ bool SettingsDialog::validateOAuth() {
             configDir = "~/.claude_cpp_sdk";
         }
         
-        OAuthManager oauth_mgr(configDir.toStdString());
-        std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+        claude::auth::OAuthManager oauth_mgr(configDir.toStdString());
+        std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
         
         if (!oauth_creds) {
             msg("LLM RE: Failed to load OAuth credentials for validation\n");
@@ -605,17 +603,17 @@ bool SettingsDialog::validateOAuth() {
         }
         
         // Create client with OAuth credentials
-        api::AnthropicClient client(*oauth_creds, base_url_edit_->text().toStdString());
+        claude::Client client(*oauth_creds, base_url_edit_->text().toStdString());
         
-        api::ChatRequest request;
-        request.model = api::Model::Haiku35;
+        claude::ChatRequest request;
+        request.model = claude::Model::Haiku35;
         request.max_tokens = 1;
         request.temperature = 0;
         request.enable_thinking = false;
         
-        request.messages.push_back(messages::Message::user_text("Hi"));
+        request.messages.push_back(claude::messages::Message::user_text("Hi"));
         
-        api::ChatResponse response = client.send_request(request);
+        claude::ChatResponse response = client.send_request(request);
         
         if (response.success) {
             return true;
@@ -641,7 +639,7 @@ void SettingsDialog::checkOAuthStatus() {
         configDir = "~/.claude_cpp_sdk";
     }
     
-    OAuthManager oauth_mgr(configDir.toStdString());
+    claude::auth::OAuthManager oauth_mgr(configDir.toStdString());
     
     if (!oauth_mgr.has_credentials()) {
         oauth_status_label_->setText("<font color='red'>✗ No credentials found</font>");
@@ -684,7 +682,7 @@ void SettingsDialog::onAuthorize() {
     
     // Run authorization in background thread
     QThread* thread = QThread::create([this]() {
-        OAuthAuthorizer authorizer;
+        claude::auth::OAuthAuthorizer authorizer;
         bool success = authorizer.authorize();
         std::string error = authorizer.getLastError();
         
@@ -721,7 +719,7 @@ void SettingsDialog::onRefreshToken() {
     
     // Run refresh in background thread
     QThread* thread = QThread::create([this, oauth_config_dir]() {
-        OAuthManager oauth_mgr(oauth_config_dir);
+        claude::auth::OAuthManager oauth_mgr(oauth_config_dir);
         auto refreshed_creds = oauth_mgr.force_refresh();
         bool success = refreshed_creds.has_value();
         std::string error = oauth_mgr.get_last_error();

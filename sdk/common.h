@@ -1,10 +1,10 @@
 //
-// Common definitions for the API module
+// Common definitions for the Claude SDK
 // This file should have NO external dependencies except standard library and nlohmann/json
 //
 
-#ifndef API_COMMON_H
-#define API_COMMON_H
+#ifndef CLAUDE_SDK_COMMON_H
+#define CLAUDE_SDK_COMMON_H
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -16,7 +16,7 @@
 #undef getenv
 #include <cstdlib>
 
-namespace llm_re {
+namespace claude {
     // Logging levels
     enum class LogLevel {
         DEBUG,
@@ -24,8 +24,8 @@ namespace llm_re {
         WARNING,
         ERROR
     };
-} // namespace llm_re
+} // namespace claude
 
 using json = nlohmann::json;
 
-#endif // API_COMMON_H
+#endif // CLAUDE_SDK_COMMON_H

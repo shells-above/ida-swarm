@@ -1,13 +1,13 @@
 #pragma once
 
-#include "api/api_common.h"
-#include "anthropic_api.h"
+#include "../common.h"
+#include "../client/client.h"
 #include <string>
 #include <optional>
 #include <chrono>
 #include <map>
 
-namespace llm_re {
+namespace claude::auth {
 
 // OAuth flow implementation for token refresh
 class OAuthFlow {
@@ -19,10 +19,10 @@ public:
     // Refresh an OAuth token
     // Returns updated credentials with new access token and updated expiry
     // Throws std::runtime_error on failure
-    api::OAuthCredentials refresh_token(const std::string& refresh_token, const std::optional<std::string>& account_uuid = std::nullopt);
+    OAuthCredentials refresh_token(const std::string& refresh_token, const std::optional<std::string>& account_uuid = std::nullopt);
     
     // Check if credentials are expired or will expire soon
-    static bool needs_refresh(const api::OAuthCredentials& creds, int buffer_seconds = 300);
+    static bool needs_refresh(const OAuthCredentials& creds, int buffer_seconds = 300);
     
     // Get last error message
     std::string get_last_error() const { return last_error_; }
@@ -46,9 +46,9 @@ private:
     json perform_refresh_request(const std::string& refresh_token);
     
     // Parse refresh response and build credentials
-    api::OAuthCredentials parse_refresh_response(const json& response,
+    OAuthCredentials parse_refresh_response(const json& response,
                                                 const std::string& original_refresh_token,
                                                 const std::optional<std::string>& account_uuid);
 };
 
-} // namespace llm_re
+} // namespace claude::auth

@@ -6,7 +6,6 @@
 #include "tool_execution_dock.h"
 #include "../core/theme_manager.h"
 #include "../core/ui_utils.h"
-#include "api/anthropic_api.h"
 #include "ui_v2/core/agent_controller.h"
 
 namespace llm_re::ui_v2 {
@@ -394,8 +393,8 @@ void ConversationView::disconnectModelSignals() {
 void ConversationView::addUserMessage(const QString& content) {
     if (!model_) return;
     
-    auto msg = std::make_shared<messages::Message>(messages::Role::User);
-    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    auto msg = std::make_shared<Message>(Role::User);
+    msg->add_content(std::make_unique<TextContent>(content.toStdString()));
     
     MessageMetadata metadata;
     metadata.id = QUuid::createUuid();
@@ -409,8 +408,8 @@ void ConversationView::addUserMessage(const QString& content) {
 void ConversationView::addAssistantMessage(const QString& content) {
     if (!model_) return;
     
-    auto msg = std::make_shared<messages::Message>(messages::Role::Assistant);
-    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    auto msg = std::make_shared<Message>(Role::Assistant);
+    msg->add_content(std::make_unique<TextContent>(content.toStdString()));
     
     MessageMetadata metadata;
     metadata.id = QUuid::createUuid();
@@ -424,8 +423,8 @@ void ConversationView::addAssistantMessage(const QString& content) {
 void ConversationView::addSystemMessage(const QString& content) {
     if (!model_) return;
     
-    auto msg = std::make_shared<messages::Message>(messages::Role::System);
-    msg->add_content(std::make_unique<messages::TextContent>(content.toStdString()));
+    auto msg = std::make_shared<Message>(Role::System);
+    msg->add_content(std::make_unique<TextContent>(content.toStdString()));
     
     MessageMetadata metadata;
     metadata.id = QUuid::createUuid();

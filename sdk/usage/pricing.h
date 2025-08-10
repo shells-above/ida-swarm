@@ -1,8 +1,8 @@
 #pragma once
 
-#include "anthropic_api.h"
+#include "../client/client.h"
 
-namespace llm_re::api {
+namespace claude::usage {
 
 // Forward declaration
 struct TokenUsage;
@@ -35,7 +35,7 @@ public:
     }
 
     // Calculate total cost for token usage
-    static double calculate_cost(const TokenUsage& usage) {
+    static double calculate_cost(const claude::TokenUsage& usage) {
         ModelPricing pricing = get_pricing(usage.model);
         
         return (usage.input_tokens          / 1000000.0 * pricing.input_price) +
@@ -45,9 +45,11 @@ public:
     }
 };
 
-// Implementation of TokenUsage::estimated_cost()
-inline double TokenUsage::estimated_cost() const {
-    return PricingModel::calculate_cost(*this);
-}
+} // namespace claude::usage
 
-} // namespace llm_re::api
+// Implementation of TokenUsage::estimated_cost() in claude namespace
+namespace claude {
+inline double TokenUsage::estimated_cost() const {
+    return usage::PricingModel::calculate_cost(*this);
+}
+} // namespace claude

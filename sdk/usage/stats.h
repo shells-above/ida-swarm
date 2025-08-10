@@ -1,11 +1,11 @@
 #pragma once
 
-#include "anthropic_api.h"
+#include "../client/client.h"
 #include "pricing.h"
 #include <vector>
 #include <chrono>
 
-namespace llm_re::api {
+namespace claude::usage {
 
 /**
  * Unified token statistics tracking
@@ -16,20 +16,20 @@ public:
     TokenStats() : session_total_(), session_start_(std::chrono::steady_clock::now()) { }
 
     // Add usage from an API response
-    void add_usage(const TokenUsage& usage) {
+    void add_usage(const claude::TokenUsage& usage) {
         session_total_ += usage;
         history_.emplace_back(std::chrono::steady_clock::now(), usage);
     }
 
     // Get cumulative totals
-    TokenUsage get_total() const {
+    claude::TokenUsage get_total() const {
         return session_total_;
     }
 
     // Get last usage entry
-    TokenUsage get_last_usage() const {
+    claude::TokenUsage get_last_usage() const {
         if (history_.empty()) {
-            return TokenUsage{};
+            return claude::TokenUsage{};
         }
         return history_.back().second;
     }
@@ -41,7 +41,7 @@ public:
 
     // Reset all statistics
     void reset() {
-        session_total_ = TokenUsage{};
+        session_total_ = claude::TokenUsage{};
         history_.clear();
         session_start_ = std::chrono::steady_clock::now();
     }
@@ -62,7 +62,7 @@ public:
     // Get formatted summary string for logging
     std::string get_summary() const {
         std::stringstream ss;
-        const TokenUsage& total = session_total_;
+        const claude::TokenUsage& total = session_total_;
         
         ss << "Tokens: " << total.input_tokens << " in, " << total.output_tokens << " out";
         ss << " [" << total.cache_read_tokens << " cache read, " << total.cache_creation_tokens << " cache write]";
@@ -72,7 +72,7 @@ public:
     }
 
     // Get iteration-specific summary
-    std::string get_iteration_summary(const TokenUsage& usage, int iteration) const {
+    std::string get_iteration_summary(const claude::TokenUsage& usage, int iteration) const {
         std::stringstream ss;
         ss << "[Iteration " << iteration << "] ";
         ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
@@ -82,9 +82,9 @@ public:
     }
 
 private:
-    TokenUsage session_total_;
-    std::vector<std::pair<std::chrono::steady_clock::time_point, TokenUsage>> history_;
+    claude::TokenUsage session_total_;
+    std::vector<std::pair<std::chrono::steady_clock::time_point, claude::TokenUsage>> history_;
     std::chrono::steady_clock::time_point session_start_;
 };
 
-} // namespace llm_re::api
+} // namespace claude::usage

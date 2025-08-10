@@ -5,7 +5,6 @@
 #ifndef TOOL_SYSTEM_H
 #define TOOL_SYSTEM_H
 
-#include "api/tool_registry.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
@@ -14,7 +13,7 @@
 namespace llm_re::tools {
 
 // IDA-specific base tool that extends the api Tool interface
-class IDAToolBase : public Tool {
+class IDAToolBase : public claude::tools::Tool {
 protected:
     std::shared_ptr<BinaryMemory> memory;
     std::shared_ptr<ActionExecutor> executor;
@@ -40,22 +39,22 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all functions", false)
             .add_boolean("named_only", "Only return user-named functions (exclude auto-generated names. defaults to true)", false)
             .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string pattern = input.value("pattern", "");
             bool named_only = input.value("named_only", true);
             int max_results = input.value("max_results", 100);
 
-            return ToolResult::success(executor->search_functions(pattern, named_only, max_results));
+            return claude::tools::ToolResult::success(executor->search_functions(pattern, named_only, max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -74,20 +73,20 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all globals", false)
             .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string pattern = input.value("pattern", "");
             int max_results = input.value("max_results", 100);
 
-            return ToolResult::success(executor->search_globals(pattern, max_results));
+            return claude::tools::ToolResult::success(executor->search_globals(pattern, max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -106,22 +105,22 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all strings", false)
             .add_integer("min_length", "Minimum string length (defaults to 5)", false)
             .add_integer("max_results", "Maximum number of results to return (defaults to 100)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string pattern = input.value("pattern", "");
             int min_length = input.value("min_length", 5);
             int max_results = input.value("max_results", 100);
 
-            return ToolResult::success(executor->search_strings(pattern, min_length, max_results));
+            return claude::tools::ToolResult::success(executor->search_strings(pattern, min_length, max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -140,17 +139,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address of the function")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_info(address));
+            return claude::tools::ToolResult::success(executor->get_function_info(address));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -169,19 +168,19 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address of the data")
             .add_integer("max_xrefs", "Maximum cross-references to return (defaults to 20)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             int max_xrefs = input.value("max_xrefs", 20);
-            return ToolResult::success(executor->get_data_info(address, max_xrefs));
+            return claude::tools::ToolResult::success(executor->get_data_info(address, max_xrefs));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -200,30 +199,30 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The starting address to dump")
             .add_integer("size", "Number of bytes to dump (max 65536)")
             .add_integer("bytes_per_line", "Bytes per line in the dump (defaults to 16)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             int size = input.at("size");
             int bytes_per_line = input.value("bytes_per_line", 16);
 
             if (size <= 0 || size > 65536) {
-                return ToolResult::failure("Size must be between 1 and 65536 bytes");
+                return claude::tools::ToolResult::failure("Size must be between 1 and 65536 bytes");
             }
 
             if (bytes_per_line <= 0 || bytes_per_line > 32) {
-                return ToolResult::failure("Bytes per line must be between 1 and 32");
+                return claude::tools::ToolResult::failure("Bytes per line must be between 1 and 32");
             }
 
-            return ToolResult::success(executor->dump_data(address, size, bytes_per_line));
+            return claude::tools::ToolResult::success(executor->dump_data(address, size, bytes_per_line));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -245,7 +244,7 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address of the function")
             .add_boolean("include_disasm", "Include disassembly (defaults to false)", false)
             .add_boolean("include_decomp", "Include decompilation (defaults to true)", false)
@@ -253,16 +252,16 @@ public:
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             bool include_disasm = input.value("include_disasm", false);
             bool include_decomp = input.value("include_decomp", true);
             int max_xrefs = input.value("max_xrefs", 20);
 
-            return ToolResult::success(executor->analyze_function(address, include_disasm, include_decomp, max_xrefs));
+            return claude::tools::ToolResult::success(executor->analyze_function(address, include_disasm, include_decomp, max_xrefs));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -284,7 +283,7 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("key", "Unique key for this analysis")
             .add_string("content", "The analysis content")
             .add_string("type", "Type of analysis: note, finding, hypothesis, question, analysis (analysis is for analyzing a specific function)")
@@ -293,7 +292,7 @@ public:
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string key = input.at("key");
             std::string content = input.at("content");
@@ -309,9 +308,9 @@ public:
                 related_addresses = ActionExecutor::parse_list_address_param(input, "related_addresses");
             }
 
-            return ToolResult::success(executor->store_analysis(key, content, address, type, related_addresses));
+            return claude::tools::ToolResult::success(executor->store_analysis(key, content, address, type, related_addresses));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -333,7 +332,7 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("key", "Specific key to retrieve", false)
             .add_integer("address", "Find analysis related to this address", false)
             .add_string("type", "Filter by type (note, finding, hypothesis, question, analysis)", false)
@@ -341,7 +340,7 @@ public:
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string key = input.value("key", "");
             std::optional<ea_t> address;
@@ -351,9 +350,9 @@ public:
             std::string type = input.value("type", "");
             std::string pattern = input.value("pattern", "");
 
-            return ToolResult::success(executor->get_analysis(key, address, type, pattern));
+            return claude::tools::ToolResult::success(executor->get_analysis(key, address, type, pattern));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -372,20 +371,20 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address to get xrefs for")
             .add_integer("max_results", "Maximum xrefs per direction (defaults to 100)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             int max_results = input.value("max_results", 100);
 
-            return ToolResult::success(executor->get_xrefs(address, max_results));
+            return claude::tools::ToolResult::success(executor->get_xrefs(address, max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -407,20 +406,20 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address to name")
             .add_string("name", "The new name. Do not provide reserved names such as word_401000.")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string name = input.at("name");
 
-            return ToolResult::success(executor->set_name(address, name));
+            return claude::tools::ToolResult::success(executor->set_name(address, name));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -442,20 +441,20 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The address for the comment")
             .add_string("comment", "The comment text (empty to clear)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string comment = input.value("comment", "");
 
-            return ToolResult::success(executor->set_comment(address, comment));
+            return claude::tools::ToolResult::success(executor->set_comment(address, comment));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -474,17 +473,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("max_results", "Maximum imports to return (defaults to 100)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             int max_results = input.value("max_results", 100);
-            return ToolResult::success(executor->get_imports(max_results));
+            return claude::tools::ToolResult::success(executor->get_imports(max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -503,16 +502,16 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("max_count", "Max number of entry points to return")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
-            return ToolResult::success(executor->get_entry_points(input.at("max_count")));
+            return claude::tools::ToolResult::success(executor->get_entry_points(input.at("max_count")));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -531,17 +530,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_function_prototype(address));
+            return claude::tools::ToolResult::success(executor->get_function_prototype(address));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -563,19 +562,19 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
             .add_string("prototype", "Full C-style prototype. Note DO NOT PROVIDE ARGUMENT NAMES, only their types! This may seem strange, but it is important!")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string prototype = input.at("prototype");
-            return ToolResult::success(executor->set_function_prototype(address, prototype));
+            return claude::tools::ToolResult::success(executor->set_function_prototype(address, prototype));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -597,21 +596,21 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("pattern", "Search pattern (substring match, case-insensitive). Empty for all types", false)
             .add_string("type_kind", "Filter by kind: struct, union, enum, typedef, any (defaults to any)", false)
             .add_integer("max_results", "Maximum results (defaults to 50)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string pattern = input.value("pattern", "");
             std::string type_kind = input.value("type_kind", "any");
             int max_results = input.value("max_results", 50);
-            return ToolResult::success(executor->search_local_types(pattern, type_kind, max_results));
+            return claude::tools::ToolResult::success(executor->search_local_types(pattern, type_kind, max_results));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -629,17 +628,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("type_name", "Name of the type to retrieve")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string type_name = input.at("type_name");
-            return ToolResult::success(executor->get_local_type(type_name));
+            return claude::tools::ToolResult::success(executor->get_local_type(type_name));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -661,19 +660,19 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("definition", "C-style type definition (e.g., 'struct Point { int x; int y; };'). Only define one struct per set_local_type tool call")
             .add_boolean("replace_existing", "Replace if type already exists (defaults to true)", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string definition = input.at("definition");
             bool replace_existing = input.value("replace_existing", true);
-            return ToolResult::success(executor->set_local_type(definition, replace_existing));
+            return claude::tools::ToolResult::success(executor->set_local_type(definition, replace_existing));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -694,17 +693,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-            return ToolResult::success(executor->get_variables(address));
+            return claude::tools::ToolResult::success(executor->get_variables(address));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -725,7 +724,7 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
             .add_string("variable_name", "Current variable name (e.g., 'v1', 'a2', or existing name)")
             .add_string("new_name", "New variable name", false)
@@ -733,15 +732,15 @@ public:
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string variable_name = input.at("variable_name");
             std::string new_name = input.value("new_name", "");
             std::string new_type = input.value("new_type", "");
-            return ToolResult::success(executor->set_variable(address, variable_name, new_name, new_type));
+            return claude::tools::ToolResult::success(executor->set_variable(address, variable_name, new_name, new_type));
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -769,13 +768,13 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("topic", "A descriptive name for the complex system/task being analyzed")
             .add_string("description", "Detailed description of what makes this task complex and why deep analysis is needed")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string topic = input.at("topic");
             std::string description = input.at("description");
@@ -787,9 +786,9 @@ public:
             result["message"] = "Started deep analysis collection for: " + topic;
             result["warning"] = "Remember to add relevant functions and observations (add_to_deep_analysis) before requesting analysis";
 
-            return ToolResult::success(result);
+            return claude::tools::ToolResult::success(result);
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -812,17 +811,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("key", "A descriptive key for this piece of information")
             .add_string("value", "The observation, finding, or analysis to store", false)
             .add_integer("function_address", "Address of a related function to include in deep analysis. Expected to be formatted as: [ADDR, ADDR] or plainly as ADDR. Do NOT wrap the square brackets with quotes.", false)
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             if (!deep_analysis_manager->has_active_collection()) {
-                return ToolResult::failure("No active deep analysis collection. Call start_deep_analysis_collection first.");
+                return claude::tools::ToolResult::failure("No active deep analysis collection. Call start_deep_analysis_collection first.");
             }
 
             std::string key = input.at("key");
@@ -842,9 +841,9 @@ public:
             result["success"] = true;
             result["message"] = "Added to deep analysis collection";
 
-            return ToolResult::success(result);
+            return claude::tools::ToolResult::success(result);
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -867,17 +866,17 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("task", "Specific analysis task or questions for Opus 4 to address")  // not necessarily opus 4, but we can let the model think that
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string task = input.at("task");
 
             if (!deep_analysis_manager->has_active_collection()) {
-                return ToolResult::failure("No active deep analysis collection to analyze");
+                return claude::tools::ToolResult::failure("No active deep analysis collection to analyze");
             }
 
             // Get collection info for cost estimate
@@ -898,9 +897,9 @@ public:
             response["topic"] = result.topic;
             response["message"] = "Deep analysis completed. Use get_deep_analysis with key: " + result.key;
 
-            return ToolResult::success(response);
+            return claude::tools::ToolResult::success(response);
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -921,10 +920,10 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder().build();
+        return claude::tools::ParameterBuilder().build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::vector<std::pair<std::string, std::string>> analyses = deep_analysis_manager->list_analyses();
 
@@ -941,9 +940,9 @@ public:
 
             result["count"] = analyses.size();
 
-            return ToolResult::success(result);
+            return claude::tools::ToolResult::success(result);
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -964,18 +963,18 @@ public:
     }
 
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_string("key", "The analysis key (from list_deep_analyses or request_deep_analysis)")
             .build();
     }
 
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         try {
             std::string key = input.at("key");
 
             std::optional<DeepAnalysisResult> analysis_opt = deep_analysis_manager->get_analysis(key);
             if (!analysis_opt) {
-                return ToolResult::failure("Deep analysis not found with key: " + key);
+                return claude::tools::ToolResult::failure("Deep analysis not found with key: " + key);
             }
 
             DeepAnalysisResult& analysis = *analysis_opt;
@@ -987,9 +986,9 @@ public:
             result["task"] = analysis.task_description;
             result["analysis"] = analysis.analysis;
 
-            return ToolResult::success(result);
+            return claude::tools::ToolResult::success(result);
         } catch (const std::exception& e) {
-            return ToolResult::failure(e.what());
+            return claude::tools::ToolResult::failure(e.what());
         }
     }
 };
@@ -1016,7 +1015,7 @@ public:
     }
     
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "Target address to patch - MUST be exact start of instruction/data")
             .add_string("original_bytes", "CRITICAL: Original bytes for verification - MUST match exactly or patch will fail (hex format)")
             .add_string("new_bytes", "⚠️ New bytes to write - WARNING: If longer than original, WILL OVERWRITE adjacent memory!")
@@ -1024,9 +1023,9 @@ public:
             .build();
     }
     
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
-            return ToolResult::failure("Patch manager not initialized");
+            return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
         
         try {
@@ -1037,7 +1036,7 @@ public:
             std::string description = input.at("description");  // Required for audit trail
             
             if (description.empty()) {
-                return ToolResult::failure("Description is required for audit trail");
+                return claude::tools::ToolResult::failure("Description is required for audit trail");
             }
             
             // Apply the byte patch with verification (thread safety handled in PatchManager)
@@ -1051,13 +1050,13 @@ public:
                 data["bytes_patched"] = patch_result.bytes_patched;
                 data["description"] = description;
                 data["timestamp"] = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                return ToolResult::success(data);
+                return claude::tools::ToolResult::success(data);
             } else {
-                return ToolResult::failure(patch_result.error_message);
+                return claude::tools::ToolResult::failure(patch_result.error_message);
             }
             
         } catch (const std::exception& e) {
-            return ToolResult::failure(std::string("Exception: ") + e.what());
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
     }
 };
@@ -1088,7 +1087,7 @@ public:
     }
     
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "Target instruction address - MUST be exact start of instruction")
             .add_string("original_asm", "CRITICAL: Original assembly for verification - MUST match exactly or patch will fail")
             .add_string("new_asm", "⚠️ New assembly - WARNING: If assembled size > original, WILL DESTROY following instructions!")
@@ -1096,9 +1095,9 @@ public:
             .build();
     }
     
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
-            return ToolResult::failure("Patch manager not initialized");
+            return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
         
         try {
@@ -1109,7 +1108,7 @@ public:
             std::string description = input.at("description");  // Required for audit trail
             
             if (description.empty()) {
-                return ToolResult::failure("Description is required for audit trail");
+                return claude::tools::ToolResult::failure("Description is required for audit trail");
             }
             
             // Apply the assembly patch with verification (thread safety handled in PatchManager)
@@ -1127,13 +1126,13 @@ public:
                 if (patch_result.nops_added > 0) {
                     data["nops_added"] = patch_result.nops_added;
                 }
-                return ToolResult::success(data);
+                return claude::tools::ToolResult::success(data);
             } else {
-                return ToolResult::failure(patch_result.error_message);
+                return claude::tools::ToolResult::failure(patch_result.error_message);
             }
             
         } catch (const std::exception& e) {
-            return ToolResult::failure(std::string("Exception: ") + e.what());
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
     }
 };
@@ -1158,15 +1157,15 @@ public:
     }
     
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "Address of patch to revert", false)
             .add_boolean("revert_all", "Revert all patches", false)
             .build();
     }
     
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
-            return ToolResult::failure("Patch manager not initialized");
+            return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
         
         try {
@@ -1189,17 +1188,17 @@ public:
                     data["message"] = "Patch reverted successfully";
                 }
             } else {
-                return ToolResult::failure("Must specify address or revert_all");
+                return claude::tools::ToolResult::failure("Must specify address or revert_all");
             }
             
             if (!success) {
-                return ToolResult::failure("No patch found at specified address");
+                return claude::tools::ToolResult::failure("No patch found at specified address");
             }
             
-            return ToolResult::success(data);
+            return claude::tools::ToolResult::success(data);
             
         } catch (const std::exception& e) {
-            return ToolResult::failure(std::string("Exception: ") + e.what());
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
     }
 };
@@ -1224,14 +1223,14 @@ public:
     }
     
     json parameters_schema() const override {
-        return ParameterBuilder()
+        return claude::tools::ParameterBuilder()
             .add_integer("address", "List only patch at specific address", false)
             .build();
     }
     
-    ToolResult execute(const json& input) override {
+    claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
-            return ToolResult::failure("Patch manager not initialized");
+            return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
         
         try {
@@ -1292,15 +1291,15 @@ public:
             data["statistics"]["byte_patches"] = stats.byte_patches;
             data["statistics"]["total_bytes_patched"] = stats.total_bytes_patched;
             
-            return ToolResult::success(data);
+            return claude::tools::ToolResult::success(data);
             
         } catch (const std::exception& e) {
-            return ToolResult::failure(std::string("Exception: ") + e.what());
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
     }
 };
 
-inline void register_all_tools(tools::ToolRegistry& registry,
+inline void register_ida_tools(claude::tools::ToolRegistry& registry,
                                std::shared_ptr<BinaryMemory> memory,
                                std::shared_ptr<ActionExecutor> executor,
                                std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,

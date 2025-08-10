@@ -1,18 +1,18 @@
 #pragma once
 
 #include "../core/ui_v2_common.h"
-#include "../../api/message_types.h"
+#include "sdk/messages/types.h"
 
 namespace llm_re::ui_v2 {
 
 // Use the API message types directly!
-using messages::Message;
-using messages::Role;
-using messages::Content;
-using messages::TextContent;
-using messages::ThinkingContent;
-using messages::ToolUseContent;
-using messages::ToolResultContent;
+using claude::messages::Message;
+using claude::messages::Role;
+using claude::messages::Content;
+using claude::messages::TextContent;
+using claude::messages::ThinkingContent;
+using claude::messages::ToolUseContent;
+using claude::messages::ToolResultContent;
 
 // UI-specific metadata that extends the base message
 struct MessageMetadata {
@@ -26,18 +26,18 @@ struct MessageMetadata {
 
 // Wrapper that holds an API message + UI metadata
 struct UIMessage {
-    std::shared_ptr<messages::Message> message;  // The actual API message
+    std::shared_ptr<Message> message;  // The actual API message
     MessageMetadata metadata;                     // UI-specific metadata
     
     // Helper functions to access message content
     QUuid id() const { return metadata.id; }
-    messages::Role role() const { return message->role(); }
+    Role role() const { return message->role(); }
     
     QString roleString() const {
         switch (message->role()) {
-            case messages::Role::User: return "User";
-            case messages::Role::Assistant: return "Assistant";
-            case messages::Role::System: return "System";
+            case Role::User: return "User";
+            case Role::Assistant: return "Assistant";
+            case Role::System: return "System";
             default: return "Unknown";
         }
     }
@@ -110,8 +110,8 @@ public:
     bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
     
     // Message management
-    void addMessage(std::shared_ptr<messages::Message> message, const MessageMetadata& metadata = {});
-    void insertMessage(int index, std::shared_ptr<messages::Message> message, const MessageMetadata& metadata = {});
+    void addMessage(std::shared_ptr<Message> message, const MessageMetadata& metadata = {});
+    void insertMessage(int index, std::shared_ptr<Message> message, const MessageMetadata& metadata = {});
     void clearMessages();
     
     UIMessage* getMessage(const QUuid& id);

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common_base.h"
-#include "api/anthropic_api.h"
+#include "sdk/client/client.h"
 
 namespace llm_re {
 
@@ -25,7 +25,7 @@ private:
 public:
     struct APISettings {
         // Authentication
-        api::AuthMethod auth_method = api::AuthMethod::API_KEY;
+        claude::AuthMethod auth_method = claude::AuthMethod::API_KEY;
         std::string api_key;
         bool use_oauth = false;
         std::string oauth_config_dir = "~/.claude_cpp_sdk";
@@ -36,7 +36,7 @@ public:
 
     struct AgentSettings {
         // Model settings
-        api::Model model = api::Model::Sonnet4;
+        claude::Model model = claude::Model::Sonnet4;
         int max_tokens = 8192;
         int max_thinking_tokens = 4096;
         double temperature = 0.0;
@@ -49,7 +49,7 @@ public:
     } agent;
 
     struct GraderSettings {
-        api::Model model = api::Model::Opus41;
+        claude::Model model = claude::Model::Opus41;
         int max_tokens = 32000;
         int max_thinking_tokens = 31999;
     } grader;

@@ -182,19 +182,19 @@ void ConsoleDock::addLog(const LogEntry& entry) {
     QString levelStr;
     QColor levelColor;
     switch (entry.level) {
-        case llm_re::LogLevel::DEBUG:
+        case LogLevel::DEBUG:
             levelStr = "[DEBUG]";
             levelColor = logColors_.debug;
             break;
-        case llm_re::LogLevel::INFO:
+        case LogLevel::INFO:
             levelStr = "[INFO ]";
             levelColor = logColors_.info;
             break;
-        case llm_re::LogLevel::WARNING:
+        case LogLevel::WARNING:
             levelStr = "[WARN ]";
             levelColor = logColors_.warning;
             break;
-        case llm_re::LogLevel::ERROR:
+        case LogLevel::ERROR:
             levelStr = "[ERROR]";
             levelColor = logColors_.error;
             break;
@@ -265,10 +265,10 @@ void ConsoleDock::exportLogs(const QString& filename) {
             stream << entry.timestamp.toString("yyyy-MM-dd hh:mm:ss.zzz") << " ";
             
             switch (entry.level) {
-                case llm_re::LogLevel::DEBUG: stream << "[DEBUG]"; break;
-                case llm_re::LogLevel::INFO: stream << "[INFO ]"; break;
-                case llm_re::LogLevel::WARNING: stream << "[WARN ]"; break;
-                case llm_re::LogLevel::ERROR: stream << "[ERROR]"; break;
+                case LogLevel::DEBUG: stream << "[DEBUG]"; break;
+                case LogLevel::INFO: stream << "[INFO ]"; break;
+                case LogLevel::WARNING: stream << "[WARN ]"; break;
+                case LogLevel::ERROR: stream << "[ERROR]"; break;
             }
             
             stream << " ";
@@ -346,19 +346,19 @@ void ConsoleDock::updateLogView() {
             QString levelStr;
             QColor levelColor;
             switch (entry.level) {
-                case llm_re::LogLevel::DEBUG:
+                case LogLevel::DEBUG:
                     levelStr = "[DEBUG]";
                     levelColor = logColors_.debug;
                     break;
-                case llm_re::LogLevel::INFO:
+                case LogLevel::INFO:
                     levelStr = "[INFO ]";
                     levelColor = logColors_.info;
                     break;
-                case llm_re::LogLevel::WARNING:
+                case LogLevel::WARNING:
                     levelStr = "[WARN ]";
                     levelColor = logColors_.warning;
                     break;
-                case llm_re::LogLevel::ERROR:
+                case LogLevel::ERROR:
                     levelStr = "[ERROR]";
                     levelColor = logColors_.error;
                     break;

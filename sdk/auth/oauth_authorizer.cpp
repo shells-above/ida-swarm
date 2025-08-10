@@ -1,6 +1,6 @@
 #include "oauth_authorizer.h"
 #include "oauth_manager.h"
-#include "anthropic_api.h"
+#include "../client/client.h"
 #include <curl/curl.h>
 #include <openssl/sha.h>
 #include <openssl/rand.h>
@@ -34,7 +34,7 @@
 #include <cstdlib>
 #endif
 
-namespace llm_re {
+namespace claude::auth {
 
 namespace {
     // CURL write callback
@@ -190,10 +190,10 @@ bool OAuthAuthorizer::startCallbackServer() {
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(api::OAUTH_REDIRECT_PORT);
+    addr.sin_port = htons(OAUTH_REDIRECT_PORT);
     
     if (bind(server_socket_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        last_error_ = "Failed to bind to port " + std::to_string(api::OAUTH_REDIRECT_PORT) + 
+        last_error_ = "Failed to bind to port " + std::to_string(OAUTH_REDIRECT_PORT) +
                      " (is another instance running?)";
 #ifdef _WIN32
         closesocket(server_socket_);
@@ -315,7 +315,7 @@ void OAuthAuthorizer::handleRequest(int client_socket) {
                 
                 // Send success response with redirect
                 std::string response = "HTTP/1.1 302 Found\r\n";
-                response += "Location: " + std::string(api::OAUTH_SUCCESS_URL) + "\r\n";
+                response += "Location: " + std::string(OAUTH_SUCCESS_URL) + "\r\n";
                 response += "Content-Length: 0\r\n";
                 response += "\r\n";
                 
@@ -377,10 +377,10 @@ std::string OAuthAuthorizer::waitForAuthCode() {
 
 std::string OAuthAuthorizer::buildAuthorizationUrl(const PKCEParams& params) {
     std::ostringstream url;
-    url << api::OAUTH_AUTH_URL << "?";
-    url << "client_id=" << api::OAUTH_CLIENT_ID;
+    url << OAUTH_AUTH_URL << "?";
+    url << "client_id=" << OAUTH_CLIENT_ID;
     url << "&response_type=code";
-    url << "&redirect_uri=" << urlEncode("http://localhost:" + std::to_string(api::OAUTH_REDIRECT_PORT) + "/callback");
+    url << "&redirect_uri=" << urlEncode("http://localhost:" + std::to_string(OAUTH_REDIRECT_PORT) + "/callback");
     url << "&scope=" << urlEncode("user:profile user:inference");
     url << "&code_challenge=" << params.code_challenge;
     url << "&code_challenge_method=S256";
@@ -406,7 +406,7 @@ bool OAuthAuthorizer::openBrowser(const std::string& url) {
 #endif
 }
 
-std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(const std::string& code) {
+std::optional<OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(const std::string& code) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         last_error_ = "Failed to initialize CURL";
@@ -417,8 +417,8 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     json request_data = {
         {"grant_type", "authorization_code"},
         {"code", code},
-        {"redirect_uri", "http://localhost:" + std::to_string(api::OAUTH_REDIRECT_PORT) + "/callback"},
-        {"client_id", api::OAUTH_CLIENT_ID},
+        {"redirect_uri", "http://localhost:" + std::to_string(OAUTH_REDIRECT_PORT) + "/callback"},
+        {"client_id", OAUTH_CLIENT_ID},
         {"code_verifier", pkce_params_.code_verifier},
         {"state", pkce_params_.state}
     };
@@ -429,9 +429,9 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     // Set up CURL
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, ("User-Agent: " + std::string(api::USER_AGENT)).c_str());
+    headers = curl_slist_append(headers, ("User-Agent: " + std::string(USER_AGENT)).c_str());
     
-    curl_easy_setopt(curl, CURLOPT_URL, api::OAUTH_TOKEN_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, OAUTH_TOKEN_URL);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, request_body.length());
@@ -466,7 +466,7 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     try {
         json response = json::parse(response_body);
         
-        api::OAuthCredentials creds;
+        OAuthCredentials creds;
         creds.access_token = response["access_token"];
         creds.refresh_token = response.value("refresh_token", "");
         
@@ -489,7 +489,7 @@ std::optional<api::OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(cons
     }
 }
 
-bool OAuthAuthorizer::saveCredentials(const api::OAuthCredentials& creds) {
+bool OAuthAuthorizer::saveCredentials(const OAuthCredentials& creds) {
     // Use OAuthManager to save credentials in encrypted format
     OAuthManager oauth_manager;
     
@@ -519,4 +519,4 @@ std::string OAuthAuthorizer::urlEncode(const std::string& value) {
     return escaped.str();
 }
 
-} // namespace llm_re
+} // namespace claude::auth

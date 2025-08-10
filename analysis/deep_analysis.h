@@ -7,9 +7,8 @@
 
 #include "core/common.h"
 #include "core/config.h"
-#include "api/oauth_manager.h"
+#include "sdk/claude_sdk.h"
 #include "analysis/memory.h"
-#include "api/anthropic_api.h"
 
 namespace llm_re {
 
@@ -33,7 +32,7 @@ struct DeepAnalysisResult {
     std::string task_description;
     std::string analysis;
     std::chrono::system_clock::time_point completed_at;
-    api::TokenUsage token_usage;
+    claude::TokenUsage token_usage;
     // cost_estimate removed - calculate from token_usage.estimated_cost() instead
 };
 
@@ -45,22 +44,22 @@ private:
     std::map<std::string, DeepAnalysisResult> completed_analyses_;
     mutable qmutex_t mutex_;
 
-    std::unique_ptr<api::AnthropicClient> deep_analysis_client_;
+    std::unique_ptr<claude::Client> deep_analysis_client_;
 
 public:
     // Constructor with Config for OAuth support
     DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const Config& config) : memory_(memory) {
         // Create API client based on config
-        if (config.api.auth_method == api::AuthMethod::OAUTH) {
-            OAuthManager oauth_mgr(config.api.oauth_config_dir);
-            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+        if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+            claude::auth::OAuthManager oauth_mgr(config.api.oauth_config_dir);
+            std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
             if (oauth_creds) {
-                deep_analysis_client_ = std::make_unique<api::AnthropicClient>(*oauth_creds, config.api.base_url);
+                deep_analysis_client_ = std::make_unique<claude::Client>(*oauth_creds, config.api.base_url);
             } else {
-                deep_analysis_client_ = std::make_unique<api::AnthropicClient>(config.api.api_key, config.api.base_url);
+                deep_analysis_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
             }
         } else {
-            deep_analysis_client_ = std::make_unique<api::AnthropicClient>(config.api.api_key, config.api.base_url);
+            deep_analysis_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
         }
         mutex_ = qmutex_create();
     }

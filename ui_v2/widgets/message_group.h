@@ -74,7 +74,7 @@ private:
     // Message data
     QList<UIMessage*> messages_;
     QHash<QUuid, MessageBubble*> bubbleMap_;
-    messages::Role role_;
+    Role role_;
     QString author_;
     QDateTime firstTimestamp_;
     QDateTime lastTimestamp_;

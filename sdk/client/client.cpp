@@ -2,9 +2,9 @@
 // Created by user on 7/1/25.
 //
 
-#include "api/anthropic_api.h"
+#include "client.h"
 
-namespace llm_re::api {
+namespace claude {
 
 ChatRequestBuilder& ChatRequestBuilder::with_tools(const tools::ToolRegistry& registry) {
     request.tool_definitions = registry.get_api_definitions();
@@ -17,4 +17,4 @@ ChatRequestBuilder& ChatRequestBuilder::with_tools(const tools::ToolRegistry& re
     return *this;
 }
 
-} // namespace llm_re::api
+} // namespace claude

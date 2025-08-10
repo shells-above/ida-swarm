@@ -1,8 +1,7 @@
 #pragma once
 
+#include "common.h"
 #include "common_base.h"
-#include "api/api_common.h"  // For LogLevel enum
-#include "api/message_types.h"
 
 namespace llm_re {
 

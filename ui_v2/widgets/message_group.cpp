@@ -63,13 +63,13 @@ void MessageGroup::createHeader() {
     const auto& colors = ThemeManager::instance().colors();
     QColor authorColor;
     switch (role_) {
-        case messages::Role::User:
+        case Role::User:
             authorColor = colors.primary;
             break;
-        case messages::Role::Assistant:
+        case Role::Assistant:
             authorColor = colors.textPrimary;
             break;
-        case messages::Role::System:
+        case Role::System:
             authorColor = colors.textSecondary;
             break;
     }

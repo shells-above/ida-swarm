@@ -5,7 +5,7 @@
 
 // Include base common header (IDA SDK without kernwin, std lib, json)
 #include "../../core/common_base.h"
-#include "../../api/api_common.h"  // For LogLevel enum
+#include "../../sdk/common.h"  // For LogLevel enum
 
 // Qt headers
 #include <QtGlobal>

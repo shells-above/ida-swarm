@@ -112,7 +112,7 @@ bool ConversationModel::setData(const QModelIndex& index, const QVariant& value,
     return true;
 }
 
-void ConversationModel::addMessage(std::shared_ptr<messages::Message> message, const MessageMetadata& metadata) {
+void ConversationModel::addMessage(std::shared_ptr<Message> message, const MessageMetadata& metadata) {
     int row = static_cast<int>(nodes_.size());
     
     beginInsertRows(QModelIndex(), row, row);
@@ -136,7 +136,7 @@ void ConversationModel::addMessage(std::shared_ptr<messages::Message> message, c
     emit messageAdded(nodePtr->message.metadata.id);
 }
 
-void ConversationModel::insertMessage(int index, std::shared_ptr<messages::Message> message, const MessageMetadata& metadata) {
+void ConversationModel::insertMessage(int index, std::shared_ptr<Message> message, const MessageMetadata& metadata) {
     if (index < 0 || index > static_cast<int>(nodes_.size())) {
         index = static_cast<int>(nodes_.size());
     }
@@ -318,13 +318,13 @@ void ConversationDelegate::drawMessageBubble(QPainter* painter,
     // Determine bubble color based on role
     QColor bubbleColor;
     switch (message->role()) {
-        case messages::Role::User:
+        case Role::User:
             bubbleColor = colors.userMessage;
             break;
-        case messages::Role::Assistant:
+        case Role::Assistant:
             bubbleColor = colors.assistantMessage;
             break;
-        case messages::Role::System:
+        case Role::System:
             bubbleColor = colors.systemMessage;
             break;
     }

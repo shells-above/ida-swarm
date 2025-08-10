@@ -2,13 +2,14 @@
 
 #include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
+#include "core/common.h"
 
 namespace llm_re::ui_v2 {
 
 // Log entry structure
 struct LogEntry {
     QDateTime timestamp;
-    llm_re::LogLevel level;  // Use core LogLevel enum
+    LogLevel level;
     QString category;
     QString message;
     QJsonObject metadata;

@@ -7,12 +7,9 @@
 
 #include "core/common.h"
 #include "core/config.h"
-#include "api/oauth_manager.h"
-#include "api/message_types.h"
+#include "sdk/claude_sdk.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
-#include "api/anthropic_api.h"
-#include "api/token_stats.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
@@ -23,8 +20,8 @@ namespace llm_re {
 
 // Unified message types for agent callbacks
 enum class AgentMessageType {
-    Log,                    // Special: passes messages::Message* with log text
-    NewMessage,             // Direct message: passes messages::Message*
+    Log,                    // Special: passes claude::messages::Message* with log text
+    NewMessage,             // Direct message: passes claude::messages::Message*
     StateChanged,           // {status: int} - still uses JSON for now
     ToolStarted,            // {tool_id: string, tool_name: string, input: json} - still uses JSON
     ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json} - still uses JSON
@@ -95,7 +92,7 @@ public:
 // Unified execution state management
 class AgentExecutionState {
 private:
-    api::ChatRequest request;
+    claude::ChatRequest request;
     int iteration = 0;
     bool valid = false;
     std::chrono::steady_clock::time_point saved_at;
@@ -118,12 +115,12 @@ public:
     }
 
     // Message operations
-    void add_message(const messages::Message& msg) {
+    void add_message(const claude::messages::Message& msg) {
         qmutex_locker_t lock(mutex_);
         request.messages.push_back(msg);
     }
 
-    std::vector<messages::Message> get_messages() const {
+    std::vector<claude::messages::Message> get_messages() const {
         qmutex_locker_t lock(mutex_);
         return request.messages;
     }
@@ -134,12 +131,12 @@ public:
     }
 
     // Request access
-    api::ChatRequest& get_request() {
+    claude::ChatRequest& get_request() {
         // Note: caller must handle thread safety if modifying
         return request;
     }
 
-    const api::ChatRequest& get_request() const {
+    const claude::ChatRequest& get_request() const {
         return request;
     }
 
@@ -196,7 +193,7 @@ public:
     // Clear all state
     void clear() {
         qmutex_locker_t lock(mutex_);
-        request = api::ChatRequest();
+        request = claude::ChatRequest();
         tool_call_iterations_.clear();
         tool_call_names_.clear();
         iteration = 0;
@@ -204,7 +201,7 @@ public:
     }
 
     // Reset for new task
-    void reset_with_request(const api::ChatRequest& new_request) {
+    void reset_with_request(const claude::ChatRequest& new_request) {
         qmutex_locker_t lock(mutex_);
         request = new_request;
         tool_call_iterations_.clear();
@@ -259,7 +256,7 @@ class Agent {
 public:
     // Single unified callback - supports both messages and JSON for transition
     struct CallbackData {
-        const messages::Message* message = nullptr;
+        const claude::messages::Message* message = nullptr;
         json json_data;
     };
 
@@ -269,10 +266,10 @@ private:
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
-    std::unique_ptr<OAuthManager> oauth_manager_;                    // OAuth credential manager for token refresh
+    std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth credential manager for token refresh
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
-    tools::ToolRegistry tool_registry_;                              // registry for tools
-    api::AnthropicClient api_client_;                                // agent api client
+    claude::tools::ToolRegistry tool_registry_;                      // registry for tools
+    claude::Client api_client_;                                      // agent api client
 
     // State management
     AgentState state_;
@@ -281,8 +278,8 @@ private:
     std::string last_error_;
 
     // Token tracking
-    api::TokenStats token_stats_;
-    std::vector<api::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
+    claude::usage::TokenStats token_stats_;
+    std::vector<claude::usage::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
 
     static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
 
@@ -415,10 +412,10 @@ Tips:
 What's your next step to complete the reversal?)";
 
     // Helper function to create AnthropicClient based on config
-    static api::AnthropicClient create_api_client(const Config& config, OAuthManager* oauth_mgr = nullptr) {
-        if (config.api.auth_method == api::AuthMethod::OAUTH && oauth_mgr) {
+    static claude::Client create_api_client(const Config& config, claude::auth::OAuthManager* oauth_mgr = nullptr) {
+        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_mgr) {
             // Try to refresh if needed (checks expiry and refreshes automatically)
-            std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr->refresh_if_needed();
+            std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr->refresh_if_needed();
             
             if (!oauth_creds) {
                 // Fallback to getting credentials without refresh
@@ -430,19 +427,19 @@ What's your next step to complete the reversal?)";
                     oauth_mgr->get_last_error().c_str());
                 msg("LLM RE: WARNING - Falling back to API key authentication\n");
                 msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
-                return api::AnthropicClient(config.api.api_key, config.api.base_url);
+                return claude::Client(config.api.api_key, config.api.base_url);
             }
             
-            return api::AnthropicClient(*oauth_creds, config.api.base_url);
+            return claude::Client(*oauth_creds, config.api.base_url);
         }
         
         // Default to API key
-        return api::AnthropicClient(config.api.api_key, config.api.base_url);
+        return claude::Client(config.api.api_key, config.api.base_url);
     }
     
     // Refresh OAuth tokens and update API client
     bool refresh_oauth_credentials() {
-        if (!oauth_manager_ || config_.api.auth_method != api::AuthMethod::OAUTH) {
+        if (!oauth_manager_ || config_.api.auth_method != claude::AuthMethod::OAUTH) {
             return false;
         }
         
@@ -464,7 +461,7 @@ public:
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
-          oauth_manager_(config.api.auth_method == api::AuthMethod::OAUTH ? std::make_unique<OAuthManager>(config.api.oauth_config_dir) : nullptr),
+          oauth_manager_(config.api.auth_method == claude::AuthMethod::OAUTH ? std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir) : nullptr),
           api_client_(create_api_client(config, oauth_manager_.get())),
           grader_(std::make_unique<AnalysisGrader>(config)) {
 
@@ -488,7 +485,7 @@ public:
         }
 
         // Register tools
-        tools::register_all_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_);
+        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
@@ -644,7 +641,7 @@ public:
     // Manual tool execution support
     json execute_manual_tool(const std::string& tool_name, const json& input) {
         // Find the tool
-        tools::Tool* tool = tool_registry_.get_tool(tool_name);
+        claude::tools::Tool* tool = tool_registry_.get_tool(tool_name);
         if (!tool) {
             return {
                 {"success", false},
@@ -654,7 +651,7 @@ public:
         
         // Execute the tool
         try {
-            tools::ToolResult result = tool->execute(input);
+            claude::tools::ToolResult result = tool->execute(input);
             return result.to_json();
         } catch (const std::exception& e) {
             return {
@@ -682,11 +679,11 @@ public:
         int total_thinking_blocks = 0;
         int total_redacted_blocks = 0;
 
-        std::vector<messages::Message> messages = execution_state_.get_messages();
-        for (const messages::Message& msg: messages) {
-            if (msg.role() == messages::Role::Assistant) {
-                std::vector<const messages::ThinkingContent*> thinking = messages::ContentExtractor::extract_thinking_blocks(msg);
-                std::vector<const messages::RedactedThinkingContent*> redacted = messages::ContentExtractor::extract_redacted_thinking_blocks(msg);
+        std::vector<claude::messages::Message> messages = execution_state_.get_messages();
+        for (const claude::messages::Message& msg: messages) {
+            if (msg.role() == claude::messages::Role::Assistant) {
+                std::vector<const claude::messages::ThinkingContent*> thinking = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
+                std::vector<const claude::messages::RedactedThinkingContent*> redacted = claude::messages::ContentExtractor::extract_redacted_thinking_blocks(msg);
                 total_thinking_blocks += thinking.size();
                 total_redacted_blocks += redacted.size();
             }
@@ -729,7 +726,7 @@ public:
     }
 
     // Token statistics
-    api::TokenUsage get_token_usage() const {
+    claude::TokenUsage get_token_usage() const {
         return token_stats_.get_total();
     }
 
@@ -739,7 +736,7 @@ public:
 
 private:
     // Helper to send messages through callback
-    void send_api_message(const messages::Message* msg) {
+    void send_api_message(const claude::messages::Message* msg) {
         if (message_callback_) {
             CallbackData data;
             data.message = msg;
@@ -748,16 +745,16 @@ private:
     }
     
     // Helper to send grader messages to console only (not conversation UI)
-    void send_grader_message_to_console(const messages::Message& msg) {
+    void send_grader_message_to_console(const claude::messages::Message& msg) {
         // Log grader thinking blocks
         for (const auto& content : msg.contents()) {
-            if (auto* thinking = dynamic_cast<const messages::ThinkingContent*>(content.get())) {
+            if (auto* thinking = dynamic_cast<const claude::messages::ThinkingContent*>(content.get())) {
                 send_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
             }
         }
         
         // Log grader text content
-        std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
+        std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
         if (text && !text->empty()) {
             send_log(LogLevel::INFO, "[Grader Response] " + *text);
         }
@@ -766,8 +763,8 @@ private:
     void send_log(LogLevel level, const std::string& msg) {
         // For now, logs still need some way to be sent - create a temporary message
         // TODO: separate log callback
-        messages::Message log_msg(messages::Role::System);
-        log_msg.add_content(std::make_unique<messages::TextContent>(
+        claude::messages::Message log_msg(claude::messages::Role::System);
+        log_msg.add_content(std::make_unique<claude::messages::TextContent>(
             std::format("[LOG:{}] {}", static_cast<int>(level), msg)
         ));
         if (message_callback_) {
@@ -842,7 +839,7 @@ private:
         api_client_.set_iteration(0);
 
         // Build initial request with cache control on tools and system
-        api::ChatRequestBuilder builder;
+        claude::ChatRequestBuilder builder;
         builder.with_model(config_.agent.model)
                .with_system_prompt(SYSTEM_PROMPT)
                .with_max_tokens(config_.agent.max_tokens)
@@ -857,9 +854,9 @@ private:
         }
 
         // Add initial user message
-        builder.add_message(messages::Message::user_text("Please analyze the binary to answer: " + task));
+        builder.add_message(claude::messages::Message::user_text("Please analyze the binary to answer: " + task));
 
-        api::ChatRequest request = builder.build();
+        claude::ChatRequest request = builder.build();
 
         // Initialize execution state with the request
         execution_state_.reset_with_request(request);
@@ -895,7 +892,7 @@ private:
         }
 
         // Add user message to execution state
-        messages::Message continue_msg = messages::Message::user_text(additional);
+        claude::messages::Message continue_msg = claude::messages::Message::user_text(additional);
 
         // Check for cache invalidation scenario
         if (execution_state_.get_request().enable_thinking && has_non_tool_result_content(continue_msg)) {
@@ -909,11 +906,11 @@ private:
     }
 
     // Helper to check if a message contains non-tool-result content
-    bool has_non_tool_result_content(const messages::Message& msg) const {
-        if (msg.role() != messages::Role::User) return false;
+    bool has_non_tool_result_content(const claude::messages::Message& msg) const {
+        if (msg.role() != claude::messages::Role::User) return false;
 
         for (const auto& content : msg.contents()) {
-            if (!dynamic_cast<messages::ToolResultContent*>(content.get())) {
+            if (!dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
                 return true;  // Found non-tool-result content
             }
         }
@@ -921,11 +918,11 @@ private:
     }
 
     // Helper to check if a message contains tool results
-    bool has_tool_results(const messages::Message& msg) const {
-        if (msg.role() != messages::Role::User) return false;
+    bool has_tool_results(const claude::messages::Message& msg) const {
+        if (msg.role() != claude::messages::Role::User) return false;
 
         for (const auto& content : msg.contents()) {
-            if (dynamic_cast<messages::ToolResultContent*>(content.get())) {
+            if (dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
                 return true;
             }
         }
@@ -952,7 +949,7 @@ private:
             return false;  // Already consolidating
         }
 
-        api::TokenUsage usage = token_stats_.get_last_usage();
+        claude::TokenUsage usage = token_stats_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         return total_tokens > CONTEXT_LIMIT_TOKENS;
     }
@@ -966,26 +963,26 @@ private:
         context_state_.last_consolidation = std::chrono::steady_clock::now();
 
         // Add consolidation message
-        messages::Message consolidation_msg = messages::Message::user_text(CONSOLIDATION_PROMPT);
+        claude::messages::Message consolidation_msg = claude::messages::Message::user_text(CONSOLIDATION_PROMPT);
         execution_state_.add_message(consolidation_msg);
 
         // Mark that we're in consolidation mode
         execution_state_.set_valid(true);
     }
 
-    ConsolidationResult process_consolidation_response(const messages::Message& response_msg, const std::vector<messages::Message>& tool_results) {
+    ConsolidationResult process_consolidation_response(const claude::messages::Message& response_msg, const std::vector<claude::messages::Message>& tool_results) {
         ConsolidationResult result;
 
         // Extract stored keys from tool calls
-        std::vector<const messages::ToolUseContent*> tool_uses = messages::ContentExtractor::extract_tool_uses(response_msg);
-        for (const messages::ToolUseContent *tool_use: tool_uses) {
+        std::vector<const claude::messages::ToolUseContent*> tool_uses = claude::messages::ContentExtractor::extract_tool_uses(response_msg);
+        for (const claude::messages::ToolUseContent *tool_use: tool_uses) {
             if (tool_use->name == "store_analysis" && tool_use->input.contains("key")) {
                 result.stored_keys.push_back(tool_use->input["key"]);
             }
         }
 
         // Extract summary text
-        std::optional<std::string> text_content = messages::ContentExtractor::extract_text(response_msg);
+        std::optional<std::string> text_content = claude::messages::ContentExtractor::extract_text(response_msg);
         if (text_content) {
             result.summary = *text_content;
             result.success = true;
@@ -1008,7 +1005,7 @@ private:
 
         // Save current task and token stats
         std::string original_task = state_.get_task();
-        api::TokenUsage total_usage_before = token_stats_.get_total();
+        claude::TokenUsage total_usage_before = token_stats_.get_total();
 
         // store old tracker session
         stats_sessions_.emplace_back(std::move(token_stats_));
@@ -1020,7 +1017,7 @@ private:
         reset_token_usage();
 
         // Build new request with consolidated context
-        api::ChatRequestBuilder builder;
+        claude::ChatRequestBuilder builder;
         builder.with_model(config_.agent.model)
                .with_system_prompt(SYSTEM_PROMPT)
                .with_max_tokens(config_.agent.max_tokens)
@@ -1042,7 +1039,7 @@ private:
             consolidation.stored_keys.empty() ? "(none)" : join(consolidation.stored_keys, ", ")
         );
 
-        builder.add_message(messages::Message::user_text(continuation_prompt));
+        builder.add_message(claude::messages::Message::user_text(continuation_prompt));
 
         // Reset execution state with new request
         execution_state_.reset_with_request(builder.build());
@@ -1063,7 +1060,7 @@ private:
     }
 
     void apply_incremental_caching() {
-        api::ChatRequest& request = execution_state_.get_request();
+        claude::ChatRequest& request = execution_state_.get_request();
         if (request.messages.size() < 2) {
             return;
         }
@@ -1072,14 +1069,14 @@ private:
         // We already use 2 for tools and system prompt, so we can only add 2 more
 
         // First, remove any existing cache controls from messages to avoid exceeding limit
-        for (messages::Message& msg: request.messages) {
-            messages::Message new_msg(msg.role());
-            for (const std::unique_ptr<messages::Content>& content: msg.contents()) {
+        for (claude::messages::Message& msg: request.messages) {
+            claude::messages::Message new_msg(msg.role());
+            for (const std::unique_ptr<claude::messages::Content>& content: msg.contents()) {
                 // Clone content without cache control
-                if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
-                    new_msg.add_content(std::make_unique<messages::TextContent>(text->text));
-                } else if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(content.get())) {
-                    new_msg.add_content(std::make_unique<messages::ToolResultContent>(
+                if (auto* text = dynamic_cast<claude::messages::TextContent*>(content.get())) {
+                    new_msg.add_content(std::make_unique<claude::messages::TextContent>(text->text));
+                } else if (auto* tool_result = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                    new_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
                         tool_result->tool_use_id,
                         tool_result->content,
                         tool_result->is_error
@@ -1096,10 +1093,10 @@ private:
         // This creates a single moving cache point for the conversation
         int cache_position = -1;
         for (int i = request.messages.size() - 1; i >= 0; i--) {
-            const messages::Message& msg = request.messages[i];
+            const claude::messages::Message& msg = request.messages[i];
 
             // Find the last user message with tool results
-            if (msg.role() == messages::Role::User && has_tool_results(msg)) {
+            if (msg.role() == claude::messages::Role::User && has_tool_results(msg)) {
                 cache_position = i;
                 break;
             }
@@ -1107,21 +1104,21 @@ private:
 
         if (cache_position >= 0) {
             // Create a new message with cache control on the last content block
-            messages::Message& msg_to_modify = request.messages[cache_position];
+            claude::messages::Message& msg_to_modify = request.messages[cache_position];
 
             // Clone the message and add cache control to the last tool result
-            messages::Message new_msg(msg_to_modify.role());
-            const std::vector<std::unique_ptr<messages::Content>>& contents = msg_to_modify.contents();
+            claude::messages::Message new_msg(msg_to_modify.role());
+            const std::vector<std::unique_ptr<claude::messages::Content>>& contents = msg_to_modify.contents();
 
             for (size_t i = 0; i < contents.size(); i++) {
                 if (i == contents.size() - 1) {
                     // Last content block - add cache control
-                    if (auto* tool_result = dynamic_cast<messages::ToolResultContent*>(contents[i].get())) {
-                        new_msg.add_content(std::make_unique<messages::ToolResultContent>(
+                    if (auto* tool_result = dynamic_cast<claude::messages::ToolResultContent*>(contents[i].get())) {
+                        new_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
                             tool_result->tool_use_id,
                             tool_result->content,
                             tool_result->is_error,
-                            messages::CacheControl{messages::CacheControl::Type::Ephemeral}
+                            claude::messages::CacheControl{claude::messages::CacheControl::Type::Ephemeral}
                         ));
                     } else {
                         new_msg.add_content(contents[i]->clone());
@@ -1159,7 +1156,7 @@ private:
             }
 
             // Create request for this iteration
-            api::ChatRequest current_request = execution_state_.get_request();
+            claude::ChatRequest current_request = execution_state_.get_request();
 
             // Check if we need to consolidate context BEFORE sending
             if (should_consolidate_context() && !context_state_.consolidation_in_progress) {
@@ -1168,7 +1165,7 @@ private:
             }
 
             // Send request with retry on OAuth expiry
-            api::ChatResponse response = api_client_.send_request(current_request);
+            claude::ChatResponse response = api_client_.send_request(current_request);
 
             // Check for OAuth token expiry (401 authentication error)
             if (!response.success && response.error && 
@@ -1195,8 +1192,8 @@ private:
 
             // Log thinking information
             if (response.has_thinking()) {
-                std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
-                std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
+                std::vector<const claude::messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
+                std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
                 send_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
             }
@@ -1212,7 +1209,7 @@ private:
             execution_state_.add_message(response.message);
 
             // Process tool calls
-            std::vector<messages::Message> tool_results = process_tool_calls(response.message, iteration);
+            std::vector<claude::messages::Message> tool_results = process_tool_calls(response.message, iteration);
 
             // Check if this was a consolidation response
             if (context_state_.consolidation_in_progress) {
@@ -1226,12 +1223,12 @@ private:
 
             // When adding tool results, combine them
             if (!tool_results.empty()) {
-                messages::Message combined_results = messages::Message(messages::Role::User);
+                claude::messages::Message combined_results = claude::messages::Message(claude::messages::Role::User);
 
-                for (const messages::Message& result : tool_results) {
-                    for (const std::unique_ptr<messages::Content>& content: result.contents()) {
+                for (const claude::messages::Message& result : tool_results) {
+                    for (const std::unique_ptr<claude::messages::Content>& content: result.contents()) {
                         // Skip empty text content blocks
-                        if (auto* text = dynamic_cast<messages::TextContent*>(content.get())) {
+                        if (auto* text = dynamic_cast<claude::messages::TextContent*>(content.get())) {
                             if (text->text.empty()) continue;
                         }
                         combined_results.add_content(content->clone());
@@ -1255,21 +1252,21 @@ private:
                         // If we just added tool results, append the user message to them
                         if (!tool_results.empty() && execution_state_.message_count() > 0) {
                             // Get the last message (should be the combined tool results)
-                            api::ChatRequest& req = execution_state_.get_request();
-                            messages::Message& last_msg = req.messages.back();
-                            if (last_msg.role() == messages::Role::User) {
+                            claude::ChatRequest& req = execution_state_.get_request();
+                            claude::messages::Message& last_msg = req.messages.back();
+                            if (last_msg.role() == claude::messages::Role::User) {
                                 // Add user text to the existing user message with tool results
-                                last_msg.add_content(std::make_unique<messages::TextContent>(user_msg));
+                                last_msg.add_content(std::make_unique<claude::messages::TextContent>(user_msg));
                                 
                                 // Note: The conversation will be updated with the complete message on the next API call
                             } else {
                                 // Create new user message if last wasn't user role
-                                messages::Message user_guidance = messages::Message::user_text(user_msg);
+                                claude::messages::Message user_guidance = claude::messages::Message::user_text(user_msg);
                                 execution_state_.add_message(user_guidance);
                             }
                         } else {
                             // No recent tool results, create standalone user message
-                            messages::Message user_guidance = messages::Message::user_text(user_msg);
+                            claude::messages::Message user_guidance = claude::messages::Message::user_text(user_msg);
                             execution_state_.add_message(user_guidance);
                         }
                     }
@@ -1277,7 +1274,7 @@ private:
             }
 
             // Handle natural completion - agent stops when satisfied
-            if (response.stop_reason == api::StopReason::EndTurn && !response.has_tool_calls()) {
+            if (response.stop_reason == claude::StopReason::EndTurn && !response.has_tool_calls()) {
                 if (iteration > 1 && !context_state_.consolidation_in_progress) {
                     // Agent has naturally stopped - they're satisfied with their understanding
                     send_log(LogLevel::INFO, "Agent stopped investigation");
@@ -1302,7 +1299,7 @@ private:
                         
                         // Add grader's questions as user message and continue
                         // Mark this as grader feedback with a special prefix we can filter
-                        messages::Message continue_msg = messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
+                        claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
                         execution_state_.add_message(continue_msg);
                     }
                 }
@@ -1316,12 +1313,12 @@ private:
     }
 
     // Process tool calls from assistant message
-    std::vector<messages::Message> process_tool_calls(const messages::Message& msg, int iteration) {
-        std::vector<messages::Message> results;
+    std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) {
+        std::vector<claude::messages::Message> results;
 
-        std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
+        std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
 
-        for (const messages::ToolUseContent* tool_use: tool_calls) {
+        for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
             send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
 
             // Track tool call
@@ -1335,13 +1332,13 @@ private:
             });
 
             // Execute tool
-            messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
+            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
             results.push_back(result_msg);
 
             // Extract result content
             json result_json;
-            for (const std::unique_ptr<messages::Content>& content: result_msg.contents()) {
-                if (auto tool_result = dynamic_cast<const messages::ToolResultContent*>(content.get())) {
+            for (const std::unique_ptr<claude::messages::Content>& content: result_msg.contents()) {
+                if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
                     try {
                         result_json = json::parse(tool_result->content);
                     } catch (...) {
@@ -1365,7 +1362,7 @@ private:
 
 
     // Handle API errors
-    void handle_api_error(const api::ChatResponse& response) {
+    void handle_api_error(const claude::ChatResponse& response) {
         if (!response.error) {
             send_log(LogLevel::ERROR, "Unknown API error");
             change_state(AgentState::Status::Idle);
@@ -1382,7 +1379,7 @@ private:
             send_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
         }
 
-        if (api::AnthropicClient::is_recoverable_error(response)) {
+        if (claude::Client::is_recoverable_error(response)) {
             send_log(LogLevel::INFO, "You can resume the analysis");
             change_state(AgentState::Status::Paused);
             execution_state_.set_valid(true);
@@ -1395,14 +1392,14 @@ private:
         }
     }
 
-    void validate_thinking_preservation(const api::ChatResponse& response) {
+    void validate_thinking_preservation(const claude::ChatResponse& response) {
         if (!response.has_thinking() || !response.has_tool_calls()) {
             return;  // No validation needed
         }
 
         // Ensure the message being saved includes thinking blocks
-        std::vector<const messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
-        std::vector<const messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
+        std::vector<const claude::messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
+        std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
         if (thinking_blocks.empty() && redacted_blocks.empty()) {
             send_log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
@@ -1433,9 +1430,9 @@ private:
         std::stringstream all_user_requests;
         bool first = true;
         
-        for (const messages::Message& msg: execution_state_.get_messages()) {
-            if (msg.role() == messages::Role::User) {
-                std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
+        for (const claude::messages::Message& msg: execution_state_.get_messages()) {
+            if (msg.role() == claude::messages::Role::User) {
+                std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
                 if (text && !text->empty()) {
                     // Skip grader feedback messages
                     if (text->find("__GRADER_FEEDBACK__: ") == 0) {
@@ -1458,7 +1455,7 @@ private:
         return grader_->evaluate_analysis(context);
     }
     
-    void log_token_usage(const api::TokenUsage& usage, int iteration) {
+    void log_token_usage(const claude::TokenUsage& usage, int iteration) {
         std::string summary = token_stats_.get_iteration_summary(usage, iteration);
         send_log(LogLevel::INFO, summary);
     }

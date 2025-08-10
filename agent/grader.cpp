@@ -1,32 +1,31 @@
 #include "agent/grader.h"
 #include "agent/agent.h"
-#include "api/oauth_manager.h"
 #include <sstream>
 
 namespace llm_re {
 
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     // Create API client based on auth method
-    if (config.api.auth_method == api::AuthMethod::OAUTH) {
-        OAuthManager oauth_mgr(config.api.oauth_config_dir);
-        std::optional<api::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+    if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+        claude::auth::OAuthManager oauth_mgr(config.api.oauth_config_dir);
+        std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
 
         if (oauth_creds) {
             // Initialize API client with OAuth
-            api_client_ = std::make_unique<api::AnthropicClient>(
+            api_client_ = std::make_unique<claude::Client>(
                 *oauth_creds,
                 config.api.base_url
             );
         } else {
             // Fallback to API key
-            api_client_ = std::make_unique<api::AnthropicClient>(
+            api_client_ = std::make_unique<claude::Client>(
                 config.api.api_key,
                 config.api.base_url
             );
         }
     } else {
         // Use API key authentication
-        api_client_ = std::make_unique<api::AnthropicClient>(
+        api_client_ = std::make_unique<claude::Client>(
             config.api.api_key,
             config.api.base_url
         );
@@ -45,10 +44,10 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     qmutex_locker_t lock(mutex_);
     
     // Build the grading request
-    messages::Message grading_request = create_grading_request(context);
+    claude::messages::Message grading_request = create_grading_request(context);
     
     // Create chat request for grader with extensive thinking
-    api::ChatRequestBuilder builder;
+    claude::ChatRequestBuilder builder;
     builder.with_model(config_.grader.model)
            .with_system_prompt(GRADER_SYSTEM_PROMPT)
            .with_max_tokens(config_.grader.max_tokens)
@@ -59,10 +58,10 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     
     builder.add_message(grading_request);
     
-    api::ChatRequest request = builder.build();
+    claude::ChatRequest request = builder.build();
     
     // Send to grader API
-    api::ChatResponse response = api_client_->send_request(request);
+    claude::ChatResponse response = api_client_->send_request(request);
     
     if (!response.success) {
         // On grader failure (API failure, not grader marking as a failure), send back for more analysis
@@ -78,7 +77,7 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     return result;
 }
 
-messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) {
+claude::messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) {
     std::stringstream prompt;
 
     // todo need to handle if this is too much context
@@ -98,25 +97,25 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
     }
 
     // Include agent's thinking and responses
-    for (const messages::Message& msg: context.agent_work) {
-        if (msg.role() == messages::Role::Assistant) {
+    for (const claude::messages::Message& msg: context.agent_work) {
+        if (msg.role() == claude::messages::Role::Assistant) {
             // Get thinking blocks
-            std::vector<const messages::ThinkingContent*> thinking_blocks = messages::ContentExtractor::extract_thinking_blocks(msg);
-            for (const messages::ThinkingContent* block: thinking_blocks) {
+            std::vector<const claude::messages::ThinkingContent*> thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
+            for (const claude::messages::ThinkingContent* block: thinking_blocks) {
                 prompt << "[THINKING]\n" << block->thinking << "\n\n";
             }
             
             // Get tool calls
             // shows the grader that the agent actually did the tool calls, and didn't hallucinate that it did
-            std::vector<const messages::ToolUseContent*> tool_calls = messages::ContentExtractor::extract_tool_uses(msg);
-            for (const messages::ToolUseContent* tool_call: tool_calls) {
+            std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+            for (const claude::messages::ToolUseContent* tool_call: tool_calls) {
                 prompt << "[TOOL_CALL]\n";
                 prompt << "Tool: " << tool_call->name << "\n";
                 prompt << "Parameters: " << tool_call->input.dump() << "\n\n";
             }
             
             // Get text content
-            std::optional<std::string> text = messages::ContentExtractor::extract_text(msg);
+            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
             if (text && !text->empty()) {
                 prompt << "[MESSAGE]\n" << *text << "\n\n";
             }
@@ -128,14 +127,14 @@ messages::Message AnalysisGrader::create_grading_request(const GradingContext& c
     prompt << "If complete, synthesize the findings into a final report for the user.\n";
     prompt << "If incomplete, identify what specific investigation is still needed.\n";
     
-    return messages::Message::user_text(prompt.str());
+    return claude::messages::Message::user_text(prompt.str());
 }
 
-AnalysisGrader::GradeResult AnalysisGrader::parse_grader_response(const messages::Message& response) const {
+AnalysisGrader::GradeResult AnalysisGrader::parse_grader_response(const claude::messages::Message& response) const {
     GradeResult result;
     
     // Extract text from response
-    std::optional<std::string> text = messages::ContentExtractor::extract_text(response);
+    std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response);
     if (!text) {
         // No text, needs more work
         result.complete = false;
@@ -174,18 +173,18 @@ Respond with JSON only:
 })";
     
     // Create request for Haiku
-    api::ChatRequestBuilder builder;
-    builder.with_model(api::Model::Haiku35)
+    claude::ChatRequestBuilder builder;
+    builder.with_model(claude::Model::Haiku35)
            .with_max_tokens(200)
            .with_temperature(0.0)  // Deterministic
            .enable_thinking(false);
     
-    builder.add_message(messages::Message::user_text(classification_prompt));
+    builder.add_message(claude::messages::Message::user_text(classification_prompt));
     
-    api::ChatRequest request = builder.build();
+    claude::ChatRequest request = builder.build();
     
     // Send to API for classification
-    api::ChatResponse response = api_client_->send_request(request);
+    claude::ChatResponse response = api_client_->send_request(request);
     
     if (!response.success) {
         // On classification failure, default to incomplete (safer)
@@ -194,7 +193,7 @@ Respond with JSON only:
     }
     
     // Parse JSON response
-    std::optional<std::string> text = messages::ContentExtractor::extract_text(response.message);
+    std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
     if (!text) {
         msg("WARNING: No text in classification response, defaulting to incomplete");
         return false;

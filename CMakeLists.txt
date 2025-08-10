@@ -153,10 +153,10 @@ set(SOURCES
         core/plugin.cpp
         core/ida_utils.cpp
         core/config.cpp
-        api/anthropic_api.cpp
-        api/oauth_manager.cpp
-        api/oauth_flow.cpp
-        api/oauth_authorizer.cpp
+        sdk/client/client.cpp
+        sdk/auth/oauth_manager.cpp
+        sdk/auth/oauth_flow.cpp
+        sdk/auth/oauth_authorizer.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory.cpp
@@ -217,12 +217,16 @@ set(HEADERS
         core/ida_validators.h
         core/config.h
         core/types.h
-        api/anthropic_api.h
-        api/message_types.h
-        api/oauth_manager.h
-        api/oauth_flow.h
-        api/oauth_authorizer.h
-        api/tool_registry.h
+        sdk/common.h
+        sdk/claude_sdk.h
+        sdk/client/client.h
+        sdk/messages/types.h
+        sdk/tools/registry.h
+        sdk/auth/oauth_manager.h
+        sdk/auth/oauth_flow.h
+        sdk/auth/oauth_authorizer.h
+        sdk/usage/pricing.h
+        sdk/usage/stats.h
         analysis/actions.h
         analysis/deep_analysis.h
         analysis/memory.h

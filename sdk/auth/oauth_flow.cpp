@@ -3,7 +3,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace llm_re {
+namespace claude::auth {
 
 OAuthFlow::OAuthFlow() 
     : last_refresh_attempt_(std::chrono::steady_clock::time_point{}) {
@@ -17,7 +17,7 @@ size_t OAuthFlow::write_callback(void* contents, size_t size, size_t nmemb, std:
     return total_size;
 }
 
-bool OAuthFlow::needs_refresh(const api::OAuthCredentials& creds, int buffer_seconds) {
+bool OAuthFlow::needs_refresh(const OAuthCredentials& creds, int buffer_seconds) {
     return creds.is_expired(buffer_seconds);
 }
 
@@ -42,7 +42,7 @@ json OAuthFlow::perform_refresh_request(const std::string& refresh_token) {
     json request_data = {
         {"grant_type", "refresh_token"},
         {"refresh_token", refresh_token},
-        {"client_id", api::OAUTH_CLIENT_ID}
+        {"client_id", OAUTH_CLIENT_ID}
     };
     
     std::string request_body = request_data.dump();
@@ -51,10 +51,10 @@ json OAuthFlow::perform_refresh_request(const std::string& refresh_token) {
     // Set up headers
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, ("User-Agent: " + std::string(api::USER_AGENT)).c_str());
+    headers = curl_slist_append(headers, ("User-Agent: " + std::string(USER_AGENT)).c_str());
     
     // Configure CURL
-    curl_easy_setopt(curl, CURLOPT_URL, api::OAUTH_TOKEN_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, OAUTH_TOKEN_URL);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, request_body.length());
@@ -106,10 +106,10 @@ json OAuthFlow::perform_refresh_request(const std::string& refresh_token) {
     }
 }
 
-api::OAuthCredentials OAuthFlow::parse_refresh_response(const json& response,
+OAuthCredentials OAuthFlow::parse_refresh_response(const json& response,
                                                         const std::string& original_refresh_token,
                                                         const std::optional<std::string>& account_uuid) {
-    api::OAuthCredentials creds;
+    OAuthCredentials creds;
     
     // Extract access token (required)
     if (!response.contains("access_token") || !response["access_token"].is_string()) {
@@ -147,7 +147,7 @@ api::OAuthCredentials OAuthFlow::parse_refresh_response(const json& response,
     return creds;
 }
 
-api::OAuthCredentials OAuthFlow::refresh_token(const std::string& refresh_token,
+OAuthCredentials OAuthFlow::refresh_token(const std::string& refresh_token,
                                               const std::optional<std::string>& account_uuid) {
     // Check rate limiting
     if (!can_refresh()) {
@@ -170,4 +170,4 @@ api::OAuthCredentials OAuthFlow::refresh_token(const std::string& refresh_token,
     }
 }
 
-} // namespace llm_re
+} // namespace claude::auth

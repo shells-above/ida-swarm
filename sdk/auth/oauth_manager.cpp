@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <sys/stat.h>
 
-namespace llm_re {
+namespace claude::auth {
 
 namespace {
     // Fernet constants
@@ -155,7 +155,7 @@ bool OAuthManager::has_credentials() const {
     return std::filesystem::exists(credentials_file) && std::filesystem::exists(key_file);
 }
 
-std::optional<api::OAuthCredentials> OAuthManager::get_credentials() {
+std::optional<OAuthCredentials> OAuthManager::get_credentials() {
     // Check cache first
     auto now = std::chrono::steady_clock::now();
     if (cached_credentials.has_value()) {
@@ -201,7 +201,7 @@ std::optional<api::OAuthCredentials> OAuthManager::get_credentials() {
     
     // Extract OAuth credentials
     try {
-        api::OAuthCredentials creds = extract_oauth_credentials(*creds_json);
+        OAuthCredentials creds = extract_oauth_credentials(*creds_json);
         
         // Cache the credentials
         cached_credentials = creds;
@@ -214,7 +214,7 @@ std::optional<api::OAuthCredentials> OAuthManager::get_credentials() {
     }
 }
 
-std::optional<api::OAuthCredentials> OAuthManager::get_cached_credentials() const {
+std::optional<OAuthCredentials> OAuthManager::get_cached_credentials() const {
     return cached_credentials;
 }
 
@@ -222,7 +222,7 @@ void OAuthManager::clear_cache() {
     cached_credentials.reset();
 }
 
-bool OAuthManager::save_credentials(const api::OAuthCredentials& creds) {
+bool OAuthManager::save_credentials(const OAuthCredentials& creds) {
     try {
         // Create the credentials JSON structure
         json oauth_tokens;
@@ -518,8 +518,8 @@ std::optional<json> OAuthManager::parse_credentials_json(const std::string& decr
     }
 }
 
-api::OAuthCredentials OAuthManager::extract_oauth_credentials(const json& creds_json) const {
-    api::OAuthCredentials creds;
+OAuthCredentials OAuthManager::extract_oauth_credentials(const json& creds_json) const {
+    OAuthCredentials creds;
     
     // {
     //   "version": 1,
@@ -604,7 +604,7 @@ bool OAuthManager::needs_refresh() {
     return creds->is_expired(300);
 }
 
-std::optional<api::OAuthCredentials> OAuthManager::refresh_if_needed() {
+std::optional<OAuthCredentials> OAuthManager::refresh_if_needed() {
     // Check if refresh is needed
     if (!needs_refresh()) {
         return get_cached_credentials();
@@ -613,7 +613,7 @@ std::optional<api::OAuthCredentials> OAuthManager::refresh_if_needed() {
     return force_refresh();
 }
 
-std::optional<api::OAuthCredentials> OAuthManager::force_refresh() {
+std::optional<OAuthCredentials> OAuthManager::force_refresh() {
     // Get current credentials
     auto current_creds = get_credentials();
     if (!current_creds) {
@@ -631,7 +631,7 @@ std::optional<api::OAuthCredentials> OAuthManager::force_refresh() {
         OAuthFlow oauth_flow;
         
         // Attempt to refresh the token
-        api::OAuthCredentials new_creds = oauth_flow.refresh_token(
+        OAuthCredentials new_creds = oauth_flow.refresh_token(
             current_creds->refresh_token,
             current_creds->account_uuid
         );
@@ -654,4 +654,4 @@ std::optional<api::OAuthCredentials> OAuthManager::force_refresh() {
     }
 }
 
-} // namespace llm_re
+} // namespace claude::auth

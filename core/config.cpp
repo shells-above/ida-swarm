@@ -9,14 +9,14 @@ bool Config::save_to_file(const std::string& path) const {
         nlohmann::ordered_json j;
 
         // API settings
-        j["api"]["auth_method"] = (api.auth_method == api::AuthMethod::API_KEY) ? "api_key" : "oauth";
+        j["api"]["auth_method"] = (api.auth_method == claude::AuthMethod::API_KEY) ? "api_key" : "oauth";
         j["api"]["api_key"] = api.api_key;
         j["api"]["use_oauth"] = api.use_oauth;
         j["api"]["oauth_config_dir"] = api.oauth_config_dir;
         j["api"]["base_url"] = api.base_url;
 
         // Agent settings
-        j["agent"]["model"] = api::model_to_string(agent.model);
+        j["agent"]["model"] = claude::model_to_string(agent.model);
         j["agent"]["max_tokens"] = agent.max_tokens;
         j["agent"]["max_thinking_tokens"] = agent.max_thinking_tokens;
         j["agent"]["temperature"] = agent.temperature;
@@ -26,7 +26,7 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
 
         // Grader settings
-        j["grader"]["model"] = api::model_to_string(grader.model);
+        j["grader"]["model"] = claude::model_to_string(grader.model);
         j["grader"]["max_tokens"] = grader.max_tokens;
         j["grader"]["max_thinking_tokens"] = grader.max_thinking_tokens;
 
@@ -72,7 +72,7 @@ bool Config::load_from_file(const std::string& path) {
             // Authentication settings
             if (j["api"].contains("auth_method")) {
                 std::string method = j["api"]["auth_method"];
-                api.auth_method = (method == "oauth") ? api::AuthMethod::OAUTH : api::AuthMethod::API_KEY;
+                api.auth_method = (method == "oauth") ? claude::AuthMethod::OAUTH : claude::AuthMethod::API_KEY;
             }
             api.api_key = j["api"].value("api_key", api.api_key);
             api.use_oauth = j["api"].value("use_oauth", api.use_oauth);
@@ -85,7 +85,7 @@ bool Config::load_from_file(const std::string& path) {
         // Agent settings
         if (j.contains("agent")) {
             if (j["agent"].contains("model")) {
-                agent.model = api::model_from_string(j["agent"]["model"]);
+                agent.model = claude::model_from_string(j["agent"]["model"]);
             }
             agent.max_tokens = j["agent"].value("max_tokens", agent.max_tokens);
             agent.max_thinking_tokens = j["agent"].value("max_thinking_tokens", agent.max_thinking_tokens);
@@ -99,7 +99,7 @@ bool Config::load_from_file(const std::string& path) {
         // Grader settings
         if (j.contains("grader")) {
             if (j["grader"].contains("model")) {
-                grader.model = api::model_from_string(j["grader"]["model"]);
+                grader.model = claude::model_from_string(j["grader"]["model"]);
             }
             grader.max_tokens = j["grader"].value("max_tokens", grader.max_tokens);
             grader.max_thinking_tokens = j["grader"].value("max_thinking_tokens", grader.max_thinking_tokens);

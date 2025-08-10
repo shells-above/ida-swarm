@@ -3,7 +3,6 @@
 #include "ui_v2_common.h"
 #include "../models/conversation_model.h"
 #include "agent/agent.h"
-#include "api/anthropic_api.h"
 #include <memory>
 #include <vector>
 
@@ -62,7 +61,7 @@ public:
     void loadMemory(const QString& path);
     
     // Statistics
-    api::TokenUsage getTokenUsage() const;
+    claude::TokenUsage getTokenUsage() const;
     json getAgentState() const;
     
     // Manual tool execution
@@ -87,12 +86,12 @@ private:
     void handleAgentMessage(AgentMessageType type, const Agent::CallbackData& data);
     
     // Helper methods
-    void addMessageToConversation(std::shared_ptr<messages::Message> msg);
+    void addMessageToConversation(std::shared_ptr<Message> msg);
     void updateMemoryView();
     QString agentStatusToString(AgentState::Status status) const;
     
     // Lightweight logging helper
-    void logToConsole(llm_re::LogLevel level, const QString& category, const QString& message, const QJsonObject& metadata = QJsonObject());
+    void logToConsole(LogLevel level, const QString& category, const QString& message, const QJsonObject& metadata = QJsonObject());
     
     // Core components
     std::unique_ptr<Agent> agent_;

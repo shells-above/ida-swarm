@@ -98,10 +98,10 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
     }
 
     // Build and send the request
-    api::ChatRequest request = api::ChatRequestBuilder()
-        .with_model(api::Model::Sonnet4)
+    claude::ChatRequest request = claude::ChatRequestBuilder()
+        .with_model(claude::Model::Sonnet4)
         .with_system_prompt(system_prompt)
-        .add_message(messages::Message::user_text(user_prompt))
+        .add_message(claude::messages::Message::user_text(user_prompt))
         .with_max_tokens(32768)
         .with_max_thinking_tokens(16384)
         .with_temperature(1.0)
@@ -109,7 +109,7 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
         .enable_interleaved_thinking(false)
         .build();
 
-    api::ChatResponse response = deep_analysis_client_->send_request(request);
+    claude::ChatResponse response = deep_analysis_client_->send_request(request);
 
     if (!response.success) {
         throw std::runtime_error("Deep analysis failed: " + response.error.value_or("Unknown error"));
@@ -229,7 +229,7 @@ std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::s
             result.task_description = metadata["task"];
             result.analysis = analysis_entries[0].content;
             result.completed_at = std::chrono::system_clock::from_time_t(metadata["completed_at"]);
-            result.token_usage = api::TokenUsage::from_json(metadata["token_usage"]);
+            result.token_usage = claude::TokenUsage::from_json(metadata["token_usage"]);
             // Cost calculated from token_usage when needed
 
             return result;

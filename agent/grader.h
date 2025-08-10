@@ -2,8 +2,7 @@
 #define GRADER_H
 
 #include "core/config.h"
-#include "api/anthropic_api.h"
-#include "api/message_types.h"
+#include "sdk/claude_sdk.h"
 #include "analysis/memory.h"
 
 namespace llm_re {
@@ -26,7 +25,7 @@ public:
     struct GradeResult {
         bool complete;             // Is the analysis PERFECT and COMPLETE?
         std::string response;      // Either user response OR agent questions
-        messages::Message fullMessage = messages::Message(messages::Role::Assistant); // Full grader response with thinking
+        claude::messages::Message fullMessage = claude::messages::Message(claude::messages::Role::Assistant);  // Full grader response with thinking
     };
     
     /**
@@ -34,12 +33,12 @@ public:
      */
     struct GradingContext {
         std::string user_request;
-        std::vector<messages::Message> agent_work;
+        std::vector<claude::messages::Message> agent_work;
         std::vector<AnalysisEntry> stored_analyses;
     };
 
 private:
-    std::unique_ptr<api::AnthropicClient> api_client_;
+    std::unique_ptr<claude::Client> api_client_;
     const Config& config_;
     mutable qmutex_t mutex_;
     
@@ -155,8 +154,8 @@ The quality of your evaluation comes from the quality of your thinking about:
 Think deeply. Derive your standards. Don't apply predetermined rules.)";
     
     // Helper methods
-    GradeResult parse_grader_response(const messages::Message& response) const;
-    static messages::Message create_grading_request(const GradingContext& context);
+    GradeResult parse_grader_response(const claude::messages::Message& response) const;
+    static claude::messages::Message create_grading_request(const GradingContext& context);
     bool classify_completion(const std::string& grader_response) const;
     
 public:

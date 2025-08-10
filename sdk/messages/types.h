@@ -2,17 +2,17 @@
 // Created by user on 6/30/25.
 //
 
-#ifndef MESSAGE_TYPES_H
-#define MESSAGE_TYPES_H
+#ifndef CLAUDE_MESSAGES_TYPES_H
+#define CLAUDE_MESSAGES_TYPES_H
 
-#include "api/api_common.h"
+#include "../common.h"
 
 // Forward declaration for ChatResponse
-namespace llm_re::api {
+namespace claude {
     struct ChatResponse;
 }
 
-namespace llm_re::messages {
+namespace claude::messages {
 
 // Forward declarations
 struct TextContent;
@@ -583,6 +583,6 @@ public:
     }
 };
 
-} // namespace llm_re::messages
+} // namespace claude::messages
 
-#endif //MESSAGE_TYPES_H
+#endif //CLAUDE_MESSAGES_TYPES_H

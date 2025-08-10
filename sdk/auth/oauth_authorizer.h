@@ -1,7 +1,7 @@
 #pragma once
 
-#include "api/api_common.h"
-#include "anthropic_api.h"
+#include "../common.h"
+#include "../client/client.h"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -9,7 +9,7 @@
 #include <optional>
 #include <map>
 
-namespace llm_re {
+namespace claude::auth {
 
 // OAuth Authorizer - handles the complete OAuth flow
 class OAuthAuthorizer {
@@ -70,13 +70,13 @@ private:
     // OAuth flow
     std::string buildAuthorizationUrl(const PKCEParams& params);
     bool openBrowser(const std::string& url);
-    std::optional<api::OAuthCredentials> exchangeCodeForTokens(const std::string& code);
+    std::optional<OAuthCredentials> exchangeCodeForTokens(const std::string& code);
     
     // Storage
-    bool saveCredentials(const api::OAuthCredentials& creds);
+    bool saveCredentials(const OAuthCredentials& creds);
     
     // URL encoding
     std::string urlEncode(const std::string& value);
 };
 
-} // namespace llm_re
+} // namespace claude::auth

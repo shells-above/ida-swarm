@@ -2,12 +2,12 @@
 // Created by user on 6/30/25.
 //
 
-#ifndef ANTHROPIC_API_H
-#define ANTHROPIC_API_H
+#ifndef CLAUDE_CLIENT_H
+#define CLAUDE_CLIENT_H
 
-#include "api/api_common.h"
-#include "api/message_types.h"
-#include "api/tool_registry.h"
+#include "../common.h"
+#include "../messages/types.h"
+#include "../tools/registry.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -21,7 +21,7 @@
 #include <ctime>
 #include <curl/curl.h>
 
-namespace llm_re::api {
+namespace claude {
 
 // Authentication methods
 enum class AuthMethod {
@@ -567,7 +567,7 @@ struct OAuthCredentials {
 };
 
 // Clean API client
-class AnthropicClient {
+class Client {
     // Authentication
     AuthMethod auth_method = AuthMethod::API_KEY;
     std::string api_key;
@@ -668,16 +668,16 @@ class AnthropicClient {
 
 public:
     // Constructor for API key authentication
-    explicit AnthropicClient(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
+    explicit Client(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
         : auth_method(AuthMethod::API_KEY), api_key(key), api_url(base_url) {
     }
     
     // Constructor for OAuth authentication
-    AnthropicClient(const OAuthCredentials& creds, const std::string& base_url = "https://api.anthropic.com/v1/messages")
+    Client(const OAuthCredentials& creds, const std::string& base_url = "https://api.anthropic.com/v1/messages")
         : auth_method(AuthMethod::OAUTH), oauth_creds(creds), api_url(base_url) {
     }
 
-    ~AnthropicClient() {
+    ~Client() {
     }
     
     // Set authentication method and credentials
@@ -949,6 +949,6 @@ public:
 // Session token tracker
 // TokenTracker removed - replaced by TokenStats in token_stats.h
 
-} // namespace llm_re::api
+} // namespace claude
 
-#endif //ANTHROPIC_API_H
+#endif //CLAUDE_CLIENT_H
