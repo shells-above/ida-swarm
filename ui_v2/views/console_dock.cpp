@@ -153,7 +153,7 @@ void ConsoleDock::addLog(const LogEntry& entry) {
     }
     
     // Check if entry passes filters
-    if (entry.level < minLevelFilter_) {
+    if (static_cast<int>(entry.level) < minLevelFilter_) {
         return;
     }
     
@@ -182,19 +182,19 @@ void ConsoleDock::addLog(const LogEntry& entry) {
     QString levelStr;
     QColor levelColor;
     switch (entry.level) {
-        case LogEntry::Debug:
+        case llm_re::LogLevel::DEBUG:
             levelStr = "[DEBUG]";
             levelColor = logColors_.debug;
             break;
-        case LogEntry::Info:
+        case llm_re::LogLevel::INFO:
             levelStr = "[INFO ]";
             levelColor = logColors_.info;
             break;
-        case LogEntry::Warning:
+        case llm_re::LogLevel::WARNING:
             levelStr = "[WARN ]";
             levelColor = logColors_.warning;
             break;
-        case LogEntry::Error:
+        case llm_re::LogLevel::ERROR:
             levelStr = "[ERROR]";
             levelColor = logColors_.error;
             break;
@@ -265,10 +265,10 @@ void ConsoleDock::exportLogs(const QString& filename) {
             stream << entry.timestamp.toString("yyyy-MM-dd hh:mm:ss.zzz") << " ";
             
             switch (entry.level) {
-                case LogEntry::Debug: stream << "[DEBUG]"; break;
-                case LogEntry::Info: stream << "[INFO ]"; break;
-                case LogEntry::Warning: stream << "[WARN ]"; break;
-                case LogEntry::Error: stream << "[ERROR]"; break;
+                case llm_re::LogLevel::DEBUG: stream << "[DEBUG]"; break;
+                case llm_re::LogLevel::INFO: stream << "[INFO ]"; break;
+                case llm_re::LogLevel::WARNING: stream << "[WARN ]"; break;
+                case llm_re::LogLevel::ERROR: stream << "[ERROR]"; break;
             }
             
             stream << " ";
@@ -321,7 +321,7 @@ void ConsoleDock::updateLogView() {
     
     for (const auto& entry : logs_) {
         // Re-add all logs that pass filters
-        if (entry.level >= minLevelFilter_) {
+        if (static_cast<int>(entry.level) >= minLevelFilter_) {
             if (!textFilterString_.isEmpty()) {
                 if (useRegex_) {
                     QRegularExpression regex(textFilterString_);
@@ -346,19 +346,19 @@ void ConsoleDock::updateLogView() {
             QString levelStr;
             QColor levelColor;
             switch (entry.level) {
-                case LogEntry::Debug:
+                case llm_re::LogLevel::DEBUG:
                     levelStr = "[DEBUG]";
                     levelColor = logColors_.debug;
                     break;
-                case LogEntry::Info:
+                case llm_re::LogLevel::INFO:
                     levelStr = "[INFO ]";
                     levelColor = logColors_.info;
                     break;
-                case LogEntry::Warning:
+                case llm_re::LogLevel::WARNING:
                     levelStr = "[WARN ]";
                     levelColor = logColors_.warning;
                     break;
-                case LogEntry::Error:
+                case llm_re::LogLevel::ERROR:
                     levelStr = "[ERROR]";
                     levelColor = logColors_.error;
                     break;

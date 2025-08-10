@@ -7,15 +7,8 @@ namespace llm_re::ui_v2 {
 
 // Log entry structure
 struct LogEntry {
-    enum Level {
-        Debug = 0,
-        Info = 1,
-        Warning = 2,
-        Error = 3
-    };
-    
     QDateTime timestamp;
-    Level level;
+    llm_re::LogLevel level;  // Use core LogLevel enum
     QString category;
     QString message;
     QJsonObject metadata;

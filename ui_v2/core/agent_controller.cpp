@@ -313,16 +313,14 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
                 if (auto* text = dynamic_cast<const messages::TextContent*>(data.message->contents()[0].get())) {
                     // Parse log level from the text (format: "[LOG:level] message")
                     QString logText = QString::fromStdString(text->text);
-                    LogEntry::Level logLevel = LogEntry::Info;
+                    llm_re::LogLevel logLevel = llm_re::LogLevel::INFO;
                     
                     if (logText.startsWith("[LOG:")) {
                         int endIdx = logText.indexOf(']');
                         if (endIdx > 5) {
                             int level = logText.mid(5, endIdx - 5).toInt();
-                            if (level == 0) logLevel = LogEntry::Debug;
-                            else if (level == 1) logLevel = LogEntry::Info;
-                            else if (level == 2) logLevel = LogEntry::Warning;
-                            else if (level >= 3) logLevel = LogEntry::Error;
+                            // Cast integer directly to LogLevel enum
+                            logLevel = static_cast<llm_re::LogLevel>(level);
                             logText = logText.mid(endIdx + 2); // Skip "] "
                         }
                     }
@@ -341,14 +339,14 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
                 for (const auto& content : data.message->contents()) {
                     // Log thinking blocks
                     if (auto* thinking = dynamic_cast<const messages::ThinkingContent*>(content.get())) {
-                        logToConsole(LogEntry::Debug, "Thinking", 
+                        logToConsole(llm_re::LogLevel::DEBUG, "Thinking", 
                                    QString::fromStdString(thinking->thinking));
                     }
                     // Log text content
                     else if (auto* text = dynamic_cast<const messages::TextContent*>(content.get())) {
                         if (!text->text.empty()) {
                             QString role = data.message->role() == messages::Role::Assistant ? "Assistant" : "Agent";
-                            logToConsole(LogEntry::Info, role,
+                            logToConsole(llm_re::LogLevel::INFO, role,
                                        QString::fromStdString(text->text));
                         }
                     }
@@ -394,7 +392,7 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
             QJsonObject paramsObj = JsonUtils::jsonToQJson(input);
             
             // Log to console
-            logToConsole(LogEntry::Info, "Tool", 
+            logToConsole(llm_re::LogLevel::INFO, "Tool", 
                         QString("Executing tool: %1").arg(qToolName));
             
             // Update tool dock
@@ -417,7 +415,7 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
             QString qToolName = QString::fromStdString(toolName);
             
             // Log to console
-            logToConsole(success ? LogEntry::Info : LogEntry::Warning, "Tool",
+            logToConsole(success ? llm_re::LogLevel::INFO : llm_re::LogLevel::WARNING, "Tool",
                         QString("Tool %1: %2")
                             .arg(qToolName)
                             .arg(success ? "succeeded" : "failed"));
@@ -485,7 +483,7 @@ void AgentController::addMessageToConversation(std::shared_ptr<messages::Message
     }
 }
 
-void AgentController::logToConsole(LogEntry::Level level, const QString& category, 
+void AgentController::logToConsole(llm_re::LogLevel level, const QString& category, 
                                       const QString& message, const QJsonObject& metadata) {
     if (!consoleDock_) {
         return;

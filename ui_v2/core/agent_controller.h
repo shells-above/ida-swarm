@@ -92,7 +92,7 @@ private:
     QString agentStatusToString(AgentState::Status status) const;
     
     // Lightweight logging helper
-    void logToConsole(LogEntry::Level level, const QString& category, const QString& message, const QJsonObject& metadata = QJsonObject());
+    void logToConsole(llm_re::LogLevel level, const QString& category, const QString& message, const QJsonObject& metadata = QJsonObject());
     
     // Core components
     std::unique_ptr<Agent> agent_;
