@@ -65,6 +65,10 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     claude::ChatResponse response = api_client_->send_request(request);
     
     if (!response.success) {
+        // Log the actual error
+        std::string error_msg = response.error.value_or("Unknown error");
+        msg("ERROR: Grader API request failed: %s\n", error_msg.c_str());
+        
         // On grader failure (API failure, not grader marking as a failure), send back for more analysis
         GradeResult result;
         result.complete = false;
@@ -290,7 +294,8 @@ Respond with JSON only:
     
     if (!response.success) {
         // On classification failure, default to incomplete (safer)
-        msg("WARNING: Classification failed, defaulting to incomplete");
+        std::string error_msg = response.error.value_or("Unknown error");
+        msg("WARNING: Classification failed (%s), defaulting to incomplete\n", error_msg.c_str());
         return false;
     }
     
