@@ -81,6 +81,24 @@ public:
         return ss.str();
     }
 
+    // Get iteration-specific summary with cumulative totals (for use after consolidations)
+    std::string get_iteration_summary_with_cumulative(
+        const claude::TokenUsage& usage, 
+        int iteration, 
+        const claude::TokenUsage& cumulative_total) const {
+        std::stringstream ss;
+        ss << "[Iteration " << iteration << "] ";
+        ss << "Tokens: " << usage.input_tokens << " in, " << usage.output_tokens << " out";
+        ss << " [" << usage.cache_read_tokens << " cache read, " << usage.cache_creation_tokens << " cache write]";
+        
+        // Format cumulative totals
+        ss << " | Total Tokens: " << cumulative_total.input_tokens << " in, " << cumulative_total.output_tokens << " out";
+        ss << " [" << cumulative_total.cache_read_tokens << " cache read, " << cumulative_total.cache_creation_tokens << " cache write]";
+        ss << " | Cost: $" << std::fixed << std::setprecision(4) << PricingModel::calculate_cost(cumulative_total);
+        
+        return ss.str();
+    }
+
 private:
     claude::TokenUsage session_total_;
     std::vector<std::pair<std::chrono::steady_clock::time_point, claude::TokenUsage>> history_;

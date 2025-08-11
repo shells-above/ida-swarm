@@ -734,6 +734,21 @@ public:
         token_stats_.reset();
     }
 
+    // Get cumulative token usage across all sessions (including consolidations)
+    claude::TokenUsage get_cumulative_token_usage() const {
+        claude::TokenUsage cumulative;
+        
+        // Add all previous sessions
+        for (const auto& session : stats_sessions_) {
+            cumulative += session.get_total();
+        }
+        
+        // Add current session
+        cumulative += token_stats_.get_total();
+        
+        return cumulative;
+    }
+
 private:
     // Helper to send messages through callback
     void send_api_message(const claude::messages::Message* msg) {
@@ -1456,8 +1471,18 @@ private:
     }
     
     void log_token_usage(const claude::TokenUsage& usage, int iteration) {
-        std::string summary = token_stats_.get_iteration_summary(usage, iteration);
-        send_log(LogLevel::INFO, summary);
+        std::string summary;
+        
+        // If we have previous sessions (from consolidations), use cumulative totals
+        if (!stats_sessions_.empty()) {
+            claude::TokenUsage cumulative = get_cumulative_token_usage();
+            summary = token_stats_.get_iteration_summary_with_cumulative(usage, iteration, cumulative);
+        } else {
+            // No consolidations yet, use regular summary
+            summary = token_stats_.get_iteration_summary(usage, iteration);
+        }
+        
+        send_log(LogLevel::INFO, "[Agent] " + summary);
     }
 };
 
