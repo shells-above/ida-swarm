@@ -1,6 +1,7 @@
 #include "agent/grader.h"
 #include "agent/agent.h"
 #include <sstream>
+#include <algorithm>
 
 namespace llm_re {
 
@@ -77,49 +78,150 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     return result;
 }
 
-claude::messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) {
+size_t AnalysisGrader::estimate_tokens(const std::string& text) {
+    // Rough estimation: ~4 characters per token on average
+    return text.length() / 4;
+}
+
+std::vector<AnalysisGrader::MessagePriority> AnalysisGrader::prioritize_messages(
+    const std::vector<claude::messages::Message>& messages) const {
+    
+    std::vector<MessagePriority> priorities;
+    int total_messages = messages.size();
+    
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const claude::messages::Message& msg = messages[i];
+        
+        if (msg.role() != claude::messages::Role::Assistant) {
+            continue;  // Only process assistant messages
+        }
+        
+        MessagePriority mp;
+        mp.message = &msg;
+        
+        // Calculate priority based on position and content
+        bool is_recent = (i >= total_messages - 5);  // Last 5 messages
+        bool has_tool_calls = !claude::messages::ContentExtractor::extract_tool_uses(msg).empty();
+        bool has_text = claude::messages::ContentExtractor::extract_text(msg).has_value();
+        
+        // Assign priority
+        if (is_recent || has_tool_calls) {
+            mp.priority = 2;  // High priority
+        } else if (has_text && i >= total_messages - 10) {
+            mp.priority = 1;  // Medium priority
+        } else {
+            mp.priority = 0;  // Low priority
+        }
+        
+        // Estimate tokens for this message
+        size_t token_count = 0;
+        
+        // Count thinking blocks
+        auto thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
+        for (const auto* block : thinking_blocks) {
+            token_count += estimate_tokens(block->thinking);
+        }
+        
+        // Count tool calls
+        auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+        for (const auto* tool : tool_calls) {
+            token_count += estimate_tokens(tool->name);
+            token_count += estimate_tokens(tool->input.dump());
+        }
+        
+        // Count text
+        auto text = claude::messages::ContentExtractor::extract_text(msg);
+        if (text) {
+            token_count += estimate_tokens(*text);
+        }
+        
+        mp.estimated_tokens = token_count;
+        priorities.push_back(mp);
+    }
+    
+    return priorities;
+}
+
+claude::messages::Message AnalysisGrader::create_grading_request(const GradingContext& context) const {
     std::stringstream prompt;
-
-    // todo need to handle if this is too much context
-
+    size_t total_tokens = 0;
+    const size_t limit = config_.grader.context_limit;
+    
+    // Always include user request (high priority)
     prompt << "USER REQUEST:\n";
     prompt << context.user_request << "\n\n";
+    total_tokens += estimate_tokens(context.user_request);
     
     prompt << "AGENT'S INVESTIGATION:\n\n";
-
-    // Include stored analyses
+    
+    // Always include stored analyses (these are consolidated findings)
     if (!context.stored_analyses.empty()) {
         prompt << "STORED ANALYSES:\n\n";
-        for (const AnalysisEntry& entry: context.stored_analyses) {
-            prompt << "[" << entry.type << ": " << entry.key << "]\n";
-            prompt << entry.content << "\n\n";
+        for (const AnalysisEntry& entry : context.stored_analyses) {
+            std::string analysis_text = "[" + entry.type + ": " + entry.key + "]\n" + entry.content + "\n\n";
+            prompt << analysis_text;
+            total_tokens += estimate_tokens(analysis_text);
         }
     }
-
-    // Include agent's thinking and responses
-    for (const claude::messages::Message& msg: context.agent_work) {
-        if (msg.role() == claude::messages::Role::Assistant) {
-            // Get thinking blocks
-            std::vector<const claude::messages::ThinkingContent*> thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
-            for (const claude::messages::ThinkingContent* block: thinking_blocks) {
-                prompt << "[THINKING]\n" << block->thinking << "\n\n";
-            }
-            
-            // Get tool calls
-            // shows the grader that the agent actually did the tool calls, and didn't hallucinate that it did
-            std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-            for (const claude::messages::ToolUseContent* tool_call: tool_calls) {
-                prompt << "[TOOL_CALL]\n";
-                prompt << "Tool: " << tool_call->name << "\n";
-                prompt << "Parameters: " << tool_call->input.dump() << "\n\n";
-            }
-            
-            // Get text content
-            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
-            if (text && !text->empty()) {
-                prompt << "[MESSAGE]\n" << *text << "\n\n";
-            }
+    
+    // Prioritize and potentially prune agent work messages
+    auto prioritized = prioritize_messages(context.agent_work);
+    
+    // Sort by priority (high to low) and then by recency
+    std::stable_sort(prioritized.begin(), prioritized.end(),
+        [](const MessagePriority& a, const MessagePriority& b) {
+            return a.priority > b.priority;
+        });
+    
+    // Track what we include
+    std::vector<std::string> message_contents;
+    std::vector<size_t> message_tokens;
+    int pruned_count = 0;
+    
+    // First pass: collect all message content
+    for (const auto& mp : prioritized) {
+        std::stringstream msg_content;
+        
+        // Get thinking blocks
+        auto thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(*mp.message);
+        for (const auto* block : thinking_blocks) {
+            msg_content << "[THINKING]\n" << block->thinking << "\n\n";
         }
+        
+        // Get tool calls
+        auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(*mp.message);
+        for (const auto* tool_call : tool_calls) {
+            msg_content << "[TOOL_CALL]\n";
+            msg_content << "Tool: " << tool_call->name << "\n";
+            msg_content << "Parameters: " << tool_call->input.dump() << "\n\n";
+        }
+        
+        // Get text content
+        auto text = claude::messages::ContentExtractor::extract_text(*mp.message);
+        if (text && !text->empty()) {
+            msg_content << "[MESSAGE]\n" << *text << "\n\n";
+        }
+        
+        std::string content = msg_content.str();
+        if (!content.empty()) {
+            message_contents.push_back(content);
+            message_tokens.push_back(mp.estimated_tokens);
+        }
+    }
+    
+    // Second pass: include messages up to limit
+    for (size_t i = 0; i < message_contents.size(); ++i) {
+        if (total_tokens + message_tokens[i] < limit) {
+            prompt << message_contents[i];
+            total_tokens += message_tokens[i];
+        } else {
+            pruned_count++;
+        }
+    }
+    
+    // Add note about pruning if necessary
+    if (pruned_count > 0) {
+        prompt << "[NOTE: " << pruned_count << " older investigation messages were pruned to fit context limits]\n\n";
     }
     
     prompt << "---\n\n";

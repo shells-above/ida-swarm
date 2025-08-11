@@ -52,6 +52,7 @@ public:
         claude::Model model = claude::Model::Opus41;
         int max_tokens = 32000;
         int max_thinking_tokens = 31999;
+        int context_limit = 140000;  // Leave buffer below 150k limit
     } grader;
 
     struct UISettings {

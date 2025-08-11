@@ -155,8 +155,17 @@ Think deeply. Derive your standards. Don't apply predetermined rules.)";
     
     // Helper methods
     GradeResult parse_grader_response(const claude::messages::Message& response) const;
-    static claude::messages::Message create_grading_request(const GradingContext& context);
+    claude::messages::Message create_grading_request(const GradingContext& context) const;
     bool classify_completion(const std::string& grader_response) const;
+    
+    // Token estimation and pruning
+    static size_t estimate_tokens(const std::string& text);
+    struct MessagePriority {
+        const claude::messages::Message* message;
+        int priority;  // 0=low, 1=medium, 2=high
+        size_t estimated_tokens;
+    };
+    std::vector<MessagePriority> prioritize_messages(const std::vector<claude::messages::Message>& messages) const;
     
 public:
     explicit AnalysisGrader(const Config& config);
