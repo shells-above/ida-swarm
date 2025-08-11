@@ -29,6 +29,13 @@ public:
         if (address == BADADDR) return false;
         return is_mapped(address);
     }
+    
+    // Relaxed validation for cross-reference operations
+    // These addresses don't need to be in mapped segments
+    static bool is_valid_xref_address(ea_t address) {
+        // Only reject BADADDR (-1) and other obviously invalid values
+        return address != BADADDR;
+    }
 
     static bool is_valid_data_address(ea_t address) {
         if (!is_valid_address(address)) return false;

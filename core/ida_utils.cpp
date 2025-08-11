@@ -279,7 +279,8 @@ FunctionInfo IDAUtils::get_function_info(ea_t address) {
 
 DataInfo IDAUtils::get_data_info(ea_t address, int max_xrefs) {
     return execute_sync_wrapper([address, max_xrefs]() {
-        if (!IDAValidators::is_valid_address(address)) {
+        // Use relaxed validation - data info can be queried for external addresses
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
@@ -422,7 +423,8 @@ std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
 // Unified name setter
 bool IDAUtils::set_addr_name(ea_t address, const std::string& name) {
     return execute_sync_wrapper([address, &name]() {
-        if (!IDAValidators::is_valid_address(address)) {
+        // Use relaxed validation - names can be set on external addresses
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
         if (!IDAValidators::is_valid_name(name)) {
@@ -432,9 +434,9 @@ bool IDAUtils::set_addr_name(ea_t address, const std::string& name) {
         // For functions, set at function start
         func_t *func = get_func(address);
         if (func) {
-            return set_name(func->start_ea, name.c_str());
+            return set_name(func->start_ea, name.c_str(), SN_NOCHECK | SN_NOWARN);
         } else {
-            return set_name(address, name.c_str());
+            return set_name(address, name.c_str(), SN_NOCHECK | SN_NOWARN);
         }
     }, MFF_WRITE);
 }
@@ -442,7 +444,8 @@ bool IDAUtils::set_addr_name(ea_t address, const std::string& name) {
 // Keep existing implementations for the following functions as they're still used:
 std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t address, int max_count) {
     return execute_sync_wrapper([address, max_count]() {
-        if (!IDAValidators::is_valid_address(address)) {
+        // Use relaxed validation - xrefs can involve external addresses
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
@@ -473,7 +476,8 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_to_with_names(ea_t
 
 std::vector<std::pair<ea_t, std::string>> IDAUtils::get_xrefs_from_with_names(ea_t address, int max_count) {
     return execute_sync_wrapper([address, max_count]() {
-        if (!IDAValidators::is_valid_address(address)) {
+        // Use relaxed validation - xrefs can involve external addresses
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
@@ -689,8 +693,8 @@ std::vector<ea_t> IDAUtils::get_function_data_refs(ea_t address, int max_count) 
 
 bool IDAUtils::add_disassembly_comment(ea_t address, const std::string& comment) {
     return execute_sync_wrapper([address, &comment]() {
-        // Validate inputs
-        if (!IDAValidators::is_valid_address(address)) {
+        // Validate inputs - use relaxed validation for comments
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
         if (comment.length() > 4096) {
@@ -756,8 +760,8 @@ bool IDAUtils::add_pseudocode_comment(ea_t address, const std::string& comment) 
 
 bool IDAUtils::clear_disassembly_comment(ea_t address) {
     return execute_sync_wrapper([address]() {
-        // Validate input
-        if (!IDAValidators::is_valid_address(address)) {
+        // Validate input - use relaxed validation for comments
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
@@ -991,7 +995,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
         qstring name;
         
         // Parse the prototype - this handles full function declarations like:
-        // "int __cdecl func(int a, char *b)"
+        // "int __cdecl func(int a, char *b);"
         // "void func(void)" 
         // "BOOL __stdcall WindowProc(HWND, UINT, WPARAM, LPARAM)"
         // Use PT_TYP to parse type declarations (functions are types)
@@ -1025,7 +1029,7 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             qstring current_name;
             get_func_name(&current_name, address);
             if (current_name != name) {
-                set_name(address, name.c_str(), SN_CHECK);
+                set_name(address, name.c_str(), SN_NOCHECK | SN_NOWARN);
             }
         }
 
