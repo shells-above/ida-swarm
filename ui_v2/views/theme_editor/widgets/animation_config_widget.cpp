@@ -322,6 +322,9 @@ void AnimationConfigWidget::onTestAnimation() {
         case AnimationManager::AnimationType::Pulse:
             AnimationManager::pulse(testWidget_, 1.2, duration);
             break;
+        default:
+            // Animation types not yet implemented for testing
+            break;
         case AnimationManager::AnimationType::Rotate:
             AnimationManager::rotate(testWidget_, 360, duration);
             break;

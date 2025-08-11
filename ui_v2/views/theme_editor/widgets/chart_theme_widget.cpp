@@ -461,7 +461,12 @@ void ChartThemeWidget::applyStylePreset(ThemeManager::ChartStyle style) {
             currentSettings_.glowRadius = 20.0f;
             currentSettings_.animationDuration = 1000;
             break;
-        // ... other presets
+        default:
+            // Corporate, Playful, Terminal, Glass styles not yet implemented
+            currentSettings_.lineWidth = 2.0f;
+            currentSettings_.glowEffects = false;
+            currentSettings_.animationDuration = 500;
+            break;
     }
 }
 

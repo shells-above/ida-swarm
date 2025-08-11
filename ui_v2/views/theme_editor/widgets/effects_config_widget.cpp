@@ -615,6 +615,14 @@ void EffectsConfigWidget::GlowPreviewWidget::paintEvent(QPaintEvent* event) {
             glowRadius = 40.0;
             intensity = 0.8;
             break;
+        case EffectsManager::GlowStyle::Pulse:
+            glowRadius = 25.0;
+            intensity = 1.0;
+            break;
+        case EffectsManager::GlowStyle::Rainbow:
+            glowRadius = 35.0;
+            intensity = 1.2;
+            break;
     }
     
     EffectsManager::paintGlow(&painter, glowRect, glowColor_, glowRadius, intensity);

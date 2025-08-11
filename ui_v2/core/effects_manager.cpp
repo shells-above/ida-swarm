@@ -484,7 +484,7 @@ bool ShimmerEffect::eventFilter(QObject* obj, QEvent* event) {
 }
 
 void ShimmerEffect::paint(QPainter* painter) {
-    if (!animation_ || !animation_->state() == QAbstractAnimation::Running) return;
+    if (!animation_ || !(animation_->state() == QAbstractAnimation::Running)) return;
     
     painter->save();
     

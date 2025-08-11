@@ -356,6 +356,10 @@ void ColorPickerDialog::generateHarmonyColors() {
     selectedColor_.getHsv(&h, &s, &v);
     
     switch (currentHarmony_) {
+        case None:
+            // No harmony colors to generate
+            break;
+            
         case Complementary:
             harmonyColors << QColor::fromHsv((h + 180) % 360, s, v);
             break;
