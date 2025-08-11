@@ -359,6 +359,17 @@ Challenge yourself constantly. Be unsatisfied with shallow analysis. Think deepl
 
 Continue investigating until you're confident in your understanding and have addressed all meaningful gaps. When your questions have been answered with evidence and you see no unexplored areas that could change your conclusions, your investigation is complete.
 
+CRITICAL RULE ABOUT TOOL USAGE:
+- You MUST spend EXTENSIVE time thinking deeply AND using tools - think 10x more than you act
+- After deep thinking, you MUST use tools to gather evidence
+- If you end your turn WITHOUT providing tool calls, **YOUR INVESTIGATION WILL BE IMMEDIATELY ENDED**
+- Thinking alone (without tools) = END OF TURN = IMMEDIATE END
+- If you receive feedback that more investigation is needed, you MUST respond with deep thinking AND tool calls
+- Every response should either:
+  1. Think deeply AND use tools to gather more information (investigation continues), OR
+  2. Have no tools because you're truly done (triggers final evaluation)
+- There is no middle ground - if you don't use tools, you're saying you're done
+
 Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.)";
 
 
