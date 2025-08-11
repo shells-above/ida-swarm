@@ -980,39 +980,53 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
-        // Ensure the prototype ends with a semicolon
-        qstring proto_str = prototype.c_str();
-        proto_str.trim2();
-        if (!proto_str.ends_with(";")) {
-            proto_str.append(';');
+        // Ensure the prototype ends with a semicolon (required by the parser)
+        std::string proto_with_semi = prototype;
+        if (!proto_with_semi.empty() && proto_with_semi.back() != ';') {
+            proto_with_semi += ';';
         }
 
-        // Parse the function declaration
-        tinfo_t new_type;
-        qstring func_name;
-        const char* ptr = proto_str.c_str();
-
-        // Use PT_SIL (silent) to suppress warnings
-        if (!parse_decl(&new_type, &func_name, get_idati(), ptr, PT_SIL)) {
-            // If parsing fails, try with different flags
-            ptr = proto_str.c_str();
-            if (!parse_decl(&new_type, &func_name, get_idati(), ptr, 0)) {
-                throw std::invalid_argument("Failed to parse function prototype: " + prototype);
+        // Try to parse as a C declaration first
+        tinfo_t tif;
+        qstring name;
+        
+        // Parse the prototype - this handles full function declarations like:
+        // "int __cdecl func(int a, char *b)"
+        // "void func(void)" 
+        // "BOOL __stdcall WindowProc(HWND, UINT, WPARAM, LPARAM)"
+        // Use PT_TYP to parse type declarations (functions are types)
+        if (!parse_decl(&tif, &name, get_idati(), proto_with_semi.c_str(), PT_TYP | PT_SIL)) {
+            // If that fails, try apply_cdecl as a more flexible fallback
+            // apply_cdecl internally handles various prototype formats and
+            // always uses TINFO_DEFINITE flag
+            if (!apply_cdecl(get_idati(), address, proto_with_semi.c_str(), TINFO_DEFINITE)) {
+                throw std::invalid_argument("Failed to parse function prototype. Expected format: 'return_type [calling_convention] function_name(parameters)'");
             }
+            // apply_cdecl succeeded, we're done
+            mark_cfunc_dirty(address);
+            return true;
         }
 
-        if (!new_type.is_func()) {
-            throw std::invalid_argument("Parsed type is not a function");
+        // Validate that we got a function type
+        if (!tif.is_func()) {
+            throw std::invalid_argument("Parsed type is not a function. Got: " + std::string(tif.dstr()));
         }
 
-        // Apply the type
-        if (!apply_tinfo(address, new_type, TINFO_DEFINITE)) {
-            throw std::runtime_error("Failed to apply function prototype");
+        // Apply the type to the function with DEFINITE flag to make it persistent
+        if (!apply_tinfo(address, tif, TINFO_DEFINITE)) {
+            throw std::runtime_error("Failed to apply function prototype to address " + format_address_hex(address));
         }
 
-        // Handle function renaming if a name was provided
-        if (!func_name.empty()) {
-            set_name(address, func_name.c_str(), SN_CHECK);
+        // Invalidate decompiler cache to ensure changes are reflected
+        mark_cfunc_dirty(address);
+
+        // If a name was extracted and is different from current, rename
+        if (!name.empty()) {
+            qstring current_name;
+            get_func_name(&current_name, address);
+            if (current_name != name) {
+                set_name(address, name.c_str(), SN_CHECK);
+            }
         }
 
         return true;
@@ -1117,184 +1131,149 @@ FunctionLocalsInfo IDAUtils::get_variables(ea_t address) {
 }
 
 bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, const std::string& new_name, const std::string& new_type) {
-    return execute_sync_wrapper([=]() {
+    return execute_sync_wrapper([address, &variable_name, &new_name, &new_type]() {
         if (!IDAValidators::is_valid_function(address)) {
             throw std::invalid_argument("Address is not a valid function: " + format_address_hex(address));
         }
 
-        // Initialize Hex-Rays if needed
         if (!init_hexrays_plugin()) {
             throw std::runtime_error("Hex-Rays decompiler not available");
         }
 
         func_t *func = get_func(address);
         if (!func) {
-            throw std::runtime_error("Invalid function address");
+            throw std::runtime_error("Cannot get function at address");
         }
 
-        // Decompile to get variables
+        // First try to modify as a function argument (simpler case)
+        // This works even without decompiling the function
+        tinfo_t func_type;
+        if (get_tinfo(&func_type, address)) {
+            func_type_data_t ftd;
+            if (func_type.get_func_details(&ftd)) {
+                // Search for argument by name
+                for (size_t i = 0; i < ftd.size(); i++) {
+                    if (ftd[i].name == variable_name.c_str()) {
+                        // Found the argument - modify it
+                        bool changed = false;
+
+                        if (!new_type.empty()) {
+                            tinfo_t new_tif;
+                            qstring dummy_name;
+                            
+                            // For bare type expressions like "char*", "int", etc., we need to wrap
+                            // them in a typedef declaration because parse_decl expects complete declarations
+                            std::string typedef_decl = "typedef " + new_type + " __dummy;";
+                            
+                            if (!parse_decl(&new_tif, &dummy_name, get_idati(), typedef_decl.c_str(), PT_TYP | PT_SIL)) {
+                                // If typedef approach fails, try as a variable declaration
+                                std::string var_decl = new_type + " __dummy";
+                                if (!parse_decl(&new_tif, &dummy_name, get_idati(), var_decl.c_str(), PT_VAR | PT_SIL)) {
+                                    throw std::invalid_argument("Failed to parse type: '" + new_type + 
+                                        "'. Expected formats: 'int', 'char*', 'struct name*', 'unsigned int', etc.");
+                                }
+                            }
+                            
+                            if (!new_tif.is_correct()) {
+                                throw std::invalid_argument("Parsed type is invalid: " + new_type);
+                            }
+                            
+                            ftd[i].type = new_tif;
+                            changed = true;
+                        }
+
+                        if (!new_name.empty()) {
+                            ftd[i].name = new_name.c_str();
+                            changed = true;
+                        }
+
+                        if (changed) {
+                            tinfo_t new_func_type;
+                            if (!new_func_type.create_func(ftd)) {
+                                throw std::runtime_error("Failed to create new function type");
+                            }
+                            if (!apply_tinfo(address, new_func_type, TINFO_DEFINITE)) {
+                                throw std::runtime_error("Failed to apply function type");
+                            }
+                            mark_cfunc_dirty(address);
+                            return true;
+                        }
+                        return false;  // No changes requested
+                    }
+                }
+            }
+        }
+
+        // Not a function argument - must be a local variable
+        // Now we need to decompile to access local variables
         hexrays_failure_t hf;
         cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_CACHE);
         if (!cfunc) {
             throw std::runtime_error("Failed to decompile function");
         }
 
-        // Helper to parse type with optional FORCE_SIZE_MISMATCH
-        auto parse_type = [](const std::string& type_str, tinfo_t& out_type) -> bool {
-            qstring clean_type = type_str.c_str();
-
-            // Remove FORCE_SIZE_MISMATCH if present
-            size_t force_pos = clean_type.find("FORCE_SIZE_MISMATCH");
-            bool force = (force_pos != qstring::npos);
-            if (force) {
-                clean_type.remove(force_pos, strlen("FORCE_SIZE_MISMATCH"));
-                clean_type.trim2();
-            }
-
-            bool success = parse_decl(&out_type, nullptr, get_idati(),
-                                    clean_type.c_str(), PT_TYP | PT_SIL);
-            return success ? force : false;  // Return force flag only if parse succeeded
-        };
-
-        // Helper to check if types have compatible sizes
-        auto types_have_compatible_sizes = [](const tinfo_t& current_type, const tinfo_t& new_type) -> bool {
-            // Get sizes
-            size_t current_size = current_type.get_size();
-            size_t new_size = new_type.get_size();
-
-            // Handle invalid sizes (can't determine size)
-            if (current_size == BADSIZE || new_size == BADSIZE) {
-                // If we can't determine size, we can't check compatibility
-                // In this case, allow the change (user knows what they're doing)
-                return true;
-            }
-
-            // If both are pointers, they're compatible (same pointer size on architecture)
-            if (current_type.is_ptr() && new_type.is_ptr()) {
-                return true;
-            }
-
-            // Otherwise, sizes must match exactly
-            return current_size == new_size;
-        };
-
-        // Try to handle as function argument first
-        tinfo_t func_type;
-        func_type_data_t ftd;
-        if (get_tinfo(&func_type, address) && func_type.get_func_details(&ftd)) {
-            for (int i = 0; i < ftd.size(); i++) {
-                if (ftd[i].name == variable_name.c_str()) {
-                    // Found as argument
-                    bool changed = false;
-
-                    // Update type if provided
-                    if (!new_type.empty()) {
-                        tinfo_t new_tif;
-                        bool force = parse_type(new_type, new_tif);
-
-                        if (!new_tif.is_correct()) {
-                            throw std::invalid_argument("Invalid type: " + new_type);
-                        }
-
-                        // Check size compatibility
-                        if (!force && !types_have_compatible_sizes(ftd[i].type, new_tif)) {
-                            size_t current_size = ftd[i].type.get_size();
-                            size_t new_size = new_tif.get_size();
-
-                            qstring current_type_str;
-                            qstring new_type_str;
-                            ftd[i].type.print(&current_type_str);
-                            new_tif.print(&new_type_str);
-
-                            throw std::runtime_error(
-                                "Type size mismatch: '" + std::string(current_type_str.c_str()) +
-                                "' (size " + std::to_string(current_size) +
-                                ") vs '" + std::string(new_type_str.c_str()) +
-                                "' (size " + std::to_string(new_size) +
-                                "). Add 'FORCE_SIZE_MISMATCH' to override."
-                            );
-                        }
-
-                        ftd[i].type = new_tif;
-                        changed = true;
-                    }
-
-                    // Update name if provided
-                    if (!new_name.empty()) {
-                        ftd[i].name = new_name.c_str();
-                        changed = true;
-                    }
-
-                    // Apply changes
-                    if (changed) {
-                        tinfo_t new_func_type;
-                        new_func_type.create_func(ftd);
-                        return apply_tinfo(address, new_func_type, TINFO_DEFINITE);
-                    }
-                    return false;
-                }
-            }
-        }
-
-        // Not an argument, handle as local variable
-        lvar_locator_t ll;
-        if (!locate_lvar(&ll, func->start_ea, variable_name.c_str())) {
-            throw std::invalid_argument("Variable not found: " + variable_name);
-        }
-
-        // Find the lvar for size checking
-        const lvar_t *lvar = nullptr;
+        // Find the local variable
         const lvars_t *lvars = cfunc->get_lvars();
+        if (!lvars) {
+            throw std::runtime_error("No local variables found");
+        }
+
+        const lvar_t *target_lvar = nullptr;
         for (size_t i = 0; i < lvars->size(); i++) {
             if ((*lvars)[i].name == variable_name.c_str()) {
-                lvar = &(*lvars)[i];
+                target_lvar = &(*lvars)[i];
                 break;
             }
         }
 
-        lvar_saved_info_t info;
-        info.ll = ll;
+        if (!target_lvar) {
+            throw std::invalid_argument("Variable not found: " + variable_name);
+        }
+
+        if (target_lvar->is_fake_var()) {
+            throw std::invalid_argument("Cannot modify compiler-generated variable");
+        }
+
+        // Use persistent modification for local variables
+        lvar_saved_info_t lsi;
+        lsi.ll = static_cast<lvar_locator_t>(*target_lvar);  // lvar_t inherits from lvar_locator_t
         uint mli_flags = 0;
 
-        // Update type if provided
         if (!new_type.empty()) {
             tinfo_t new_tif;
-            bool force = parse_type(new_type, new_tif);
-
+            qstring dummy_name;
+            
+            // For bare type expressions like "char*", "int", etc., we need to wrap
+            // them in a typedef declaration because parse_decl expects complete declarations
+            std::string typedef_decl = "typedef " + new_type + " __dummy;";
+            
+            if (!parse_decl(&new_tif, &dummy_name, get_idati(), typedef_decl.c_str(), PT_TYP | PT_SIL)) {
+                // If typedef approach fails, try as a variable declaration
+                std::string var_decl = new_type + " __dummy";
+                if (!parse_decl(&new_tif, &dummy_name, get_idati(), var_decl.c_str(), PT_VAR | PT_SIL)) {
+                    throw std::invalid_argument("Failed to parse type: '" + new_type + 
+                        "'. Expected formats: 'int', 'char*', 'struct name*', 'unsigned int', etc.");
+                }
+            }
+            
             if (!new_tif.is_correct()) {
-                throw std::invalid_argument("Invalid type: " + new_type);
+                throw std::invalid_argument("Parsed type is invalid: " + new_type);
             }
-
-            // Check size compatibility
-            if (!force && lvar && !types_have_compatible_sizes(lvar->type(), new_tif)) {
-                size_t current_size = lvar->type().get_size();
-                size_t new_size = new_tif.get_size();
-
-                qstring current_type_str;
-                qstring new_type_str;
-                lvar->type().print(&current_type_str);
-                new_tif.print(&new_type_str);
-
-                throw std::runtime_error(
-                    "Type size mismatch: '" + std::string(current_type_str.c_str()) +
-                    "' (size " + std::to_string(current_size) +
-                    ") vs '" + std::string(new_type_str.c_str()) +
-                    "' (size " + std::to_string(new_size) +
-                    "). Add 'FORCE_SIZE_MISMATCH' to override."
-                );
-            }
-
-            info.type = new_tif;
+            
+            lsi.type = new_tif;
             mli_flags |= MLI_TYPE;
         }
 
-        // Update name if provided
         if (!new_name.empty()) {
-            info.name = new_name.c_str();
+            lsi.name = new_name.c_str();
             mli_flags |= MLI_NAME;
         }
 
-        return mli_flags ? modify_user_lvar_info(func->start_ea, mli_flags, info) : false;
+        if (mli_flags == 0) {
+            return false;  // No changes requested
+        }
+
+        return modify_user_lvar_info(func->start_ea, mli_flags, lsi);
     }, MFF_WRITE);
 }
 

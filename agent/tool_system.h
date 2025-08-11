@@ -557,14 +557,14 @@ public:
         return "Set the complete function signature including return type, calling convention, and parameters. "
                "Use this when you need to change the overall function type or multiple parameters at once. "
                "For individual parameter/variable updates, use set_variable instead. "
-               "Use standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *, int);'). "
-               "Note: This does NOT validate the size of the types in the prototype, be EXTREMELY SURE you are providing the right sizes. You'll break decompilation if you don't";
+               "Accepts standard C declaration syntax (e.g., 'int __stdcall ProcessData(void *buffer, int size)' or 'BOOL func(HWND, UINT, WPARAM, LPARAM)'). "
+               "Important: Ensure type sizes are correct for the target architecture to avoid decompilation issues.";
     }
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
-            .add_string("prototype", "Full C-style prototype. Note DO NOT PROVIDE ARGUMENT NAMES, only their types! This may seem strange, but it is important!")
+            .add_string("prototype", "Full C-style function prototype with or without argument names")
             .build();
     }
 
@@ -720,7 +720,7 @@ public:
         return "Update any variable in a function - arguments or locals. Give them meaningful names and/or correct types. "
                "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
                "Works for both function arguments (a1, a2, etc.) and local variables (v1, v2, etc.). "
-               "Well-named variables make function logic self-documenting. ";
+               "Well-named variables make function logic self-documenting.";
     }
 
     json parameters_schema() const override {
@@ -728,7 +728,7 @@ public:
             .add_integer("address", "The function address")
             .add_string("variable_name", "Current variable name (e.g., 'v1', 'a2', or existing name)")
             .add_string("new_name", "New variable name", false)
-            .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT'). Be very careful with the size of the types", false)
+            .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT')", false)
             .build();
     }
 

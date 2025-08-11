@@ -15,6 +15,7 @@
 #include <bytes.hpp>
 #include <name.hpp>
 #include <funcs.hpp>
+#include <typeinf.hpp>
 #include <hexrays.hpp>
 #include <ua.hpp>
 #include <allins.hpp>
