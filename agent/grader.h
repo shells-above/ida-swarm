@@ -38,7 +38,8 @@ public:
     };
 
 private:
-    std::unique_ptr<claude::Client> api_client_;
+    mutable std::unique_ptr<claude::Client> api_client_;  // Mutable to allow token refresh in const methods
+    mutable std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;  // For OAuth token refresh
     const Config& config_;
     mutable qmutex_t mutex_;
     
@@ -157,6 +158,7 @@ Think deeply. Derive your standards. Don't apply predetermined rules.)";
     GradeResult parse_grader_response(const claude::messages::Message& response) const;
     claude::messages::Message create_grading_request(const GradingContext& context) const;
     bool classify_completion(const std::string& grader_response) const;
+    bool refresh_oauth_credentials() const;  // Refresh OAuth tokens when expired
     
     // Token estimation and pruning
     static size_t estimate_tokens(const std::string& text);

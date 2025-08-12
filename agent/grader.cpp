@@ -8,8 +8,9 @@ namespace llm_re {
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     // Create API client based on auth method
     if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-        claude::auth::OAuthManager oauth_mgr(config.api.oauth_config_dir);
-        std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+        // Create and store OAuth manager for token refresh
+        oauth_manager_ = std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir);
+        std::optional<claude::OAuthCredentials> oauth_creds = oauth_manager_->get_credentials();
 
         if (oauth_creds) {
             // Initialize API client with OAuth
@@ -23,6 +24,7 @@ AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
                 config.api.api_key,
                 config.api.base_url
             );
+            oauth_manager_.reset();  // Don't need OAuth manager if using API key
         }
     } else {
         // Use API key authentication
@@ -63,6 +65,21 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     
     // Send to grader API
     claude::ChatResponse response = api_client_->send_request(request);
+    
+    // Check for OAuth token expiry (401 authentication error)
+    if (!response.success && response.error && 
+        response.error->find("OAuth token has expired") != std::string::npos) {
+        
+        msg("Grader OAuth token expired, attempting to refresh...\n");
+        
+        if (refresh_oauth_credentials()) {
+            // Retry the request with refreshed credentials
+            msg("Retrying grader request with refreshed OAuth token...\n");
+            response = api_client_->send_request(request);
+        } else {
+            msg("ERROR: Failed to refresh OAuth token for grader\n");
+        }
+    }
     
     if (!response.success) {
         // Log the actual error
@@ -236,6 +253,23 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
     return claude::messages::Message::user_text(prompt.str());
 }
 
+bool AnalysisGrader::refresh_oauth_credentials() const {
+    if (!oauth_manager_ || config_.api.auth_method != claude::AuthMethod::OAUTH) {
+        return false;
+    }
+    
+    auto refreshed_creds = oauth_manager_->force_refresh();
+    if (!refreshed_creds) {
+        msg("ERROR: Failed to refresh OAuth token in grader: %s\n", oauth_manager_->get_last_error().c_str());
+        return false;
+    }
+    
+    // Update the API client with new credentials
+    api_client_->set_oauth_credentials(*refreshed_creds);
+    msg("Grader successfully refreshed OAuth token\n");
+    return true;
+}
+
 AnalysisGrader::GradeResult AnalysisGrader::parse_grader_response(const claude::messages::Message& response) const {
     GradeResult result;
     
@@ -291,6 +325,21 @@ Respond with JSON only:
     
     // Send to API for classification
     claude::ChatResponse response = api_client_->send_request(request);
+    
+    // Check for OAuth token expiry (401 authentication error)
+    if (!response.success && response.error && 
+        response.error->find("OAuth token has expired") != std::string::npos) {
+        
+        msg("Classifier OAuth token expired, attempting to refresh...\n");
+        
+        if (refresh_oauth_credentials()) {
+            // Retry the request with refreshed credentials
+            msg("Retrying classifier request with refreshed OAuth token...\n");
+            response = api_client_->send_request(request);
+        } else {
+            msg("ERROR: Failed to refresh OAuth token for classifier\n");
+        }
+    }
     
     if (!response.success) {
         // On classification failure, default to incomplete (safer)

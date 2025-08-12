@@ -261,16 +261,6 @@ public:
     };
 
 private:
-    // Core components
-    std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
-    std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
-    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
-    std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
-    std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth credential manager for token refresh
-    std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
-    claude::tools::ToolRegistry tool_registry_;                      // registry for tools
-    claude::Client api_client_;                                      // agent api client
-
     // State management
     AgentState state_;
     AgentExecutionState execution_state_;  // Execution and conversation state
@@ -504,7 +494,7 @@ public:
         });
     }
 
-    ~Agent() {
+    virtual ~Agent() {
         stop();
         cleanup_thread();
         if (task_semaphore_) {
@@ -519,7 +509,7 @@ public:
     }
 
     // Start/stop agent
-    void start() {
+    virtual void start() {
         if (worker_thread_) return;
 
         stop_requested_ = false;
@@ -529,7 +519,7 @@ public:
         }, this);
     }
 
-    void stop() {
+    virtual void stop() {
         if (!worker_thread_) return;
 
         stop_requested_ = true;
@@ -551,7 +541,7 @@ public:
     }
 
     // Task management
-    void set_task(const std::string& task) {
+    virtual void set_task(const std::string& task) {
         {
             qmutex_locker_t lock(queue_mutex_);
 
@@ -608,7 +598,7 @@ public:
     void clear_last_error() { last_error_.clear(); }
     
     // User message injection (thread-safe)
-    void inject_user_message(const std::string& message) {
+    virtual void inject_user_message(const std::string& message) {
         qmutex_locker_t lock(pending_messages_mutex_);
         pending_user_messages_.push(message);
     }
@@ -650,7 +640,7 @@ public:
     }
     
     // Manual tool execution support
-    json execute_manual_tool(const std::string& tool_name, const json& input) {
+    virtual json execute_manual_tool(const std::string& tool_name, const json& input) {
         // Find the tool
         claude::tools::Tool* tool = tool_registry_.get_tool(tool_name);
         if (!tool) {
@@ -760,6 +750,32 @@ public:
         return cumulative;
     }
 
+protected:  // Changed to protected so SwarmAgent can access
+    // Core components
+    std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
+    std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
+    std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
+    std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth credential manager for token refresh
+    std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
+    claude::tools::ToolRegistry tool_registry_;                      // registry for tools
+    claude::Client api_client_;                                      // agent api client
+    
+    // Send log message (accessible to SwarmAgent)
+    void send_log(LogLevel level, const std::string& msg) {
+        // For now, logs still need some way to be sent - create a temporary message
+        // TODO: log callback
+        claude::messages::Message log_msg(claude::messages::Role::System);
+        log_msg.add_content(std::make_unique<claude::messages::TextContent>(
+            std::format("[LOG:{}] {}", static_cast<int>(level), msg)
+        ));
+        if (message_callback_) {
+            CallbackData data;
+            data.message = &log_msg;
+            message_callback_(AgentMessageType::Log, data);
+        }
+    }
+
 private:
     // Helper to send messages through callback
     void send_api_message(const claude::messages::Message* msg) {
@@ -783,20 +799,6 @@ private:
         std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
         if (text && !text->empty()) {
             send_log(LogLevel::INFO, "[Grader Response] " + *text);
-        }
-    }
-    
-    void send_log(LogLevel level, const std::string& msg) {
-        // For now, logs still need some way to be sent - create a temporary message
-        // TODO: separate log callback
-        claude::messages::Message log_msg(claude::messages::Role::System);
-        log_msg.add_content(std::make_unique<claude::messages::TextContent>(
-            std::format("[LOG:{}] {}", static_cast<int>(level), msg)
-        ));
-        if (message_callback_) {
-            CallbackData data;
-            data.message = &log_msg;
-            message_callback_(AgentMessageType::Log, data);
         }
     }
     
