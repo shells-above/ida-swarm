@@ -264,7 +264,6 @@ private:
     // State management
     AgentState state_;
     AgentExecutionState execution_state_;  // Execution and conversation state
-    const Config& config_;
     std::string last_error_;
 
     // Token tracking
@@ -464,7 +463,7 @@ public:
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
           oauth_manager_(config.api.auth_method == claude::AuthMethod::OAUTH ? std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir) : nullptr),
           api_client_(create_api_client(config, oauth_manager_.get())),
-          grader_(std::make_unique<AnalysisGrader>(config)) {
+          grader_(config.grader.enabled ? std::make_unique<AnalysisGrader>(config) : nullptr) {
 
         // Clear the API request log file on startup
         std::ofstream clear_log("/tmp/anthropic_requests.log", std::ios::trunc);
@@ -486,7 +485,7 @@ public:
         }
 
         // Register tools
-        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_);
+        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_, config_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
@@ -532,6 +531,8 @@ public:
         // Don't block UI thread - worker will report completion via logs/state changes
     }
 
+    virtual void trigger_shutdown() { }
+    
     void cleanup_thread() {
         if (worker_thread_) {
             qthread_join(worker_thread_);
@@ -751,6 +752,9 @@ public:
     }
 
 protected:  // Changed to protected so SwarmAgent can access
+    // Configuration
+    const Config& config_;
+    
     // Core components
     std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
@@ -774,6 +778,54 @@ protected:  // Changed to protected so SwarmAgent can access
             data.message = &log_msg;
             message_callback_(AgentMessageType::Log, data);
         }
+    }
+
+    // Process tool calls from assistant message
+    virtual std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) {
+        std::vector<claude::messages::Message> results;
+
+        std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+
+        for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
+            send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
+
+            // Track tool call
+            execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
+
+            // Send tool started message
+            send_json_message(AgentMessageType::ToolStarted, {
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input}
+            });
+
+            // Execute tool
+            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
+            results.push_back(result_msg);
+
+            // Extract result content
+            json result_json;
+            for (const std::unique_ptr<claude::messages::Content>& content: result_msg.contents()) {
+                if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
+                    try {
+                        result_json = json::parse(tool_result->content);
+                    } catch (...) {
+                        result_json = {{"content", tool_result->content}};
+                    }
+                    break;
+                }
+            }
+
+            // Send tool executed message
+            send_json_message(AgentMessageType::ToolExecuted, {
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input},
+                {"result", result_json}
+            });
+        }
+
+        return results;
     }
 
 private:
@@ -922,10 +974,7 @@ private:
         // Add user message to execution state
         claude::messages::Message continue_msg = claude::messages::Message::user_text(additional);
 
-        // Check for cache invalidation scenario
-        if (execution_state_.get_request().enable_thinking && has_non_tool_result_content(continue_msg)) {
-            send_log(LogLevel::WARNING, "Non-tool-result user message will invalidate thinking block cache.");
-        }
+        // will invalidate cache
 
         execution_state_.add_message(continue_msg);
 
@@ -1307,28 +1356,43 @@ private:
                     // Agent has naturally stopped - they're satisfied with their understanding
                     send_log(LogLevel::INFO, "Agent stopped investigation");
 
-                    // Check with grader
-                    AnalysisGrader::GradeResult grade = check_with_grader();
-                    
-                    // Log grader's full response (with thinking) to console
-                    send_grader_message_to_console(grade.fullMessage);
-                    
-                    if (grade.complete) {
-                        send_log(LogLevel::INFO, "Grader approved investigation");
+                    // Check with grader if enabled
+                    if (grader_) {
+                        AnalysisGrader::GradeResult grade = check_with_grader();
+                        
+                        // Log grader's full response (with thinking) to console
+                        send_grader_message_to_console(grade.fullMessage);
+                        
+                        if (grade.complete) {
+                            send_log(LogLevel::INFO, "Grader approved investigation");
+                            grader_approved = true;
+                            
+                            // Send final report - this will be shown in conversation UI
+                            send_json_message(AgentMessageType::FinalReport, {
+                                {"report", grade.response}
+                            });
+                            change_state(AgentState::Status::Completed);
+                        } else {
+                            send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
+                            
+                            // Add grader's questions as user message and continue
+                            // Mark this as grader feedback with a special prefix we can filter
+                            claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
+                            execution_state_.add_message(continue_msg);
+                        }
+                    } else {
+                        // No grader - extract and send the actual findings
+                        send_log(LogLevel::INFO, "Grader disabled - extracting final findings");
                         grader_approved = true;
                         
-                        // Send final report - this will be shown in conversation UI
+                        // Get the last assistant message which contains the actual findings
+                        std::string final_findings = extract_last_assistant_message();
+                        
+                        // Send the actual findings as the final report
                         send_json_message(AgentMessageType::FinalReport, {
-                            {"report", grade.response}
+                            {"report", final_findings}
                         });
                         change_state(AgentState::Status::Completed);
-                    } else {
-                        send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
-                        
-                        // Add grader's questions as user message and continue
-                        // Mark this as grader feedback with a special prefix we can filter
-                        claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
-                        execution_state_.add_message(continue_msg);
                     }
                 }
             }
@@ -1338,54 +1402,6 @@ private:
             send_log(LogLevel::WARNING, "Reached maximum iterations");
             change_state(AgentState::Status::Completed);
         }
-    }
-
-    // Process tool calls from assistant message
-    std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) {
-        std::vector<claude::messages::Message> results;
-
-        std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-
-        for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
-            send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
-
-            // Track tool call
-            execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
-
-            // Send tool started message
-            send_json_message(AgentMessageType::ToolStarted, {
-                {"tool_id", tool_use->id},
-                {"tool_name", tool_use->name},
-                {"input", tool_use->input}
-            });
-
-            // Execute tool
-            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
-            results.push_back(result_msg);
-
-            // Extract result content
-            json result_json;
-            for (const std::unique_ptr<claude::messages::Content>& content: result_msg.contents()) {
-                if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
-                    try {
-                        result_json = json::parse(tool_result->content);
-                    } catch (...) {
-                        result_json = {{"content", tool_result->content}};
-                    }
-                    break;
-                }
-            }
-
-            // Send tool executed message
-            send_json_message(AgentMessageType::ToolExecuted, {
-                {"tool_id", tool_use->id},
-                {"tool_name", tool_use->name},
-                {"input", tool_use->input},
-                {"result", result_json}
-            });
-        }
-
-        return results;
     }
 
 
@@ -1438,6 +1454,24 @@ private:
     }
 
 
+    // Helper to extract the last assistant message from conversation
+    std::string extract_last_assistant_message() {
+        std::vector<claude::messages::Message> messages = execution_state_.get_messages();
+        
+        // Iterate in reverse to find last assistant message
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->role() == claude::messages::Role::Assistant) {
+                // Extract text content from the message
+                auto text = claude::messages::ContentExtractor::extract_text(*it);
+                if (text && !text->empty()) {
+                    return *text;
+                }
+            }
+        }
+        
+        return "Investigation complete (no findings extracted)";
+    }
+    
     // changes and notifies ui of agent state
     void change_state(AgentState::Status new_status) {
         state_.set_status(new_status);
@@ -1495,7 +1529,7 @@ private:
             summary = token_stats_.get_iteration_summary(usage, iteration);
         }
         
-        send_log(LogLevel::INFO, "[Agent] " + summary);
+        send_log(LogLevel::INFO, summary);
     }
 };
 

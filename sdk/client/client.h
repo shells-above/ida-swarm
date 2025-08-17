@@ -872,6 +872,24 @@ public:
 
         // Parse response
         try {
+            // First check if response looks like JSON
+            if (response_body.empty() || (response_body[0] != '{' && response_body[0] != '[')) {
+                // Log non-JSON response to debug file
+                {
+                    std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+                    if (log_file.is_open()) {
+                        log_file << "=== NON-JSON RESPONSE for iteration " << current_iteration << "\n";
+                        log_file << "HTTP Code: " << http_code << "\n";
+                        log_file << "Full response:\n" << response_body << "\n";
+                        log_file << "----------------------------------------\n\n";
+                        log_file.close();
+                    }
+                }
+                
+                throw std::runtime_error("Response is not valid JSON. First char: '" + 
+                    (response_body.empty() ? "empty" : std::string(1, response_body[0])) + "'");
+            }
+            
             json response_json = json::parse(response_body);
 
             // Temporary file logging for debugging - log response too

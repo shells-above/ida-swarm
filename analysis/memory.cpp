@@ -93,10 +93,10 @@ std::vector<AnalysisEntry> BinaryMemory::get_analysis(const std::string& key, st
         results.push_back(entry);
     }
 
-    // Sort by timestamp (newest first)
+    // Sort by timestamp (oldest first)
     std::sort(results.begin(), results.end(),
               [](const AnalysisEntry& a, const AnalysisEntry& b) {
-                  return a.timestamp > b.timestamp;
+                  return a.timestamp < b.timestamp;
               });
 
     return results;

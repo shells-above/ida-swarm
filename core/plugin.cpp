@@ -124,21 +124,15 @@ llm_plugin_t::llm_plugin_t() {
     // Initialize CURL globally for the plugin
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    // Get IDB path for instance tracking
-    // Handle case where no database is loaded yet
-    const char* path = get_path(PATH_TYPE_IDB);
-    if (path && path[0] != '\0') {
-        idb_path_ = path;
-    } else {
-        idb_path_ = "no_database";
-    }
-
-    msg("LLM RE: Plugin initialized for IDB: %s\n", idb_path_.c_str());
+    // Don't get database path yet - wait for ui_ready_to_run
+    // This ensures we get the correct path
+    msg("LLM RE: Plugin loaded, waiting for IDA to be ready\n");
 
     // Load configuration
     load_config();
 
-    // Register this instance
+    // Register with temporary path - will update in ui_ready_to_run
+    idb_path_ = "no_database";
     PluginInstanceManager::register_instance(idb_path_, this);
 
     // Hook UI events to detect when IDA is closing
@@ -205,7 +199,21 @@ ssize_t idaapi llm_plugin_t::on_event(ssize_t code, va_list va) {
             break;
 
         case ui_ready_to_run:
-            // UI is ready
+            // Get database path now that IDA is ready
+            if (idb_path_.empty() || idb_path_ == "no_database") {
+                const char* path = get_path(PATH_TYPE_IDB);
+                if (path && path[0] != '\0') {
+                    idb_path_ = path;
+                    msg("LLM RE: IDA ready, database path: %s\n", idb_path_.c_str());
+                    
+                    // Update registration with correct path
+                    PluginInstanceManager::unregister_instance("no_database");
+                    PluginInstanceManager::register_instance(idb_path_, this);
+                } else {
+                    idb_path_ = "no_database";
+                    msg("LLM RE: IDA ready but no database path available\n");
+                }
+            }
             break;
 
         case ui_saving:

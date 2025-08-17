@@ -26,6 +26,9 @@ private:
     void createGraderTab();
     void createUITab();
     void createAdvancedTab();
+    void createIRCTab();
+    void createOrchestratorTab();
+    void createSwarmTab();
     
     // Tab widget
     QTabWidget* tab_widget_ = nullptr;
@@ -50,8 +53,10 @@ private:
     QCheckBox* enable_thinking_check_ = nullptr;
     QCheckBox* enable_interleaved_thinking_check_ = nullptr;
     QCheckBox* enable_deep_analysis_check_ = nullptr;
+    QCheckBox* enable_python_tool_check_ = nullptr;
     
     // Grader settings widgets
+    QCheckBox* grader_enabled_check_ = nullptr;
     QComboBox* grader_model_combo_ = nullptr;
     QSpinBox* grader_max_tokens_spin_ = nullptr;
     QSpinBox* grader_max_thinking_tokens_spin_ = nullptr;
@@ -73,7 +78,19 @@ private:
     QSpinBox* auto_save_interval_spin_ = nullptr;
     QComboBox* density_mode_combo_ = nullptr;
     
+    // IRC settings widgets
+    QLineEdit* irc_server_edit_ = nullptr;
+    QSpinBox* irc_port_spin_ = nullptr;
+    QLineEdit* irc_conflict_channel_format_edit_ = nullptr;
+    QLineEdit* irc_private_channel_format_edit_ = nullptr;
     
+    // Orchestrator settings widgets
+    QComboBox* orchestrator_model_combo_ = nullptr;
+    QSpinBox* orchestrator_max_tokens_spin_ = nullptr;
+    QSpinBox* orchestrator_max_thinking_tokens_spin_ = nullptr;
+    QDoubleSpinBox* orchestrator_temperature_spin_ = nullptr;
+    QCheckBox* orchestrator_enable_thinking_check_ = nullptr;
+
     // Buttons
     QPushButton* ok_button_ = nullptr;
     QPushButton* cancel_button_ = nullptr;

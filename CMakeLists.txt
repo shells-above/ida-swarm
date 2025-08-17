@@ -145,12 +145,14 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# Find SQLite3 for IRC server
+find_package(SQLite3 REQUIRED)
+
 # Include Keystone build configuration
 include(cmake/BuildKeystone.cmake)
 
-# Source files
-set(SOURCES
-        core/plugin.cpp
+# Common source files (shared between plugins)
+set(COMMON_SOURCES
         core/ida_utils.cpp
         core/config.cpp
         sdk/client/client.cpp
@@ -162,6 +164,35 @@ set(SOURCES
         analysis/memory.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
+        irc/irc_server.cpp
+        irc/irc_client.cpp
+        orchestrator/orchestrator_logger.cpp
+)
+
+# Orchestrator plugin sources
+set(ORCHESTRATOR_SOURCES
+        orchestrator/orchestrator_plugin.cpp
+        orchestrator/orchestrator.cpp
+        orchestrator/database_manager.cpp
+        orchestrator/agent_spawner.cpp
+        orchestrator/tool_call_tracker.cpp
+        orchestrator/merge_manager.cpp
+        ${COMMON_SOURCES}
+)
+
+# Agent plugin sources
+set(AGENT_SOURCES
+        agent/agent_plugin.cpp
+        agent/swarm_agent.cpp
+        agent/conflict_detector.cpp
+        orchestrator/tool_call_tracker.cpp  # Shared for conflict detection
+        ${COMMON_SOURCES}
+)
+
+# Original plugin sources
+set(SOURCES
+        core/plugin.cpp
+        ${COMMON_SOURCES}
         # ui_v2 core
         ui_v2/core/base_styled_widget.cpp
         ui_v2/core/theme_manager.cpp
@@ -234,6 +265,9 @@ set(HEADERS
         agent/agent.h
         agent/tool_system.h
         agent/grader.h
+        # IRC headers
+        irc/irc_server.h
+        irc/irc_client.h
         # ui_v2 core
         ui_v2/core/base_styled_widget.h
         ui_v2/core/theme_manager.h
@@ -283,13 +317,41 @@ set(HEADERS
         ui_v2/widgets/charts/sparkline_widget.h
 )
 
-# Create shared library (end in "64", won't be loaded if it doesn't)
+# Create orchestrator plugin (no UI headers needed)
+add_library(ida_orchestrator64 SHARED
+        ${ORCHESTRATOR_SOURCES}
+)
+
+# Create agent plugin (no UI headers needed)
+add_library(ida_agent64 SHARED
+        ${AGENT_SOURCES}
+)
+
+# Original plugin (for backward compatibility)
 add_library(ida_llm_agent64 SHARED
         ${SOURCES}
         ${HEADERS}
 )
 
-# Set library properties
+# Set orchestrator plugin properties
+set_target_properties(ida_orchestrator64 PROPERTIES
+        OUTPUT_NAME "ida_orchestrator64"
+        PREFIX ""
+        SUFFIX ${PLUGIN_EXT}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# Set agent plugin properties
+set_target_properties(ida_agent64 PROPERTIES
+        OUTPUT_NAME "ida_agent64"
+        PREFIX ""
+        SUFFIX ${PLUGIN_EXT}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# Set original plugin properties
 set_target_properties(ida_llm_agent64 PROPERTIES
         OUTPUT_NAME "ida_llm_agent64"
         PREFIX ""
@@ -298,14 +360,36 @@ set_target_properties(ida_llm_agent64 PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# Link libraries including custom Qt frameworks
-target_link_libraries(ida_llm_agent64
+# Common libraries
+set(COMMON_LIBS
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
         OpenSSL::Crypto
         keystone
+        SQLite::SQLite3
+)
+
+# Link libraries for orchestrator plugin
+target_link_libraries(ida_orchestrator64
+        ${COMMON_LIBS}
+        ${QT_CORE_FRAMEWORK}
+        ${QT_GUI_FRAMEWORK}
+        ${QT_WIDGETS_FRAMEWORK}
+        ${QT_NETWORK_FRAMEWORK}
+)
+
+# Link libraries for agent plugin
+target_link_libraries(ida_agent64
+        ${COMMON_LIBS}
+        ${QT_CORE_FRAMEWORK}
+        ${QT_NETWORK_FRAMEWORK}
+)
+
+# Link libraries for original plugin
+target_link_libraries(ida_llm_agent64
+        ${COMMON_LIBS}
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
@@ -317,17 +401,37 @@ target_link_libraries(ida_llm_agent64
         ${QT_OPENGL_FRAMEWORK}
 )
 
-# Post-build: Copy plugin to IDA plugins directory
+# Post-build: Copy plugins to IDA plugins directory
+add_custom_command(TARGET ida_orchestrator64 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:ida_orchestrator64>
+        "${IDA_PLUGINS_PATH}/"
+        COMMENT "Copying orchestrator plugin to IDA plugins directory"
+)
+
+add_custom_command(TARGET ida_agent64 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:ida_agent64>
+        "${IDA_PLUGINS_PATH}/"
+        COMMENT "Copying agent plugin to IDA plugins directory"
+)
+
 add_custom_command(TARGET ida_llm_agent64 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:ida_llm_agent64>
         "${IDA_PLUGINS_PATH}/"
-        COMMENT "Copying plugin to IDA plugins directory"
+        COMMENT "Copying original plugin to IDA plugins directory"
 )
 # put llm_re_config.json into IDA_PLUGINS_PATH dir
 
+# Custom target to build all plugins at once
+add_custom_target(all_plugins
+    DEPENDS ida_orchestrator64 ida_agent64 ida_llm_agent64
+    COMMENT "Building all IDA plugins"
+)
+
 # Installation
-install(TARGETS ida_llm_agent64
+install(TARGETS ida_orchestrator64 ida_agent64 ida_llm_agent64
         RUNTIME DESTINATION ${IDA_PLUGINS_PATH}
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )

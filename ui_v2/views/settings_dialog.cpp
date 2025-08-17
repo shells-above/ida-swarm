@@ -33,6 +33,9 @@ void SettingsDialog::setupUI() {
     createGraderTab();
     createUITab();
     createAdvancedTab();
+    createIRCTab();
+    createOrchestratorTab();
+    createSwarmTab();
     
     layout->addWidget(tab_widget_);
     
@@ -191,6 +194,11 @@ void SettingsDialog::createAgentTab() {
     connect(enable_deep_analysis_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
     agent_layout->addRow(enable_deep_analysis_check_);
     
+    enable_python_tool_check_ = new QCheckBox("Enable Python Execution Tool");
+    enable_python_tool_check_->setToolTip("Allow agents to execute Python code. WARNING: Only enable if you trust the agent's behavior.\nPython code runs in isolated temp files with stdlib only, no network access.");
+    connect(enable_python_tool_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
+    agent_layout->addRow(enable_python_tool_check_);
+    
     layout->addWidget(agent_group);
     layout->addStretch();
     
@@ -296,6 +304,12 @@ void SettingsDialog::createGraderTab() {
     auto* tab = new QWidget();
     auto* layout = new QFormLayout(tab);
     
+    // Enable grader checkbox
+    grader_enabled_check_ = new QCheckBox("Enable Grader");
+    grader_enabled_check_->setToolTip("Enable the grader to evaluate agent's work quality");
+    connect(grader_enabled_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
+    layout->addRow(grader_enabled_check_);
+    
     // Grader model selection
     grader_model_combo_ = new QComboBox();
     grader_model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Haiku 3.5"});
@@ -342,6 +356,109 @@ void SettingsDialog::createAdvancedTab() {
     tab_widget_->addTab(tab, "Advanced");
 }
 
+void SettingsDialog::createIRCTab() {
+    auto* tab = new QWidget();
+    auto* layout = new QVBoxLayout(tab);
+    
+    // IRC Settings section
+    auto* irc_group = new QGroupBox("IRC Configuration");
+    auto* irc_layout = new QFormLayout(irc_group);
+    
+    irc_server_edit_ = new QLineEdit();
+    irc_server_edit_->setToolTip("IRC server address");
+    connect(irc_server_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
+    irc_layout->addRow("Server:", irc_server_edit_);
+    
+    irc_port_spin_ = new QSpinBox();
+    irc_port_spin_->setRange(1024, 65535);
+    irc_port_spin_->setToolTip("IRC server port");
+    connect(irc_port_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    irc_layout->addRow("Port:", irc_port_spin_);
+    
+    // Channel Formats section
+    auto* formats_group = new QGroupBox("Channel Formats");
+    auto* formats_layout = new QFormLayout(formats_group);
+    
+    irc_conflict_channel_format_edit_ = new QLineEdit();
+    irc_conflict_channel_format_edit_->setToolTip("Format for conflict resolution channels\n"
+                                                  "Use {address} and {type} as placeholders");
+    connect(irc_conflict_channel_format_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
+    formats_layout->addRow("Conflict Channels:", irc_conflict_channel_format_edit_);
+    
+    irc_private_channel_format_edit_ = new QLineEdit();
+    irc_private_channel_format_edit_->setToolTip("Format for private conversation channels\n"
+                                                 "Use {agent1} and {agent2} as placeholders");
+    connect(irc_private_channel_format_edit_, &QLineEdit::textChanged, this, &SettingsDialog::onSettingChanged);
+    formats_layout->addRow("Private Channels:", irc_private_channel_format_edit_);
+    
+    layout->addWidget(irc_group);
+    layout->addWidget(formats_group);
+    layout->addStretch();
+    
+    tab_widget_->addTab(tab, "IRC");
+}
+
+void SettingsDialog::createOrchestratorTab() {
+    auto* tab = new QWidget();
+    auto* layout = new QVBoxLayout(tab);
+    
+    // Model Settings section
+    auto* model_group = new QGroupBox("Model Settings");
+    auto* model_layout = new QFormLayout(model_group);
+    
+    orchestrator_model_combo_ = new QComboBox();
+    orchestrator_model_combo_->addItems({"Opus 4.1", "Sonnet 4", "Haiku 3.5"});
+    orchestrator_model_combo_->setToolTip("Model for orchestrator reasoning");
+    connect(orchestrator_model_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Model:", orchestrator_model_combo_);
+    
+    orchestrator_max_tokens_spin_ = new QSpinBox();
+    orchestrator_max_tokens_spin_->setRange(1000, 200000);
+    orchestrator_max_tokens_spin_->setSingleStep(1000);
+    orchestrator_max_tokens_spin_->setToolTip("Maximum output tokens");
+    connect(orchestrator_max_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Max Tokens:", orchestrator_max_tokens_spin_);
+    
+    orchestrator_max_thinking_tokens_spin_ = new QSpinBox();
+    orchestrator_max_thinking_tokens_spin_->setRange(0, 200000);
+    orchestrator_max_thinking_tokens_spin_->setSingleStep(1000);
+    orchestrator_max_thinking_tokens_spin_->setToolTip("Maximum thinking tokens for deep reasoning");
+    connect(orchestrator_max_thinking_tokens_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Max Thinking Tokens:", orchestrator_max_thinking_tokens_spin_);
+    
+    orchestrator_temperature_spin_ = new QDoubleSpinBox();
+    orchestrator_temperature_spin_->setRange(0.0, 2.0);
+    orchestrator_temperature_spin_->setSingleStep(0.1);
+    orchestrator_temperature_spin_->setDecimals(1);
+    orchestrator_temperature_spin_->setToolTip("Temperature for response generation");
+    connect(orchestrator_temperature_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow("Temperature:", orchestrator_temperature_spin_);
+    
+    orchestrator_enable_thinking_check_ = new QCheckBox("Enable Thinking");
+    orchestrator_enable_thinking_check_->setToolTip("Enable deep thinking mode for orchestrator");
+    connect(orchestrator_enable_thinking_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
+    model_layout->addRow(orchestrator_enable_thinking_check_);
+    
+    layout->addWidget(model_group);
+    layout->addStretch();
+    
+    tab_widget_->addTab(tab, "Orchestrator");
+}
+
+void SettingsDialog::createSwarmTab() {
+    auto* tab = new QWidget();
+    auto* layout = new QVBoxLayout(tab);
+    
+    // Swarm Configuration section
+    auto* swarm_group = new QGroupBox("Swarm Configuration");
+    auto* swarm_layout = new QFormLayout(swarm_group);
+
+    layout->addWidget(swarm_group);
+    layout->addStretch();
+    
+    tab_widget_->addTab(tab, "Swarm");
+}
+
 void SettingsDialog::loadSettings() {
     const Config& config = SettingsManager::instance().config();
     
@@ -379,8 +496,10 @@ void SettingsDialog::loadSettings() {
     enable_thinking_check_->setChecked(config.agent.enable_thinking);
     enable_interleaved_thinking_check_->setChecked(config.agent.enable_interleaved_thinking);
     enable_deep_analysis_check_->setChecked(config.agent.enable_deep_analysis);
+    enable_python_tool_check_->setChecked(config.agent.enable_python_tool);
     
     // Grader settings
+    grader_enabled_check_->setChecked(config.grader.enabled);
     switch (config.grader.model) {
         case claude::Model::Opus41:
             grader_model_combo_->setCurrentIndex(0);
@@ -411,6 +530,36 @@ void SettingsDialog::loadSettings() {
     auto_save_conversations_check_->setChecked(config.ui.auto_save_conversations);
     auto_save_interval_spin_->setValue(config.ui.auto_save_interval);
     density_mode_combo_->setCurrentIndex(config.ui.density_mode);
+    
+    // IRC settings
+    irc_server_edit_->setText(QString::fromStdString(config.irc.server));
+    irc_port_spin_->setValue(config.irc.port);
+    irc_conflict_channel_format_edit_->setText(QString::fromStdString(config.irc.conflict_channel_format));
+    irc_private_channel_format_edit_->setText(QString::fromStdString(config.irc.private_channel_format));
+    
+    // Orchestrator settings
+    
+    // Map orchestrator model enum to combo index
+    switch (config.orchestrator.model.model) {
+        case claude::Model::Opus41:
+            orchestrator_model_combo_->setCurrentIndex(0);
+            break;
+        case claude::Model::Sonnet4:
+            orchestrator_model_combo_->setCurrentIndex(1);
+            break;
+        case claude::Model::Haiku35:
+            orchestrator_model_combo_->setCurrentIndex(2);
+            break;
+        default:
+            orchestrator_model_combo_->setCurrentIndex(1); // Default to Sonnet
+    }
+    
+    orchestrator_max_tokens_spin_->setValue(config.orchestrator.model.max_tokens);
+    orchestrator_max_thinking_tokens_spin_->setValue(config.orchestrator.model.max_thinking_tokens);
+    orchestrator_temperature_spin_->setValue(config.orchestrator.model.temperature);
+    orchestrator_enable_thinking_check_->setChecked(config.orchestrator.model.enable_thinking);
+    
+    // Swarm settings
 }
 
 void SettingsDialog::applySettings() {
@@ -451,8 +600,10 @@ void SettingsDialog::applySettings() {
     config.agent.enable_thinking = enable_thinking_check_->isChecked();
     config.agent.enable_interleaved_thinking = enable_interleaved_thinking_check_->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check_->isChecked();
+    config.agent.enable_python_tool = enable_python_tool_check_->isChecked();
     
     // Grader settings
+    config.grader.enabled = grader_enabled_check_->isChecked();
     switch (grader_model_combo_->currentIndex()) {
         case 0:
             config.grader.model = claude::Model::Opus41;
@@ -484,6 +635,32 @@ void SettingsDialog::applySettings() {
     config.ui.auto_save_interval = auto_save_interval_spin_->value();
     config.ui.density_mode = density_mode_combo_->currentIndex();
     
+    // IRC settings
+    config.irc.server = irc_server_edit_->text().toStdString();
+    config.irc.port = irc_port_spin_->value();
+    config.irc.conflict_channel_format = irc_conflict_channel_format_edit_->text().toStdString();
+    config.irc.private_channel_format = irc_private_channel_format_edit_->text().toStdString();
+    
+    // Orchestrator settings
+    
+    // Map combo index to orchestrator model enum
+    switch (orchestrator_model_combo_->currentIndex()) {
+        case 0:
+            config.orchestrator.model.model = claude::Model::Opus41;
+            break;
+        case 1:
+            config.orchestrator.model.model = claude::Model::Sonnet4;
+            break;
+        case 2:
+            config.orchestrator.model.model = claude::Model::Haiku35;
+            break;
+    }
+    
+    config.orchestrator.model.max_tokens = orchestrator_max_tokens_spin_->value();
+    config.orchestrator.model.max_thinking_tokens = orchestrator_max_thinking_tokens_spin_->value();
+    config.orchestrator.model.temperature = orchestrator_temperature_spin_->value();
+    config.orchestrator.model.enable_thinking = orchestrator_enable_thinking_check_->isChecked();
+
     // Apply and save
     SettingsManager::instance().applyUISettings();
     SettingsManager::instance().saveSettings();

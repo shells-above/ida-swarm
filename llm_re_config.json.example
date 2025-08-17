@@ -17,6 +17,7 @@
     "enable_deep_analysis": false
   },
   "grader": {
+    "enabled": true,
     "model": "claude-opus-4-1-20250805",
     "max_tokens": 32000,
     "max_thinking_tokens": 31999
