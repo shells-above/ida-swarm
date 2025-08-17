@@ -224,6 +224,11 @@ void OAuthManager::clear_cache() {
 
 bool OAuthManager::save_credentials(const OAuthCredentials& creds) {
     try {
+        // Ensure config directory exists
+        if (!std::filesystem::exists(config_dir)) {
+            std::filesystem::create_directories(config_dir);
+        }
+        
         // Create the credentials JSON structure
         json oauth_tokens;
         oauth_tokens["claude_ai"] = {
