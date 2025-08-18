@@ -1349,14 +1349,24 @@ private:
             }
         }
 
-        // Read output
+        // Read output with size limit
         std::string output;
         char buffer[4096];
         ssize_t bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
 
         while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
             buffer[bytes_read] = '\0';
             output += buffer;
+            
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (read(pipefd[0], buffer, sizeof(buffer) - 1) > 0) {
+                    // Just discard it
+                }
+                break;
+            }
         }
         close(pipefd[0]);
 
@@ -1366,6 +1376,11 @@ private:
 
         if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
             output = "Python execution failed with exit code " + std::to_string(WEXITSTATUS(status)) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
         }
 
         return output.empty() ? "(no output)" : output;
@@ -1407,14 +1422,24 @@ private:
 
         CloseHandle(hWritePipe);
 
-        // Read output
+        // Read output with size limit
         std::string output;
         char buffer[4096];
         DWORD bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
 
         while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
             buffer[bytes_read] = '\0';
             output += buffer;
+            
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
+                    // Just discard it
+                }
+                break;
+            }
         }
 
         CloseHandle(hReadPipe);
@@ -1430,6 +1455,11 @@ private:
 
         if (exit_code != 0) {
             output = "Python execution failed with exit code " + std::to_string(exit_code) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
         }
 
         return output.empty() ? "(no output)" : output;
