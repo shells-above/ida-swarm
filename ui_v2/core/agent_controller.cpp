@@ -4,6 +4,7 @@
 #include "json_utils.h"
 #include <set>
 #include <fstream>
+#include <QCoreApplication>
 #include "../views/conversation_view.h"
 #include "../views/memory_dock.h"
 #include "../views/tool_execution_dock.h"
@@ -106,6 +107,9 @@ void AgentController::executeTask(const std::string& task) {
     
     // Generate a task ID for tracking
     currentTaskId_ = QUuid::createUuid().toString();
+    
+    // Force Qt to process pending events (fixes Linux delay issue)
+    QCoreApplication::processEvents();
 }
 
 void AgentController::stopExecution() const {
@@ -134,6 +138,9 @@ void AgentController::continueWithTask(const std::string& additional) {
     // Continue task
     agent_->continue_with_task(additional);
     currentTaskId_ = QUuid::createUuid().toString();
+    
+    // Force Qt to process pending events (fixes Linux delay issue)
+    QCoreApplication::processEvents();
 }
 
 void AgentController::injectUserMessage(const std::string& message) {
@@ -326,6 +333,12 @@ void AgentController::handleAgentMessage(AgentMessageType type, const Agent::Cal
                     }
                     
                     logToConsole(logLevel, "Agent", logText);
+                    
+                    // Process events periodically for log messages on Linux
+                    // This ensures timely display of iteration logs
+                    if (logText.contains("Iteration ")) {
+                        QCoreApplication::processEvents();
+                    }
                 }
             }
             break;

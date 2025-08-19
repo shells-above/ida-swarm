@@ -867,13 +867,20 @@ private:
     void worker_loop() {
         send_log(LogLevel::INFO, "Agent worker thread started");
         while (!stop_requested_) {
+            // Wait for semaphore signal or timeout
+            qsem_wait(task_semaphore_, 100);
+            
+            // Check for stop request
+            if (stop_requested_) {
+                break;
+            }
+            
             AgentTask task;
             // Get next task
             {
                 qmutex_locker_t lock(queue_mutex_);
                 if (task_queue_.empty()) {
-                    // Wait for task with timeout
-                    qsem_wait(task_semaphore_, 100);
+                    // Spurious wakeup or timeout, continue waiting
                     continue;
                 }
 
