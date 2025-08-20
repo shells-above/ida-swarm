@@ -1233,7 +1233,7 @@ public:
         return "Execute Python code whatever task you deem necessary. Use this to perform computation you couldn't have done yourself. "
                "IMPORTANT: Use ONLY Python standard library - no external packages. "
                "EXTREMELY IMPORTANT: **this tool IS EXPENSIVE!!** ONLY USE THIS TOOL WHEN IT WILL GREATLY ENHANCE YOUR ABILITIES. Do NOT WASTE IT. "  // it's not expensive, but the LLM like to run python and have it print out its reasoning, which i don't want it doing
-               "BE VERY CAREFUL WITH WHAT YOU DO HERE! If you aren't careful, it will flood your context window with useless information! Make sure you know EXACTLY what you are doing! ";
+               "BE VERY CAREFUL WITH WHAT YOU DO HERE! If you aren't careful, it will flood your context window with useless information! Make sure you know EXACTLY what you are doing! "
                "NEVER perform network operations (not needed for RE tasks).";
     }
 
