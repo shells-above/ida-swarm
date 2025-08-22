@@ -67,7 +67,7 @@ public:
         bool enable_python_tool = false;  // Disabled by default for security
         
         // Context management
-        size_t context_limit = 150000;  // Token limit before consolidation
+        int context_limit = 150000;  // Token limit before consolidation
     } agent;
 
     struct GraderSettings {

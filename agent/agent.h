@@ -270,8 +270,6 @@ private:
     claude::usage::TokenStats token_stats_;
     std::vector<claude::usage::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
 
-    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
-
     // context management
     struct ContextManagementState {
         bool consolidation_in_progress = false;
@@ -1042,7 +1040,7 @@ private:
 
         claude::TokenUsage usage = token_stats_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
-        return total_tokens > CONTEXT_LIMIT_TOKENS;
+        return total_tokens > config_.agent.context_limit;
     }
 
     // Trigger context consolidation
