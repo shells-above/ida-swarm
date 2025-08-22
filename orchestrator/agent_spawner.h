@@ -28,9 +28,6 @@ public:
     // Terminate all agents
     void terminate_all_agents();
     
-    // Get agent output/logs
-    std::string get_agent_output(int pid) const;
-    
 private:
     const Config& config_;
     std::string binary_name_;
