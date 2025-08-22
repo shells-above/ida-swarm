@@ -15,7 +15,8 @@
     "context_limit": 150000,
     "enable_thinking": true,
     "enable_interleaved_thinking": true,
-    "enable_deep_analysis": false
+    "enable_deep_analysis": false,
+    "enable_python_tool": true
   },
   "grader": {
     "enabled": true,
