@@ -3,6 +3,7 @@
 
 #include "core/config.h"
 #include "sdk/claude_sdk.h"
+#include "sdk/auth/oauth_manager.h"
 #include "analysis/memory.h"
 
 namespace llm_re {
@@ -39,9 +40,9 @@ public:
 
 private:
     mutable std::unique_ptr<claude::Client> api_client_;  // Mutable to allow token refresh in const methods
-    mutable std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;  // For OAuth token refresh
     const Config& config_;
     mutable qmutex_t mutex_;
+    mutable std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;  // OAuth manager for this grader instance
     
     
     // Grader system prompt

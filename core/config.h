@@ -2,6 +2,8 @@
 
 #include "common_base.h"
 #include "sdk/client/client.h"
+#include "sdk/auth/oauth_manager.h"
+#include <memory>
 
 namespace llm_re {
 
@@ -11,6 +13,12 @@ struct Config {
     static Config& instance() {
         static Config instance;
         return instance;
+    }
+    
+    // Create a new OAuth manager instance for a component
+    // Each component creates its own instance that reads from the same credential files
+    static std::shared_ptr<claude::auth::OAuthManager> create_oauth_manager(const std::string& config_dir) {
+        return std::make_shared<claude::auth::OAuthManager>(config_dir);
     }
     
     // Save configuration

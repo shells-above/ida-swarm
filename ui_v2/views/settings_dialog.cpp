@@ -771,16 +771,19 @@ bool SettingsDialog::validateOAuth() {
             configDir = "~/.claude_cpp_sdk";
         }
         
-        claude::auth::OAuthManager oauth_mgr(configDir.toStdString());
-        std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr.get_credentials();
+        // Create OAuth manager if we don't have one
+        if (!oauth_manager_) {
+            oauth_manager_ = Config::create_oauth_manager(configDir.toStdString());
+        }
+        std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_ ? oauth_manager_->get_credentials() : nullptr;
         
         if (!oauth_creds) {
             msg("LLM RE: Failed to load OAuth credentials for validation\n");
             return false;
         }
         
-        // Create client with OAuth credentials
-        claude::Client client(*oauth_creds, base_url_edit_->text().toStdString());
+        // Create client with OAuth credentials - pass shared_ptr
+        claude::Client client(oauth_creds, base_url_edit_->text().toStdString());
         
         claude::ChatRequest request;
         request.model = claude::Model::Haiku35;
@@ -816,14 +819,17 @@ void SettingsDialog::checkOAuthStatus() {
         configDir = "~/.claude_cpp_sdk";
     }
     
-    claude::auth::OAuthManager oauth_mgr(configDir.toStdString());
+    // Create OAuth manager if we don't have one
+    if (!oauth_manager_) {
+        oauth_manager_ = Config::create_oauth_manager(configDir.toStdString());
+    }
     
-    if (!oauth_mgr.has_credentials()) {
+    if (!oauth_manager_ || !oauth_manager_->has_credentials()) {
         oauth_status_label_->setText("<font color='red'>✗ No credentials found</font>");
         return;
     }
     
-    auto creds = oauth_mgr.get_credentials();
+    auto creds = oauth_manager_->get_credentials();
     if (!creds) {
         oauth_status_label_->setText("<font color='red'>✗ Failed to read credentials</font>");
         return;
@@ -891,15 +897,35 @@ void SettingsDialog::onRefreshToken() {
     refresh_token_button_->setText("Refreshing...");
     oauth_status_label_->setText("<font color='blue'>⟳ Refreshing token...</font>");
     
-    // Get OAuth config dir
+    // Get OAuth config dir (use default if empty)
     std::string oauth_config_dir = oauth_config_dir_edit_->text().toStdString();
+    if (oauth_config_dir.empty()) {
+        oauth_config_dir = "~/.claude_cpp_sdk";
+    }
+    
+    // Create OAuth manager if we don't have one
+    if (!oauth_manager_) {
+        oauth_manager_ = Config::create_oauth_manager(oauth_config_dir);
+    }
+    
+    if (!oauth_manager_) {
+        QMessageBox::warning(this, "OAuth Error", 
+                           "Failed to initialize OAuth manager. Please check your configuration.");
+        refresh_token_button_->setEnabled(use_oauth_check_->isChecked());
+        refresh_token_button_->setText("Refresh Token");
+        return;
+    }
     
     // Run refresh in background thread
-    QThread* thread = QThread::create([this, oauth_config_dir]() {
-        claude::auth::OAuthManager oauth_mgr(oauth_config_dir);
-        auto refreshed_creds = oauth_mgr.force_refresh();
-        bool success = refreshed_creds.has_value();
-        std::string error = oauth_mgr.get_last_error();
+    QThread* thread = QThread::create([this, oauth_manager = oauth_manager_]() {
+        bool success = false;
+        std::string error = "OAuth manager not available";
+        
+        if (oauth_manager) {
+            auto refreshed_creds = oauth_manager->force_refresh();
+            success = (refreshed_creds != nullptr);
+            error = oauth_manager->get_last_error();
+        }
         
         // Update UI in main thread
         QMetaObject::invokeMethod(this, [this, success, error]() {

@@ -2,6 +2,7 @@
 
 #include "../core/ui_v2_common.h"
 #include "../core/base_styled_widget.h"
+#include "../../sdk/auth/oauth_manager.h"
 
 namespace llm_re::ui_v2 {
 
@@ -99,6 +100,9 @@ private:
     
     // Track changes
     bool has_changes_ = false;
+    
+    // OAuth manager for this dialog instance
+    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
     
 private:
     bool validateApiKey(const std::string& apiKey);

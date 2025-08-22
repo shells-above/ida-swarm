@@ -18,10 +18,10 @@ public:
     bool has_credentials() const;
     
     // Get OAuth credentials (reads and decrypts from storage)
-    std::optional<OAuthCredentials> get_credentials();
+    std::shared_ptr<OAuthCredentials> get_credentials();
     
     // Get cached credentials without re-reading
-    std::optional<OAuthCredentials> get_cached_credentials() const;
+    std::shared_ptr<OAuthCredentials> get_cached_credentials() const;
     
     // Clear cached credentials
     void clear_cache();
@@ -30,11 +30,11 @@ public:
     bool save_credentials(const OAuthCredentials& creds);
     
     // Refresh OAuth tokens if expired or about to expire
-    // Returns updated credentials on success, nullopt on failure
-    std::optional<OAuthCredentials> refresh_if_needed();
+    // Returns updated credentials on success, nullptr on failure
+    std::shared_ptr<OAuthCredentials> refresh_if_needed();
     
     // Force refresh OAuth tokens
-    std::optional<OAuthCredentials> force_refresh();
+    std::shared_ptr<OAuthCredentials> force_refresh();
     
     // Check if current credentials need refresh
     bool needs_refresh();
@@ -47,8 +47,8 @@ private:
     std::filesystem::path credentials_file;
     std::filesystem::path key_file;
     
-    // Cached credentials
-    std::optional<OAuthCredentials> cached_credentials;
+    // Cached credentials (shared between all clients)
+    std::shared_ptr<OAuthCredentials> cached_credentials;
     std::chrono::steady_clock::time_point cache_time;
     static constexpr int CACHE_DURATION_SECONDS = 60;
     

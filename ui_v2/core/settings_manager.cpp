@@ -8,7 +8,7 @@ SettingsManager& SettingsManager::instance() {
     return instance;
 }
 
-SettingsManager::SettingsManager() : QObject(nullptr) {
+SettingsManager::SettingsManager() : QObject(nullptr), config_(Config::instance()) {
     // Default settings path
     settings_path_ = QString::fromStdString(get_user_idadir()) + "/llm_re_config.json";
     

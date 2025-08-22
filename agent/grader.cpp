@@ -6,16 +6,19 @@
 namespace llm_re {
 
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
-    // Create API client based on auth method
+    // Create our own OAuth manager if using OAuth authentication
     if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-        // Create and store OAuth manager for token refresh
-        oauth_manager_ = std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir);
-        std::optional<claude::OAuthCredentials> oauth_creds = oauth_manager_->get_credentials();
+        oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
+    }
+    
+    // Create API client based on auth method
+    if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
+        std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->get_credentials();
 
         if (oauth_creds) {
-            // Initialize API client with OAuth
+            // Initialize API client with OAuth - pass shared_ptr so it shares credentials
             api_client_ = std::make_unique<claude::Client>(
-                *oauth_creds,
+                oauth_creds,
                 config.api.base_url
             );
         } else {
@@ -24,7 +27,6 @@ AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
                 config.api.api_key,
                 config.api.base_url
             );
-            oauth_manager_.reset();  // Don't need OAuth manager if using API key
         }
     } else {
         // Use API key authentication
@@ -264,8 +266,9 @@ bool AnalysisGrader::refresh_oauth_credentials() const {
         return false;
     }
     
-    // Update the API client with new credentials
-    api_client_->set_oauth_credentials(*refreshed_creds);
+    // Update the API client with the shared credentials pointer
+    // Note: The credentials are already updated in-place by force_refresh
+    api_client_->set_oauth_credentials(refreshed_creds);
     msg("Grader successfully refreshed OAuth token\n");
     return true;
 }

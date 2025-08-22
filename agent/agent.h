@@ -412,25 +412,31 @@ Tips:
 What's your next step to complete the reversal?)";
 
     // Helper function to create AnthropicClient based on config
-    static claude::Client create_api_client(const Config& config, claude::auth::OAuthManager* oauth_mgr = nullptr) {
-        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_mgr) {
+    claude::Client create_api_client(const Config& config) {
+        // Create our own OAuth manager if using OAuth authentication
+        if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+            oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
+        }
+        
+        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
             // Try to refresh if needed (checks expiry and refreshes automatically)
-            std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr->refresh_if_needed();
+            std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->refresh_if_needed();
             
             if (!oauth_creds) {
                 // Fallback to getting credentials without refresh
-                oauth_creds = oauth_mgr->get_credentials();
+                oauth_creds = oauth_manager_->get_credentials();
             }
             
             if (!oauth_creds) {
                 msg("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n", 
-                    oauth_mgr->get_last_error().c_str());
+                    oauth_manager_->get_last_error().c_str());
                 msg("LLM RE: WARNING - Falling back to API key authentication\n");
                 msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
                 return claude::Client(config.api.api_key, config.api.base_url);
             }
             
-            return claude::Client(*oauth_creds, config.api.base_url);
+            // Pass the shared_ptr so all clients share the same credentials
+            return claude::Client(oauth_creds, config.api.base_url);
         }
         
         // Default to API key
@@ -449,8 +455,10 @@ What's your next step to complete the reversal?)";
             return false;
         }
         
-        // Update the API client with new credentials
-        api_client_.set_oauth_credentials(*refreshed_creds);
+        // Update the API client with the shared credentials pointer
+        // Note: The credentials are already updated in-place by force_refresh, 
+        // but we set it again to be explicit
+        api_client_.set_oauth_credentials(refreshed_creds);
         send_log(LogLevel::INFO, "Successfully refreshed OAuth token");
         return true;
     }
@@ -461,8 +469,7 @@ public:
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
-          oauth_manager_(config.api.auth_method == claude::AuthMethod::OAUTH ? std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir) : nullptr),
-          api_client_(create_api_client(config, oauth_manager_.get())),
+          api_client_(create_api_client(config)),
           grader_(config.grader.enabled ? std::make_unique<AnalysisGrader>(config) : nullptr) {
 
         // Clear the API request log file on startup
@@ -760,10 +767,10 @@ protected:  // Changed to protected so SwarmAgent can access
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
-    std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth credential manager for token refresh
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
     claude::Client api_client_;                                      // agent api client
+    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
     
     // Send log message (accessible to SwarmAgent)
     void send_log(LogLevel level, const std::string& msg) {

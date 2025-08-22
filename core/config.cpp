@@ -170,6 +170,8 @@ bool Config::load_from_file(const std::string& path) {
         if (j.contains("swarm")) {
         }
 
+        // OAuth manager is now created on-demand by each component
+
         return true;
     } catch (const std::exception& e) {
         msg("LLM RE: Error loading config: %s\n", e.what());

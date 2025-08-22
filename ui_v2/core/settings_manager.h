@@ -19,8 +19,8 @@ public:
     SettingsManager& operator=(const SettingsManager&) = delete;
     
     // Configuration access
-    const Config& config() const { return Config::instance(); }
-    Config& config() { return Config::instance(); }
+    const Config& config() const { return config_; }
+    Config& config() { return config_; }
     
     // Load/save settings
     bool loadSettings();
@@ -101,7 +101,7 @@ private:
     ~SettingsManager() = default;
     
     QString settings_path_;
-    Config config_ = Config::instance();
+    Config& config_ = Config::instance();
     
     // Auto-save timer
     QTimer* auto_save_timer_ = nullptr;

@@ -3,6 +3,7 @@
 #include "../core/common.h"
 #include "../core/config.h"
 #include "../sdk/claude_sdk.h"
+#include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"
 #include "database_manager.h"
 #include "agent_spawner.h"
@@ -60,6 +61,7 @@ private:
     
     // Claude API for orchestrator
     std::unique_ptr<claude::Client> api_client_;
+    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
     claude::tools::ToolRegistry tool_registry_;
     
     // Agent management

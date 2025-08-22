@@ -31,12 +31,16 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     tool_tracker_ = std::make_unique<ToolCallTracker>(binary_name_);
     merge_manager_ = std::make_unique<MergeManager>(tool_tracker_.get());
     
-    // Setup API client
+    // Create our own OAuth manager if using OAuth authentication
     if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-        auto oauth_mgr = std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir);
-        auto creds = oauth_mgr->get_credentials();
+        oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
+    }
+    
+    // Setup API client
+    if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
+        auto creds = oauth_manager_->get_credentials();
         if (creds) {
-            api_client_ = std::make_unique<claude::Client>(*creds, config.api.base_url);
+            api_client_ = std::make_unique<claude::Client>(creds, config.api.base_url);
         }
     }
     
