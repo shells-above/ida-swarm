@@ -138,6 +138,10 @@ void Orchestrator::process_user_input(const std::string& input) {
     completed_agents_.clear();
     agent_results_.clear();
     
+    // Initialize conversation history for new task
+    conversation_history_.clear();
+    conversation_history_.push_back(claude::messages::Message::user_text(input));
+    
     ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
     ORCH_LOG("Orchestrator: Thinking deeply about approach...\n");
     
@@ -156,21 +160,28 @@ void Orchestrator::process_user_input(const std::string& input) {
         ORCH_LOG("Orchestrator: %s\n", text->c_str());
     }
     
+    // Add response to conversation history
+    conversation_history_.push_back(response.message);
+    
     // Process any tool calls (spawn_agent, etc.)
     std::vector<claude::messages::Message> tool_results = process_orchestrator_tools(response.message);
     
+    // Add tool results to conversation history
+    for (const auto& result : tool_results) {
+        conversation_history_.push_back(result);
+    }
+    
     // Continue conversation if needed
     if (!tool_results.empty()) {
-        // Build conversation history
-        std::vector<claude::messages::Message> conversation;
-        conversation.push_back(claude::messages::Message::user_text(input));
-        conversation.push_back(response.message);
-        for (const auto& result : tool_results) {
-            conversation.push_back(result);
-        }
         
         // Continue processing until no more tool calls
         while (true) {
+            // Check if we need to consolidate context
+            if (should_consolidate_context()) {
+                ORCH_LOG("Orchestrator: Context limit reached, consolidating conversation...\n");
+                consolidate_conversation_context();
+            }
+            
             // Send tool results back
             claude::ChatRequestBuilder builder;
             builder.with_model(config_.orchestrator.model.model)
@@ -185,8 +196,8 @@ void Orchestrator::process_user_input(const std::string& input) {
                 builder.with_tools(tool_registry_);
             }
             
-            // Add all conversation history
-            for (const auto& msg : conversation) {
+            // Add conversation history
+            for (const auto& msg : conversation_history_) {
                 builder.add_message(msg);
             }
             
@@ -212,9 +223,9 @@ void Orchestrator::process_user_input(const std::string& input) {
             }
             
             // Add continuation and its tool results to conversation history
-            conversation.push_back(continuation.message);
+            conversation_history_.push_back(continuation.message);
             for (const auto& result : cont_tool_results) {
-                conversation.push_back(result);
+                conversation_history_.push_back(result);
             }
             
             ORCH_LOG("Orchestrator: Processed %zu more tool calls, continuing conversation...\n", 
@@ -684,6 +695,90 @@ void Orchestrator::shutdown() {
     db_manager_.reset();
     
     ORCH_LOG("Orchestrator: Shutdown complete\n");
+}
+
+bool Orchestrator::should_consolidate_context() const {
+    if (consolidation_state_.consolidation_in_progress) {
+        return false;  // Already consolidating
+    }
+    
+    // Estimate total tokens in conversation history
+    size_t total_tokens = 0;
+    for (const auto& msg : conversation_history_) {
+        std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
+        if (text) {
+            total_tokens += text->length() / 4;  // Simple token estimation
+        }
+        
+        // Add tokens for tool calls and results
+        auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+        for (const auto* tool : tool_calls) {
+            total_tokens += tool->name.length() / 4;
+            total_tokens += tool->input.dump().length() / 4;
+        }
+    }
+    
+    return total_tokens > config_.agent.context_limit;
+}
+
+void Orchestrator::consolidate_conversation_context() {
+    ORCH_LOG("Orchestrator: Starting context consolidation...\n");
+    
+    consolidation_state_.consolidation_in_progress = true;
+    consolidation_state_.consolidation_count++;
+    consolidation_state_.last_consolidation = std::chrono::steady_clock::now();
+    
+    // Create consolidation summary
+    std::string summary = create_orchestrator_consolidation_summary(conversation_history_);
+    
+    // Replace conversation history with just the summary
+    conversation_history_.clear();
+    conversation_history_.push_back(claude::messages::Message::user_text(current_user_task_));
+    conversation_history_.push_back(claude::messages::Message::assistant_text(summary));
+    
+    consolidation_state_.consolidation_in_progress = false;
+    
+    ORCH_LOG("Orchestrator: Context consolidation complete (consolidation #%d)\n", 
+        consolidation_state_.consolidation_count);
+}
+
+std::string Orchestrator::create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const {
+    // Send conversation to Claude for summarization
+    claude::ChatRequestBuilder builder;
+    builder.with_model(claude::Model::Sonnet4)  // Use Sonnet for consolidation
+           .with_system_prompt("You are helping consolidate an orchestrator's conversation history.")
+           .with_max_tokens(8000)
+           .with_temperature(0.1)  // Low temperature for consistent summaries
+           .enable_thinking(false);
+    
+    // Add consolidation prompt
+    builder.add_message(claude::messages::Message::user_text(ORCHESTRATOR_CONSOLIDATION_PROMPT));
+    
+    // Add conversation history (excluding the current consolidation request)
+    for (size_t i = 0; i < conversation.size(); ++i) {
+        builder.add_message(conversation[i]);
+    }
+    
+    auto response = api_client_->send_request(builder.build());
+    
+    if (response.success) {
+        std::optional<std::string> summary_text = claude::messages::ContentExtractor::extract_text(response.message);
+        if (summary_text) {
+            return "=== ORCHESTRATOR CONTEXT CONSOLIDATION ===\n\n" + *summary_text;
+        }
+    }
+    
+    // Fallback summary if Claude request fails
+    return std::format(
+        "=== ORCHESTRATOR CONTEXT CONSOLIDATION ===\n\n"
+        "User Task: {}\n"
+        "Agents Spawned: {}\n"
+        "Consolidation Count: {}\n"
+        "Note: Full consolidation failed, using fallback summary.",
+        current_user_task_,
+        agents_.size(),
+        consolidation_state_.consolidation_count
+    );
 }
 
 } // namespace llm_re::orchestrator

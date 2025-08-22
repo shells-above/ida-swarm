@@ -182,6 +182,14 @@ void SettingsDialog::createAgentTab() {
             this, &SettingsDialog::onSettingChanged);
     agent_layout->addRow("Max Iterations:", max_iterations_spin_);
     
+    context_limit_edit_ = new QLineEdit();
+    context_limit_edit_->setPlaceholderText("150000");
+    context_limit_edit_->setToolTip("Token limit before conversation consolidation is triggered (5000-200000)");
+    context_limit_edit_->setValidator(new QIntValidator(5000, 200000, this));
+    connect(context_limit_edit_, &QLineEdit::textChanged,
+            this, &SettingsDialog::onSettingChanged);
+    agent_layout->addRow("Context Limit (tokens):", context_limit_edit_);
+    
     enable_thinking_check_ = new QCheckBox("Enable Thinking Mode");
     connect(enable_thinking_check_, &QCheckBox::toggled, this, &SettingsDialog::onSettingChanged);
     agent_layout->addRow(enable_thinking_check_);
@@ -493,6 +501,7 @@ void SettingsDialog::loadSettings() {
     
     // Agent settings
     max_iterations_spin_->setValue(config.agent.max_iterations);
+    context_limit_edit_->setText(QString::number(config.agent.context_limit));
     enable_thinking_check_->setChecked(config.agent.enable_thinking);
     enable_interleaved_thinking_check_->setChecked(config.agent.enable_interleaved_thinking);
     enable_deep_analysis_check_->setChecked(config.agent.enable_deep_analysis);
@@ -597,6 +606,7 @@ void SettingsDialog::applySettings() {
     
     // Agent settings
     config.agent.max_iterations = max_iterations_spin_->value();
+    config.agent.context_limit = context_limit_edit_->text().toInt();
     config.agent.enable_thinking = enable_thinking_check_->isChecked();
     config.agent.enable_interleaved_thinking = enable_interleaved_thinking_check_->isChecked();
     config.agent.enable_deep_analysis = enable_deep_analysis_check_->isChecked();

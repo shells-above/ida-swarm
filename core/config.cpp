@@ -25,6 +25,7 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
         j["agent"]["enable_python_tool"] = agent.enable_python_tool;
+        j["agent"]["context_limit"] = agent.context_limit;
 
         // Grader settings
         j["grader"]["enabled"] = grader.enabled;
@@ -113,6 +114,7 @@ bool Config::load_from_file(const std::string& path) {
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
             agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
             agent.enable_python_tool = j["agent"].value("enable_python_tool", agent.enable_python_tool);
+            agent.context_limit = j["agent"].value("context_limit", agent.context_limit);
         }
 
         // Grader settings

@@ -51,6 +51,7 @@ private:
     
     // Agent settings widgets
     QSpinBox* max_iterations_spin_ = nullptr;
+    QLineEdit* context_limit_edit_ = nullptr;
     QCheckBox* enable_thinking_check_ = nullptr;
     QCheckBox* enable_interleaved_thinking_check_ = nullptr;
     QCheckBox* enable_deep_analysis_check_ = nullptr;

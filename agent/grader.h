@@ -161,8 +161,7 @@ Think deeply. Derive your standards. Don't apply predetermined rules.)";
     bool classify_completion(const std::string& grader_response) const;
     bool refresh_oauth_credentials() const;  // Refresh OAuth tokens when expired
     
-    // Token estimation and pruning
-    static size_t estimate_tokens(const std::string& text);
+    // Token estimation and pruning (using shared TokenUtils)
     struct MessagePriority {
         const claude::messages::Message* message;
         int priority;  // 0=low, 1=medium, 2=high

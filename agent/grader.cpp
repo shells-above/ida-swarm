@@ -101,10 +101,7 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     return result;
 }
 
-size_t AnalysisGrader::estimate_tokens(const std::string& text) {
-    // Rough estimation: ~4 characters per token on average
-    return text.length() / 4;
-}
+// Note: Now using shared TokenUtils::estimate_tokens() instead
 
 std::vector<AnalysisGrader::MessagePriority> AnalysisGrader::prioritize_messages(
     const std::vector<claude::messages::Message>& messages) const {
@@ -136,26 +133,24 @@ std::vector<AnalysisGrader::MessagePriority> AnalysisGrader::prioritize_messages
             mp.priority = 0;  // Low priority
         }
         
-        // Estimate tokens for this message
+        // Estimate tokens for this message - simple approach
         size_t token_count = 0;
+        std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
+        if (text) {
+            token_count += text->length() / 4;
+        }
         
-        // Count thinking blocks
+        // Add tokens for thinking blocks
         auto thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
         for (const auto* block : thinking_blocks) {
-            token_count += estimate_tokens(block->thinking);
+            token_count += block->thinking.length() / 4;
         }
         
-        // Count tool calls
+        // Add tokens for tool calls
         auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
         for (const auto* tool : tool_calls) {
-            token_count += estimate_tokens(tool->name);
-            token_count += estimate_tokens(tool->input.dump());
-        }
-        
-        // Count text
-        auto text = claude::messages::ContentExtractor::extract_text(msg);
-        if (text) {
-            token_count += estimate_tokens(*text);
+            token_count += tool->name.length() / 4;
+            token_count += tool->input.dump().length() / 4;
         }
         
         mp.estimated_tokens = token_count;
@@ -173,7 +168,7 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
     // Always include user request (high priority)
     prompt << "USER REQUEST:\n";
     prompt << context.user_request << "\n\n";
-    total_tokens += estimate_tokens(context.user_request);
+    total_tokens += context.user_request.length() / 4;
     
     prompt << "AGENT'S INVESTIGATION:\n\n";
     
@@ -183,7 +178,7 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
         for (const AnalysisEntry& entry : context.stored_analyses) {
             std::string analysis_text = "[" + entry.type + ": " + entry.key + "]\n" + entry.content + "\n\n";
             prompt << analysis_text;
-            total_tokens += estimate_tokens(analysis_text);
+            total_tokens += analysis_text.length() / 4;
         }
     }
     

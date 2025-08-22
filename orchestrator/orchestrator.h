@@ -14,6 +14,7 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <chrono>
 
 namespace llm_re::orchestrator {
 
@@ -77,6 +78,14 @@ private:
     
     // Token tracking
     claude::usage::TokenStats token_stats_;
+    
+    // Context management for orchestrator
+    std::vector<claude::messages::Message> conversation_history_;
+    struct ConsolidationState {
+        bool consolidation_in_progress = false;
+        int consolidation_count = 0;
+        std::chrono::steady_clock::time_point last_consolidation;
+    } consolidation_state_;
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
@@ -95,6 +104,11 @@ private:
     
     // Handle IRC messages (for agent results)
     void handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message);
+    
+    // Context consolidation for orchestrator
+    bool should_consolidate_context() const;
+    void consolidate_conversation_context();
+    std::string create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const;
 
     // System prompts
     static constexpr const char* ORCHESTRATOR_SYSTEM_PROMPT = R"(You are the Orchestrator for a multi-agent reverse engineering system. You are the ONLY entity that communicates with the user.
@@ -140,6 +154,23 @@ IMPORTANT: You cannot directly interact with the binary. All binary analysis mus
 
 Think deeply. Plan carefully. Orchestrate intelligently.)";
     
+    // Orchestrator consolidation prompts
+    static constexpr const char* ORCHESTRATOR_CONSOLIDATION_PROMPT = R"(CONTEXT CONSOLIDATION REQUIRED:
+
+Our orchestration conversation has grown too long and we need to consolidate it to continue effectively.
+
+Please provide a comprehensive summary of our coordination session that includes:
+
+1. **Original User Task**: What the user asked us to investigate
+2. **Agents Spawned**: List all agents created and their specific tasks
+3. **Key Agent Findings**: Important discoveries from agent reports
+4. **Coordination Decisions**: Major orchestration choices made
+5. **Current Progress**: What has been completed vs what remains
+6. **Active Context**: Any ongoing agent work or pending results
+
+Make this summary comprehensive but concise - it will replace our entire conversation history.
+Focus on preserving the essential context needed to continue coordinating agents effectively.)";
+
     static constexpr const char* DEEP_THINKING_PROMPT = R"(You need to think EXTREMELY deeply about this task. Consider:
 
 1. What is the user really asking for?
