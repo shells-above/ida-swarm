@@ -5,6 +5,7 @@
 #include "../sdk/claude_sdk.h"
 #include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"
+#include "../agent/event_bus.h"
 #include "database_manager.h"
 #include "agent_spawner.h"
 #include "tool_call_tracker.h"
@@ -86,6 +87,9 @@ private:
         int consolidation_count = 0;
         std::chrono::steady_clock::time_point last_consolidation;
     } consolidation_state_;
+    
+    // Event bus for UI communication
+    EventBus& event_bus_ = get_event_bus();
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);

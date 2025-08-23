@@ -2,6 +2,7 @@
 
 #include "agent.h"
 #include "conflict_detector.h"
+#include "message_adapter.h"
 #include "../irc/irc_client.h"
 #include "../orchestrator/tool_call_tracker.h"
 #include <memory>
@@ -103,8 +104,9 @@ private:
     void request_peer_list();
     void handle_peer_departure(const std::string& agent_id);
     
-    // Message callback handler to intercept and display Agent logs
-    void handle_agent_message(AgentMessageType type, const CallbackData& data);
+    // Message adapters
+    std::unique_ptr<ConsoleAdapter> console_adapter_;
+    std::unique_ptr<IRCAdapter> irc_adapter_;
 };
 
 } // namespace llm_re::agent

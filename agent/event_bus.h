@@ -1,0 +1,164 @@
+#pragma once
+
+#include <functional>
+#include <vector>
+#include <memory>
+#include <mutex>
+#include <chrono>
+#include "../core/common.h"
+
+namespace llm_re {
+
+// Simple event that agents emit - agents know nothing about consumers
+struct AgentEvent {
+    enum Type {
+        // Core agent events
+        MESSAGE,        // Any message (API response, etc)
+        LOG,           // Log message  
+        STATE,         // State change (idle/running/paused/completed)
+        TOOL_CALL,     // Tool execution event
+        TASK_COMPLETE, // Task completion  
+        ERROR,         // Error occurred
+        METRIC,        // Token usage, timing, etc
+        
+        // Analysis events
+        ANALYSIS_RESULT, // Final analysis result/report
+        GRADER_FEEDBACK, // Grader evaluation
+        
+        // Context management
+        CONTEXT_CONSOLIDATION, // Context limit reached, consolidating
+        
+        // User interaction
+        USER_MESSAGE,    // User injected message
+        
+        // Orchestrator events
+        ORCHESTRATOR_THINKING,    // Orchestrator is processing
+        ORCHESTRATOR_RESPONSE,    // Orchestrator's response
+        AGENT_SPAWNING,          // Starting to spawn agents
+        AGENT_SPAWN_COMPLETE,    // Agent spawned successfully
+        AGENT_SPAWN_FAILED,      // Agent spawn failed
+        SWARM_RESULT,           // Collected result from swarm
+        ORCHESTRATOR_INPUT      // User input to orchestrator
+    };
+    
+    Type type;
+    std::string source;  // Agent ID or "system"
+    json payload;        // All event data as JSON
+    std::chrono::steady_clock::time_point timestamp;
+    
+    // Constructor
+    AgentEvent(Type t, const std::string& src, const json& data) 
+        : type(t), source(src), payload(data), timestamp(std::chrono::steady_clock::now()) {}
+};
+
+// Thread-safe event bus for agent communication
+class EventBus {
+private:
+    using Handler = std::function<void(const AgentEvent&)>;
+    
+    struct Subscription {
+        std::string id;
+        Handler handler;
+        std::vector<AgentEvent::Type> filter; // Empty = receive all
+    };
+    
+    mutable std::mutex mutex_;
+    std::vector<std::unique_ptr<Subscription>> subscriptions_;
+    std::atomic<int> next_id_{1};
+    
+public:
+    EventBus() = default;
+    ~EventBus() = default;
+    
+    // Subscribe to events with optional type filter
+    std::string subscribe(Handler handler, const std::vector<AgentEvent::Type>& types = {}) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        auto sub = std::make_unique<Subscription>();
+        sub->id = "sub_" + std::to_string(next_id_++);
+        sub->handler = std::move(handler);
+        sub->filter = types;
+        
+        std::string id = sub->id;
+        subscriptions_.push_back(std::move(sub));
+        return id;
+    }
+    
+    // Unsubscribe 
+    void unsubscribe(const std::string& subscription_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        subscriptions_.erase(
+            std::remove_if(subscriptions_.begin(), subscriptions_.end(),
+                [&](const std::unique_ptr<Subscription>& sub) {
+                    return sub->id == subscription_id;
+                }),
+            subscriptions_.end()
+        );
+    }
+    
+    // Emit event to all subscribers (non-blocking)
+    void emit(const AgentEvent& event) {
+        std::vector<Handler> handlers_to_call;
+        
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto& sub : subscriptions_) {
+                // Check filter
+                if (sub->filter.empty() || 
+                    std::find(sub->filter.begin(), sub->filter.end(), event.type) != sub->filter.end()) {
+                    handlers_to_call.push_back(sub->handler);
+                }
+            }
+        }
+        
+        // Call handlers outside the lock to prevent deadlocks
+        for (const auto& handler : handlers_to_call) {
+            try {
+                handler(event);
+            } catch (const std::exception& e) {
+                // Log but don't propagate exceptions from handlers
+                msg("EventBus: Handler exception: %s\n", e.what());
+            }
+        }
+    }
+    
+    // Helper methods for common event types
+    void emit_log(const std::string& source, LogLevel level, const std::string& message) {
+        emit(AgentEvent(AgentEvent::LOG, source, {
+            {"level", static_cast<int>(level)},
+            {"message", message}
+        }));
+    }
+    
+    void emit_state(const std::string& source, int status) {
+        emit(AgentEvent(AgentEvent::STATE, source, {
+            {"status", status}
+        }));
+    }
+    
+    void emit_message(const std::string& source, const json& message_data) {
+        emit(AgentEvent(AgentEvent::MESSAGE, source, message_data));
+    }
+    
+    void emit_tool_call(const std::string& source, const json& tool_data) {
+        emit(AgentEvent(AgentEvent::TOOL_CALL, source, tool_data));
+    }
+    
+    void emit_error(const std::string& source, const std::string& error) {
+        emit(AgentEvent(AgentEvent::ERROR, source, {
+            {"error", error}
+        }));
+    }
+    
+    void emit_metric(const std::string& source, const json& metrics) {
+        emit(AgentEvent(AgentEvent::METRIC, source, metrics));
+    }
+};
+
+// Global event bus instance (or could be passed around)
+inline EventBus& get_event_bus() {
+    static EventBus instance;
+    return instance;
+}
+
+} // namespace llm_re

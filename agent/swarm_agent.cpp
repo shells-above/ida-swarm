@@ -9,7 +9,7 @@
 namespace llm_re::agent {
 
 SwarmAgent::SwarmAgent(const Config& config, const std::string& agent_id)
-    : Agent(config), agent_id_(agent_id) {
+    : Agent(config, agent_id), agent_id_(agent_id) {
     
     // ConflictDetector will be created in initialize() when we have binary_name
 }
@@ -34,10 +34,9 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     // Create conflict detector now that we have binary_name
     conflict_detector_ = std::make_unique<ConflictDetector>(agent_id_, binary_name_);
     
-    // Set up message callback to intercept Agent logs and display them
-    set_message_callback([this](AgentMessageType type, const CallbackData& data) {
-        handle_agent_message(type, data);
-    });
+    // Set up console adapter to display agent messages
+    console_adapter_ = std::make_unique<ConsoleAdapter>();
+    console_adapter_->start();
     
     // Extract IRC configuration - use provided values or fall back to config defaults
     irc_server_ = swarm_config.value("irc_server", config_.irc.server);
@@ -57,7 +56,7 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     msg("SwarmAgent: Initializing conflict detector\n");
     if (!conflict_detector_->initialize()) {
         msg("SwarmAgent: ERROR - Failed to initialize conflict detector\n");
-        send_log(LogLevel::ERROR, "Failed to initialize conflict detector");
+        emit_log(LogLevel::ERROR, "Failed to initialize conflict detector");
         return false;
     }
     msg("SwarmAgent: Conflict detector initialized successfully\n");
@@ -66,7 +65,7 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     msg("SwarmAgent: Attempting to connect to IRC server\n");
     if (!connect_to_irc()) {
         msg("SwarmAgent: WARNING - Failed to connect to IRC, continuing without collaboration\n");
-        send_log(LogLevel::WARNING, "Failed to connect to IRC - continuing without collaboration");
+        emit_log(LogLevel::WARNING, "Failed to connect to IRC - continuing without collaboration");
         // Don't fail completely, agent can still work
     }
     
@@ -79,7 +78,7 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     start();
     
     msg("SwarmAgent: Agent %s initialization complete\n", agent_id_.c_str());
-    send_log(LogLevel::INFO, std::format("SwarmAgent {} initialized", agent_id_));
+    emit_log(LogLevel::INFO, std::format("SwarmAgent {} initialized", agent_id_));
     return true;
 }
 
@@ -90,7 +89,7 @@ bool SwarmAgent::connect_to_irc() {
     msg("SwarmAgent: Connecting to IRC %s:%d\n", irc_server_.c_str(), irc_port_);
     if (!irc_client_->connect()) {
         msg("SwarmAgent: Failed to connect to IRC server\n");
-        send_log(LogLevel::ERROR, "Failed to connect to IRC server");
+        emit_log(LogLevel::ERROR, "Failed to connect to IRC server");
         return false;
     }
     msg("SwarmAgent: Successfully connected to IRC\n");
@@ -113,7 +112,19 @@ bool SwarmAgent::connect_to_irc() {
     
     irc_connected_ = true;
     msg("SwarmAgent: IRC setup complete\n");
-    send_log(LogLevel::INFO, "Connected to IRC server");
+    emit_log(LogLevel::INFO, "Connected to IRC server");
+    
+    // Set up IRC adapter for event-based communication
+    irc_adapter_ = std::make_unique<IRCAdapter>(
+        "#agents",
+        [this](const std::string& channel, const std::string& message) {
+            if (irc_client_ && irc_connected_) {
+                irc_client_->send_message(channel, message);
+            }
+        }
+    );
+    irc_adapter_->start();
+    
     return true;
 }
 
@@ -172,7 +183,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             
             if (!conflicts.empty()) {
                 ::msg("SwarmAgent: CONFLICT DETECTED - %zu conflicts found\n", conflicts.size());
-                send_log(LogLevel::WARNING, std::format("Conflict detected for {} at 0x{:x}", 
+                emit_log(LogLevel::WARNING, std::format("Conflict detected for {} at 0x{:x}", 
                     tool_use->name, address));
                 
                 // Handle each conflict
@@ -221,7 +232,7 @@ json SwarmAgent::execute_tool_with_conflict_check(const std::string& tool_name, 
         
         if (!conflicts.empty()) {
             msg("SwarmAgent: CONFLICT DETECTED - %zu conflicts found\n", conflicts.size());
-            send_log(LogLevel::WARNING, std::format("Conflict detected for {} at 0x{:x}", tool_name, address));
+            emit_log(LogLevel::WARNING, std::format("Conflict detected for {} at 0x{:x}", tool_name, address));
             
             // Handle each conflict
             for (const ToolConflict& conflict : conflicts) {
@@ -241,7 +252,7 @@ json SwarmAgent::execute_tool_with_conflict_check(const std::string& tool_name, 
 }
 
 void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
-    send_log(LogLevel::INFO, "Handling conflict notification");
+    emit_log(LogLevel::INFO, "Handling conflict notification");
     
     // Generate channel name for this conflict using configured format
     std::string format = config_.irc.conflict_channel_format;
@@ -363,7 +374,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
                     conflict_channel
                 ));
                 
-                send_log(LogLevel::INFO, "Force-joined conflict channel: " + conflict_channel);
+                emit_log(LogLevel::INFO, "Force-joined conflict channel: " + conflict_channel);
             }
         }
         return;
@@ -388,22 +399,22 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
 void SwarmAgent::send_irc_message(const std::string& channel, const std::string& message) {
     if (irc_client_ && irc_connected_) {
         irc_client_->send_message(channel, message);
-        send_log(LogLevel::INFO, std::format("Sent to {}: {}", channel, message));
+        emit_log(LogLevel::INFO, std::format("Sent to {}: {}", channel, message));
     } else {
-        send_log(LogLevel::WARNING, "Not connected to IRC");
+        emit_log(LogLevel::WARNING, "Not connected to IRC");
     }
 }
 
 void SwarmAgent::join_irc_channel(const std::string& channel) {
     if (irc_client_ && irc_connected_) {
         irc_client_->join_channel(channel);
-        send_log(LogLevel::INFO, std::format("Joined IRC channel: {}", channel));
+        emit_log(LogLevel::INFO, std::format("Joined IRC channel: {}", channel));
     }
 }
 
 void SwarmAgent::start_private_conversation(const std::string& target_agent, const std::string& initial_message) {
     if (!irc_client_ || !irc_connected_) {
-        send_log(LogLevel::WARNING, "Cannot start private conversation - not connected to IRC");
+        emit_log(LogLevel::WARNING, "Cannot start private conversation - not connected to IRC");
         return;
     }
     
@@ -422,7 +433,7 @@ void SwarmAgent::start_private_conversation(const std::string& target_agent, con
     
     // Inject notification into our conversation
     inject_user_message("💬 Started private conversation with " + target_agent + " in " + channel);
-    send_log(LogLevel::INFO, "Started private conversation with " + target_agent);
+    emit_log(LogLevel::INFO, "Started private conversation with " + target_agent);
 }
 
 std::string SwarmAgent::leave_private_channel() {
@@ -441,14 +452,14 @@ std::string SwarmAgent::leave_private_channel() {
     
     // Inject notification
     inject_user_message("👋 Left " + channel + " and returned to main task");
-    send_log(LogLevel::INFO, "Left private channel: " + channel);
+    emit_log(LogLevel::INFO, "Left private channel: " + channel);
     
     return channel;
 }
 
 void SwarmAgent::force_join_conflict_channel(const std::string& channel, const ToolConflict& conflict) {
     if (!irc_client_ || !irc_connected_) {
-        send_log(LogLevel::WARNING, "Cannot join conflict channel - not connected to IRC");
+        emit_log(LogLevel::WARNING, "Cannot join conflict channel - not connected to IRC");
         return;
     }
     
@@ -475,12 +486,12 @@ void SwarmAgent::force_join_conflict_channel(const std::string& channel, const T
     );
     
     inject_user_message(notification);
-    send_log(LogLevel::INFO, "Force-joined conflict channel: " + channel);
+    emit_log(LogLevel::INFO, "Force-joined conflict channel: " + channel);
 }
 
 void SwarmAgent::trigger_shutdown() {
     msg("SwarmAgent: Trigger shutdown for agent %s\n", agent_id_.c_str());
-    send_log(LogLevel::INFO, "SwarmAgent trigger shutdown - sending IRC logout");
+    emit_log(LogLevel::INFO, "SwarmAgent trigger shutdown - sending IRC logout");
     
     // Server will automatically broadcast departure
     if (irc_client_ && irc_connected_) {
@@ -494,7 +505,7 @@ void SwarmAgent::trigger_shutdown() {
 
 void SwarmAgent::shutdown() {
     msg("SwarmAgent: Shutting down agent %s\n", agent_id_.c_str());
-    send_log(LogLevel::INFO, "SwarmAgent shutting down");
+    emit_log(LogLevel::INFO, "SwarmAgent shutting down");
     
     // Server will automatically broadcast departure
     if (irc_client_ && irc_connected_) {
@@ -508,6 +519,14 @@ void SwarmAgent::shutdown() {
     
     // Clean up
     msg("SwarmAgent: Cleaning up resources\n");
+    if (console_adapter_) {
+        console_adapter_->stop();
+        console_adapter_.reset();
+    }
+    if (irc_adapter_) {
+        irc_adapter_->stop();
+        irc_adapter_.reset();
+    }
     conflict_detector_.reset();
     irc_client_.reset();
     
@@ -527,7 +546,7 @@ void SwarmAgent::announce_presence() {
         irc_client_->send_message("#agents", "MY_TASK: " + task);
     }
     msg("SwarmAgent: Announced task to swarm\n");
-    send_log(LogLevel::INFO, "Joined swarm");
+    emit_log(LogLevel::INFO, "Joined swarm");
 }
 
 void SwarmAgent::request_peer_list() {
@@ -541,7 +560,7 @@ void SwarmAgent::handle_peer_departure(const std::string& departed_agent_id) {
     if (it != known_peers_.end()) {
         std::string task = it->second.task;  // Save task before erasing
         known_peers_.erase(it);
-        send_log(LogLevel::INFO, std::format("Agent {} departed", departed_agent_id));
+        emit_log(LogLevel::INFO, std::format("Agent {} departed", departed_agent_id));
         
         // Notify the LLM agent about the departure
         inject_user_message(std::format(
@@ -551,141 +570,5 @@ void SwarmAgent::handle_peer_departure(const std::string& departed_agent_id) {
     }
 }
 
-void SwarmAgent::handle_agent_message(AgentMessageType type, const CallbackData& data) {
-    switch (type) {
-        case AgentMessageType::Log:
-            if (data.message) {
-                // Extract text from log message
-                auto text = claude::messages::ContentExtractor::extract_text(*data.message);
-                if (text) {
-                    // Parse log level and message
-                    std::string log_str = *text;
-                    if (log_str.find("[LOG:") == 0) {
-                        size_t end_bracket = log_str.find(']');
-                        if (end_bracket != std::string::npos) {
-                            std::string level_str = log_str.substr(5, end_bracket - 5);
-                            std::string message = log_str.substr(end_bracket + 2); // Skip "] "
-                            
-                            // Map log level to prefix
-                            std::string prefix = "Agent";
-                            int level = std::stoi(level_str);
-                            switch (static_cast<LogLevel>(level)) {
-                                case LogLevel::DEBUG:
-                                    prefix = "Agent[DEBUG]";
-                                    break;
-                                case LogLevel::INFO:
-                                    prefix = "Agent[INFO]";
-                                    break;
-                                case LogLevel::WARNING:
-                                    prefix = "Agent[WARN]";
-                                    break;
-                                case LogLevel::ERROR:
-                                    prefix = "Agent[ERROR]";
-                                    break;
-                            }
-                            
-                            msg("%s: %s\n", prefix.c_str(), message.c_str());
-                        }
-                    } else {
-                        // Fallback for non-formatted logs
-                        msg("Agent: %s\n", log_str.c_str());
-                    }
-                }
-            }
-            break;
-            
-        case AgentMessageType::NewMessage:
-            if (data.message) {
-                // Display API messages
-                auto text = claude::messages::ContentExtractor::extract_text(*data.message);
-                if (text && !text->empty()) {
-                    // Truncate long messages
-                    std::string msg_text = *text;
-                    if (msg_text.length() > 200) {
-                        msg_text = msg_text.substr(0, 200) + "...";
-                    }
-                    
-                    if (data.message->role() == claude::messages::Role::Assistant) {
-                        msg("Agent[Assistant]: %s\n", msg_text.c_str());
-                    } else if (data.message->role() == claude::messages::Role::User) {
-                        msg("Agent[User]: %s\n", msg_text.c_str());
-                    }
-                }
-            }
-            break;
-            
-        case AgentMessageType::ToolStarted:
-            if (!data.json_data.empty()) {
-                std::string tool_name = data.json_data.value("tool_name", "unknown");
-                msg("Agent[Tool]: Starting %s\n", tool_name.c_str());
-                
-                // Show truncated input for debugging
-                if (data.json_data.contains("input")) {
-                    std::string input_str = data.json_data["input"].dump();
-                    if (input_str.length() > 100) {
-                        input_str = input_str.substr(0, 100) + "...";
-                    }
-                    msg("Agent[Tool]: Input: %s\n", input_str.c_str());
-                }
-            }
-            break;
-            
-        case AgentMessageType::ToolExecuted:
-            if (!data.json_data.empty()) {
-                std::string tool_name = data.json_data.value("tool_name", "unknown");
-                msg("Agent[Tool]: Completed %s\n", tool_name.c_str());
-                
-                // Show truncated result for debugging
-                if (data.json_data.contains("result")) {
-                    std::string result_str = data.json_data["result"].dump();
-                    if (result_str.length() > 100) {
-                        result_str = result_str.substr(0, 100) + "...";
-                    }
-                    msg("Agent[Tool]: Result: %s\n", result_str.c_str());
-                }
-            }
-            break;
-            
-        case AgentMessageType::StateChanged:
-            if (!data.json_data.empty()) {
-                int status = data.json_data.value("status", 0);
-                std::string status_str = "Unknown";
-                switch (status) {
-                    case 0: status_str = "Idle"; break;
-                    case 1: status_str = "Running"; break;
-                    case 2: status_str = "Paused"; break;
-                    case 3: status_str = "Completed"; break;
-                }
-                msg("Agent[State]: Changed to %s\n", status_str.c_str());
-            }
-            break;
-            
-        case AgentMessageType::FinalReport:
-            if (!data.json_data.empty() && data.json_data.contains("report")) {
-                std::string report = data.json_data["report"].get<std::string>();
-                msg("Agent[Report]: %s\n", report.c_str());
-                
-                // Send the final report to orchestrator via IRC as JSON
-                if (irc_client_ && irc_connected_) {
-                    // Create JSON message with agent_id and report
-                    json result_json = {
-                        {"agent_id", agent_id_},
-                        {"report", report}
-                    };
-                    
-                    // Send as JSON string prefixed with AGENT_RESULT:
-                    irc_client_->join_channel("#results");
-                    std::string result_msg = "AGENT_RESULT:" + result_json.dump();
-                    irc_client_->send_message("#results", result_msg);
-                    msg("SwarmAgent: Sent final report to orchestrator via IRC\n");
-                    
-                    // Ensure message is sent before agent exits
-                    // Give IRC more time to send the message and flush buffers
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                }
-            }
-            break;
-    }
-}
 
 } // namespace llm_re::agent

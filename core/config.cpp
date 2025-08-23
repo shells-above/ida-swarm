@@ -33,23 +33,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["grader"]["max_tokens"] = grader.max_tokens;
         j["grader"]["max_thinking_tokens"] = grader.max_thinking_tokens;
 
-        // UI settings
-        j["ui"]["log_buffer_size"] = ui.log_buffer_size;
-        j["ui"]["auto_scroll"] = ui.auto_scroll;
-        j["ui"]["theme_name"] = ui.theme_name;
-        j["ui"]["font_size"] = ui.font_size;
-        j["ui"]["show_timestamps"] = ui.show_timestamps;
-        j["ui"]["show_tool_details"] = ui.show_tool_details;
-        
-        // Window management
-        j["ui"]["start_minimized"] = ui.start_minimized;
-        j["ui"]["remember_window_state"] = ui.remember_window_state;
-        
-        // Conversation view
-        j["ui"]["auto_save_conversations"] = ui.auto_save_conversations;
-        j["ui"]["auto_save_interval"] = ui.auto_save_interval;
-        j["ui"]["density_mode"] = ui.density_mode;
-
         // IRC settings (now at top level)
         j["irc"]["server"] = irc.server;
         j["irc"]["port"] = irc.port;
@@ -127,26 +110,7 @@ bool Config::load_from_file(const std::string& path) {
             grader.max_thinking_tokens = j["grader"].value("max_thinking_tokens", grader.max_thinking_tokens);
         }
 
-        // UI settings
-        if (j.contains("ui")) {
-            ui.log_buffer_size = j["ui"].value("log_buffer_size", ui.log_buffer_size);
-            ui.auto_scroll = j["ui"].value("auto_scroll", ui.auto_scroll);
-            ui.theme_name = j["ui"].value("theme_name", ui.theme_name);
-            ui.font_size = j["ui"].value("font_size", ui.font_size);
-            ui.show_timestamps = j["ui"].value("show_timestamps", ui.show_timestamps);
-            ui.show_tool_details = j["ui"].value("show_tool_details", ui.show_tool_details);
-            
-            // Window management
-            ui.start_minimized = j["ui"].value("start_minimized", ui.start_minimized);
-            ui.remember_window_state = j["ui"].value("remember_window_state", ui.remember_window_state);
-            
-            // Conversation view
-            ui.auto_save_conversations = j["ui"].value("auto_save_conversations", ui.auto_save_conversations);
-            ui.auto_save_interval = j["ui"].value("auto_save_interval", ui.auto_save_interval);
-            ui.density_mode = j["ui"].value("density_mode", ui.density_mode);
-        }
-
-        // IRC settings (now at top level)
+        // IRC settings
         if (j.contains("irc")) {
             irc.server = j["irc"].value("server", irc.server);
             irc.port = j["irc"].value("port", irc.port);
@@ -171,8 +135,6 @@ bool Config::load_from_file(const std::string& path) {
         // Swarm settings
         if (j.contains("swarm")) {
         }
-
-        // OAuth manager is now created on-demand by each component
 
         return true;
     } catch (const std::exception& e) {

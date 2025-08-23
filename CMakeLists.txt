@@ -263,75 +263,20 @@ set(COMMON_SOURCES
         orchestrator/orchestrator_logger.cpp
 )
 
-# Orchestrator plugin sources
-set(ORCHESTRATOR_SOURCES
-        orchestrator/orchestrator_plugin.cpp
+# Unified plugin sources - combines all functionality
+set(PLUGIN_SOURCES
+        plugin.cpp  # New unified plugin entry point
+        # Orchestrator components
         orchestrator/orchestrator.cpp
         orchestrator/database_manager.cpp
         orchestrator/agent_spawner.cpp
         orchestrator/tool_call_tracker.cpp
         orchestrator/merge_manager.cpp
-        ${COMMON_SOURCES}
-)
-
-# Agent plugin sources
-set(AGENT_SOURCES
-        agent/agent_plugin.cpp
+        # Agent components
         agent/swarm_agent.cpp
         agent/conflict_detector.cpp
-        orchestrator/tool_call_tracker.cpp  # Shared for conflict detection
+        # Common sources
         ${COMMON_SOURCES}
-)
-
-# Original plugin sources
-set(SOURCES
-        core/plugin.cpp
-        ${COMMON_SOURCES}
-        # ui_v2 core
-        ui_v2/core/base_styled_widget.cpp
-        ui_v2/core/theme_manager.cpp
-        ui_v2/core/theme_templates.cpp
-        ui_v2/core/theme_transition_manager.cpp
-        ui_v2/core/theme_undo_manager.cpp
-        ui_v2/core/effects_manager.cpp
-        ui_v2/core/animation_manager.cpp
-        ui_v2/core/focus_manager.cpp
-        ui_v2/core/ui_utils.cpp
-        ui_v2/core/agent_controller.cpp
-        ui_v2/core/settings_manager.cpp
-        ui_v2/core/color_constants.cpp
-        # ui_v2 models
-        ui_v2/models/conversation_model.cpp
-        # ui_v2 views
-        ui_v2/views/main_window.cpp
-        ui_v2/views/conversation_view.cpp
-        ui_v2/views/memory_dock.cpp
-        ui_v2/views/tool_execution_dock.cpp
-        ui_v2/views/console_dock.cpp
-        ui_v2/views/settings_dialog.cpp
-        # ui_v2 theme editor
-        ui_v2/views/theme_editor/theme_editor_dialog.cpp
-        ui_v2/views/theme_editor/widgets/accessibility_tools.cpp
-        ui_v2/views/theme_editor/widgets/animation_config_widget.cpp
-        ui_v2/views/theme_editor/widgets/chart_theme_widget.cpp
-        ui_v2/views/theme_editor/widgets/color_picker_widget.cpp
-        ui_v2/views/theme_editor/widgets/effects_config_widget.cpp
-        ui_v2/views/theme_editor/widgets/theme_preview_widget.cpp
-        ui_v2/views/theme_editor/widgets/theme_template_selector.cpp
-        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.cpp
-        # ui_v2 widgets
-        ui_v2/widgets/message_bubble.cpp
-        ui_v2/widgets/message_group.cpp
-        ui_v2/widgets/markdown_viewer.cpp
-        # ui_v2 custom charts
-        ui_v2/widgets/charts/chart_types.cpp
-        ui_v2/widgets/charts/custom_chart_base.cpp
-        ui_v2/widgets/charts/chart_theme.cpp
-        ui_v2/widgets/charts/line_chart.cpp
-        ui_v2/widgets/charts/circular_chart.cpp
-        ui_v2/widgets/charts/bar_chart.cpp
-        ui_v2/widgets/charts/heatmap_widget.cpp
-        ui_v2/widgets/charts/sparkline_widget.cpp
 )
 
 # Header files
@@ -362,92 +307,17 @@ set(HEADERS
         # IRC headers
         irc/irc_server.h
         irc/irc_client.h
-        # ui_v2 core
-        ui_v2/core/base_styled_widget.h
-        ui_v2/core/theme_manager.h
-        ui_v2/core/theme_constants.h
-        ui_v2/core/theme_transition_manager.h
-        ui_v2/core/theme_undo_manager.h
-        ui_v2/core/effects_manager.h
-        ui_v2/core/animation_manager.h
-        ui_v2/core/focus_manager.h
-        ui_v2/core/ui_constants.h
-        ui_v2/core/ui_utils.h
-        ui_v2/core/agent_controller.h
-        ui_v2/core/settings_manager.h
-        ui_v2/core/ui_v2_common.h
-        ui_v2/core/color_constants.h
-        # ui_v2 models
-        ui_v2/models/conversation_model.h
-        ui_v2/models/tool_execution.h
-        # ui_v2 views
-        ui_v2/views/main_window.h
-        ui_v2/views/conversation_view.h
-        ui_v2/views/memory_dock.h
-        ui_v2/views/tool_execution_dock.h
-        ui_v2/views/settings_dialog.h
-        # ui_v2 theme editor
-        ui_v2/views/theme_editor/theme_editor_dialog.h
-        ui_v2/views/theme_editor/widgets/accessibility_tools.h
-        ui_v2/views/theme_editor/widgets/animation_config_widget.h
-        ui_v2/views/theme_editor/widgets/chart_theme_widget.h
-        ui_v2/views/theme_editor/widgets/color_picker_widget.h
-        ui_v2/views/theme_editor/widgets/effects_config_widget.h
-        ui_v2/views/theme_editor/widgets/theme_preview_widget.h
-        ui_v2/views/theme_editor/widgets/theme_template_selector.h
-        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.h
-        # ui_v2 widgets
-        ui_v2/widgets/message_bubble.h
-        ui_v2/widgets/message_group.h
-        ui_v2/widgets/markdown_viewer.h
-        # ui_v2 custom charts
-        ui_v2/widgets/charts/chart_types.h
-        ui_v2/widgets/charts/custom_chart_base.h
-        ui_v2/widgets/charts/chart_theme.h
-        ui_v2/widgets/charts/line_chart.h
-        ui_v2/widgets/charts/circular_chart.h
-        ui_v2/widgets/charts/bar_chart.h
-        ui_v2/widgets/charts/heatmap_widget.h
-        ui_v2/widgets/charts/sparkline_widget.h
 )
 
-# Create orchestrator plugin (no UI headers needed)
-add_library(ida_orchestrator64 SHARED
-        ${ORCHESTRATOR_SOURCES}
-)
-
-# Create agent plugin (no UI headers needed)
-add_library(ida_agent64 SHARED
-        ${AGENT_SOURCES}
-)
-
-# Original plugin (for backward compatibility)
-add_library(ida_llm_agent64 SHARED
-        ${SOURCES}
+# Create unified plugin
+add_library(ida_llm_re64 SHARED
+        ${PLUGIN_SOURCES}
         ${HEADERS}
 )
 
-# Set orchestrator plugin properties
-set_target_properties(ida_orchestrator64 PROPERTIES
-        OUTPUT_NAME "ida_orchestrator64"
-        PREFIX ""
-        SUFFIX ${PLUGIN_EXT}
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-# Set agent plugin properties
-set_target_properties(ida_agent64 PROPERTIES
-        OUTPUT_NAME "ida_agent64"
-        PREFIX ""
-        SUFFIX ${PLUGIN_EXT}
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-# Set original plugin properties
-set_target_properties(ida_llm_agent64 PROPERTIES
-        OUTPUT_NAME "ida_llm_agent64"
+# Set unified plugin properties
+set_target_properties(ida_llm_re64 PROPERTIES
+        OUTPUT_NAME "ida_llm_re64"
         PREFIX ""
         SUFFIX ${PLUGIN_EXT}
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -465,8 +335,8 @@ set(COMMON_LIBS
         SQLite::SQLite3
 )
 
-# Link libraries for orchestrator plugin
-target_link_libraries(ida_orchestrator64
+# Link libraries for unified plugin
+target_link_libraries(ida_llm_re64
         ${COMMON_LIBS}
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
@@ -474,58 +344,23 @@ target_link_libraries(ida_orchestrator64
         ${QT_NETWORK_FRAMEWORK}
 )
 
-# Link libraries for agent plugin
-target_link_libraries(ida_agent64
-        ${COMMON_LIBS}
-        ${QT_CORE_FRAMEWORK}
-        ${QT_NETWORK_FRAMEWORK}
-)
-
-# Link libraries for original plugin
-target_link_libraries(ida_llm_agent64
-        ${COMMON_LIBS}
-        ${QT_CORE_FRAMEWORK}
-        ${QT_GUI_FRAMEWORK}
-        ${QT_WIDGETS_FRAMEWORK}
-        ${QT_PRINTSUPPORT_FRAMEWORK}
-        ${QT_NETWORK_FRAMEWORK}
-        ${QT_CONCURRENT_FRAMEWORK}
-        ${QT_SQL_FRAMEWORK}
-        ${QT_XML_FRAMEWORK}
-        ${QT_OPENGL_FRAMEWORK}
-)
-
-# Post-build: Copy plugins to IDA plugins directory
-add_custom_command(TARGET ida_orchestrator64 POST_BUILD
+# Post-build: Copy unified plugin to IDA plugins directory
+add_custom_command(TARGET ida_llm_re64 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:ida_orchestrator64>
+        $<TARGET_FILE:ida_llm_re64>
         "${IDA_PLUGINS_PATH}/"
-        COMMENT "Copying orchestrator plugin to IDA plugins directory"
-)
-
-add_custom_command(TARGET ida_agent64 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:ida_agent64>
-        "${IDA_PLUGINS_PATH}/"
-        COMMENT "Copying agent plugin to IDA plugins directory"
-)
-
-add_custom_command(TARGET ida_llm_agent64 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:ida_llm_agent64>
-        "${IDA_PLUGINS_PATH}/"
-        COMMENT "Copying original plugin to IDA plugins directory"
+        COMMENT "Copying unified plugin to IDA plugins directory"
 )
 # put llm_re_config.json into IDA_PLUGINS_PATH dir
 
 # Custom target to build all plugins at once
 add_custom_target(all_plugins
-    DEPENDS ida_orchestrator64 ida_agent64 ida_llm_agent64
-    COMMENT "Building all IDA plugins"
+    DEPENDS ida_llm_re64
+    COMMENT "Building unified IDA plugin"
 )
 
 # Installation
-install(TARGETS ida_orchestrator64 ida_agent64 ida_llm_agent64
+install(TARGETS ida_llm_re64
         RUNTIME DESTINATION ${IDA_PLUGINS_PATH}
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )

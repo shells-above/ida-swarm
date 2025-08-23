@@ -10,6 +10,7 @@
 #include "sdk/claude_sdk.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
+#include "agent/event_bus.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
@@ -17,16 +18,6 @@
 #include <fstream>
 
 namespace llm_re {
-
-// Unified message types for agent callbacks
-enum class AgentMessageType {
-    Log,                    // Special: passes claude::messages::Message* with log text
-    NewMessage,             // Direct message: passes claude::messages::Message*
-    StateChanged,           // {status: int} - still uses JSON for now
-    ToolStarted,            // {tool_id: string, tool_name: string, input: json} - still uses JSON
-    ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json} - still uses JSON
-    FinalReport             // {report: string} - still uses JSON
-};
 
 // Agent state management
 class AgentState {
@@ -253,13 +244,6 @@ struct AgentTask {
 
 // Main agent
 class Agent {
-public:
-    // Single unified callback - supports both messages and JSON for transition
-    struct CallbackData {
-        const claude::messages::Message* message = nullptr;
-        json json_data;
-    };
-
 private:
     // State management
     AgentState state_;
@@ -295,8 +279,9 @@ private:
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
 
-    // Callback for messages
-    std::function<void(AgentMessageType, const CallbackData&)> message_callback_;
+    // Event bus for all communication
+    EventBus& event_bus_;
+    std::string agent_id_;
 
     // System prompt
     // note that if you start getting errors about Qt MOC making a llm_re::llm_re:: namespace it probably
@@ -449,7 +434,7 @@ What's your next step to complete the reversal?)";
         
         auto refreshed_creds = oauth_manager_->force_refresh();
         if (!refreshed_creds) {
-            send_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
+            emit_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
             return false;
         }
         
@@ -457,13 +442,15 @@ What's your next step to complete the reversal?)";
         // Note: The credentials are already updated in-place by force_refresh, 
         // but we set it again to be explicit
         api_client_.set_oauth_credentials(refreshed_creds);
-        send_log(LogLevel::INFO, "Successfully refreshed OAuth token");
+        emit_log(LogLevel::INFO, "Successfully refreshed OAuth token");
         return true;
     }
 
 public:
-    Agent(const Config& config)
+    Agent(const Config& config, const std::string& agent_id = "agent")
         : config_(config),
+          agent_id_(agent_id),
+          event_bus_(get_event_bus()),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
@@ -485,7 +472,7 @@ public:
         // Initialize patch manager
         patch_manager_ = std::make_shared<PatchManager>();
         if (!patch_manager_->initialize()) {
-            send_log(LogLevel::WARNING, "Failed to initialize patch manager");
+            emit_log(LogLevel::WARNING, "Failed to initialize patch manager");
             patch_manager_ = nullptr;
         }
 
@@ -494,7 +481,7 @@ public:
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
-            send_log(level, msg);
+            emit_log(level, msg);
         });
     }
 
@@ -532,8 +519,6 @@ public:
         if (task_semaphore_) {
             qsem_post(task_semaphore_);
         }
-
-        // Don't block UI thread - worker will report completion via logs/state changes
     }
 
     virtual void trigger_shutdown() { }
@@ -572,7 +557,7 @@ public:
 
     void resume() {
         if (!state_.is_paused() || !execution_state_.is_valid()) {
-            send_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
+            emit_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
             return;
         }
 
@@ -587,7 +572,7 @@ public:
 
     void continue_with_task(const std::string& additional_task) {
         if (!state_.is_completed() && !state_.is_idle()) {
-            send_log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
+            emit_log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
             return;
         }
 
@@ -609,12 +594,8 @@ public:
         pending_user_messages_.push(message);
     }
 
-    // Single callback setter
-    void set_message_callback(std::function<void(AgentMessageType, const CallbackData&)> callback) {
-        message_callback_ = callback;
-        
-        // We'll remove the API client message logger - we'll handle messages directly after responses
-    }
+    // Get agent ID
+    const std::string& get_agent_id() const { return agent_id_; }
 
     // State queries
     AgentState::Status get_status() const { return state_.get_status(); }
@@ -713,9 +694,9 @@ public:
         if (file.is_open()) {
             file << memory_->export_memory_snapshot().dump(2);
             file.close();
-            send_log(LogLevel::INFO, "Memory saved to " + filename);
+            emit_log(LogLevel::INFO, "Memory saved to " + filename);
         } else {
-            send_log(LogLevel::ERROR, "Failed to save memory to " + filename);
+            emit_log(LogLevel::ERROR, "Failed to save memory to " + filename);
         }
     }
 
@@ -726,9 +707,9 @@ public:
             file >> snapshot;
             memory_->import_memory_snapshot(snapshot);
             file.close();
-            send_log(LogLevel::INFO, "Memory loaded from " + filename);
+            emit_log(LogLevel::INFO, "Memory loaded from " + filename);
         } else {
-            send_log(LogLevel::ERROR, "Failed to load memory from " + filename);
+            emit_log(LogLevel::ERROR, "Failed to load memory from " + filename);
         }
     }
 
@@ -770,19 +751,9 @@ protected:  // Changed to protected so SwarmAgent can access
     claude::Client api_client_;                                      // agent api client
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
     
-    // Send log message (accessible to SwarmAgent)
-    void send_log(LogLevel level, const std::string& msg) {
-        // For now, logs still need some way to be sent - create a temporary message
-        // TODO: log callback
-        claude::messages::Message log_msg(claude::messages::Role::System);
-        log_msg.add_content(std::make_unique<claude::messages::TextContent>(
-            std::format("[LOG:{}] {}", static_cast<int>(level), msg)
-        ));
-        if (message_callback_) {
-            CallbackData data;
-            data.message = &log_msg;
-            message_callback_(AgentMessageType::Log, data);
-        }
+    // Emit log event
+    void emit_log(LogLevel level, const std::string& msg) {
+        event_bus_.emit_log(agent_id_, level, msg);
     }
 
     // Process tool calls from assistant message
@@ -792,13 +763,14 @@ protected:  // Changed to protected so SwarmAgent can access
         std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
 
         for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
-            send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
+            emit_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
 
             // Track tool call
             execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
 
-            // Send tool started message
-            send_json_message(AgentMessageType::ToolStarted, {
+            // Emit tool started event
+            event_bus_.emit_tool_call(agent_id_, {
+                {"phase", "started"},
                 {"tool_id", tool_use->id},
                 {"tool_name", tool_use->name},
                 {"input", tool_use->input}
@@ -821,8 +793,9 @@ protected:  // Changed to protected so SwarmAgent can access
                 }
             }
 
-            // Send tool executed message
-            send_json_message(AgentMessageType::ToolExecuted, {
+            // Emit tool completed event
+            event_bus_.emit_tool_call(agent_id_, {
+                {"phase", "completed"},
                 {"tool_id", tool_use->id},
                 {"tool_name", tool_use->name},
                 {"input", tool_use->input},
@@ -835,42 +808,37 @@ protected:  // Changed to protected so SwarmAgent can access
 
 private:
     // Helper to send messages through callback
-    void send_api_message(const claude::messages::Message* msg) {
-        if (message_callback_) {
-            CallbackData data;
-            data.message = msg;
-            message_callback_(AgentMessageType::NewMessage, data);
-        }
+    void emit_api_message(const claude::messages::Message* msg) {
+        // Extract message content for event
+        json message_data = {
+            {"role", static_cast<int>(msg->role())},
+            {"content", claude::messages::ContentExtractor::extract_text(*msg).value_or("")}
+        };
+        event_bus_.emit_message(agent_id_, message_data);
     }
     
-    // Helper to send grader messages to console only (not conversation UI)
-    void send_grader_message_to_console(const claude::messages::Message& msg) {
+    // Helper to emit grader messages
+    void emit_grader_message(const claude::messages::Message& msg) {
         // Log grader thinking blocks
         for (const auto& content : msg.contents()) {
             if (auto* thinking = dynamic_cast<const claude::messages::ThinkingContent*>(content.get())) {
-                send_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
+                emit_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
             }
         }
         
         // Log grader text content
         std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
         if (text && !text->empty()) {
-            send_log(LogLevel::INFO, "[Grader Response] " + *text);
-        }
-    }
-    
-    // Helper for JSON messages (for tool messages, state changes, etc.)
-    void send_json_message(AgentMessageType type, const json& json_data) {
-        if (message_callback_) {
-            CallbackData data;
-            data.json_data = json_data;
-            message_callback_(type, data);
+            emit_log(LogLevel::INFO, "[Grader Response] " + *text);
+            event_bus_.emit(AgentEvent(AgentEvent::GRADER_FEEDBACK, agent_id_, {
+                {"feedback", *text}
+            }));
         }
     }
 
     // Worker thread main loop
     void worker_loop() {
-        send_log(LogLevel::INFO, "Agent worker thread started");
+        emit_log(LogLevel::INFO, "Agent worker thread started");
         while (!stop_requested_) {
             // Wait for semaphore signal or timeout
             qsem_wait(task_semaphore_, 100);
@@ -909,7 +877,7 @@ private:
                         break;
                 }
             } catch (const std::exception& e) {
-                send_log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
+                emit_log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
                 change_state(AgentState::Status::Idle);
             }
         }
@@ -924,7 +892,7 @@ private:
 
     // Process new task
     void process_new_task(const std::string& task) {
-        send_log(LogLevel::INFO, "Starting new task");
+        emit_log(LogLevel::INFO, "Starting new task");
         
         // Clear execution state for new task
         execution_state_.clear();
@@ -962,12 +930,12 @@ private:
     // Process resume
     void process_resume() {
         if (!execution_state_.is_valid()) {
-            send_log(LogLevel::ERROR, "No valid saved state to resume from");
+            emit_log(LogLevel::ERROR, "No valid saved state to resume from");
             change_state(AgentState::Status::Idle);
             return;
         }
 
-        send_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
+        emit_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
 
         // Continue from saved state
         run_analysis_loop();
@@ -975,10 +943,10 @@ private:
 
     // Process continue
     void process_continue(const std::string& additional) {
-        send_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
+        emit_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
 
         if (!execution_state_.is_valid()) {
-            send_log(LogLevel::WARNING, "No saved state found while continuing");
+            emit_log(LogLevel::WARNING, "No saved state found while continuing");
             change_state(AgentState::Status::Idle);
             return;
         }
@@ -1045,7 +1013,10 @@ private:
 
     // Trigger context consolidation
     void trigger_context_consolidation() {
-        send_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+        emit_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+        event_bus_.emit(AgentEvent(AgentEvent::CONTEXT_CONSOLIDATION, agent_id_, {
+            {"status", "starting"}
+        }));
 
         context_state_.consolidation_in_progress = true;
         context_state_.consolidation_count++;
@@ -1076,7 +1047,7 @@ private:
             result.summary = *text_content;
             result.success = true;
         } else {
-            send_log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
+            emit_log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
 
             // Fallback summary in case LLM didn't make one (which would be bad)
             result.summary = std::format("Consolidated {} findings to memory. Keys: {}",
@@ -1090,7 +1061,7 @@ private:
 
     // Rebuild conversation after consolidation
     void rebuild_after_consolidation(const ConsolidationResult& consolidation) {
-        send_log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
+        emit_log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
 
         // Save current task and token stats
         std::string original_task = state_.get_task();
@@ -1134,7 +1105,7 @@ private:
         execution_state_.reset_with_request(builder.build());
 
         // Log consolidation stats
-        send_log(LogLevel::INFO, std::format(
+        emit_log(LogLevel::INFO, std::format(
             "Context consolidated. Stored {} keys. Token usage before: {} in, {} out, {} cache read, {} cache write. Cost so far: ${:.4f}",
             consolidation.stored_keys.size(),
             total_usage_before.input_tokens,
@@ -1229,7 +1200,7 @@ private:
 
         while (iteration < config_.agent.max_iterations && !stop_requested_ && !grader_approved && state_.is_running()) {
             if (stop_requested_) {
-                send_log(LogLevel::INFO, "Analysis interrupted by stop request");
+                emit_log(LogLevel::INFO, "Analysis interrupted by stop request");
                 break;
             }
 
@@ -1237,7 +1208,7 @@ private:
             execution_state_.set_iteration(iteration);
             api_client_.set_iteration(iteration);
 
-            send_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
+            emit_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
             // Apply caching for continuation
             if (iteration > 1) {
@@ -1260,14 +1231,14 @@ private:
             if (!response.success && response.error && 
                 response.error->find("OAuth token has expired") != std::string::npos) {
                 
-                send_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
+                emit_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
                 
                 if (refresh_oauth_credentials()) {
                     // Retry the request with refreshed credentials
-                    send_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
+                    emit_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
                     response = api_client_.send_request(current_request);
                 } else {
-                    send_log(LogLevel::ERROR, "Failed to refresh OAuth token");
+                    emit_log(LogLevel::ERROR, "Failed to refresh OAuth token");
                 }
             }
 
@@ -1277,14 +1248,14 @@ private:
             }
 
             // Send the response message directly to the UI!
-            send_api_message(&response.message);
+            emit_api_message(&response.message);
 
             // Log thinking information
             if (response.has_thinking()) {
                 std::vector<const claude::messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
                 std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
-                send_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
+                emit_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
             }
 
             validate_thinking_preservation(response);
@@ -1336,7 +1307,10 @@ private:
                         std::string user_msg = pending_user_messages_.front();
                         pending_user_messages_.pop();
                         
-                        send_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
+                        emit_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
+                        event_bus_.emit(AgentEvent(AgentEvent::USER_MESSAGE, agent_id_, {
+                            {"message", user_msg}
+                        }));
                         
                         // If we just added tool results, append the user message to them
                         if (!tool_results.empty() && execution_state_.message_count() > 0) {
@@ -1366,26 +1340,26 @@ private:
             if (response.stop_reason == claude::StopReason::EndTurn && !response.has_tool_calls()) {
                 if (iteration > 1 && !context_state_.consolidation_in_progress) {
                     // Agent has naturally stopped - they're satisfied with their understanding
-                    send_log(LogLevel::INFO, "Agent stopped investigation");
+                    emit_log(LogLevel::INFO, "Agent stopped investigation");
 
                     // Check with grader if enabled
                     if (grader_) {
                         AnalysisGrader::GradeResult grade = check_with_grader();
                         
                         // Log grader's full response (with thinking) to console
-                        send_grader_message_to_console(grade.fullMessage);
+                        emit_grader_message(grade.fullMessage);
                         
                         if (grade.complete) {
-                            send_log(LogLevel::INFO, "Grader approved investigation");
+                            emit_log(LogLevel::INFO, "Grader approved investigation");
                             grader_approved = true;
                             
-                            // Send final report - this will be shown in conversation UI
-                            send_json_message(AgentMessageType::FinalReport, {
+                            // Emit final report event
+                            event_bus_.emit(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
                                 {"report", grade.response}
-                            });
+                            }));
                             change_state(AgentState::Status::Completed);
                         } else {
-                            send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
+                            emit_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
                             
                             // Add grader's questions as user message and continue
                             // Mark this as grader feedback with a special prefix we can filter
@@ -1394,16 +1368,16 @@ private:
                         }
                     } else {
                         // No grader - extract and send the actual findings
-                        send_log(LogLevel::INFO, "Grader disabled - extracting final findings");
+                        emit_log(LogLevel::INFO, "Grader disabled - extracting final findings");
                         grader_approved = true;
                         
                         // Get the last assistant message which contains the actual findings
                         std::string final_findings = extract_last_assistant_message();
                         
-                        // Send the actual findings as the final report
-                        send_json_message(AgentMessageType::FinalReport, {
+                        // Emit the actual findings as the final report
+                        event_bus_.emit(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
                             {"report", final_findings}
-                        });
+                        }));
                         change_state(AgentState::Status::Completed);
                     }
                 }
@@ -1411,7 +1385,7 @@ private:
         }
 
         if (iteration >= config_.agent.max_iterations) {
-            send_log(LogLevel::WARNING, "Reached maximum iterations");
+            emit_log(LogLevel::WARNING, "Reached maximum iterations");
             change_state(AgentState::Status::Completed);
         }
     }
@@ -1420,7 +1394,8 @@ private:
     // Handle API errors
     void handle_api_error(const claude::ChatResponse& response) {
         if (!response.error) {
-            send_log(LogLevel::ERROR, "Unknown API error");
+            emit_log(LogLevel::ERROR, "Unknown API error");
+            event_bus_.emit_error(agent_id_, "Unknown API error");
             change_state(AgentState::Status::Idle);
             last_error_ = "Unknown API error";
             return;
@@ -1431,17 +1406,19 @@ private:
         // Check for thinking-specific errors
         if (error_msg.find("thinking") != std::string::npos ||
             error_msg.find("budget_tokens") != std::string::npos) {
-            send_log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
-            send_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
+            emit_log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
+            emit_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
+            event_bus_.emit_error(agent_id_, error_msg);
         }
 
         if (claude::Client::is_recoverable_error(response)) {
-            send_log(LogLevel::INFO, "You can resume the analysis");
+            emit_log(LogLevel::INFO, "You can resume the analysis");
             change_state(AgentState::Status::Paused);
             execution_state_.set_valid(true);
             last_error_ = "API Error (recoverable): " + error_msg;
         } else {
-            send_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+            emit_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+            event_bus_.emit_error(agent_id_, error_msg);
             change_state(AgentState::Status::Idle);
             execution_state_.set_valid(false);
             last_error_ = "API Error: " + error_msg;
@@ -1458,9 +1435,9 @@ private:
         std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
         if (thinking_blocks.empty() && redacted_blocks.empty()) {
-            send_log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
+            emit_log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
         } else {
-            send_log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
+            emit_log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
                 thinking_blocks.size() + redacted_blocks.size()));
         }
     }
@@ -1484,18 +1461,15 @@ private:
         return "Investigation complete (no findings extracted)";
     }
     
-    // changes and notifies ui of agent state
+    // changes state and emits event
     void change_state(AgentState::Status new_status) {
         state_.set_status(new_status);
-
-        send_json_message(AgentMessageType::StateChanged, {
-            {"status", static_cast<int>(new_status)}
-        });
+        event_bus_.emit_state(agent_id_, static_cast<int>(new_status));
     }
 
     // Check with grader to evaluate agent's work
     AnalysisGrader::GradeResult check_with_grader() {
-        send_log(LogLevel::INFO, "Evaluating analysis quality...");
+        emit_log(LogLevel::INFO, "Evaluating analysis quality...");
         
         // Build grading context
         AnalysisGrader::GradingContext context;
@@ -1541,7 +1515,19 @@ private:
             summary = token_stats_.get_iteration_summary(usage, iteration);
         }
         
-        send_log(LogLevel::INFO, summary);
+        emit_log(LogLevel::INFO, summary);
+        
+        // Emit metrics event with properly serialized token usage
+        event_bus_.emit_metric(agent_id_, {
+            {"tokens", {
+                {"input_tokens", usage.input_tokens},
+                {"output_tokens", usage.output_tokens},
+                {"cache_read_tokens", usage.cache_read_tokens},
+                {"cache_creation_tokens", usage.cache_creation_tokens},
+                {"estimated_cost", usage.estimated_cost()}
+            }},
+            {"iteration", iteration}
+        });
     }
 };
 

@@ -116,18 +116,17 @@ bool Orchestrator::initialize() {
 }
 
 void Orchestrator::start_interactive_session() {
-    ORCH_LOG("===========================================\n");
-    ORCH_LOG("LLM Multi-Agent Orchestrator Ready\n");
-    ORCH_LOG("===========================================\n");
-    
     // Use IDA's ask_str dialog to get user input
     qstring user_input;
     if (ask_str(&user_input, 0, "What would you like me to investigate?")) {
         if (!user_input.empty()) {
+            // Emit user input event
+            event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_INPUT, "orchestrator", {
+                {"input", user_input.c_str()}
+            }));
+            
             process_user_input(user_input.c_str());
         }
-    } else {
-        ORCH_LOG("Orchestrator: User cancelled input\n");
     }
 }
 
@@ -145,6 +144,9 @@ void Orchestrator::process_user_input(const std::string& input) {
     ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
     ORCH_LOG("Orchestrator: Thinking deeply about approach...\n");
     
+    // Emit thinking event
+    event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
+    
     // Send to Claude API with deep thinking
     auto response = send_orchestrator_request(input);
     
@@ -158,6 +160,11 @@ void Orchestrator::process_user_input(const std::string& input) {
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
     if (text) {
         ORCH_LOG("Orchestrator: %s\n", text->c_str());
+        
+        // Emit orchestrator response event
+        event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+            {"response", *text}
+        }));
     }
     
     // Add response to conversation history
@@ -385,6 +392,12 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     // Generate agent ID
     std::string agent_id = std::format("agent_{}", next_agent_id_++);
     
+    // Emit agent spawning event
+    event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWNING, "orchestrator", {
+        {"agent_id", agent_id},
+        {"task", task}
+    }));
+    
     // Save and pack current database
     ORCH_LOG("Orchestrator: Creating agent database for %s\n", agent_id.c_str());
     std::string agent_db_path = db_manager_->create_agent_database(agent_id);
@@ -416,11 +429,22 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     ORCH_LOG("Orchestrator: Agent spawner returned PID %d for %s\n", pid, agent_id.c_str());
     
     if (pid <= 0) {
+        // Emit spawn failed event
+        event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWN_FAILED, "orchestrator", {
+            {"agent_id", agent_id},
+            {"error", "Failed to spawn agent process"}
+        }));
+        
         return {
             {"success", false},
             {"error", "Failed to spawn agent process"}
         };
     }
+    
+    // Emit spawn complete event
+    event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWN_COMPLETE, "orchestrator", {
+        {"agent_id", agent_id}
+    }));
     
     // Track agent info
     AgentInfo info;
@@ -643,6 +667,12 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             std::string report = result_json["report"];
             
             ORCH_LOG("Orchestrator: Received result from %s: %s\n", agent_id.c_str(), report.c_str());
+            
+            // Emit swarm result event
+            event_bus_.emit(AgentEvent(AgentEvent::SWARM_RESULT, "orchestrator", {
+                {"agent_id", agent_id},
+                {"result", report}
+            }));
             
             // Store the result
             agent_results_[agent_id] = report;

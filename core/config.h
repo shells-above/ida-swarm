@@ -74,34 +74,16 @@ public:
         bool enabled = true;  // Whether the grader is enabled
         claude::Model model = claude::Model::Opus41;
         int max_tokens = 32000;
-        int max_thinking_tokens = 31999;
+        int max_thinking_tokens = 30000;
         int context_limit = 140000;  // Leave buffer below 150k limit
     } grader;
-
-    struct UISettings {
-        int log_buffer_size = 1000;
-        bool auto_scroll = true;
-        std::string theme_name = "dark";  // "default", "dark", "light", or custom theme name
-        int font_size = 10;
-        bool show_timestamps = true;
-        bool show_tool_details = true;
-        
-        // Window management
-        bool start_minimized = false;
-        bool remember_window_state = true;
-        
-        // Conversation view
-        bool auto_save_conversations = true;
-        int auto_save_interval = 60;  // seconds
-        int density_mode = 1;  // 0=Compact, 1=Cozy, 2=Spacious
-    } ui;
 
     struct OrchestratorSettings {
         // Model Configuration (for orchestrator's reasoning)
         struct Model {
             claude::Model model = claude::Model::Sonnet4;
             int max_tokens = 32000;
-            int max_thinking_tokens = 31999;
+            int max_thinking_tokens = 30000;
             double temperature = 1.0;
             bool enable_thinking = true;
         } model;

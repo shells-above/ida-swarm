@@ -12,7 +12,6 @@
 using claude::LogLevel;  // so we dont have to prefix it with claude::
 
 // Only include kernwin.hpp if we haven't already included Qt headers
-// This allows UI files to include this after ui_v2_common.h
 #ifndef QT_VERSION
     #include <kernwin.hpp>
 #endif
