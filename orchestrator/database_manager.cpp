@@ -50,7 +50,6 @@ bool DatabaseManager::create_workspace() {
         
         // Create subdirectories
         fs::create_directories(fs::path(workspace_dir_) / "agents");
-        fs::create_directories(fs::path(workspace_dir_) / "backups");
         fs::create_directories(fs::path(workspace_dir_) / "configs");
         
         return true;
