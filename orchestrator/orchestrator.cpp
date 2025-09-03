@@ -21,9 +21,8 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     fs::path idb_path(main_db_path);
     binary_name_ = idb_path.stem().string(); // Get filename without extension
     
-    // Initialize logger first
-    g_orch_logger.initialize(binary_name_);
-    ORCH_LOG("Orchestrator: Initializing for binary: %s\n", binary_name_.c_str());
+    // Don't initialize logger here - will do it after workspace cleanup in initialize()
+    // to avoid the log file being deleted
     
     // Create subsystems with binary name
     db_manager_ = std::make_unique<DatabaseManager>(main_db_path, binary_name_);
@@ -59,19 +58,20 @@ Orchestrator::~Orchestrator() {
 bool Orchestrator::initialize() {
     if (initialized_) return true;
     
-    ORCH_LOG("Orchestrator: Initializing subsystems...\n");
-    
-    // Clean up any existing workspace directory from previous runs
+    // Clean up any existing workspace directory from previous runs BEFORE initializing logger
     std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
     if (std::filesystem::exists(workspace_dir)) {
-        ORCH_LOG("Orchestrator: Cleaning up previous workspace: %s\n", workspace_dir.string().c_str());
         try {
             std::filesystem::remove_all(workspace_dir);
-            ORCH_LOG("Orchestrator: Successfully removed previous workspace\n");
         } catch (const std::exception& e) {
-            ORCH_LOG("Orchestrator: Warning - failed to clean previous workspace: %s\n", e.what());
+            // Can't log yet, logger not initialized
         }
     }
+    
+    // NOW initialize logger after cleanup
+    g_orch_logger.initialize(binary_name_);
+    ORCH_LOG("Orchestrator: Initializing subsystems...\n");
+    ORCH_LOG("Orchestrator: Workspace cleaned and logger initialized for binary: %s\n", binary_name_.c_str());
     
     // Ignore SIGPIPE to prevent crashes when IRC connections break
     signal(SIGPIPE, SIG_IGN);
