@@ -65,10 +65,7 @@ public:
 protected:
     // Override tool processing to add conflict detection for ALL tools
     std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) override;
-    
-    // Override tool execution to add conflict detection
-    virtual json execute_tool_with_conflict_check(const std::string& tool_name, const json& input);
-    
+
     // Handle conflict through IRC deliberation
     void initiate_conflict_deliberation(const ToolConflict& conflict, const std::string& channel);
     
@@ -101,7 +98,6 @@ private:
 
     // Agent discovery methods
     void announce_presence();
-    void request_peer_list();
     void handle_peer_departure(const std::string& agent_id);
     
     // Message adapters
