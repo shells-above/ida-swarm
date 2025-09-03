@@ -61,6 +61,18 @@ bool Orchestrator::initialize() {
     
     ORCH_LOG("Orchestrator: Initializing subsystems...\n");
     
+    // Clean up any existing workspace directory from previous runs
+    std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
+    if (std::filesystem::exists(workspace_dir)) {
+        ORCH_LOG("Orchestrator: Cleaning up previous workspace: %s\n", workspace_dir.string().c_str());
+        try {
+            std::filesystem::remove_all(workspace_dir);
+            ORCH_LOG("Orchestrator: Successfully removed previous workspace\n");
+        } catch (const std::exception& e) {
+            ORCH_LOG("Orchestrator: Warning - failed to clean previous workspace: %s\n", e.what());
+        }
+    }
+    
     // Ignore SIGPIPE to prevent crashes when IRC connections break
     signal(SIGPIPE, SIG_IGN);
     ORCH_LOG("Orchestrator: Configured SIGPIPE handler\n");
