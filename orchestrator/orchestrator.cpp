@@ -142,8 +142,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     conversation_history_.push_back(claude::messages::Message::user_text(input));
     
     ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
-    ORCH_LOG("Orchestrator: Thinking deeply about approach...\n");
-    
+
     // Emit thinking event
     event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
     
