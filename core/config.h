@@ -21,7 +21,10 @@ struct Config {
         return std::make_shared<claude::auth::OAuthManager>(config_dir);
     }
     
-    // Save configuration
+    // Load configuration from default location
+    void load();
+    
+    // Save configuration to default location
     void save() const;
     
     // Reset to defaults

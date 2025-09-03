@@ -56,6 +56,9 @@ public:
         hook_event_listener(HT_UI, this);
         config_ = &Config::instance();
         
+        // Load configuration from file
+        config_->load();
+        
         msg("LLM RE: Plugin loaded, detecting mode...\n");
     }
     

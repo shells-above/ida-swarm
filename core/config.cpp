@@ -136,6 +136,20 @@ bool Config::load_from_file(const std::string& path) {
     }
 }
 
+void Config::load() {
+    // Get default config path
+    char config_path[QMAXPATH];
+    qstrncpy(config_path, get_user_idadir(), sizeof(config_path));
+    qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
+    
+    // Try to load from file, ignore if it doesn't exist (will use defaults)
+    if (load_from_file(config_path)) {
+        msg("LLM RE: Configuration loaded from: %s\n", config_path);
+    } else {
+        msg("LLM RE: Using default configuration (no config file found or load failed)\n");
+    }
+}
+
 void Config::save() const {
     // Get default config path
     char config_path[QMAXPATH];
