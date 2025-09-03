@@ -511,22 +511,22 @@ public:
     using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
-        return "get_entry_points";
+        return "get_exports";
     }
 
     std::string description() const override {
-        return "Get all entry points of the binary (main entry, exports, TLS callbacks). Shows where execution can begin.";
+        return "Get all exports of the binary (entry points, exports, TLS callbacks). Shows where execution can begin.";
     }
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
-            .add_integer("max_count", "Max number of entry points to return")
+            .add_integer("max_count", "Max number of exports to return")
             .build();
     }
 
     claude::tools::ToolResult execute(const json& input) override {
         try {
-            return claude::tools::ToolResult::success(executor->get_entry_points(input.at("max_count")));
+            return claude::tools::ToolResult::success(executor->get_exports(input.at("max_count")));
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(e.what());
         }

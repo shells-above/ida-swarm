@@ -829,7 +829,7 @@ std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
     });
 }
 
-std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_entry_points() {
+std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_exports() {
     return execute_sync_wrapper([]() {
         std::vector<std::tuple<ea_t, std::string, std::string>> result;
 
