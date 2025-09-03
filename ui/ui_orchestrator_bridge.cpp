@@ -26,31 +26,48 @@ void UIOrchestratorBridge::set_orchestrator(orchestrator::Orchestrator* orch) {
 }
 
 void UIOrchestratorBridge::setup_worker_thread() {
+    msg("UIOrchestratorBridge: Setting up worker thread\n");
+    
     // Create worker thread
     worker_thread_ = new QThread();
+    msg("UIOrchestratorBridge: Created QThread\n");
     
     // Create worker
     worker_ = new OrchestratorWorker(orchestrator_);
+    msg("UIOrchestratorBridge: Created OrchestratorWorker\n");
     
     // Move worker to thread
     worker_->moveToThread(worker_thread_);
+    msg("UIOrchestratorBridge: Moved worker to thread\n");
     
     // Connect signals for task processing
-    connect(this, &UIOrchestratorBridge::process_task_requested,
-            worker_, &OrchestratorWorker::process_task);
+    msg("UIOrchestratorBridge: Connecting signals...\n");
+    
+    bool connected = connect(this, &UIOrchestratorBridge::process_task_requested,
+                           worker_, &OrchestratorWorker::process_task,
+                           Qt::QueuedConnection);
+    msg("UIOrchestratorBridge: process_task_requested connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     // Connect worker signals to bridge signals
-    connect(worker_, &OrchestratorWorker::processing_started,
-            this, &UIOrchestratorBridge::on_processing_started);
+    connected = connect(worker_, &OrchestratorWorker::processing_started,
+                       this, &UIOrchestratorBridge::on_processing_started,
+                       Qt::QueuedConnection);
+    msg("UIOrchestratorBridge: processing_started connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
-    connect(worker_, &OrchestratorWorker::processing_completed,
-            this, &UIOrchestratorBridge::on_processing_completed);
+    connected = connect(worker_, &OrchestratorWorker::processing_completed,
+                       this, &UIOrchestratorBridge::on_processing_completed,
+                       Qt::QueuedConnection);
+    msg("UIOrchestratorBridge: processing_completed connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
-    connect(worker_, &OrchestratorWorker::status_update,
-            this, &UIOrchestratorBridge::status_update);
+    connected = connect(worker_, &OrchestratorWorker::status_update,
+                       this, &UIOrchestratorBridge::status_update,
+                       Qt::QueuedConnection);
+    msg("UIOrchestratorBridge: status_update connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
-    connect(worker_, &OrchestratorWorker::error_occurred,
-            this, &UIOrchestratorBridge::error_occurred);
+    connected = connect(worker_, &OrchestratorWorker::error_occurred,
+                       this, &UIOrchestratorBridge::error_occurred,
+                       Qt::QueuedConnection);
+    msg("UIOrchestratorBridge: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     // Clean up when thread finishes
     connect(worker_thread_, &QThread::finished,
@@ -58,6 +75,7 @@ void UIOrchestratorBridge::setup_worker_thread() {
     
     // Start the thread
     worker_thread_->start();
+    msg("UIOrchestratorBridge: Worker thread started\n");
 }
 
 void UIOrchestratorBridge::cleanup_worker_thread() {

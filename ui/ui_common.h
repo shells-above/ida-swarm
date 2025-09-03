@@ -15,8 +15,8 @@
 #include <algorithm>
 
 // Step 2: IDA SDK headers - these MUST come before Qt
-// We don't actually need IDA headers in the UI, but if we do:
-// #include "../core/common_base.h"  // This includes IDA headers
+#include <pro.h>
+#include <kernwin.hpp>
 
 // Save Qt's emit macro if it's already defined
 #ifdef emit

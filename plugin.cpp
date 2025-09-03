@@ -195,18 +195,57 @@ private:
     void start_swarm_agent() {
         if (swarm_agent_) return;
         
-        // Get the orchestrator-generated prompt
-        std::string orchestrator_prompt = agent_config_["prompt"];
+        msg("LLM RE: start_swarm_agent() called\n");
         
-        swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
+        // Get the orchestrator-generated prompt
+        msg("LLM RE: Extracting prompt from config...\n");
+        std::string orchestrator_prompt = agent_config_["prompt"];
+        msg("LLM RE: Got prompt: %.100s...\n", orchestrator_prompt.c_str());
+        
+        msg("LLM RE: About to create SwarmAgent object for %s\n", agent_id_.c_str());
+        msg("LLM RE: config_ pointer = %p\n", (void*)config_);
+        
+        // Safety check
+        if (!config_) {
+            msg("LLM RE: ERROR - config_ is NULL!\n");
+            return;
+        }
+        
+        // CRITICAL: This is where it might crash
+        msg("LLM RE: Creating SwarmAgent with config at %p and agent_id %s\n", (void*)config_, agent_id_.c_str());
+        
+        // Validate config pointer
+        if (!config_) {
+            msg("LLM RE: ERROR - config_ is NULL!\n");
+            return;
+        }
+        
+        // Try to access config to verify it's valid
+        msg("LLM RE: Config auth_method=%d, api_key_len=%zu\n", 
+            (int)config_->api.auth_method, config_->api.api_key.length());
+        
+        msg("LLM RE: About to call new SwarmAgent\n");
+        try {
+            swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
+        } catch (const std::exception& e) {
+            msg("LLM RE: Exception creating SwarmAgent: %s\n", e.what());
+            return;
+        } catch (...) {
+            msg("LLM RE: Unknown exception creating SwarmAgent\n");
+            return;
+        }
+        
+        msg("LLM RE: SwarmAgent object created successfully\n");
         
         // Initialize with configuration
+        msg("LLM RE: About to call swarm_agent_->initialize()\n");
         if (!swarm_agent_->initialize(agent_config_)) {
             msg("LLM RE: Failed to initialize swarm agent\n");
             delete swarm_agent_;
             swarm_agent_ = nullptr;
             return;
         }
+        msg("LLM RE: SwarmAgent initialization returned successfully\n");
         
         msg("LLM RE: Starting swarm agent %s\n", agent_id_.c_str());
         msg("LLM RE: Task: %.200s...\n", orchestrator_prompt.c_str());

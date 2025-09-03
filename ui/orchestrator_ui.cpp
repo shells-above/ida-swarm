@@ -103,17 +103,27 @@ void OrchestratorUI::setup_ui() {
             this, &OrchestratorUI::on_task_submitted);
     
     // Connect to bridge signals for progress updates
-    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_started,
-            this, &OrchestratorUI::on_processing_started);
+    msg("OrchestratorUI: Connecting to bridge signals...\n");
     
-    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_completed,
-            this, &OrchestratorUI::on_processing_completed);
+    bool connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_started,
+                           this, &OrchestratorUI::on_processing_started,
+                           Qt::AutoConnection);
+    msg("OrchestratorUI: processing_started connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
-    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::status_update,
-            this, &OrchestratorUI::on_status_update);
+    connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_completed,
+                       this, &OrchestratorUI::on_processing_completed,
+                       Qt::AutoConnection);
+    msg("OrchestratorUI: processing_completed connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
-    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::error_occurred,
-            this, &OrchestratorUI::on_error_occurred);
+    connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::status_update,
+                       this, &OrchestratorUI::on_status_update,
+                       Qt::AutoConnection);
+    msg("OrchestratorUI: status_update connection: %s\n", connected ? "SUCCESS" : "FAILED");
+    
+    connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::error_occurred,
+                       this, &OrchestratorUI::on_error_occurred,
+                       Qt::AutoConnection);
+    msg("OrchestratorUI: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     // Status bar
     statusBar()->showMessage("Ready");
