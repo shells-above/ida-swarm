@@ -275,6 +275,8 @@ set(PLUGIN_SOURCES
         # Agent components
         agent/swarm_agent.cpp
         agent/conflict_detector.cpp
+        # UI components
+        ui/orchestrator_ui.cpp
         # Common sources
         ${COMMON_SOURCES}
 )
@@ -304,9 +306,16 @@ set(HEADERS
         agent/agent.h
         agent/tool_system.h
         agent/grader.h
+        agent/event_bus.h
         # IRC headers
         irc/irc_server.h
         irc/irc_client.h
+        # UI headers
+        ui/orchestrator_ui.h
+        ui/ui_orchestrator_bridge.h
+        ui/ui_integration.h
+        # Orchestrator headers
+        orchestrator/orchestrator.h
 )
 
 # Create unified plugin

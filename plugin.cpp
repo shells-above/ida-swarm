@@ -11,6 +11,8 @@
 #include "agent/swarm_agent.h"
 #include "agent/event_bus.h"
 #include "agent/message_adapter.h"
+#include "ui/orchestrator_ui.h"
+#include "ui/ui_orchestrator_bridge.h"
 #include "core/config.h"
 #include "core/ida_utils.h"
 #include <loader.hpp>
@@ -35,6 +37,7 @@ private:
     
     // Orchestrator mode
     orchestrator::Orchestrator* orchestrator_ = nullptr;
+    ui::OrchestratorUI* ui_window_ = nullptr;
     
     // Swarm agent mode
     agent::SwarmAgent* swarm_agent_ = nullptr;
@@ -150,6 +153,9 @@ private:
                 orchestrator_ = nullptr;
                 return;
             }
+            
+            // Set orchestrator in the bridge so UI can communicate with it
+            ui::UIOrchestratorBridge::instance().set_orchestrator(orchestrator_);
         }
         msg("LLM RE: Orchestrator ready\n");
     }
@@ -167,14 +173,20 @@ private:
     }
     
     void start_orchestrator() {
-        if (orchestrator_) {
-            // Already running, just start a new session
-            orchestrator_->start_interactive_session();
+        if (!orchestrator_) {
+            msg("LLM RE: Orchestrator not initialized\n");
             return;
         }
         
-        // Orchestrator should have been initialized in setup_orchestrator_mode
-        msg("LLM RE: Orchestrator not initialized\n");
+        // Create UI window if it doesn't exist
+        if (!ui_window_) {
+            ui_window_ = new ui::OrchestratorUI(nullptr);
+            msg("LLM RE: Created orchestrator UI\n");
+        }
+        
+        // Show the UI window
+        ui_window_->show_ui();
+        msg("LLM RE: Showing orchestrator UI\n");
     }
     
     void start_swarm_agent() {
@@ -252,6 +264,12 @@ private:
         if (!state_subscription_id_.empty()) {
             get_event_bus().unsubscribe(state_subscription_id_);
             state_subscription_id_.clear();
+        }
+        
+        // Clean up UI
+        if (ui_window_) {
+            delete ui_window_;
+            ui_window_ = nullptr;
         }
         
         // Clean up orchestrator mode

@@ -121,7 +121,7 @@ void Orchestrator::start_interactive_session() {
     if (ask_str(&user_input, 0, "What would you like me to investigate?")) {
         if (!user_input.empty()) {
             // Emit user input event
-            event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_INPUT, "orchestrator", {
+            event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_INPUT, "orchestrator", {
                 {"input", user_input.c_str()}
             }));
             
@@ -145,7 +145,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     ORCH_LOG("Orchestrator: Thinking deeply about approach...\n");
     
     // Emit thinking event
-    event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
+    event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
     
     // Send to Claude API with deep thinking
     auto response = send_orchestrator_request(input);
@@ -162,7 +162,7 @@ void Orchestrator::process_user_input(const std::string& input) {
         ORCH_LOG("Orchestrator: %s\n", text->c_str());
         
         // Emit orchestrator response event
-        event_bus_.emit(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+        event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
             {"response", *text}
         }));
     }
@@ -393,7 +393,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     std::string agent_id = std::format("agent_{}", next_agent_id_++);
     
     // Emit agent spawning event
-    event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWNING, "orchestrator", {
+    event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWNING, "orchestrator", {
         {"agent_id", agent_id},
         {"task", task}
     }));
@@ -430,7 +430,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     
     if (pid <= 0) {
         // Emit spawn failed event
-        event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWN_FAILED, "orchestrator", {
+        event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWN_FAILED, "orchestrator", {
             {"agent_id", agent_id},
             {"error", "Failed to spawn agent process"}
         }));
@@ -442,7 +442,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     }
     
     // Emit spawn complete event
-    event_bus_.emit(AgentEvent(AgentEvent::AGENT_SPAWN_COMPLETE, "orchestrator", {
+    event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWN_COMPLETE, "orchestrator", {
         {"agent_id", agent_id}
     }));
     
@@ -669,7 +669,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             ORCH_LOG("Orchestrator: Received result from %s: %s\n", agent_id.c_str(), report.c_str());
             
             // Emit swarm result event
-            event_bus_.emit(AgentEvent(AgentEvent::SWARM_RESULT, "orchestrator", {
+            event_bus_.publish(AgentEvent(AgentEvent::SWARM_RESULT, "orchestrator", {
                 {"agent_id", agent_id},
                 {"result", report}
             }));

@@ -49,6 +49,9 @@ public:
     // Helper to get agent result
     std::string get_agent_result(const std::string& agent_id) const;
     
+    // Process user input (public for UI access)
+    void process_user_input(const std::string& input);
+    
 private:
     // Core components
     const Config& config_;
@@ -93,9 +96,6 @@ private:
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
-    
-    // Process user input
-    void process_user_input(const std::string& input);
     
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);

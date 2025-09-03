@@ -279,9 +279,12 @@ private:
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
 
+protected:  // Make these accessible to SwarmAgent
     // Event bus for all communication
     EventBus& event_bus_;
     std::string agent_id_;
+    
+private:
 
     // System prompt
     // note that if you start getting errors about Qt MOC making a llm_re::llm_re:: namespace it probably
@@ -830,7 +833,7 @@ private:
         std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
         if (text && !text->empty()) {
             emit_log(LogLevel::INFO, "[Grader Response] " + *text);
-            event_bus_.emit(AgentEvent(AgentEvent::GRADER_FEEDBACK, agent_id_, {
+            event_bus_.publish(AgentEvent(AgentEvent::GRADER_FEEDBACK, agent_id_, {
                 {"feedback", *text}
             }));
         }
@@ -1014,7 +1017,7 @@ private:
     // Trigger context consolidation
     void trigger_context_consolidation() {
         emit_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
-        event_bus_.emit(AgentEvent(AgentEvent::CONTEXT_CONSOLIDATION, agent_id_, {
+        event_bus_.publish(AgentEvent(AgentEvent::CONTEXT_CONSOLIDATION, agent_id_, {
             {"status", "starting"}
         }));
 
@@ -1308,7 +1311,7 @@ private:
                         pending_user_messages_.pop();
                         
                         emit_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
-                        event_bus_.emit(AgentEvent(AgentEvent::USER_MESSAGE, agent_id_, {
+                        event_bus_.publish(AgentEvent(AgentEvent::USER_MESSAGE, agent_id_, {
                             {"message", user_msg}
                         }));
                         
@@ -1354,7 +1357,7 @@ private:
                             grader_approved = true;
                             
                             // Emit final report event
-                            event_bus_.emit(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
+                            event_bus_.publish(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
                                 {"report", grade.response}
                             }));
                             change_state(AgentState::Status::Completed);
@@ -1375,7 +1378,7 @@ private:
                         std::string final_findings = extract_last_assistant_message();
                         
                         // Emit the actual findings as the final report
-                        event_bus_.emit(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
+                        event_bus_.publish(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
                             {"report", final_findings}
                         }));
                         change_state(AgentState::Status::Completed);

@@ -319,6 +319,12 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
     msg("SwarmAgent: IRC message in %s from %s: %.100s...\n", 
         channel.c_str(), sender.c_str(), message.c_str());
     
+    // Emit IRC message event for UI
+    event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
+        {"channel", channel},
+        {"message", message}
+    }));
+    
     // Handle system messages from the server
     if (sender == "SYSTEM") {
         // Parse system notifications
@@ -400,6 +406,12 @@ void SwarmAgent::send_irc_message(const std::string& channel, const std::string&
     if (irc_client_ && irc_connected_) {
         irc_client_->send_message(channel, message);
         emit_log(LogLevel::INFO, std::format("Sent to {}: {}", channel, message));
+        
+        // Emit our own message to the event bus for UI
+        event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, agent_id_, {
+            {"channel", channel},
+            {"message", message}
+        }));
     } else {
         emit_log(LogLevel::WARNING, "Not connected to IRC");
     }

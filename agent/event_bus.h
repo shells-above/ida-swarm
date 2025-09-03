@@ -96,8 +96,9 @@ public:
         );
     }
     
-    // Emit event to all subscribers (non-blocking)
-    void emit(const AgentEvent& event) {
+    // Publish event to all subscribers (non-blocking)
+    // Note: Qt defines 'emit' as a macro, so we avoid that name
+    void publish(const AgentEvent& event) {
         std::vector<Handler> handlers_to_call;
         
         {
@@ -124,34 +125,34 @@ public:
     
     // Helper methods for common event types
     void emit_log(const std::string& source, LogLevel level, const std::string& message) {
-        emit(AgentEvent(AgentEvent::LOG, source, {
+        publish(AgentEvent(AgentEvent::LOG, source, {
             {"level", static_cast<int>(level)},
             {"message", message}
         }));
     }
     
     void emit_state(const std::string& source, int status) {
-        emit(AgentEvent(AgentEvent::STATE, source, {
+        publish(AgentEvent(AgentEvent::STATE, source, {
             {"status", status}
         }));
     }
     
     void emit_message(const std::string& source, const json& message_data) {
-        emit(AgentEvent(AgentEvent::MESSAGE, source, message_data));
+        publish(AgentEvent(AgentEvent::MESSAGE, source, message_data));
     }
     
     void emit_tool_call(const std::string& source, const json& tool_data) {
-        emit(AgentEvent(AgentEvent::TOOL_CALL, source, tool_data));
+        publish(AgentEvent(AgentEvent::TOOL_CALL, source, tool_data));
     }
     
     void emit_error(const std::string& source, const std::string& error) {
-        emit(AgentEvent(AgentEvent::ERROR, source, {
+        publish(AgentEvent(AgentEvent::ERROR, source, {
             {"error", error}
         }));
     }
     
     void emit_metric(const std::string& source, const json& metrics) {
-        emit(AgentEvent(AgentEvent::METRIC, source, metrics));
+        publish(AgentEvent(AgentEvent::METRIC, source, metrics));
     }
 };
 
