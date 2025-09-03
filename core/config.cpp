@@ -45,9 +45,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["orchestrator"]["model"]["max_thinking_tokens"] = orchestrator.model.max_thinking_tokens;
         j["orchestrator"]["model"]["temperature"] = orchestrator.model.temperature;
         j["orchestrator"]["model"]["enable_thinking"] = orchestrator.model.enable_thinking;
-        
-        // Swarm settings
-        j["swarm"] = {};
 
         // Write to file
         std::ofstream file(path);
@@ -130,10 +127,6 @@ bool Config::load_from_file(const std::string& path) {
                 orchestrator.model.temperature = j["orchestrator"]["model"].value("temperature", orchestrator.model.temperature);
                 orchestrator.model.enable_thinking = j["orchestrator"]["model"].value("enable_thinking", orchestrator.model.enable_thinking);
             }
-        }
-        
-        // Swarm settings
-        if (j.contains("swarm")) {
         }
 
         return true;
