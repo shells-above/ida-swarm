@@ -1,0 +1,958 @@
+// Include order is critical! ui_common.h handles the proper ordering
+#include "ui_common.h"
+#include "orchestrator_ui.h"
+#include "ui_orchestrator_bridge.h"
+#include "preferences_dialog.h"
+
+// Now we can safely include Qt implementation headers
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSplitter>
+#include <QTextEdit>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTableWidget>
+#include <QListWidget>
+#include <QLabel>
+#include <QTabWidget>
+#include <QPlainTextEdit>
+#include <QTreeWidget>
+#include <QProgressBar>
+#include <QComboBox>
+#include <QHeaderView>
+#include <QMenuBar>
+#include <QMenu>
+#include <QAction>
+#include <QStatusBar>
+#include <QDateTime>
+#include <QTextCursor>
+#include <QTextCharFormat>
+#include <QTimer>
+#include <QGroupBox>
+#include <QGridLayout>
+#include <QScrollBar>
+
+namespace llm_re::ui {
+
+// Main OrchestratorUI implementation
+OrchestratorUI::OrchestratorUI(QWidget* parent) 
+    : QMainWindow(parent) {
+    setup_ui();
+    setup_event_subscriptions();
+    create_menus();
+}
+
+OrchestratorUI::~OrchestratorUI() {
+    // Unsubscribe from EventBus
+    if (!event_subscription_id_.empty()) {
+        event_bus_.unsubscribe(event_subscription_id_);
+    }
+}
+
+void OrchestratorUI::setup_ui() {
+    setWindowTitle("IDA RE Agent - Orchestrator Control");
+    resize(1400, 900);
+    
+    // Create central widget and main layout
+    auto* central = new QWidget(this);
+    setCentralWidget(central);
+    auto* layout = new QVBoxLayout(central);
+    
+    // Create main horizontal splitter
+    main_splitter_ = new QSplitter(Qt::Horizontal, this);
+    
+    // Left side - Task panel and Agent monitor
+    left_splitter_ = new QSplitter(Qt::Vertical);
+    
+    task_panel_ = new TaskPanel(this);
+    agent_monitor_ = new AgentMonitor(this);
+    
+    left_splitter_->addWidget(task_panel_);
+    left_splitter_->addWidget(agent_monitor_);
+    left_splitter_->setStretchFactor(0, 2);  // Task panel gets more space
+    left_splitter_->setStretchFactor(1, 1);
+    
+    // Right side - Metrics at top, tabs at bottom
+    right_splitter_ = new QSplitter(Qt::Vertical);
+    
+    metrics_panel_ = new MetricsPanel(this);
+    
+    // Bottom tabs for IRC and Tool calls
+    bottom_tabs_ = new QTabWidget(this);
+    irc_viewer_ = new IRCViewer(this);
+    tool_tracker_ = new ToolCallTracker(this);
+    
+    bottom_tabs_->addTab(irc_viewer_, "IRC Communication");
+    bottom_tabs_->addTab(tool_tracker_, "Tool Calls");
+    
+    right_splitter_->addWidget(metrics_panel_);
+    right_splitter_->addWidget(bottom_tabs_);
+    right_splitter_->setStretchFactor(0, 1);
+    right_splitter_->setStretchFactor(1, 3);
+    
+    // Add to main splitter
+    main_splitter_->addWidget(left_splitter_);
+    main_splitter_->addWidget(right_splitter_);
+    main_splitter_->setStretchFactor(0, 3);
+    main_splitter_->setStretchFactor(1, 2);
+    
+    layout->addWidget(main_splitter_);
+    
+    // Connect signals
+    connect(task_panel_, &TaskPanel::task_submitted, 
+            this, &OrchestratorUI::on_task_submitted);
+    
+    // Connect to bridge signals for progress updates
+    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_started,
+            this, &OrchestratorUI::on_processing_started);
+    
+    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_completed,
+            this, &OrchestratorUI::on_processing_completed);
+    
+    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::status_update,
+            this, &OrchestratorUI::on_status_update);
+    
+    connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::error_occurred,
+            this, &OrchestratorUI::on_error_occurred);
+    
+    // Status bar
+    statusBar()->showMessage("Ready");
+}
+
+void OrchestratorUI::setup_event_subscriptions() {
+    // Connect internal signal for thread-safe updates
+    connect(this, &OrchestratorUI::event_received,
+            this, &OrchestratorUI::handle_event,
+            Qt::QueuedConnection);
+    
+    // Subscribe to ALL EventBus events
+    event_subscription_id_ = event_bus_.subscribe(
+        [this](const AgentEvent& event) {
+            // Emit signal to handle in UI thread
+            emit event_received(event);
+        }
+    );
+}
+
+void OrchestratorUI::create_menus() {
+    // File menu
+    QMenu* file_menu = menuBar()->addMenu("&File");
+    
+    QAction* clear_action = file_menu->addAction("&Clear All");
+    connect(clear_action, &QAction::triggered, this, &OrchestratorUI::on_clear_console);
+    
+    file_menu->addSeparator();
+    
+    QAction* close_action = file_menu->addAction("&Close");
+    connect(close_action, &QAction::triggered, this, &QWidget::close);
+    
+    // Edit menu
+    QMenu* edit_menu = menuBar()->addMenu("&Edit");
+    
+    QAction* preferences_action = edit_menu->addAction("&Preferences...");
+    connect(preferences_action, &QAction::triggered, this, &OrchestratorUI::on_preferences_clicked);
+    
+    // Control menu
+    QMenu* control_menu = menuBar()->addMenu("&Control");
+    
+    QAction* pause_action = control_menu->addAction("&Pause/Resume");
+    connect(pause_action, &QAction::triggered, this, &OrchestratorUI::on_pause_resume_clicked);
+}
+
+void OrchestratorUI::handle_event(const AgentEvent& event) {
+    // Route events to appropriate widgets based on type
+    switch (event.type) {
+        case AgentEvent::ORCHESTRATOR_INPUT:
+            if (event.payload.contains("input")) {
+                task_panel_->add_user_input(event.payload["input"]);
+            }
+            break;
+            
+        case AgentEvent::ORCHESTRATOR_THINKING:
+            task_panel_->set_thinking_state(true);
+            statusBar()->showMessage("Orchestrator thinking...");
+            break;
+            
+        case AgentEvent::ORCHESTRATOR_RESPONSE:
+            task_panel_->set_thinking_state(false);
+            if (event.payload.contains("response")) {
+                task_panel_->add_orchestrator_message(event.payload["response"]);
+            }
+            statusBar()->showMessage("Ready");
+            break;
+            
+        case AgentEvent::AGENT_SPAWNING:
+            if (event.payload.contains("agent_id") && event.payload.contains("task")) {
+                agent_monitor_->on_agent_spawning(
+                    event.payload["agent_id"],
+                    event.payload["task"]
+                );
+            }
+            break;
+            
+        case AgentEvent::AGENT_SPAWN_COMPLETE:
+            if (event.payload.contains("agent_id")) {
+                agent_monitor_->on_agent_spawned(event.payload["agent_id"]);
+            }
+            break;
+            
+        case AgentEvent::AGENT_SPAWN_FAILED:
+            if (event.payload.contains("agent_id")) {
+                std::string error = event.payload.contains("error") ? 
+                    event.payload["error"] : "Unknown error";
+                agent_monitor_->on_agent_failed(event.payload["agent_id"], error);
+            }
+            break;
+            
+        case AgentEvent::STATE:
+            if (event.payload.contains("status")) {
+                agent_monitor_->on_agent_state_change(
+                    event.source,
+                    event.payload["status"]
+                );
+            }
+            break;
+            
+        case AgentEvent::TOOL_CALL:
+            tool_tracker_->add_tool_call(event.source, event.payload);
+            break;
+            
+        case AgentEvent::METRIC:
+            if (event.payload.contains("input_tokens") && event.payload.contains("output_tokens")) {
+                metrics_panel_->update_token_usage(
+                    event.payload["input_tokens"],
+                    event.payload["output_tokens"]
+                );
+            }
+            break;
+            
+        case AgentEvent::TASK_COMPLETE:
+            agent_monitor_->on_agent_completed(event.source);
+            break;
+            
+        case AgentEvent::MESSAGE:
+            // Could be IRC message or other
+            if (event.payload.contains("channel") && event.payload.contains("message")) {
+                irc_viewer_->add_message(
+                    event.payload["channel"],
+                    event.source,
+                    event.payload["message"]
+                );
+            }
+            break;
+            
+        case AgentEvent::ERROR:
+            if (event.payload.contains("error")) {
+                statusBar()->showMessage(
+                    QString("Error from %1: %2")
+                        .arg(QString::fromStdString(event.source))
+                        .arg(QString::fromStdString(event.payload["error"])),
+                    5000
+                );
+            }
+            break;
+    }
+}
+
+void OrchestratorUI::on_task_submitted() {
+    msg("OrchestratorUI: on_task_submitted called\n");
+    
+    std::string task = task_panel_->get_task_input();
+    if (task.empty()) {
+        msg("OrchestratorUI: Task is empty, returning\n");
+        return;
+    }
+    
+    msg("OrchestratorUI: Task: %s\n", task.c_str());
+    
+    // Clear input
+    task_panel_->clear_input();
+    
+    // Submit task to orchestrator via bridge
+    msg("OrchestratorUI: Submitting task to bridge\n");
+    UIOrchestratorBridge::instance().submit_task(task);
+}
+
+void OrchestratorUI::on_clear_console() {
+    task_panel_->clear_history();
+    agent_monitor_->clear_agents();
+    irc_viewer_->clear_messages();
+    tool_tracker_->clear_calls();
+}
+
+void OrchestratorUI::on_pause_resume_clicked() {
+    is_paused_ = !is_paused_;
+    statusBar()->showMessage(is_paused_ ? "Paused" : "Resumed");
+}
+
+void OrchestratorUI::on_preferences_clicked() {
+    PreferencesDialog dialog(this);
+    
+    // Connect to configuration changed signal to update UI if needed
+    connect(&dialog, &PreferencesDialog::configurationChanged,
+            [this]() {
+                statusBar()->showMessage("Configuration updated", 3000);
+                // The UI components will use Config::instance() directly
+                // so no need to manually update anything here
+            });
+    
+    dialog.exec();
+}
+
+void OrchestratorUI::on_processing_started() {
+    msg("OrchestratorUI: on_processing_started called!\n");
+    
+    // Disable input while processing
+    task_panel_->submit_button_->setEnabled(false);
+    task_panel_->task_input_->setEnabled(false);
+    
+    // Update status
+    task_panel_->set_thinking_state(true);
+    statusBar()->showMessage("Processing task...");
+    
+    msg("OrchestratorUI: UI updated to show processing state\n");
+}
+
+void OrchestratorUI::on_processing_completed() {
+    // Re-enable input
+    task_panel_->submit_button_->setEnabled(true);
+    task_panel_->task_input_->setEnabled(true);
+    
+    // Update status
+    task_panel_->set_thinking_state(false);
+    statusBar()->showMessage("Ready");
+}
+
+void OrchestratorUI::on_status_update(const QString& message) {
+    statusBar()->showMessage(message);
+}
+
+void OrchestratorUI::on_error_occurred(const QString& error) {
+    // Show error in status bar
+    statusBar()->showMessage(QString("Error: %1").arg(error), 5000);
+    
+    // Also add to conversation display
+    task_panel_->format_message("System", error.toStdString(), "#FF0000");
+    
+    // Re-enable UI if needed
+    task_panel_->submit_button_->setEnabled(true);
+    task_panel_->task_input_->setEnabled(true);
+    task_panel_->set_thinking_state(false);
+}
+
+void OrchestratorUI::show_ui() {
+    show();
+    raise();
+    activateWindow();
+}
+
+// TaskPanel implementation
+TaskPanel::TaskPanel(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Conversation display
+    conversation_display_ = new QTextEdit(this);
+    conversation_display_->setReadOnly(true);
+    conversation_display_->setFont(QFont("Consolas", 10));
+    
+    // Status label
+    status_label_ = new QLabel("Ready", this);
+    status_label_->setStyleSheet("QLabel { color: green; font-weight: bold; }");
+    
+    // Input area
+    auto* input_layout = new QHBoxLayout();
+    
+    task_input_ = new QLineEdit(this);
+    task_input_->setPlaceholderText("Enter task for orchestrator...");
+    task_input_->setFont(QFont("Consolas", 10));
+    
+    submit_button_ = new QPushButton("Submit Task", this);
+    clear_button_ = new QPushButton("Clear", this);
+    
+    input_layout->addWidget(task_input_);
+    input_layout->addWidget(submit_button_);
+    input_layout->addWidget(clear_button_);
+    
+    layout->addWidget(new QLabel("Orchestrator Conversation:", this));
+    layout->addWidget(conversation_display_);
+    layout->addWidget(status_label_);
+    layout->addLayout(input_layout);
+    
+    // Connect signals
+    connect(submit_button_, &QPushButton::clicked, [this]() {
+        emit task_submitted();
+    });
+    
+    connect(task_input_, &QLineEdit::returnPressed, [this]() {
+        emit task_submitted();
+    });
+    
+    connect(clear_button_, &QPushButton::clicked, [this]() {
+        clear_history();
+    });
+}
+
+void TaskPanel::add_orchestrator_message(const std::string& message, bool is_thinking) {
+    QString prefix = is_thinking ? "[THINKING] " : "";
+    format_message("Orchestrator", prefix.toStdString() + message, "#0000FF");
+}
+
+void TaskPanel::add_user_input(const std::string& input) {
+    format_message("User", input, "#008000");
+}
+
+void TaskPanel::format_message(const std::string& speaker, const std::string& message, const QString& color) {
+    QTextCursor cursor = conversation_display_->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    
+    // Add timestamp
+    QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
+    cursor.insertHtml(QString("<span style='color: gray'>[%1]</span> ").arg(timestamp));
+    
+    // Add speaker
+    cursor.insertHtml(QString("<span style='color: %1; font-weight: bold'>%2:</span> ")
+        .arg(color)
+        .arg(QString::fromStdString(speaker)));
+    
+    // Add message
+    cursor.insertText(QString::fromStdString(message) + "\n\n");
+    
+    // Scroll to bottom
+    conversation_display_->verticalScrollBar()->setValue(
+        conversation_display_->verticalScrollBar()->maximum()
+    );
+}
+
+void TaskPanel::clear_history() {
+    conversation_display_->clear();
+}
+
+std::string TaskPanel::get_task_input() const {
+    return task_input_->text().toStdString();
+}
+
+void TaskPanel::clear_input() {
+    task_input_->clear();
+}
+
+void TaskPanel::set_thinking_state(bool thinking) {
+    if (thinking) {
+        status_label_->setText("Orchestrator thinking...");
+        status_label_->setStyleSheet("QLabel { color: orange; font-weight: bold; }");
+    } else {
+        status_label_->setText("Ready");
+        status_label_->setStyleSheet("QLabel { color: green; font-weight: bold; }");
+    }
+}
+
+// AgentMonitor implementation
+AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Header
+    auto* header_layout = new QHBoxLayout();
+    header_layout->addWidget(new QLabel("Active Agents:", this));
+    
+    agent_count_label_ = new QLabel("0 agents", this);
+    agent_count_label_->setStyleSheet("QLabel { font-weight: bold; }");
+    header_layout->addWidget(agent_count_label_);
+    header_layout->addStretch();
+    
+    // Agent table
+    agent_table_ = new QTableWidget(0, 5, this);
+    agent_table_->setHorizontalHeaderLabels(
+        QStringList() << "Agent ID" << "Task" << "Status" << "Spawned" << "Duration"
+    );
+    agent_table_->horizontalHeader()->setStretchLastSection(true);
+    agent_table_->setAlternatingRowColors(true);
+    agent_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    
+    layout->addLayout(header_layout);
+    layout->addWidget(agent_table_);
+}
+
+void AgentMonitor::on_agent_spawning(const std::string& agent_id, const std::string& task) {
+    int row = agent_table_->rowCount();
+    agent_table_->insertRow(row);
+    
+    agent_table_->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(agent_id)));
+    
+    // Truncate task if too long
+    std::string display_task = task.length() > 50 ? task.substr(0, 47) + "..." : task;
+    agent_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(display_task)));
+    
+    agent_table_->setItem(row, 2, new QTableWidgetItem("Spawning"));
+    agent_table_->setItem(row, 3, new QTableWidgetItem(QDateTime::currentDateTime().toString("hh:mm:ss")));
+    agent_table_->setItem(row, 4, new QTableWidgetItem("0s"));
+    
+    // Color code status
+    agent_table_->item(row, 2)->setBackground(QColor(255, 255, 200));
+    
+    update_agent_count();
+}
+
+void AgentMonitor::on_agent_spawned(const std::string& agent_id) {
+    int row = find_agent_row(agent_id);
+    if (row >= 0) {
+        agent_table_->item(row, 2)->setText("Active");
+        agent_table_->item(row, 2)->setBackground(QColor(200, 255, 200));
+    }
+}
+
+void AgentMonitor::on_agent_failed(const std::string& agent_id, const std::string& error) {
+    int row = find_agent_row(agent_id);
+    if (row >= 0) {
+        agent_table_->item(row, 2)->setText("Failed");
+        agent_table_->item(row, 2)->setBackground(QColor(255, 200, 200));
+        agent_table_->item(row, 2)->setToolTip(QString::fromStdString(error));
+    }
+}
+
+void AgentMonitor::on_agent_state_change(const std::string& agent_id, int state) {
+    int row = find_agent_row(agent_id);
+    if (row >= 0) {
+        QString status = state_to_string(state);
+        agent_table_->item(row, 2)->setText(status);
+        
+        // Update color based on state
+        if (state == 0) { // Idle
+            agent_table_->item(row, 2)->setBackground(QColor(220, 220, 220));
+        } else if (state == 1) { // Running
+            agent_table_->item(row, 2)->setBackground(QColor(200, 255, 200));
+        } else if (state == 2) { // Paused
+            agent_table_->item(row, 2)->setBackground(QColor(255, 255, 200));
+        } else if (state == 3) { // Completed
+            agent_table_->item(row, 2)->setBackground(QColor(200, 200, 255));
+        }
+    }
+}
+
+void AgentMonitor::on_agent_completed(const std::string& agent_id) {
+    int row = find_agent_row(agent_id);
+    if (row >= 0) {
+        agent_table_->item(row, 2)->setText("Completed");
+        agent_table_->item(row, 2)->setBackground(QColor(200, 200, 255));
+    }
+}
+
+void AgentMonitor::clear_agents() {
+    agent_table_->setRowCount(0);
+    update_agent_count();
+}
+
+int AgentMonitor::find_agent_row(const std::string& agent_id) {
+    for (int i = 0; i < agent_table_->rowCount(); ++i) {
+        if (agent_table_->item(i, 0)->text().toStdString() == agent_id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void AgentMonitor::update_agent_count() {
+    int count = agent_table_->rowCount();
+    agent_count_label_->setText(QString("%1 agent%2").arg(count).arg(count == 1 ? "" : "s"));
+}
+
+QString AgentMonitor::state_to_string(int state) {
+    switch (state) {
+        case 0: return "Idle";
+        case 1: return "Running";
+        case 2: return "Paused";
+        case 3: return "Completed";
+        default: return "Unknown";
+    }
+}
+
+// IRCViewer implementation
+IRCViewer::IRCViewer(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Controls
+    auto* control_layout = new QHBoxLayout();
+    
+    control_layout->addWidget(new QLabel("Channel:", this));
+    
+    channel_combo_ = new QComboBox(this);
+    channel_combo_->addItem("All Channels");
+    channel_combo_->addItem("#agents");
+    channel_combo_->addItem("#results");
+    channel_combo_->addItem("#conflicts");
+    channel_combo_->setCurrentIndex(0);
+    control_layout->addWidget(channel_combo_);
+    
+    control_layout->addWidget(new QLabel("Filter:", this));
+    
+    filter_input_ = new QLineEdit(this);
+    filter_input_->setPlaceholderText("Filter messages...");
+    control_layout->addWidget(filter_input_);
+    
+    clear_button_ = new QPushButton("Clear", this);
+    control_layout->addWidget(clear_button_);
+    
+    control_layout->addStretch();
+    
+    // Message tree
+    message_tree_ = new QTreeWidget(this);
+    message_tree_->setHeaderLabels(QStringList() << "Time" << "Channel" << "Sender" << "Message");
+    message_tree_->setAlternatingRowColors(true);
+    message_tree_->setRootIsDecorated(false);
+    
+    // Adjust column widths
+    message_tree_->setColumnWidth(0, 80);
+    message_tree_->setColumnWidth(1, 100);
+    message_tree_->setColumnWidth(2, 100);
+    
+    layout->addLayout(control_layout);
+    layout->addWidget(message_tree_);
+    
+    // Connect signals
+    connect(channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &IRCViewer::on_channel_selected);
+    
+    connect(filter_input_, &QLineEdit::textChanged,
+            this, &IRCViewer::on_filter_changed);
+    
+    connect(clear_button_, &QPushButton::clicked,
+            this, &IRCViewer::clear_messages);
+}
+
+void IRCViewer::add_message(const std::string& channel, const std::string& sender, const std::string& message) {
+    auto* item = new QTreeWidgetItem(message_tree_);
+    
+    item->setText(0, QDateTime::currentDateTime().toString("hh:mm:ss"));
+    item->setText(1, QString::fromStdString(channel));
+    item->setText(2, QString::fromStdString(sender));
+    item->setText(3, QString::fromStdString(message));
+    
+    // Color code by channel
+    if (channel == "#conflicts") {
+        item->setBackground(1, QColor(255, 220, 220));
+    } else if (channel == "#results") {
+        item->setBackground(1, QColor(220, 220, 255));
+    }
+    
+    apply_filters();
+}
+
+void IRCViewer::add_join(const std::string& channel, const std::string& nick) {
+    add_message(channel, "***", nick + " has joined");
+}
+
+void IRCViewer::add_part(const std::string& channel, const std::string& nick) {
+    add_message(channel, "***", nick + " has left");
+}
+
+void IRCViewer::clear_messages() {
+    message_tree_->clear();
+}
+
+void IRCViewer::set_channel_filter(const std::string& channel) {
+    current_channel_filter_ = channel;
+    apply_filters();
+}
+
+void IRCViewer::on_channel_selected() {
+    QString channel = channel_combo_->currentText();
+    if (channel == "All Channels") {
+        current_channel_filter_.clear();
+    } else {
+        current_channel_filter_ = channel.toStdString();
+    }
+    apply_filters();
+}
+
+void IRCViewer::on_filter_changed(const QString& text) {
+    apply_filters();
+}
+
+void IRCViewer::apply_filters() {
+    QString filter_text = filter_input_->text().toLower();
+    
+    for (int i = 0; i < message_tree_->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* item = message_tree_->topLevelItem(i);
+        
+        bool visible = true;
+        
+        // Channel filter
+        if (!current_channel_filter_.empty()) {
+            if (item->text(1).toStdString() != current_channel_filter_) {
+                visible = false;
+            }
+        }
+        
+        // Text filter
+        if (visible && !filter_text.isEmpty()) {
+            bool match = item->text(2).toLower().contains(filter_text) ||
+                         item->text(3).toLower().contains(filter_text);
+            if (!match) {
+                visible = false;
+            }
+        }
+        
+        item->setHidden(!visible);
+    }
+}
+
+// ToolCallTracker implementation
+ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Controls and stats
+    auto* control_layout = new QHBoxLayout();
+    
+    control_layout->addWidget(new QLabel("Agent:", this));
+    
+    agent_filter_ = new QComboBox(this);
+    agent_filter_->addItem("All Agents");
+    control_layout->addWidget(agent_filter_);
+    
+    control_layout->addWidget(new QLabel("Tool:", this));
+    
+    tool_filter_ = new QLineEdit(this);
+    tool_filter_->setPlaceholderText("Filter tools...");
+    control_layout->addWidget(tool_filter_);
+    
+    call_count_label_ = new QLabel("Total: 0 calls", this);
+    control_layout->addWidget(call_count_label_);
+    
+    conflict_count_label_ = new QLabel("Conflicts: 0", this);
+    conflict_count_label_->setStyleSheet("QLabel { color: red; font-weight: bold; }");
+    control_layout->addWidget(conflict_count_label_);
+    
+    control_layout->addStretch();
+    
+    // Tool call table
+    tool_table_ = new QTableWidget(0, 5, this);
+    tool_table_->setHorizontalHeaderLabels(
+        QStringList() << "Time" << "Agent" << "Tool" << "Parameters" << "Result"
+    );
+    tool_table_->horizontalHeader()->setStretchLastSection(true);
+    tool_table_->setAlternatingRowColors(true);
+    
+    layout->addLayout(control_layout);
+    layout->addWidget(tool_table_);
+    
+    // Connect signals
+    connect(agent_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ToolCallTracker::on_agent_filter_changed);
+    
+    connect(tool_filter_, &QLineEdit::textChanged,
+            this, &ToolCallTracker::on_tool_filter_changed);
+}
+
+void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& tool_data) {
+    int row = tool_table_->rowCount();
+    tool_table_->insertRow(row);
+    
+    tool_table_->setItem(row, 0, new QTableWidgetItem(QDateTime::currentDateTime().toString("hh:mm:ss")));
+    tool_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(agent_id)));
+    
+    // Extract tool name and parameters
+    std::string tool_name = tool_data.contains("tool") ? tool_data["tool"] : "unknown";
+    tool_table_->setItem(row, 2, new QTableWidgetItem(QString::fromStdString(tool_name)));
+    
+    // Format parameters
+    if (tool_data.contains("input")) {
+        std::string params = tool_data["input"].dump();
+        if (params.length() > 100) params = params.substr(0, 97) + "...";
+        tool_table_->setItem(row, 3, new QTableWidgetItem(QString::fromStdString(params)));
+    } else {
+        tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
+    }
+    
+    // Result status
+    if (tool_data.contains("result")) {
+        if (tool_data["result"].contains("success") && tool_data["result"]["success"] == false) {
+            tool_table_->setItem(row, 4, new QTableWidgetItem("Failed"));
+            tool_table_->item(row, 4)->setBackground(QColor(255, 200, 200));
+        } else {
+            tool_table_->setItem(row, 4, new QTableWidgetItem("Success"));
+            tool_table_->item(row, 4)->setBackground(QColor(200, 255, 200));
+        }
+    } else {
+        tool_table_->setItem(row, 4, new QTableWidgetItem("Pending"));
+    }
+    
+    // Update agent filter if needed
+    bool found = false;
+    for (int i = 0; i < agent_filter_->count(); ++i) {
+        if (agent_filter_->itemText(i).toStdString() == agent_id) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        agent_filter_->addItem(QString::fromStdString(agent_id));
+    }
+    
+    total_calls_++;
+    update_stats();
+    apply_filters();
+}
+
+void ToolCallTracker::add_conflict(const std::string& description) {
+    conflict_count_++;
+    update_stats();
+}
+
+void ToolCallTracker::clear_calls() {
+    tool_table_->setRowCount(0);
+    total_calls_ = 0;
+    conflict_count_ = 0;
+    update_stats();
+}
+
+void ToolCallTracker::set_agent_filter(const std::string& agent_id) {
+    current_agent_filter_ = agent_id;
+    apply_filters();
+}
+
+void ToolCallTracker::on_agent_filter_changed() {
+    QString agent = agent_filter_->currentText();
+    if (agent == "All Agents") {
+        current_agent_filter_.clear();
+    } else {
+        current_agent_filter_ = agent.toStdString();
+    }
+    apply_filters();
+}
+
+void ToolCallTracker::on_tool_filter_changed(const QString& text) {
+    apply_filters();
+}
+
+void ToolCallTracker::apply_filters() {
+    QString filter_text = tool_filter_->text().toLower();
+    
+    for (int i = 0; i < tool_table_->rowCount(); ++i) {
+        bool visible = true;
+        
+        // Agent filter
+        if (!current_agent_filter_.empty()) {
+            if (tool_table_->item(i, 1)->text().toStdString() != current_agent_filter_) {
+                visible = false;
+            }
+        }
+        
+        // Tool filter
+        if (visible && !filter_text.isEmpty()) {
+            if (!tool_table_->item(i, 2)->text().toLower().contains(filter_text)) {
+                visible = false;
+            }
+        }
+        
+        tool_table_->setRowHidden(i, !visible);
+    }
+}
+
+void ToolCallTracker::update_stats() {
+    call_count_label_->setText(QString("Total: %1 calls").arg(total_calls_));
+    conflict_count_label_->setText(QString("Conflicts: %1").arg(conflict_count_));
+}
+
+// MetricsPanel implementation
+MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Token usage section
+    auto* token_group = new QGroupBox("Token Usage", this);
+    auto* token_layout = new QGridLayout(token_group);
+    
+    token_layout->addWidget(new QLabel("Input:", this), 0, 0);
+    input_tokens_label_ = new QLabel("0", this);
+    token_layout->addWidget(input_tokens_label_, 0, 1);
+    
+    token_layout->addWidget(new QLabel("Output:", this), 1, 0);
+    output_tokens_label_ = new QLabel("0", this);
+    token_layout->addWidget(output_tokens_label_, 1, 1);
+    
+    token_layout->addWidget(new QLabel("Total:", this), 2, 0);
+    total_tokens_label_ = new QLabel("0", this);
+    total_tokens_label_->setStyleSheet("QLabel { font-weight: bold; }");
+    token_layout->addWidget(total_tokens_label_, 2, 1);
+    
+    // Context usage section
+    auto* context_group = new QGroupBox("Context Usage", this);
+    auto* context_layout = new QVBoxLayout(context_group);
+    
+    context_bar_ = new QProgressBar(this);
+    context_bar_->setMinimum(0);
+    context_bar_->setMaximum(100);
+    context_bar_->setValue(0);
+    context_layout->addWidget(context_bar_);
+    
+    context_label_ = new QLabel("0% used", this);
+    context_label_->setAlignment(Qt::AlignCenter);
+    context_layout->addWidget(context_label_);
+    
+    // Agent metrics section
+    auto* agent_group = new QGroupBox("Agents", this);
+    auto* agent_layout = new QGridLayout(agent_group);
+    
+    agent_layout->addWidget(new QLabel("Active:", this), 0, 0);
+    active_agents_label_ = new QLabel("0", this);
+    agent_layout->addWidget(active_agents_label_, 0, 1);
+    
+    agent_layout->addWidget(new QLabel("Total:", this), 1, 0);
+    total_agents_label_ = new QLabel("0", this);
+    agent_layout->addWidget(total_agents_label_, 1, 1);
+    
+    // Timing section
+    auto* timing_group = new QGroupBox("Recent Operations", this);
+    auto* timing_layout = new QVBoxLayout(timing_group);
+    
+    timing_list_ = new QListWidget(this);
+    timing_list_->setMaximumHeight(100);
+    timing_layout->addWidget(timing_list_);
+    
+    // Add all groups to main layout
+    layout->addWidget(token_group);
+    layout->addWidget(context_group);
+    layout->addWidget(agent_group);
+    layout->addWidget(timing_group);
+    layout->addStretch();
+}
+
+void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens) {
+    total_input_tokens_ += input_tokens;
+    total_output_tokens_ += output_tokens;
+    
+    input_tokens_label_->setText(QString::number(total_input_tokens_));
+    output_tokens_label_->setText(QString::number(total_output_tokens_));
+    total_tokens_label_->setText(QString::number(total_input_tokens_ + total_output_tokens_));
+}
+
+void MetricsPanel::update_context_usage(double percent) {
+    context_bar_->setValue(static_cast<int>(percent));
+    context_label_->setText(QString("%1% used").arg(percent, 0, 'f', 1));
+    
+    // Color code based on usage
+    if (percent > 80) {
+        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: red; }");
+    } else if (percent > 60) {
+        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: orange; }");
+    } else {
+        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: green; }");
+    }
+}
+
+void MetricsPanel::update_agent_metrics(int active, int total) {
+    active_agents_label_->setText(QString::number(active));
+    total_agents_label_->setText(QString::number(total));
+}
+
+void MetricsPanel::add_timing_metric(const std::string& operation, double duration_ms) {
+    QString item_text = QString("%1: %2 ms")
+        .arg(QString::fromStdString(operation))
+        .arg(duration_ms, 0, 'f', 2);
+    
+    timing_list_->insertItem(0, item_text);
+    
+    // Keep only last 10 items
+    while (timing_list_->count() > 10) {
+        delete timing_list_->takeItem(10);
+    }
+}
+
+} // namespace llm_re::ui

@@ -274,9 +274,13 @@ set(PLUGIN_SOURCES
         orchestrator/merge_manager.cpp
         # Agent components
         agent/swarm_agent.cpp
+        agent/swarm_logger.cpp
         agent/conflict_detector.cpp
         # UI components
         ui/orchestrator_ui.cpp
+        ui/preferences_dialog.cpp
+        ui/orchestrator_worker.cpp
+        ui/ui_orchestrator_bridge.cpp
         # Common sources
         ${COMMON_SOURCES}
 )
@@ -312,6 +316,8 @@ set(HEADERS
         irc/irc_client.h
         # UI headers
         ui/orchestrator_ui.h
+        ui/preferences_dialog.h
+        ui/orchestrator_worker.h
         ui/ui_orchestrator_bridge.h
         ui/ui_integration.h
         # Orchestrator headers
