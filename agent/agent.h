@@ -16,6 +16,9 @@
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
 #include <fstream>
+#include <format>
+#include <thread>
+#include <chrono>
 
 namespace llm_re {
 
@@ -278,6 +281,11 @@ private:
     // User message injection
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
+    
+    // API error retry tracking
+    int api_retry_count_ = 0;
+    static constexpr int MAX_API_RETRIES = 5;
+    std::chrono::steady_clock::time_point last_api_error_time_;
 
 protected:  // Make these accessible to SwarmAgent
     // Event bus for all communication
@@ -751,8 +759,8 @@ protected:  // Changed to protected so SwarmAgent can access
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
-    claude::Client api_client_;                                      // agent api client
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
+    claude::Client api_client_;                                      // agent api client
     
     // Emit log event
     void emit_log(LogLevel level, const std::string& msg) {
@@ -1249,6 +1257,9 @@ private:
                 handle_api_error(response);
                 break;
             }
+            
+            // Reset retry counter on successful API call
+            api_retry_count_ = 0;
 
             // Send the response message directly to the UI!
             emit_api_message(&response.message);
@@ -1399,12 +1410,19 @@ private:
         if (!response.error) {
             emit_log(LogLevel::ERROR, "Unknown API error");
             event_bus_.emit_error(agent_id_, "Unknown API error");
-            change_state(AgentState::Status::Idle);
+            change_state(AgentState::Status::Completed);
             last_error_ = "Unknown API error";
+            // Force exit on unknown error
+            _exit(1);
             return;
         }
 
         std::string error_msg = *response.error;
+        bool is_recoverable = claude::Client::is_recoverable_error(response);
+        
+        // Check if this is a prompt length error (unrecoverable)
+        bool is_prompt_too_long = error_msg.find("prompt is too long") != std::string::npos ||
+                                  error_msg.find("maximum") != std::string::npos;
 
         // Check for thinking-specific errors
         if (error_msg.find("thinking") != std::string::npos ||
@@ -1414,17 +1432,49 @@ private:
             event_bus_.emit_error(agent_id_, error_msg);
         }
 
-        if (claude::Client::is_recoverable_error(response)) {
-            emit_log(LogLevel::INFO, "You can resume the analysis");
-            change_state(AgentState::Status::Paused);
-            execution_state_.set_valid(true);
-            last_error_ = "API Error (recoverable): " + error_msg;
-        } else {
-            emit_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+        // Handle unrecoverable errors or max retries reached
+        if (!is_recoverable || is_prompt_too_long || api_retry_count_ >= MAX_API_RETRIES) {
+            if (api_retry_count_ >= MAX_API_RETRIES) {
+                emit_log(LogLevel::ERROR, std::format("Max retries ({}) reached. Giving up.", MAX_API_RETRIES));
+            } else {
+                emit_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+            }
+            
             event_bus_.emit_error(agent_id_, error_msg);
-            change_state(AgentState::Status::Idle);
+            change_state(AgentState::Status::Completed);
             execution_state_.set_valid(false);
             last_error_ = "API Error: " + error_msg;
+            
+            // Send completion message and exit
+            _exit(1);
+            
+        } else {
+            // Recoverable error - implement retry with delay
+            api_retry_count_++;
+            auto now = std::chrono::steady_clock::now();
+            auto time_since_last_error = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_api_error_time_).count();
+            
+            emit_log(LogLevel::WARNING, std::format(
+                "Recoverable API error (attempt {}/{}): {}", 
+                api_retry_count_, MAX_API_RETRIES, error_msg));
+            
+            // If less than 60 seconds since last error, wait
+            if (time_since_last_error < 60) {
+                int wait_time = 60 - time_since_last_error;
+                emit_log(LogLevel::INFO, std::format(
+                    "Waiting {} seconds before retry...", wait_time));
+                std::this_thread::sleep_for(std::chrono::seconds(wait_time));
+            }
+            
+            last_api_error_time_ = now;
+            change_state(AgentState::Status::Paused);
+            execution_state_.set_valid(true);
+            last_error_ = std::format("API Error (recoverable, attempt {}/{}): {}",
+                                     api_retry_count_, MAX_API_RETRIES, error_msg);
+            
+            // The agent will automatically resume from the paused state
+            emit_log(LogLevel::INFO, "Will retry after delay...");
         }
     }
 
