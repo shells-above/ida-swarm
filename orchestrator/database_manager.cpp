@@ -62,16 +62,22 @@ bool DatabaseManager::create_workspace() {
 bool DatabaseManager::save_current_database() {
     ORCH_LOG("DatabaseManager: About to call save_database()\n");
     
-    // Force save to current location
-    bool result = save_database();
+    // Create request to execute save_database on main thread
+    struct SaveDatabaseRequest : exec_request_t {
+        bool result = false;
+        virtual ssize_t idaapi execute() override {
+            result = save_database();
+            return 0;
+        }
+    };
     
-    ORCH_LOG("DatabaseManager: save_database() returned %d\n", result ? 1 : 0);
+    SaveDatabaseRequest req;
+    execute_sync(req, MFF_WRITE);  // MFF_WRITE for database modification
+    
+    ORCH_LOG("DatabaseManager: save_database() returned %d\n", req.result ? 1 : 0);
     ORCH_LOG("DatabaseManager: Saved main database\n");
     
-    // Explicitly flush messages
-    refresh_idaview_anyway();
-    
-    return result;
+    return req.result;
 }
 
 std::string DatabaseManager::create_agent_database(const std::string& agent_id) {
