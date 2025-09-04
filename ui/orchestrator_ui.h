@@ -11,6 +11,7 @@ class AgentMonitor;
 class IRCViewer;
 class ToolCallTracker;
 class MetricsPanel;
+class LogWindow;
 
 // Main UI window that observes the EventBus
 class OrchestratorUI : public QMainWindow {
@@ -47,7 +48,6 @@ private:
     // Setup methods
     void setup_ui();
     void setup_event_subscriptions();
-    void create_menus();
     
     // Main components
     TaskPanel* task_panel_;
@@ -55,6 +55,7 @@ private:
     IRCViewer* irc_viewer_;
     ToolCallTracker* tool_tracker_;
     MetricsPanel* metrics_panel_;
+    LogWindow* log_window_;
     
     // Layout
     QSplitter* main_splitter_;
@@ -117,9 +118,12 @@ public:
 private:
     QTableWidget* agent_table_;
     QLabel* agent_count_label_;
+    QTimer* duration_timer_;
+    std::map<std::string, QDateTime> agent_spawn_times_;
     
     int find_agent_row(const std::string& agent_id);
     void update_agent_count();
+    void update_durations();
     QString state_to_string(int state);
 };
 
@@ -197,8 +201,6 @@ public:
     // Update metrics
     void update_token_usage(size_t input_tokens, size_t output_tokens);
     void update_context_usage(double percent);
-    void update_agent_metrics(int active, int total);
-    void add_timing_metric(const std::string& operation, double duration_ms);
 
 private:
     // Token usage
@@ -209,13 +211,6 @@ private:
     // Context usage
     QProgressBar* context_bar_;
     QLabel* context_label_;
-    
-    // Agent counts
-    QLabel* active_agents_label_;
-    QLabel* total_agents_label_;
-    
-    // Timing metrics
-    QListWidget* timing_list_;
     
     size_t total_input_tokens_ = 0;
     size_t total_output_tokens_ = 0;

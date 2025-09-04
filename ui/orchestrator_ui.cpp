@@ -3,6 +3,7 @@
 #include "orchestrator_ui.h"
 #include "ui_orchestrator_bridge.h"
 #include "preferences_dialog.h"
+#include "log_window.h"
 
 // Now we can safely include Qt implementation headers
 #include <QVBoxLayout>
@@ -43,7 +44,6 @@ OrchestratorUI::OrchestratorUI(QWidget* parent)
     
     setup_ui();
     setup_event_subscriptions();
-    create_menus();
 }
 
 OrchestratorUI::~OrchestratorUI() {
@@ -81,13 +81,15 @@ void OrchestratorUI::setup_ui() {
     
     metrics_panel_ = new MetricsPanel(this);
     
-    // Bottom tabs for IRC and Tool calls
+    // Bottom tabs for IRC, Tool calls, and Logs
     bottom_tabs_ = new QTabWidget(this);
     irc_viewer_ = new IRCViewer(this);
     tool_tracker_ = new ToolCallTracker(this);
+    log_window_ = new LogWindow(this);
     
     bottom_tabs_->addTab(irc_viewer_, "IRC Communication");
     bottom_tabs_->addTab(tool_tracker_, "Tool Calls");
+    bottom_tabs_->addTab(log_window_, "Orchestrator Logs");
     
     right_splitter_->addWidget(metrics_panel_);
     right_splitter_->addWidget(bottom_tabs_);
@@ -150,30 +152,6 @@ void OrchestratorUI::setup_event_subscriptions() {
     );
 }
 
-void OrchestratorUI::create_menus() {
-    // File menu
-    QMenu* file_menu = menuBar()->addMenu("&File");
-    
-    QAction* clear_action = file_menu->addAction("&Clear All");
-    connect(clear_action, &QAction::triggered, this, &OrchestratorUI::on_clear_console);
-    
-    file_menu->addSeparator();
-    
-    QAction* close_action = file_menu->addAction("&Close");
-    connect(close_action, &QAction::triggered, this, &QWidget::close);
-    
-    // Edit menu
-    QMenu* edit_menu = menuBar()->addMenu("&Edit");
-    
-    QAction* preferences_action = edit_menu->addAction("&Preferences...");
-    connect(preferences_action, &QAction::triggered, this, &OrchestratorUI::on_preferences_clicked);
-    
-    // Control menu
-    QMenu* control_menu = menuBar()->addMenu("&Control");
-    
-    QAction* pause_action = control_menu->addAction("&Pause/Resume");
-    connect(pause_action, &QAction::triggered, this, &OrchestratorUI::on_pause_resume_clicked);
-}
 
 void OrchestratorUI::handle_event(const AgentEvent& event) {
     msg("OrchestratorUI::handle_event called with event type %d from source '%s'\n",
@@ -273,6 +251,14 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                         .arg(QString::fromStdString(event.payload["error"])),
                     5000
                 );
+            }
+            break;
+            
+        case AgentEvent::LOG:
+            if (event.payload.contains("level") && event.payload.contains("message")) {
+                auto level = static_cast<claude::LogLevel>(event.payload["level"].get<int>());
+                std::string message = event.payload["message"];
+                log_window_->add_log(level, event.source, message);
             }
             break;
     }
@@ -491,6 +477,11 @@ AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
     agent_table_->setAlternatingRowColors(true);
     agent_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     
+    // Setup duration update timer
+    duration_timer_ = new QTimer(this);
+    connect(duration_timer_, &QTimer::timeout, this, &AgentMonitor::update_durations);
+    duration_timer_->start(1000); // Update every second
+    
     layout->addLayout(header_layout);
     layout->addWidget(agent_table_);
 }
@@ -499,6 +490,10 @@ void AgentMonitor::on_agent_spawning(const std::string& agent_id, const std::str
     int row = agent_table_->rowCount();
     agent_table_->insertRow(row);
     
+    // Store spawn time for duration calculation
+    QDateTime spawn_time = QDateTime::currentDateTime();
+    agent_spawn_times_[agent_id] = spawn_time;
+    
     agent_table_->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(agent_id)));
     
     // Truncate task if too long
@@ -506,11 +501,11 @@ void AgentMonitor::on_agent_spawning(const std::string& agent_id, const std::str
     agent_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(display_task)));
     
     agent_table_->setItem(row, 2, new QTableWidgetItem("Spawning"));
-    agent_table_->setItem(row, 3, new QTableWidgetItem(QDateTime::currentDateTime().toString("hh:mm:ss")));
+    agent_table_->setItem(row, 3, new QTableWidgetItem(spawn_time.toString("hh:mm:ss")));
     agent_table_->setItem(row, 4, new QTableWidgetItem("0s"));
     
-    // Color code status
-    agent_table_->item(row, 2)->setBackground(QColor(255, 255, 200));
+    // Color code status - soft yellow for spawning
+    agent_table_->item(row, 2)->setBackground(QColor(255, 248, 220));
     
     update_agent_count();
 }
@@ -519,7 +514,7 @@ void AgentMonitor::on_agent_spawned(const std::string& agent_id) {
     int row = find_agent_row(agent_id);
     if (row >= 0) {
         agent_table_->item(row, 2)->setText("Active");
-        agent_table_->item(row, 2)->setBackground(QColor(200, 255, 200));
+        agent_table_->item(row, 2)->setBackground(QColor(230, 255, 230));
     }
 }
 
@@ -540,13 +535,13 @@ void AgentMonitor::on_agent_state_change(const std::string& agent_id, int state)
         
         // Update color based on state
         if (state == 0) { // Idle
-            agent_table_->item(row, 2)->setBackground(QColor(220, 220, 220));
+            agent_table_->item(row, 2)->setBackground(QColor(240, 240, 240));
         } else if (state == 1) { // Running
-            agent_table_->item(row, 2)->setBackground(QColor(200, 255, 200));
+            agent_table_->item(row, 2)->setBackground(QColor(230, 255, 230));
         } else if (state == 2) { // Paused
-            agent_table_->item(row, 2)->setBackground(QColor(255, 255, 200));
+            agent_table_->item(row, 2)->setBackground(QColor(255, 248, 220));
         } else if (state == 3) { // Completed
-            agent_table_->item(row, 2)->setBackground(QColor(200, 200, 255));
+            agent_table_->item(row, 2)->setBackground(QColor(230, 230, 255));
         }
     }
 }
@@ -555,12 +550,13 @@ void AgentMonitor::on_agent_completed(const std::string& agent_id) {
     int row = find_agent_row(agent_id);
     if (row >= 0) {
         agent_table_->item(row, 2)->setText("Completed");
-        agent_table_->item(row, 2)->setBackground(QColor(200, 200, 255));
+        agent_table_->item(row, 2)->setBackground(QColor(230, 230, 255));
     }
 }
 
 void AgentMonitor::clear_agents() {
     agent_table_->setRowCount(0);
+    agent_spawn_times_.clear();
     update_agent_count();
 }
 
@@ -576,6 +572,41 @@ int AgentMonitor::find_agent_row(const std::string& agent_id) {
 void AgentMonitor::update_agent_count() {
     int count = agent_table_->rowCount();
     agent_count_label_->setText(QString("%1 agent%2").arg(count).arg(count == 1 ? "" : "s"));
+}
+
+void AgentMonitor::update_durations() {
+    QDateTime current_time = QDateTime::currentDateTime();
+    
+    for (int row = 0; row < agent_table_->rowCount(); ++row) {
+        if (agent_table_->item(row, 0)) {
+            std::string agent_id = agent_table_->item(row, 0)->text().toStdString();
+            
+            // Find spawn time for this agent
+            auto spawn_iter = agent_spawn_times_.find(agent_id);
+            if (spawn_iter != agent_spawn_times_.end()) {
+                // Calculate duration
+                qint64 seconds_elapsed = spawn_iter->second.secsTo(current_time);
+                
+                QString duration_text;
+                if (seconds_elapsed < 60) {
+                    duration_text = QString("%1s").arg(seconds_elapsed);
+                } else if (seconds_elapsed < 3600) {
+                    int minutes = seconds_elapsed / 60;
+                    int seconds = seconds_elapsed % 60;
+                    duration_text = QString("%1m %2s").arg(minutes).arg(seconds);
+                } else {
+                    int hours = seconds_elapsed / 3600;
+                    int minutes = (seconds_elapsed % 3600) / 60;
+                    duration_text = QString("%1h %2m").arg(hours).arg(minutes);
+                }
+                
+                // Update duration column
+                if (agent_table_->item(row, 4)) {
+                    agent_table_->item(row, 4)->setText(duration_text);
+                }
+            }
+        }
+    }
 }
 
 QString AgentMonitor::state_to_string(int state) {
@@ -910,31 +941,10 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     context_label_->setAlignment(Qt::AlignCenter);
     context_layout->addWidget(context_label_);
     
-    // Agent metrics section
-    auto* agent_group = new QGroupBox("Agents", this);
-    auto* agent_layout = new QGridLayout(agent_group);
-    
-    agent_layout->addWidget(new QLabel("Active:", this), 0, 0);
-    active_agents_label_ = new QLabel("0", this);
-    agent_layout->addWidget(active_agents_label_, 0, 1);
-    
-    agent_layout->addWidget(new QLabel("Total:", this), 1, 0);
-    total_agents_label_ = new QLabel("0", this);
-    agent_layout->addWidget(total_agents_label_, 1, 1);
-    
-    // Timing section
-    auto* timing_group = new QGroupBox("Recent Operations", this);
-    auto* timing_layout = new QVBoxLayout(timing_group);
-    
-    timing_list_ = new QListWidget(this);
-    timing_list_->setMaximumHeight(100);
-    timing_layout->addWidget(timing_list_);
     
     // Add all groups to main layout
     layout->addWidget(token_group);
     layout->addWidget(context_group);
-    layout->addWidget(agent_group);
-    layout->addWidget(timing_group);
     layout->addStretch();
 }
 
@@ -961,22 +971,5 @@ void MetricsPanel::update_context_usage(double percent) {
     }
 }
 
-void MetricsPanel::update_agent_metrics(int active, int total) {
-    active_agents_label_->setText(QString::number(active));
-    total_agents_label_->setText(QString::number(total));
-}
-
-void MetricsPanel::add_timing_metric(const std::string& operation, double duration_ms) {
-    QString item_text = QString("%1: %2 ms")
-        .arg(QString::fromStdString(operation))
-        .arg(duration_ms, 0, 'f', 2);
-    
-    timing_list_->insertItem(0, item_text);
-    
-    // Keep only last 10 items
-    while (timing_list_->count() > 10) {
-        delete timing_list_->takeItem(10);
-    }
-}
 
 } // namespace llm_re::ui
