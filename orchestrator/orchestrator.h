@@ -97,6 +97,9 @@ private:
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
     
+    // OAuth token management
+    bool refresh_oauth_if_needed();
+    
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);
     

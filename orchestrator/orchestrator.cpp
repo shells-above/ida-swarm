@@ -156,6 +156,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
 
     // Emit thinking event
+    ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_THINKING event\n");
     event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
     
     // Send to Claude API with deep thinking
@@ -173,6 +174,7 @@ void Orchestrator::process_user_input(const std::string& input) {
         ORCH_LOG("Orchestrator: %s\n", text->c_str());
         
         // Emit orchestrator response event
+        ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event\n");
         event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
             {"response", *text}
         }));
@@ -256,6 +258,11 @@ void Orchestrator::process_user_input(const std::string& input) {
 }
 
 claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& user_input) {
+    // Check and refresh OAuth token if needed
+    if (!refresh_oauth_if_needed()) {
+        ORCH_LOG("Orchestrator: Warning - OAuth token refresh check failed\n");
+    }
+    
     // Build request with extensive thinking
     claude::ChatRequestBuilder builder;
     builder.with_model(config_.orchestrator.model.model)
@@ -287,7 +294,23 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
     
     builder.add_message(claude::messages::Message::user_text(enhanced_input));
     
-    return api_client_->send_request(builder.build());
+    auto response = api_client_->send_request(builder.build());
+    
+    // Check for OAuth token expiry and retry if needed
+    if (!response.success && response.error && 
+        response.error->find("OAuth token has expired") != std::string::npos) {
+        
+        ORCH_LOG("Orchestrator: OAuth token expired, attempting to refresh...\n");
+        
+        if (refresh_oauth_if_needed()) {
+            ORCH_LOG("Orchestrator: Retrying request with refreshed OAuth token...\n");
+            response = api_client_->send_request(builder.build());
+        } else {
+            ORCH_LOG("Orchestrator: Failed to refresh OAuth token\n");
+        }
+    }
+    
+    return response;
 }
 
 std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(const claude::messages::Message& msg) {
@@ -404,6 +427,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     std::string agent_id = std::format("agent_{}", next_agent_id_++);
     
     // Emit agent spawning event
+    ORCH_LOG("Orchestrator: Publishing AGENT_SPAWNING event for %s\n", agent_id.c_str());
     event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWNING, "orchestrator", {
         {"agent_id", agent_id},
         {"task", task}
@@ -453,6 +477,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     }
     
     // Emit spawn complete event
+    ORCH_LOG("Orchestrator: Publishing AGENT_SPAWN_COMPLETE event for %s\n", agent_id.c_str());
     event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWN_COMPLETE, "orchestrator", {
         {"agent_id", agent_id}
     }));
@@ -659,6 +684,37 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
     }
     
     ORCH_LOG("Orchestrator: Agent wait complete\n");
+}
+
+bool Orchestrator::refresh_oauth_if_needed() {
+    // Only refresh if using OAuth
+    if (!oauth_manager_ || config_.api.auth_method != claude::AuthMethod::OAUTH) {
+        return true; // Not using OAuth, no refresh needed
+    }
+    
+    // Check if refresh is needed
+    if (oauth_manager_->needs_refresh()) {
+        ORCH_LOG("Orchestrator: OAuth token needs refresh, refreshing...\n");
+        
+        auto refreshed_creds = oauth_manager_->force_refresh();
+        if (!refreshed_creds) {
+            ORCH_LOG("Orchestrator: Failed to refresh OAuth token: %s\n", 
+                oauth_manager_->get_last_error().c_str());
+            return false;
+        }
+        
+        // Update the API client with new credentials
+        api_client_->set_oauth_credentials(refreshed_creds);
+        ORCH_LOG("Orchestrator: Successfully refreshed OAuth token\n");
+        
+        // Emit event for UI update
+        event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+            {"token_refreshed", true},
+            {"expires_at", refreshed_creds->expires_at}
+        }));
+    }
+    
+    return true;
 }
 
 void Orchestrator::handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message) {

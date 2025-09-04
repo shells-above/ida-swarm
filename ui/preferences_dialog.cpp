@@ -8,6 +8,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QRadioButton>
 #include <QLineEdit>
 #include <QComboBox>
@@ -57,6 +58,14 @@ PreferencesDialog::PreferencesDialog(QWidget* parent)
     // Set initial state
     onAuthMethodChanged();
     
+    // Setup token status timer (update every 60 seconds)
+    tokenStatusTimer_ = new QTimer(this);
+    connect(tokenStatusTimer_, &QTimer::timeout, this, &PreferencesDialog::updateTokenStatus);
+    tokenStatusTimer_->start(60000); // 60 seconds
+    
+    // Initial token status update
+    updateTokenStatus();
+    
     setWindowTitle("Preferences");
     resize(800, 600);
 }
@@ -99,19 +108,42 @@ void PreferencesDialog::createApiTab() {
     auto* widget = new QWidget();
     auto* layout = new QVBoxLayout(widget);
     
-    // Authentication method group
-    auto* authGroup = new QGroupBox("Authentication Method", widget);
-    auto* authLayout = new QVBoxLayout(authGroup);
+    // Authentication method selector with horizontal layout
+    auto* authSelectorGroup = new QGroupBox("Authentication Method", widget);
+    auto* authSelectorLayout = new QHBoxLayout(authSelectorGroup);
     
-    apiKeyRadio_ = new QRadioButton("API Key", authGroup);
-    oauthRadio_ = new QRadioButton("OAuth", authGroup);
+    apiKeyRadio_ = new QRadioButton("API Key", authSelectorGroup);
+    oauthRadio_ = new QRadioButton("OAuth", authSelectorGroup);
     apiKeyRadio_->setChecked(true);
     
-    authLayout->addWidget(apiKeyRadio_);
-    authLayout->addWidget(oauthRadio_);
+    // Style the radio buttons to be more prominent
+    QString radioStyle = R"(
+        QRadioButton {
+            font-weight: bold;
+            padding: 5px;
+        }
+        QRadioButton::indicator {
+            width: 18px;
+            height: 18px;
+        }
+    )";
+    apiKeyRadio_->setStyleSheet(radioStyle);
+    oauthRadio_->setStyleSheet(radioStyle);
     
-    // API Key settings
-    auto* apiKeyGroup = new QGroupBox("API Key Settings", widget);
+    authSelectorLayout->addWidget(apiKeyRadio_);
+    authSelectorLayout->addSpacing(30);
+    authSelectorLayout->addWidget(oauthRadio_);
+    authSelectorLayout->addStretch();
+    
+    // Stacked widget to show only the active authentication method
+    auto* authStack = new QStackedWidget(widget);
+    
+    // === API Key Page ===
+    auto* apiKeyPage = new QWidget();
+    auto* apiKeyPageLayout = new QVBoxLayout(apiKeyPage);
+    
+    auto* apiKeyGroup = new QGroupBox("API Key Configuration", apiKeyPage);
+    apiKeyGroup->setStyleSheet("QGroupBox { font-weight: bold; }");
     auto* apiKeyLayout = new QFormLayout(apiKeyGroup);
     
     apiKeyEdit_ = new QLineEdit(apiKeyGroup);
@@ -119,8 +151,21 @@ void PreferencesDialog::createApiTab() {
     apiKeyEdit_->setPlaceholderText("sk-ant-api03-...");
     apiKeyLayout->addRow("API Key:", apiKeyEdit_);
     
-    // OAuth settings
-    auto* oauthGroup = new QGroupBox("OAuth Settings", widget);
+    // Add helpful text for API key
+    auto* apiKeyHelp = new QLabel("Enter your Anthropic API key. You can obtain one from console.anthropic.com", apiKeyGroup);
+    apiKeyHelp->setWordWrap(true);
+    apiKeyHelp->setStyleSheet("QLabel { color: #666666; font-size: 11px; }");
+    apiKeyLayout->addRow("", apiKeyHelp);
+    
+    apiKeyPageLayout->addWidget(apiKeyGroup);
+    apiKeyPageLayout->addStretch();
+    
+    // === OAuth Page ===
+    auto* oauthPage = new QWidget();
+    auto* oauthPageLayout = new QVBoxLayout(oauthPage);
+    
+    auto* oauthGroup = new QGroupBox("OAuth Configuration", oauthPage);
+    oauthGroup->setStyleSheet("QGroupBox { font-weight: bold; }");
     auto* oauthLayout = new QFormLayout(oauthGroup);
     
     auto* oauthDirLayout = new QHBoxLayout();
@@ -131,27 +176,71 @@ void PreferencesDialog::createApiTab() {
     oauthDirLayout->addWidget(oauthDirBrowse_);
     oauthLayout->addRow("Config Directory:", oauthDirLayout);
     
-    // Connection settings
+    // Token status with better styling
+    auto* tokenStatusWidget = new QWidget(oauthGroup);
+    auto* tokenStatusLayout = new QVBoxLayout(tokenStatusWidget);
+    tokenStatusLayout->setContentsMargins(0, 0, 0, 0);
+    
+    tokenExpirationLabel_ = new QLabel("Token Status: Checking...", tokenStatusWidget);
+    tokenExpirationLabel_->setStyleSheet("QLabel { font-size: 12px; padding: 5px; }");
+    
+    refreshTokenButton_ = new QPushButton("Refresh Token", tokenStatusWidget);
+    refreshTokenButton_->setMaximumWidth(120);
+    
+    tokenStatusLayout->addWidget(tokenExpirationLabel_);
+    tokenStatusLayout->addWidget(refreshTokenButton_);
+    
+    oauthLayout->addRow("Status:", tokenStatusWidget);
+    
+    // Add helpful text for OAuth
+    auto* oauthHelp = new QLabel("OAuth tokens are automatically refreshed when needed. Use the button above for manual refresh.", oauthGroup);
+    oauthHelp->setWordWrap(true);
+    oauthHelp->setStyleSheet("QLabel { color: #666666; font-size: 11px; }");
+    oauthLayout->addRow("", oauthHelp);
+    
+    oauthPageLayout->addWidget(oauthGroup);
+    oauthPageLayout->addStretch();
+    
+    // Add pages to stack
+    authStack->addWidget(apiKeyPage);
+    authStack->addWidget(oauthPage);
+    
+    // Connection settings (common to both)
     auto* connectionGroup = new QGroupBox("Connection Settings", widget);
+    connectionGroup->setStyleSheet("QGroupBox { font-weight: bold; }");
     auto* connectionLayout = new QFormLayout(connectionGroup);
     
     baseUrlEdit_ = new QLineEdit(connectionGroup);
     baseUrlEdit_->setPlaceholderText("https://api.anthropic.com/v1/messages");
     connectionLayout->addRow("Base URL:", baseUrlEdit_);
     
-    // Test connection
-    auto* testLayout = new QHBoxLayout();
-    testApiButton_ = new QPushButton("Test Connection", widget);
-    apiStatusLabel_ = new QLabel("", widget);
+    // Test connection with better layout
+    auto* testWidget = new QWidget(widget);
+    auto* testLayout = new QHBoxLayout(testWidget);
+    testLayout->setContentsMargins(0, 10, 0, 0);
+    
+    testApiButton_ = new QPushButton("Test Connection", testWidget);
+    testApiButton_->setMaximumWidth(150);
+    apiStatusLabel_ = new QLabel("", testWidget);
+    apiStatusLabel_->setStyleSheet("QLabel { font-weight: bold; }");
+    
     testLayout->addWidget(testApiButton_);
     testLayout->addWidget(apiStatusLabel_);
     testLayout->addStretch();
     
-    layout->addWidget(authGroup);
-    layout->addWidget(apiKeyGroup);
-    layout->addWidget(oauthGroup);
+    // Connect radio buttons to switch stacked widget pages
+    connect(apiKeyRadio_, &QRadioButton::toggled, [authStack](bool checked) {
+        if (checked) authStack->setCurrentIndex(0);
+    });
+    connect(oauthRadio_, &QRadioButton::toggled, [authStack](bool checked) {
+        if (checked) authStack->setCurrentIndex(1);
+    });
+    
+    // Final layout assembly
+    layout->addWidget(authSelectorGroup);
+    layout->addWidget(authStack);
     layout->addWidget(connectionGroup);
-    layout->addLayout(testLayout);
+    layout->addWidget(testWidget);
     layout->addStretch();
     
     tabWidget_->addTab(widget, "API");
@@ -399,6 +488,9 @@ void PreferencesDialog::connectSignals() {
     // Test buttons
     connect(testApiButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestAPIConnection);
     connect(testIrcButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestIRCConnection);
+    
+    // OAuth token refresh button
+    connect(refreshTokenButton_, &QPushButton::clicked, this, &PreferencesDialog::onRefreshOAuthToken);
     
     // Auth method radio buttons
     connect(apiKeyRadio_, &QRadioButton::toggled, this, &PreferencesDialog::onAuthMethodChanged);
@@ -951,18 +1043,16 @@ void PreferencesDialog::onTestIRCConnection() {
 void PreferencesDialog::onAuthMethodChanged() {
     bool useApiKey = apiKeyRadio_->isChecked();
     
-    // Enable/disable relevant fields
-    apiKeyEdit_->setEnabled(useApiKey);
-    oauthDirEdit_->setEnabled(!useApiKey);
-    oauthDirBrowse_->setEnabled(!useApiKey);
+    // The QStackedWidget automatically handles showing/hiding the appropriate page
+    // based on the radio button connections we set up in createApiTab()
     
-    // Update visual hints
-    if (useApiKey) {
-        apiKeyEdit_->setStyleSheet("");
-        oauthDirEdit_->setStyleSheet("QLineEdit { background-color: #f0f0f0; }");
+    // Update token status when switching to OAuth
+    if (!useApiKey) {
+        updateTokenStatus();
     } else {
-        apiKeyEdit_->setStyleSheet("QLineEdit { background-color: #f0f0f0; }");
-        oauthDirEdit_->setStyleSheet("");
+        // Clear token status when switching to API Key mode
+        tokenExpirationLabel_->setText("Token Status: N/A (Using API Key)");
+        tokenExpirationLabel_->setStyleSheet("QLabel { font-size: 12px; padding: 5px; color: #666666; }");
     }
 }
 
@@ -1026,6 +1116,115 @@ bool PreferencesDialog::hasUnsavedChanges() {
     // Check if any field has been modified
     // For simplicity, we'll track this with configModified_ flag
     return configModified_;
+}
+
+void PreferencesDialog::onRefreshOAuthToken() {
+    // Disable button during refresh
+    refreshTokenButton_->setEnabled(false);
+    refreshTokenButton_->setText("Refreshing...");
+    
+    // Create OAuth manager to refresh token
+    auto oauth_manager = Config::create_oauth_manager(oauthDirEdit_->text().toStdString());
+    if (!oauth_manager) {
+        tokenExpirationLabel_->setText("Token Status: <b>Error - Failed to create OAuth manager</b>");
+        tokenExpirationLabel_->setStyleSheet("QLabel { font-size: 12px; padding: 5px; color: #ff0000; }");
+        refreshTokenButton_->setEnabled(true);
+        refreshTokenButton_->setText("Refresh Token");
+        return;
+    }
+    
+    // Force refresh the token
+    auto refreshed_creds = oauth_manager->force_refresh();
+    if (refreshed_creds) {
+        // Just update the status display - no dialog
+        updateTokenStatus();
+        
+        // Show success briefly in the status label
+        tokenExpirationLabel_->setText("Token Status: <b>Successfully Refreshed!</b>");
+        tokenExpirationLabel_->setStyleSheet("QLabel { font-size: 12px; padding: 5px; color: #00aa00; }");
+        
+        // Use a timer to update to the actual expiry time after 2 seconds
+        QTimer::singleShot(2000, this, &PreferencesDialog::updateTokenStatus);
+    } else {
+        // Show error in the status label instead of dialog
+        QString errorMsg = QString("Token Status: <b>Refresh Failed - %1</b>")
+            .arg(QString::fromStdString(oauth_manager->get_last_error()));
+        tokenExpirationLabel_->setText(errorMsg);
+        tokenExpirationLabel_->setStyleSheet("QLabel { font-size: 12px; padding: 5px; color: #ff0000; }");
+    }
+    
+    // Re-enable button
+    refreshTokenButton_->setEnabled(true);
+    refreshTokenButton_->setText("Refresh Token");
+}
+
+void PreferencesDialog::updateTokenStatus() {
+    // Only update if OAuth is selected
+    if (!oauthRadio_->isChecked()) {
+        tokenExpirationLabel_->setText("Token Status: N/A (Using API Key)");
+        return;
+    }
+    
+    // Create OAuth manager to check token status
+    auto oauth_manager = Config::create_oauth_manager(oauthDirEdit_->text().toStdString());
+    if (!oauth_manager) {
+        tokenExpirationLabel_->setText("Token Status: No OAuth configuration found");
+        tokenExpirationLabel_->setStyleSheet("QLabel { color: #999999; }");
+        return;
+    }
+    
+    // Get current credentials
+    auto creds = oauth_manager->get_credentials();
+    if (!creds) {
+        tokenExpirationLabel_->setText("Token Status: No credentials available");
+        tokenExpirationLabel_->setStyleSheet("QLabel { color: #999999; }");
+        return;
+    }
+    
+    // Calculate time until expiration
+    auto now = std::chrono::system_clock::now();
+    auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        now.time_since_epoch()).count();
+    
+    double seconds_until_expiry = creds->expires_at - now_timestamp;
+    
+    // Format the expiration message
+    QString status_text;
+    QString style_sheet;
+    
+    if (seconds_until_expiry <= 0) {
+        status_text = "Token Status: <b>EXPIRED</b>";
+        style_sheet = "QLabel { color: #ff0000; }"; // Red
+    } else if (seconds_until_expiry < 300) { // Less than 5 minutes
+        int minutes = static_cast<int>(seconds_until_expiry / 60);
+        status_text = QString("Token Status: Expires in <b>%1 minutes</b>").arg(minutes);
+        style_sheet = "QLabel { color: #ff6600; }"; // Orange/Red
+    } else if (seconds_until_expiry < 3600) { // Less than 1 hour
+        int minutes = static_cast<int>(seconds_until_expiry / 60);
+        status_text = QString("Token Status: Expires in <b>%1 minutes</b>").arg(minutes);
+        style_sheet = "QLabel { color: #ff9900; }"; // Orange
+    } else if (seconds_until_expiry < 86400) { // Less than 24 hours
+        int hours = static_cast<int>(seconds_until_expiry / 3600);
+        int minutes = static_cast<int>((seconds_until_expiry - hours * 3600) / 60);
+        if (minutes > 0) {
+            status_text = QString("Token Status: Expires in <b>%1h %2m</b>").arg(hours).arg(minutes);
+        } else {
+            status_text = QString("Token Status: Expires in <b>%1 hours</b>").arg(hours);
+        }
+        style_sheet = "QLabel { color: #009900; }"; // Green
+    } else {
+        int days = static_cast<int>(seconds_until_expiry / 86400);
+        int hours = static_cast<int>((seconds_until_expiry - days * 86400) / 3600);
+        if (hours > 0) {
+            status_text = QString("Token Status: Expires in <b>%1d %2h</b>").arg(days).arg(hours);
+        } else {
+            status_text = QString("Token Status: Expires in <b>%1 days</b>").arg(days);
+        }
+        style_sheet = "QLabel { color: #009900; }"; // Green
+    }
+    
+    tokenExpirationLabel_->setText(status_text);
+    tokenExpirationLabel_->setStyleSheet(style_sheet);
 }
 
 } // namespace llm_re::ui

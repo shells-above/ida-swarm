@@ -19,6 +19,7 @@ class QFormLayout;
 class QGroupBox;
 class QTextEdit;
 class QDialogButtonBox;
+class QTimer;
 QT_END_NAMESPACE
 
 namespace llm_re::ui {
@@ -45,6 +46,10 @@ private slots:
     // Test buttons
     void onTestAPIConnection();
     void onTestIRCConnection();
+    
+    // OAuth management
+    void onRefreshOAuthToken();
+    void updateTokenStatus();
     
     // Radio button handlers
     void onAuthMethodChanged();
@@ -94,6 +99,11 @@ private:
     QLineEdit* baseUrlEdit_;
     QPushButton* testApiButton_;
     QLabel* apiStatusLabel_;
+    
+    // OAuth token status widgets
+    QLabel* tokenExpirationLabel_;
+    QPushButton* refreshTokenButton_;
+    QTimer* tokenStatusTimer_;
     
     // Models Tab widgets - Agent
     QGroupBox* agentModelGroup_;
