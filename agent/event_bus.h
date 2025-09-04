@@ -46,6 +46,9 @@ struct AgentEvent {
     json payload;        // All event data as JSON
     std::chrono::steady_clock::time_point timestamp;
     
+    // Default constructor (required for Qt meta-type system)
+    AgentEvent() : type(LOG), source(""), payload(json::object()), timestamp(std::chrono::steady_clock::now()) {}
+    
     // Constructor
     AgentEvent(Type t, const std::string& src, const json& data) 
         : type(t), source(src), payload(data), timestamp(std::chrono::steady_clock::now()) {}
@@ -163,3 +166,10 @@ inline EventBus& get_event_bus() {
 }
 
 } // namespace llm_re
+
+// Qt meta-type registration for AgentEvent
+// This is needed for passing AgentEvent through Qt signals with queued connections
+#ifdef QT_CORE_LIB
+#include <QMetaType>
+Q_DECLARE_METATYPE(llm_re::AgentEvent)
+#endif

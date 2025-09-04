@@ -37,6 +37,10 @@ namespace llm_re::ui {
 // Main OrchestratorUI implementation
 OrchestratorUI::OrchestratorUI(QWidget* parent) 
     : QMainWindow(parent) {
+    // Register AgentEvent with Qt's meta-type system for signal/slot connections
+    qRegisterMetaType<AgentEvent>("AgentEvent");
+    msg("OrchestratorUI: Registered AgentEvent metatype for Qt signal/slot system\n");
+    
     setup_ui();
     setup_event_subscriptions();
     create_menus();
@@ -138,6 +142,8 @@ void OrchestratorUI::setup_event_subscriptions() {
     // Subscribe to ALL EventBus events
     event_subscription_id_ = event_bus_.subscribe(
         [this](const AgentEvent& event) {
+            msg("OrchestratorUI: EventBus subscription received event type %d from source '%s'\n", 
+                static_cast<int>(event.type), event.source.c_str());
             // Emit signal to handle in UI thread
             emit event_received(event);
         }
@@ -170,20 +176,26 @@ void OrchestratorUI::create_menus() {
 }
 
 void OrchestratorUI::handle_event(const AgentEvent& event) {
+    msg("OrchestratorUI::handle_event called with event type %d from source '%s'\n",
+        static_cast<int>(event.type), event.source.c_str());
+    
     // Route events to appropriate widgets based on type
     switch (event.type) {
         case AgentEvent::ORCHESTRATOR_INPUT:
+            msg("OrchestratorUI: Handling ORCHESTRATOR_INPUT event\n");
             if (event.payload.contains("input")) {
                 task_panel_->add_user_input(event.payload["input"]);
             }
             break;
             
         case AgentEvent::ORCHESTRATOR_THINKING:
+            msg("OrchestratorUI: Handling ORCHESTRATOR_THINKING event\n");
             task_panel_->set_thinking_state(true);
             statusBar()->showMessage("Orchestrator thinking...");
             break;
             
         case AgentEvent::ORCHESTRATOR_RESPONSE:
+            msg("OrchestratorUI: Handling ORCHESTRATOR_RESPONSE event\n");
             task_panel_->set_thinking_state(false);
             if (event.payload.contains("response")) {
                 task_panel_->add_orchestrator_message(event.payload["response"]);
@@ -192,6 +204,8 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             break;
             
         case AgentEvent::AGENT_SPAWNING:
+            msg("OrchestratorUI: Handling AGENT_SPAWNING event for agent %s\n",
+                event.payload.contains("agent_id") ? event.payload["agent_id"].get<std::string>().c_str() : "unknown");
             if (event.payload.contains("agent_id") && event.payload.contains("task")) {
                 agent_monitor_->on_agent_spawning(
                     event.payload["agent_id"],
