@@ -498,6 +498,7 @@ AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
     
     // Remove white borders from status cells
     agent_table_->setStyleSheet(
+        "QTableWidget::item { border: none; }"
         "QTableWidget::item:selected { border: none; }"
         "QTableWidget { gridline-color: rgba(0,0,0,30); }"
     );
@@ -521,9 +522,12 @@ void AgentMonitor::on_agent_spawning(const std::string& agent_id, const std::str
     
     agent_table_->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(agent_id)));
     
-    // Truncate task if too long
+    // Store full task but display truncated version
     std::string display_task = task.length() > 50 ? task.substr(0, 47) + "..." : task;
-    agent_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(display_task)));
+    auto* task_item = new QTableWidgetItem(QString::fromStdString(display_task));
+    task_item->setToolTip(QString::fromStdString(task));  // Show full task on hover
+    task_item->setData(Qt::UserRole, QString::fromStdString(task));  // Store full task for copying
+    agent_table_->setItem(row, 1, task_item);
     
     agent_table_->setItem(row, 2, new QTableWidgetItem("Spawning"));
     agent_table_->setItem(row, 3, new QTableWidgetItem(spawn_time.toString("hh:mm:ss")));
