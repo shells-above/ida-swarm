@@ -823,11 +823,9 @@ void IRCViewer::add_message(const std::string& channel, const std::string& sende
     item->setText(2, QString::fromStdString(sender));
     item->setText(3, QString::fromStdString(message));
     
-    // Color code by channel
+    // Color code by channel - only highlight conflicts
     if (channel == "#conflicts") {
         item->setBackground(1, QColor(255, 220, 220));
-    } else if (channel == "#results") {
-        item->setBackground(1, QColor(220, 220, 255));
     }
     
     apply_filters();
