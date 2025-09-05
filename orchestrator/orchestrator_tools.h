@@ -32,7 +32,7 @@ public:
                "copy of the database and can communicate with other agents via IRC. "
                "Think VERY carefully about the task and context before spawning. "
                "INCREDIBLY IMPORTANT: The agent WILL **ONLY** have the information that **YOU PROVIDE TO THEM INSIDE 'task' or 'context'! "
-               "This program does NOT DO ANY ADDITIONAL HANDLING! "
+               "This program *does NOT DO ANY ADDITIONAL HANDLING!* "
                "You *MUST THINK DEEPLY ABOUT EXACTLY WHAT THE AGENT NEEDS TO KNOW!* "
                "The spawned agent has *NO ADDITIONAL INFORMATION AT ALL!!* they ONLY know what you provide them!";
     }

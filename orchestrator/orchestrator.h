@@ -160,6 +160,9 @@ TOOLS AVAILABLE:
 - spawn_agent: Create a new agent with a specific task
 - merge_database: Integrate an agent's findings into the main database
 
+Before finishing your spawn_agent call, make sure you provided enough information to the agent.
+The agent **only** knows what ever you tell them, this program *does not do* any additional handling.
+
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 
 Think deeply. Plan carefully. Orchestrate intelligently.)";
