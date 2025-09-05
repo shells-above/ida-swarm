@@ -1,7 +1,8 @@
 #pragma once
 
 #include "ui_common.h"
-#include <QSplitter>
+#include <QTreeWidgetItem>
+#include <set>
 
 namespace llm_re::ui {
 
@@ -150,6 +151,7 @@ public:
 private slots:
     void on_channel_selected();
     void on_filter_changed(const QString& text);
+    void on_item_double_clicked(QTreeWidgetItem* item, int column);
 
 private:
     QTreeWidget* message_tree_;
@@ -158,7 +160,20 @@ private:
     QPushButton* clear_button_;
     
     std::string current_channel_filter_;
+    std::set<std::string> discovered_conflict_channels_;
+    bool showing_conflict_list_ = false;
+    
+    // Store all messages to repopulate tree when switching views
+    struct IRCMessage {
+        QString time;
+        QString channel;
+        QString sender;
+        QString message;
+    };
+    std::vector<IRCMessage> all_messages_;
+    
     void apply_filters();
+    void show_conflict_channel_list();
 };
 
 // Tool call tracking widget

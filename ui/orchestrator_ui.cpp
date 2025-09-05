@@ -813,22 +813,39 @@ IRCViewer::IRCViewer(QWidget* parent) : QWidget(parent) {
     
     connect(clear_button_, &QPushButton::clicked,
             this, &IRCViewer::clear_messages);
+    
+    connect(message_tree_, &QTreeWidget::itemDoubleClicked,
+            this, &IRCViewer::on_item_double_clicked);
 }
 
 void IRCViewer::add_message(const std::string& channel, const std::string& sender, const std::string& message) {
-    auto* item = new QTreeWidgetItem(message_tree_);
+    // Store the message
+    IRCMessage msg;
+    msg.time = QDateTime::currentDateTime().toString("hh:mm:ss");
+    msg.channel = QString::fromStdString(channel);
+    msg.sender = QString::fromStdString(sender);
+    msg.message = QString::fromStdString(message);
+    all_messages_.push_back(msg);
     
-    item->setText(0, QDateTime::currentDateTime().toString("hh:mm:ss"));
-    item->setText(1, QString::fromStdString(channel));
-    item->setText(2, QString::fromStdString(sender));
-    item->setText(3, QString::fromStdString(message));
-    
-    // Color code by channel - only highlight conflicts
-    if (channel == "#conflicts") {
-        item->setBackground(1, QColor(255, 220, 220));
+    // Detect and track conflict channels
+    if (channel.find("#conflict_") == 0) {
+        discovered_conflict_channels_.insert(channel);
     }
     
-    apply_filters();
+    // Only add to tree if we're not showing the conflict list
+    if (!showing_conflict_list_) {
+        auto* item = new QTreeWidgetItem(message_tree_);
+        item->setText(0, msg.time);
+        item->setText(1, msg.channel);
+        item->setText(2, msg.sender);
+        item->setText(3, msg.message);
+        
+        if (channel.find("#conflict_") == 0) {
+            item->setBackground(1, QColor(255, 220, 220));
+        }
+        
+        apply_filters();
+    }
 }
 
 void IRCViewer::add_join(const std::string& channel, const std::string& nick) {
@@ -841,6 +858,9 @@ void IRCViewer::add_part(const std::string& channel, const std::string& nick) {
 
 void IRCViewer::clear_messages() {
     message_tree_->clear();
+    all_messages_.clear();
+    discovered_conflict_channels_.clear();
+    showing_conflict_list_ = false;
 }
 
 void IRCViewer::set_channel_filter(const std::string& channel) {
@@ -850,11 +870,18 @@ void IRCViewer::set_channel_filter(const std::string& channel) {
 
 void IRCViewer::on_channel_selected() {
     QString channel = channel_combo_->currentText();
+    
     if (channel == "All Channels") {
         current_channel_filter_.clear();
+        showing_conflict_list_ = false;
+    } else if (channel == "#conflicts") {
+        current_channel_filter_ = "#conflicts";
+        showing_conflict_list_ = true;
     } else {
         current_channel_filter_ = channel.toStdString();
+        showing_conflict_list_ = false;
     }
+    
     apply_filters();
 }
 
@@ -862,31 +889,101 @@ void IRCViewer::on_filter_changed(const QString& text) {
     apply_filters();
 }
 
+void IRCViewer::on_item_double_clicked(QTreeWidgetItem* item, int column) {
+    // If we're showing the conflict list and user double-clicks a channel
+    if (showing_conflict_list_ && item) {
+        QString channel_name = item->text(1);  // Channel column
+        if (channel_name.startsWith("#conflict_")) {
+            // Switch to viewing this specific conflict channel
+            current_channel_filter_ = channel_name.toStdString();
+            showing_conflict_list_ = false;
+            
+            // Update dropdown to reflect we're viewing a specific channel
+            // Add the conflict channel to dropdown if not there
+            int index = channel_combo_->findText(channel_name);
+            if (index == -1) {
+                channel_combo_->addItem(channel_name);
+                index = channel_combo_->count() - 1;
+            }
+            channel_combo_->setCurrentIndex(index);
+            
+            apply_filters();
+        }
+    }
+}
+
+void IRCViewer::show_conflict_channel_list() {
+    // Clear tree and show list of discovered conflict channels
+    message_tree_->clear();
+    
+    for (const auto& conflict_channel : discovered_conflict_channels_) {
+        auto* item = new QTreeWidgetItem(message_tree_);
+        item->setText(0, "");  // No time for channel list
+        item->setText(1, QString::fromStdString(conflict_channel));
+        item->setText(2, "");  // No sender
+        item->setText(3, "Double-click to view messages");
+        item->setBackground(1, QColor(255, 220, 220));
+        
+        // Make it stand out as clickable
+        QFont font = item->font(1);
+        font.setBold(true);
+        item->setFont(1, font);
+        item->setFont(3, font);
+    }
+    
+    if (discovered_conflict_channels_.empty()) {
+        auto* item = new QTreeWidgetItem(message_tree_);
+        item->setText(0, "");
+        item->setText(1, "");
+        item->setText(2, "");
+        item->setText(3, "No conflict channels active");
+        item->setForeground(3, Qt::gray);
+    }
+}
+
 void IRCViewer::apply_filters() {
+    // If we're showing the conflict channel list, display that instead of messages
+    if (showing_conflict_list_) {
+        show_conflict_channel_list();
+        return;
+    }
+    
+    // Rebuild tree with all messages and apply filters
+    message_tree_->clear();
+    
     QString filter_text = filter_input_->text().toLower();
     
-    for (int i = 0; i < message_tree_->topLevelItemCount(); ++i) {
-        QTreeWidgetItem* item = message_tree_->topLevelItem(i);
-        
+    for (const auto& msg : all_messages_) {
         bool visible = true;
         
         // Channel filter
         if (!current_channel_filter_.empty()) {
-            if (item->text(1).toStdString() != current_channel_filter_) {
+            if (msg.channel.toStdString() != current_channel_filter_) {
                 visible = false;
             }
         }
         
         // Text filter
         if (visible && !filter_text.isEmpty()) {
-            bool match = item->text(2).toLower().contains(filter_text) ||
-                         item->text(3).toLower().contains(filter_text);
+            bool match = msg.sender.toLower().contains(filter_text) ||
+                         msg.message.toLower().contains(filter_text);
             if (!match) {
                 visible = false;
             }
         }
         
-        item->setHidden(!visible);
+        if (visible) {
+            auto* item = new QTreeWidgetItem(message_tree_);
+            item->setText(0, msg.time);
+            item->setText(1, msg.channel);
+            item->setText(2, msg.sender);
+            item->setText(3, msg.message);
+            
+            // Highlight conflict channels
+            if (msg.channel.startsWith("#conflict_")) {
+                item->setBackground(1, QColor(255, 220, 220));
+            }
+        }
     }
 }
 
