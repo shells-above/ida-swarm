@@ -123,6 +123,7 @@ private:
     QLabel* agent_count_label_;
     QTimer* duration_timer_;
     std::map<std::string, QDateTime> agent_spawn_times_;
+    std::map<std::string, QDateTime> agent_completion_times_;
     
     int find_agent_row(const std::string& agent_id);
     void update_agent_count();

@@ -580,6 +580,33 @@ void AgentMonitor::on_agent_state_change(const std::string& agent_id, int state)
         } else if (state == 3) { // Completed
             agent_table_->item(row, 2)->setBackground(QColor(245, 245, 255));
             agent_table_->item(row, 2)->setForeground(QColor(60, 60, 180));
+            
+            // Also record completion time when state changes to completed
+            agent_completion_times_[agent_id] = QDateTime::currentDateTime();
+            
+            // Update duration one final time
+            if (agent_spawn_times_.find(agent_id) != agent_spawn_times_.end()) {
+                QDateTime spawn_time = agent_spawn_times_[agent_id];
+                QDateTime completion_time = agent_completion_times_[agent_id];
+                qint64 seconds_elapsed = spawn_time.secsTo(completion_time);
+                
+                QString duration_text;
+                if (seconds_elapsed < 60) {
+                    duration_text = QString("%1s").arg(seconds_elapsed);
+                } else if (seconds_elapsed < 3600) {
+                    int minutes = seconds_elapsed / 60;
+                    int seconds = seconds_elapsed % 60;
+                    duration_text = QString("%1m %2s").arg(minutes).arg(seconds);
+                } else {
+                    int hours = seconds_elapsed / 3600;
+                    int minutes = (seconds_elapsed % 3600) / 60;
+                    duration_text = QString("%1h %2m").arg(hours).arg(minutes);
+                }
+                
+                if (agent_table_->item(row, 4)) {
+                    agent_table_->item(row, 4)->setText(duration_text);
+                }
+            }
         }
     }
 }
@@ -589,12 +616,40 @@ void AgentMonitor::on_agent_completed(const std::string& agent_id) {
     if (row >= 0) {
         agent_table_->item(row, 2)->setText("Completed");
         agent_table_->item(row, 2)->setBackground(QColor(230, 230, 255));
+        
+        // Record completion time to stop duration updates
+        agent_completion_times_[agent_id] = QDateTime::currentDateTime();
+        
+        // Update duration one final time with the exact completion duration
+        if (agent_spawn_times_.find(agent_id) != agent_spawn_times_.end()) {
+            QDateTime spawn_time = agent_spawn_times_[agent_id];
+            QDateTime completion_time = agent_completion_times_[agent_id];
+            qint64 seconds_elapsed = spawn_time.secsTo(completion_time);
+            
+            QString duration_text;
+            if (seconds_elapsed < 60) {
+                duration_text = QString("%1s").arg(seconds_elapsed);
+            } else if (seconds_elapsed < 3600) {
+                int minutes = seconds_elapsed / 60;
+                int seconds = seconds_elapsed % 60;
+                duration_text = QString("%1m %2s").arg(minutes).arg(seconds);
+            } else {
+                int hours = seconds_elapsed / 3600;
+                int minutes = (seconds_elapsed % 3600) / 60;
+                duration_text = QString("%1h %2m").arg(hours).arg(minutes);
+            }
+            
+            if (agent_table_->item(row, 4)) {
+                agent_table_->item(row, 4)->setText(duration_text);
+            }
+        }
     }
 }
 
 void AgentMonitor::clear_agents() {
     agent_table_->setRowCount(0);
     agent_spawn_times_.clear();
+    agent_completion_times_.clear();
     update_agent_count();
 }
 
@@ -618,6 +673,11 @@ void AgentMonitor::update_durations() {
     for (int row = 0; row < agent_table_->rowCount(); ++row) {
         if (agent_table_->item(row, 0)) {
             std::string agent_id = agent_table_->item(row, 0)->text().toStdString();
+            
+            // Skip updating duration if agent has completed
+            if (agent_completion_times_.find(agent_id) != agent_completion_times_.end()) {
+                continue;
+            }
             
             // Find spawn time for this agent
             auto spawn_iter = agent_spawn_times_.find(agent_id);
