@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../core/common.h"
+#include "../agent/event_bus.h"
 #include <sqlite3.h>
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 namespace llm_re::orchestrator {
 
@@ -37,7 +40,7 @@ struct AgentToolStats {
 // Tracks all tool calls across all agents
 class ToolCallTracker {
 public:
-    explicit ToolCallTracker(const std::string& binary_name);
+    explicit ToolCallTracker(const std::string& binary_name, EventBus* event_bus = nullptr);
     ~ToolCallTracker();
     
     // Initialize the database
@@ -72,10 +75,20 @@ public:
     // Check if tool is a write operation
     static bool is_write_tool(const std::string& tool_name);
     
+    // Start/stop monitoring for new tool calls
+    void start_monitoring();
+    void stop_monitoring();
+    
 private:
     sqlite3* db_ = nullptr;
     std::string binary_name_;
+    EventBus* event_bus_;
     mutable std::mutex mutex_;
+    
+    // Monitoring thread
+    std::thread monitor_thread_;
+    std::atomic<bool> monitoring_{false};
+    int64_t last_seen_id_ = 0;
     
     // Database operations
     bool create_tables();
@@ -94,6 +107,9 @@ private:
     
     // Convert tool call to/from database row
     ToolCall row_to_tool_call(sqlite3_stmt* stmt);
+    
+    // Monitoring thread function
+    void monitor_loop();
     
     // List of write tools
     static const std::vector<std::string> WRITE_TOOLS;

@@ -11,6 +11,13 @@
 
 #include <pro.h>
 #include <kernwin.hpp>
+#include "../agent/event_bus.h"
+#include "../sdk/common.h"
+
+using llm_re::EventBus;
+using llm_re::AgentEvent;
+using llm_re::get_event_bus;
+using claude::LogLevel;
 
 namespace llm_re::orchestrator {
 
@@ -82,7 +89,7 @@ public:
         return false;
     }
     
-    void log(const char* format, ...) {
+    void log(claude::LogLevel level, const char* format, ...) {
         // Format the message using va_list
         va_list args;
         va_start(args, format);
@@ -98,6 +105,8 @@ public:
         vsnprintf(buffer.data(), buffer.size(), format, args);
         va_end(args);
         
+        std::string message(buffer.data());
+        
         // Get timestamp once
         std::string timestamp = get_timestamp();
         
@@ -105,14 +114,72 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (log_file_.is_open()) {
-                log_file_ << "[" << timestamp << "] " << buffer.data();
+                log_file_ << "[" << timestamp << "] " << "[" << level_to_string(level) << "] " << message;
                 log_file_.flush();  // Immediate flush to ensure data is written
             }
         }
         
+        // Emit EventBus event for UI logging
+        EventBus& bus = get_event_bus();
+        bus.emit_log("orchestrator", static_cast<LogLevel>(level), message);
+        
         // Also try to write to IDA console (best effort, might not work if UI is hung)
         ::msg("%s", buffer.data());
     }
+    
+    // Overload for backward compatibility (defaults to INFO level)
+    void log(const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        
+        // First pass to get length
+        va_list args_copy;
+        va_copy(args_copy, args);
+        int len = vsnprintf(nullptr, 0, format, args_copy);
+        va_end(args_copy);
+        
+        // Allocate buffer and format
+        std::vector<char> buffer(len + 1);
+        vsnprintf(buffer.data(), buffer.size(), format, args);
+        va_end(args);
+        
+        std::string message(buffer.data());
+        log_internal(claude::LogLevel::INFO, message);
+    }
+
+private:
+    void log_internal(claude::LogLevel level, const std::string& message) {
+        // Get timestamp once
+        std::string timestamp = get_timestamp();
+        
+        // Write to file with timestamp
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (log_file_.is_open()) {
+                log_file_ << "[" << timestamp << "] " << "[" << level_to_string(level) << "] " << message;
+                log_file_.flush();
+            }
+        }
+        
+        // Emit EventBus event for UI logging
+        EventBus& bus = get_event_bus();
+        bus.emit_log("orchestrator", static_cast<LogLevel>(level), message);
+        
+        // Also try to write to IDA console
+        ::msg("%s", message.c_str());
+    }
+    
+    std::string level_to_string(claude::LogLevel level) {
+        switch (level) {
+            case claude::LogLevel::DEBUG:   return "DEBUG";
+            case claude::LogLevel::INFO:    return "INFO ";
+            case claude::LogLevel::WARNING: return "WARN ";
+            case claude::LogLevel::ERROR:   return "ERROR";
+            default:                        return "?????";
+        }
+    }
+
+public:
     
     // Convenience wrapper for cleaner syntax
     template<typename... Args>
@@ -124,7 +191,11 @@ public:
 // Global logger instance for the orchestrator system
 extern OrchestratorLogger g_orch_logger;
 
-// Macro to replace msg() calls
+// Macros for different log levels
 #define ORCH_LOG(...) g_orch_logger.log(__VA_ARGS__)
+#define ORCH_LOG_DEBUG(...) g_orch_logger.log(claude::LogLevel::DEBUG, __VA_ARGS__)
+#define ORCH_LOG_INFO(...) g_orch_logger.log(claude::LogLevel::INFO, __VA_ARGS__)
+#define ORCH_LOG_WARNING(...) g_orch_logger.log(claude::LogLevel::WARNING, __VA_ARGS__)
+#define ORCH_LOG_ERROR(...) g_orch_logger.log(claude::LogLevel::ERROR, __VA_ARGS__)
 
 } // namespace llm_re::orchestrator

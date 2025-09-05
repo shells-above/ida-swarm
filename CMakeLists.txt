@@ -281,6 +281,7 @@ set(PLUGIN_SOURCES
         ui/preferences_dialog.cpp
         ui/orchestrator_worker.cpp
         ui/ui_orchestrator_bridge.cpp
+        ui/log_window.cpp
         # Common sources
         ${COMMON_SOURCES}
 )
@@ -320,6 +321,7 @@ set(HEADERS
         ui/orchestrator_worker.h
         ui/ui_orchestrator_bridge.h
         ui/ui_integration.h
+        ui/log_window.h
         # Orchestrator headers
         orchestrator/orchestrator.h
 )

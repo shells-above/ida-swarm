@@ -16,11 +16,12 @@ const std::vector<std::string> ToolCallTracker::WRITE_TOOLS = {
     "patch_assembly"
 };
 
-ToolCallTracker::ToolCallTracker(const std::string& binary_name) 
-    : binary_name_(binary_name) {
+ToolCallTracker::ToolCallTracker(const std::string& binary_name, EventBus* event_bus) 
+    : binary_name_(binary_name), event_bus_(event_bus) {
 }
 
 ToolCallTracker::~ToolCallTracker() {
+    stop_monitoring();
     finalize_statements();
     if (db_) {
         sqlite3_close(db_);
@@ -377,6 +378,85 @@ ToolCall ToolCallTracker::row_to_tool_call(sqlite3_stmt* stmt) {
     call.is_write_operation = sqlite3_column_int(stmt, 6) != 0;
     
     return call;
+}
+
+void ToolCallTracker::start_monitoring() {
+    if (monitoring_ || !event_bus_) {
+        return;  // Already monitoring or no event bus
+    }
+    
+    monitoring_ = true;
+    monitor_thread_ = std::thread(&ToolCallTracker::monitor_loop, this);
+    ORCH_LOG("ToolCallTracker: Started monitoring thread\n");
+}
+
+void ToolCallTracker::stop_monitoring() {
+    if (!monitoring_) {
+        return;  // Not monitoring
+    }
+    
+    monitoring_ = false;
+    if (monitor_thread_.joinable()) {
+        monitor_thread_.join();
+    }
+    ORCH_LOG("ToolCallTracker: Stopped monitoring thread\n");
+}
+
+void ToolCallTracker::monitor_loop() {
+    while (monitoring_) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            
+            if (!db_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+            
+            // Query for new tool calls
+            const char* query = "SELECT id, agent_id, tool_name, address, parameters, timestamp, is_write "
+                               "FROM tool_calls WHERE id > ? ORDER BY id";
+            
+            sqlite3_stmt* stmt = nullptr;
+            int rc = sqlite3_prepare_v2(db_, query, -1, &stmt, nullptr);
+            if (rc != SQLITE_OK) {
+                ORCH_LOG("ToolCallTracker: Failed to prepare monitor query: %s\n", sqlite3_errmsg(db_));
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+            
+            sqlite3_bind_int64(stmt, 1, last_seen_id_);
+            
+            // Process new tool calls
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                ToolCall call = row_to_tool_call(stmt);
+                
+                // Emit event for this tool call
+                json tool_data = {
+                    {"tool_name", call.tool_name},
+                    {"address", call.address},
+                    {"parameters", call.parameters},
+                    {"is_write", call.is_write_operation},
+                    {"timestamp", std::chrono::duration_cast<std::chrono::seconds>(
+                        call.timestamp.time_since_epoch()).count()}
+                };
+                
+                if (event_bus_) {
+                    event_bus_->publish(AgentEvent(AgentEvent::TOOL_CALL, call.agent_id, tool_data));
+                }
+                
+                // Update last seen ID
+                last_seen_id_ = call.id;
+                
+                ORCH_LOG("ToolCallTracker: Emitted TOOL_CALL event for %s - %s at 0x%llx\n",
+                    call.agent_id.c_str(), call.tool_name.c_str(), call.address);
+            }
+            
+            sqlite3_finalize(stmt);
+        }
+        
+        // Sleep before next poll
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
 }
 
 } // namespace llm_re::orchestrator

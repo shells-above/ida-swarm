@@ -100,6 +100,9 @@ private:
     // OAuth token management
     bool refresh_oauth_if_needed();
     
+    // Token usage tracking
+    void log_token_usage(const claude::TokenUsage& usage);
+    
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);
     

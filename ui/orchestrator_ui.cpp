@@ -4,6 +4,7 @@
 #include "ui_orchestrator_bridge.h"
 #include "preferences_dialog.h"
 #include "log_window.h"
+#include "../core/config.h"
 
 // Now we can safely include Qt implementation headers
 #include <QVBoxLayout>
@@ -221,9 +222,26 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             
         case AgentEvent::METRIC:
             if (event.payload.contains("input_tokens") && event.payload.contains("output_tokens")) {
+                // Get cache tokens if provided
+                size_t cache_read = 0;
+                size_t cache_write = 0;
+                if (event.payload.contains("cache_read_input_tokens")) {
+                    cache_read = event.payload["cache_read_input_tokens"];
+                }
+                if (event.payload.contains("cache_creation_input_tokens")) {
+                    cache_write = event.payload["cache_creation_input_tokens"];
+                }
+                
                 metrics_panel_->update_token_usage(
                     event.payload["input_tokens"],
-                    event.payload["output_tokens"]
+                    event.payload["output_tokens"],
+                    cache_read,
+                    cache_write
+                );
+            }
+            if (event.payload.contains("context_percentage")) {
+                metrics_panel_->update_context_usage(
+                    event.payload["context_percentage"]
                 );
             }
             break;
@@ -476,6 +494,13 @@ AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
     agent_table_->horizontalHeader()->setStretchLastSection(true);
     agent_table_->setAlternatingRowColors(true);
     agent_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    agent_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    
+    // Remove white borders from status cells
+    agent_table_->setStyleSheet(
+        "QTableWidget::item:selected { border: none; }"
+        "QTableWidget { gridline-color: rgba(0,0,0,30); }"
+    );
     
     // Setup duration update timer
     duration_timer_ = new QTimer(this);
@@ -514,7 +539,8 @@ void AgentMonitor::on_agent_spawned(const std::string& agent_id) {
     int row = find_agent_row(agent_id);
     if (row >= 0) {
         agent_table_->item(row, 2)->setText("Active");
-        agent_table_->item(row, 2)->setBackground(QColor(230, 255, 230));
+        agent_table_->item(row, 2)->setBackground(QColor(245, 255, 245));
+        agent_table_->item(row, 2)->setForeground(QColor(60, 120, 60));
     }
 }
 
@@ -537,11 +563,13 @@ void AgentMonitor::on_agent_state_change(const std::string& agent_id, int state)
         if (state == 0) { // Idle
             agent_table_->item(row, 2)->setBackground(QColor(240, 240, 240));
         } else if (state == 1) { // Running
-            agent_table_->item(row, 2)->setBackground(QColor(230, 255, 230));
+            agent_table_->item(row, 2)->setBackground(QColor(245, 255, 245));
+            agent_table_->item(row, 2)->setForeground(QColor(60, 120, 60));
         } else if (state == 2) { // Paused
             agent_table_->item(row, 2)->setBackground(QColor(255, 248, 220));
         } else if (state == 3) { // Completed
-            agent_table_->item(row, 2)->setBackground(QColor(230, 230, 255));
+            agent_table_->item(row, 2)->setBackground(QColor(245, 245, 255));
+            agent_table_->item(row, 2)->setForeground(QColor(60, 60, 180));
         }
     }
 }
@@ -804,20 +832,25 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
     tool_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(agent_id)));
     
     // Extract tool name and parameters
-    std::string tool_name = tool_data.contains("tool") ? tool_data["tool"] : "unknown";
+    std::string tool_name = tool_data.contains("tool_name") ? tool_data["tool_name"] : "unknown";
     tool_table_->setItem(row, 2, new QTableWidgetItem(QString::fromStdString(tool_name)));
     
-    // Format parameters
-    if (tool_data.contains("input")) {
-        std::string params = tool_data["input"].dump();
+    // Format parameters (from ToolCallTracker: "parameters")
+    if (tool_data.contains("parameters")) {
+        std::string params = tool_data["parameters"].dump();
         if (params.length() > 100) params = params.substr(0, 97) + "...";
         tool_table_->setItem(row, 3, new QTableWidgetItem(QString::fromStdString(params)));
     } else {
         tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
     }
     
-    // Result status
-    if (tool_data.contains("result")) {
+    // Result status - ToolCallTracker events don't have results, just whether it's a write operation
+    if (tool_data.contains("is_write")) {
+        bool is_write = tool_data["is_write"];
+        tool_table_->setItem(row, 4, new QTableWidgetItem(is_write ? "Write" : "Read"));
+        tool_table_->item(row, 4)->setBackground(is_write ? QColor(255, 248, 220) : QColor(240, 240, 240));
+    } else if (tool_data.contains("result")) {
+        // Legacy format from agents
         if (tool_data["result"].contains("success") && tool_data["result"]["success"] == false) {
             tool_table_->setItem(row, 4, new QTableWidgetItem("Failed"));
             tool_table_->item(row, 4)->setBackground(QColor(255, 200, 200));
@@ -826,7 +859,7 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
             tool_table_->item(row, 4)->setBackground(QColor(200, 255, 200));
         }
     } else {
-        tool_table_->setItem(row, 4, new QTableWidgetItem("Pending"));
+        tool_table_->setItem(row, 4, new QTableWidgetItem("-"));
     }
     
     // Update agent filter if needed
@@ -914,18 +947,44 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     auto* token_group = new QGroupBox("Token Usage", this);
     auto* token_layout = new QGridLayout(token_group);
     
+    // Row 0: Input tokens
     token_layout->addWidget(new QLabel("Input:", this), 0, 0);
     input_tokens_label_ = new QLabel("0", this);
     token_layout->addWidget(input_tokens_label_, 0, 1);
     
+    // Row 1: Output tokens
     token_layout->addWidget(new QLabel("Output:", this), 1, 0);
     output_tokens_label_ = new QLabel("0", this);
     token_layout->addWidget(output_tokens_label_, 1, 1);
     
-    token_layout->addWidget(new QLabel("Total:", this), 2, 0);
+    // Row 2: Cache read
+    token_layout->addWidget(new QLabel("Cache Read:", this), 2, 0);
+    cache_read_label_ = new QLabel("0", this);
+    cache_read_label_->setStyleSheet("QLabel { color: #0080ff; }");
+    token_layout->addWidget(cache_read_label_, 2, 1);
+    
+    // Row 3: Cache write  
+    token_layout->addWidget(new QLabel("Cache Write:", this), 3, 0);
+    cache_write_label_ = new QLabel("0", this);
+    cache_write_label_->setStyleSheet("QLabel { color: #ff8000; }");
+    token_layout->addWidget(cache_write_label_, 3, 1);
+    
+    // Row 4: Total with separator
+    auto* separator = new QFrame(this);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    token_layout->addWidget(separator, 4, 0, 1, 2);
+    
+    token_layout->addWidget(new QLabel("Total:", this), 5, 0);
     total_tokens_label_ = new QLabel("0", this);
-    total_tokens_label_->setStyleSheet("QLabel { font-weight: bold; }");
-    token_layout->addWidget(total_tokens_label_, 2, 1);
+    total_tokens_label_->setStyleSheet("QLabel { font-weight: bold; font-size: 14px; }");
+    token_layout->addWidget(total_tokens_label_, 5, 1);
+    
+    // Row 6: Estimated cost
+    token_layout->addWidget(new QLabel("Est. Cost:", this), 6, 0);
+    cost_label_ = new QLabel("$0.00", this);
+    cost_label_->setStyleSheet("QLabel { color: #008000; font-weight: bold; }");
+    token_layout->addWidget(cost_label_, 6, 1);
     
     // Context usage section
     auto* context_group = new QGroupBox("Context Usage", this);
@@ -935,10 +994,16 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     context_bar_->setMinimum(0);
     context_bar_->setMaximum(100);
     context_bar_->setValue(0);
+    context_bar_->setTextVisible(false);  // Hide the default percentage text
+    context_bar_->setStyleSheet(
+        "QProgressBar { border: 1px solid #ccc; border-radius: 3px; background: #f0f0f0; }"
+        "QProgressBar::chunk { background: #4caf50; border-radius: 2px; }"
+    );
     context_layout->addWidget(context_bar_);
     
-    context_label_ = new QLabel("0% used", this);
+    context_label_ = new QLabel("0% of context used", this);
     context_label_->setAlignment(Qt::AlignCenter);
+    context_label_->setStyleSheet("QLabel { font-size: 12px; }");
     context_layout->addWidget(context_label_);
     
     
@@ -948,27 +1013,57 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     layout->addStretch();
 }
 
-void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens) {
+void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens, 
+                                     size_t cache_read, size_t cache_write) {
     total_input_tokens_ += input_tokens;
     total_output_tokens_ += output_tokens;
+    total_cache_read_tokens_ += cache_read;
+    total_cache_write_tokens_ += cache_write;
     
     input_tokens_label_->setText(QString::number(total_input_tokens_));
     output_tokens_label_->setText(QString::number(total_output_tokens_));
-    total_tokens_label_->setText(QString::number(total_input_tokens_ + total_output_tokens_));
+    
+    // Update cache labels
+    cache_read_label_->setText(QString::number(total_cache_read_tokens_));
+    cache_write_label_->setText(QString::number(total_cache_write_tokens_));
+    
+    // Calculate total
+    size_t total = total_input_tokens_ + total_output_tokens_;
+    total_tokens_label_->setText(QString::number(total));
+    
+    // Calculate cost using PricingModel from SDK with the model from config
+    const Config& config = Config::instance();
+    claude::TokenUsage usage;
+    usage.model = config.orchestrator.model.model;  // Use the actual model from config
+    usage.input_tokens = total_input_tokens_;
+    usage.output_tokens = total_output_tokens_;
+    usage.cache_creation_tokens = total_cache_write_tokens_;
+    usage.cache_read_tokens = total_cache_read_tokens_;
+    
+    double total_cost = claude::usage::PricingModel::calculate_cost(usage);
+    cost_label_->setText(QString("$%1").arg(total_cost, 0, 'f', 4));
 }
 
 void MetricsPanel::update_context_usage(double percent) {
     context_bar_->setValue(static_cast<int>(percent));
-    context_label_->setText(QString("%1% used").arg(percent, 0, 'f', 1));
+    context_label_->setText(QString("%1% of context used").arg(percent, 0, 'f', 1));
     
-    // Color code based on usage
+    // Color code based on usage with smooth gradients
+    QString color;
     if (percent > 80) {
-        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: red; }");
+        color = "#e74c3c";  // Red
     } else if (percent > 60) {
-        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: orange; }");
+        color = "#f39c12";  // Orange
+    } else if (percent > 40) {
+        color = "#f1c40f";  // Yellow
     } else {
-        context_bar_->setStyleSheet("QProgressBar::chunk { background-color: green; }");
+        color = "#27ae60";  // Green
     }
+    
+    context_bar_->setStyleSheet(QString(
+        "QProgressBar { border: 1px solid #ccc; border-radius: 3px; background: #f0f0f0; }"
+        "QProgressBar::chunk { background: %1; border-radius: 2px; }").arg(color)
+    );
 }
 
 

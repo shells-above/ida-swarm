@@ -199,7 +199,8 @@ public:
     explicit MetricsPanel(QWidget* parent = nullptr);
     
     // Update metrics
-    void update_token_usage(size_t input_tokens, size_t output_tokens);
+    void update_token_usage(size_t input_tokens, size_t output_tokens, 
+                          size_t cache_read = 0, size_t cache_write = 0);
     void update_context_usage(double percent);
 
 private:
@@ -207,6 +208,9 @@ private:
     QLabel* input_tokens_label_;
     QLabel* output_tokens_label_;
     QLabel* total_tokens_label_;
+    QLabel* cache_read_label_;
+    QLabel* cache_write_label_;
+    QLabel* cost_label_;
     
     // Context usage
     QProgressBar* context_bar_;
@@ -214,6 +218,8 @@ private:
     
     size_t total_input_tokens_ = 0;
     size_t total_output_tokens_ = 0;
+    size_t total_cache_read_tokens_ = 0;
+    size_t total_cache_write_tokens_ = 0;
 };
 
 } // namespace llm_re::ui

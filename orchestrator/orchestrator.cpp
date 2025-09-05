@@ -27,7 +27,7 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     // Create subsystems with binary name
     db_manager_ = std::make_unique<DatabaseManager>(main_db_path, binary_name_);
     agent_spawner_ = std::make_unique<AgentSpawner>(config, binary_name_);
-    tool_tracker_ = std::make_unique<ToolCallTracker>(binary_name_);
+    tool_tracker_ = std::make_unique<ToolCallTracker>(binary_name_, &event_bus_);
     merge_manager_ = std::make_unique<MergeManager>(tool_tracker_.get());
     
     // Create our own OAuth manager if using OAuth authentication
@@ -82,6 +82,9 @@ bool Orchestrator::initialize() {
         ORCH_LOG("Orchestrator: Failed to initialize tool tracker\n");
         return false;
     }
+    
+    // Start monitoring for new tool calls
+    tool_tracker_->start_monitoring();
     
     // Start IRC server for agent communication with binary name
     fs::path idb_path(main_database_path_);
@@ -173,11 +176,16 @@ void Orchestrator::process_user_input(const std::string& input) {
     if (text) {
         ORCH_LOG("Orchestrator: %s\n", text->c_str());
         
-        // Emit orchestrator response event
-        ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event\n");
-        event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
-            {"response", *text}
-        }));
+        // Only emit the response if there are no tool calls (otherwise wait for final response)
+        std::vector<const claude::messages::ToolUseContent*> initial_tool_calls = 
+            claude::messages::ContentExtractor::extract_tool_uses(response.message);
+        if (initial_tool_calls.empty()) {
+            // No tool calls, this is the final response
+            ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event (no tools)\n");
+            event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+                {"response", *text}
+            }));
+        }
     }
     
     // Add response to conversation history
@@ -239,6 +247,12 @@ void Orchestrator::process_user_input(const std::string& input) {
             
             // If no more tool calls, we're done
             if (cont_tool_results.empty()) {
+                // Publish the final response to UI before breaking
+                if (cont_text && !cont_text->empty()) {
+                    event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+                        {"response", *cont_text}
+                    }));
+                }
                 break;
             }
             
@@ -253,8 +267,9 @@ void Orchestrator::process_user_input(const std::string& input) {
         }
     }
     
-    // Update token stats
+    // Update token stats and emit event
     token_stats_.add_usage(response.usage);
+    log_token_usage(response.usage);
 }
 
 claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& user_input) {
@@ -666,6 +681,9 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
                     ORCH_LOG("Orchestrator: Agent %s exited without sending result, marking as completed\n", agent_id.c_str());
                     completed_agents_.insert(agent_id);
                     agent_results_[agent_id] = "Agent process terminated without sending final report";
+                    
+                    // Emit task complete event for UI updates
+                    event_bus_.publish(AgentEvent(AgentEvent::TASK_COMPLETE, agent_id, {}));
                 }
             }
         }
@@ -718,13 +736,15 @@ bool Orchestrator::refresh_oauth_if_needed() {
 }
 
 void Orchestrator::handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message) {
-    // Only interested in messages on the #results channel
-    if (channel != "#results") {
-        return;
-    }
+    // Emit all IRC messages to the UI for display
+    event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
+        {"channel", channel},
+        {"message", message}
+    }));
     
-    // Parse AGENT_RESULT messages
-    if (message.find("AGENT_RESULT:") == 0) {
+    // Parse AGENT_RESULT messages from #results channel
+    if (channel == "#results") {
+        if (message.find("AGENT_RESULT:") == 0) {
         // Format: AGENT_RESULT:{json}
         std::string json_str = message.substr(13);  // Skip "AGENT_RESULT:"
         
@@ -749,6 +769,9 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             ORCH_LOG("Orchestrator: Marked %s as completed (have %zu/%zu completions)\n",
                 agent_id.c_str(), completed_agents_.size(), agents_.size());
             
+            // Emit task complete event for UI updates
+            event_bus_.publish(AgentEvent(AgentEvent::TASK_COMPLETE, agent_id, {}));
+            
             // Find the agent info
             auto it = agents_.find(agent_id);
             if (it != agents_.end()) {
@@ -761,7 +784,40 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         } catch (const std::exception& e) {
             ORCH_LOG("Orchestrator: Failed to parse agent result JSON: %s\n", e.what());
         }
+        }
     }
+}
+
+void Orchestrator::log_token_usage(const claude::TokenUsage& usage) {
+    // Calculate context usage percentage
+    // Claude 3.5 Sonnet has a 200k token context window
+    const size_t context_window = 200000;
+    
+    // Estimate current context usage (sum of all messages in conversation)
+    size_t total_context_tokens = 0;
+    for (const auto& msg : conversation_history_) {
+        // Rough estimate: 4 characters per token
+        size_t msg_size = 0;
+        auto text = claude::messages::ContentExtractor::extract_text(msg);
+        if (text) {
+            msg_size = text->length() / 4;
+        }
+        total_context_tokens += msg_size;
+    }
+    
+    double context_percentage = (static_cast<double>(total_context_tokens) / context_window) * 100.0;
+    
+    // Emit token usage event for UI with context usage
+    event_bus_.publish(AgentEvent(AgentEvent::METRIC, "orchestrator", {
+        {"input_tokens", usage.input_tokens},
+        {"output_tokens", usage.output_tokens},
+        {"cache_creation_input_tokens", usage.cache_creation_tokens},
+        {"cache_read_input_tokens", usage.cache_read_tokens},
+        {"context_percentage", context_percentage}
+    }));
+    
+    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d, Context: %.1f%%\n",
+        usage.input_tokens, usage.output_tokens, context_percentage);
 }
 
 void Orchestrator::shutdown() {

@@ -161,7 +161,10 @@ void IRCClient::receive_loop() {
                             size_t chan_end = line.find(' ', cmd_end + 1);
                             if (chan_end != std::string::npos) {
                                 std::string channel = line.substr(cmd_end + 1, chan_end - cmd_end - 1);
-                                std::string msg = line.substr(chan_end + 2); // Skip ' :'
+                                // Find the colon that marks the start of the message
+                                size_t msg_start = line.find(':', chan_end);
+                                std::string msg = (msg_start != std::string::npos) ? 
+                                    line.substr(msg_start + 1) : line.substr(chan_end + 1);
                                 
                                 // Extract sender nick from prefix
                                 std::string sender;
