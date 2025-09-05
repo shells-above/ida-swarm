@@ -1161,10 +1161,8 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     context_bar_->setMaximum(100);
     context_bar_->setValue(0);
     context_bar_->setTextVisible(false);  // Hide the default percentage text
-    context_bar_->setStyleSheet(
-        "QProgressBar { border: 1px solid #ccc; border-radius: 3px; background: #f0f0f0; }"
-        "QProgressBar::chunk { background: #4caf50; border-radius: 2px; }"
-    );
+    // Remove custom stylesheet to use default theme appearance
+    // The bar will use the system's default progress bar styling
     context_layout->addWidget(context_bar_);
     
     context_label_ = new QLabel("0% of context used", this);
@@ -1226,9 +1224,9 @@ void MetricsPanel::update_context_usage(double percent) {
         color = "#27ae60";  // Green
     }
     
+    // Only style the chunk (filled portion), let the background use default theme
     context_bar_->setStyleSheet(QString(
-        "QProgressBar { border: 1px solid #ccc; border-radius: 3px; background: #f0f0f0; }"
-        "QProgressBar::chunk { background: %1; border-radius: 2px; }").arg(color)
+        "QProgressBar::chunk { background: %1; }").arg(color)
     );
 }
 
