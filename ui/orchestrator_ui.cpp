@@ -33,6 +33,9 @@
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QScrollBar>
+#include <QKeyEvent>
+#include <QClipboard>
+#include <QApplication>
 
 namespace llm_re::ui {
 
@@ -503,6 +506,9 @@ AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
         "QTableWidget { gridline-color: rgba(0,0,0,30); }"
     );
     
+    // Install event filter to handle copy operations with full task text
+    agent_table_->installEventFilter(this);
+    
     // Setup duration update timer
     duration_timer_ = new QTimer(this);
     connect(duration_timer_, &QTimer::timeout, this, &AgentMonitor::update_durations);
@@ -649,6 +655,51 @@ QString AgentMonitor::state_to_string(int state) {
         case 3: return "Completed";
         default: return "Unknown";
     }
+}
+
+bool AgentMonitor::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == agent_table_ && event->type() == QEvent::KeyPress) {
+        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+        
+        // Handle Ctrl+C / Cmd+C for copy
+        if (keyEvent->matches(QKeySequence::Copy)) {
+            QList<QTableWidgetItem*> selected = agent_table_->selectedItems();
+            if (!selected.isEmpty()) {
+                QString copyText;
+                int lastRow = -1;
+                
+                for (QTableWidgetItem* item : selected) {
+                    // Add newline for new rows
+                    if (lastRow != -1 && item->row() != lastRow) {
+                        copyText += "\n";
+                    }
+                    // Add tab between columns in same row
+                    else if (lastRow == item->row()) {
+                        copyText += "\t";
+                    }
+                    
+                    // For Task column (column 1), use the full task data
+                    if (item->column() == 1) {
+                        QVariant fullTask = item->data(Qt::UserRole);
+                        if (fullTask.isValid()) {
+                            copyText += fullTask.toString();
+                        } else {
+                            copyText += item->text();
+                        }
+                    } else {
+                        copyText += item->text();
+                    }
+                    
+                    lastRow = item->row();
+                }
+                
+                QApplication::clipboard()->setText(copyText);
+                return true; // Event handled
+            }
+        }
+    }
+    
+    return QWidget::eventFilter(obj, event);
 }
 
 // IRCViewer implementation
@@ -817,6 +868,9 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
     tool_table_->horizontalHeader()->setStretchLastSection(true);
     tool_table_->setAlternatingRowColors(true);
     
+    // Install event filter to handle copy operations with full text
+    tool_table_->installEventFilter(this);
+    
     layout->addLayout(control_layout);
     layout->addWidget(tool_table_);
     
@@ -841,9 +895,12 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
     
     // Format parameters (from ToolCallTracker: "parameters")
     if (tool_data.contains("parameters")) {
-        std::string params = tool_data["parameters"].dump();
-        if (params.length() > 100) params = params.substr(0, 97) + "...";
-        tool_table_->setItem(row, 3, new QTableWidgetItem(QString::fromStdString(params)));
+        std::string params_full = tool_data["parameters"].dump();
+        std::string params_display = params_full.length() > 100 ? params_full.substr(0, 97) + "..." : params_full;
+        auto* params_item = new QTableWidgetItem(QString::fromStdString(params_display));
+        params_item->setToolTip(QString::fromStdString(params_full));  // Show full params on hover
+        params_item->setData(Qt::UserRole, QString::fromStdString(params_full));  // Store full params for copying
+        tool_table_->setItem(row, 3, params_item);
     } else {
         tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
     }
@@ -941,6 +998,51 @@ void ToolCallTracker::apply_filters() {
 void ToolCallTracker::update_stats() {
     call_count_label_->setText(QString("Total: %1 calls").arg(total_calls_));
     conflict_count_label_->setText(QString("Conflicts: %1").arg(conflict_count_));
+}
+
+bool ToolCallTracker::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == tool_table_ && event->type() == QEvent::KeyPress) {
+        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+        
+        // Handle Ctrl+C / Cmd+C for copy
+        if (keyEvent->matches(QKeySequence::Copy)) {
+            QList<QTableWidgetItem*> selected = tool_table_->selectedItems();
+            if (!selected.isEmpty()) {
+                QString copyText;
+                int lastRow = -1;
+                
+                for (QTableWidgetItem* item : selected) {
+                    // Add newline for new rows
+                    if (lastRow != -1 && item->row() != lastRow) {
+                        copyText += "\n";
+                    }
+                    // Add tab between columns in same row
+                    else if (lastRow == item->row()) {
+                        copyText += "\t";
+                    }
+                    
+                    // For Parameters column (column 3), use the full data
+                    if (item->column() == 3) {
+                        QVariant fullData = item->data(Qt::UserRole);
+                        if (fullData.isValid()) {
+                            copyText += fullData.toString();
+                        } else {
+                            copyText += item->text();
+                        }
+                    } else {
+                        copyText += item->text();
+                    }
+                    
+                    lastRow = item->row();
+                }
+                
+                QApplication::clipboard()->setText(copyText);
+                return true; // Event handled
+            }
+        }
+    }
+    
+    return QWidget::eventFilter(obj, event);
 }
 
 // MetricsPanel implementation

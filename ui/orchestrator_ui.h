@@ -115,6 +115,9 @@ public:
     void on_agent_completed(const std::string& agent_id);
     void clear_agents();
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private:
     QTableWidget* agent_table_;
     QLabel* agent_count_label_;
@@ -171,6 +174,9 @@ public:
     
     // Filter by agent
     void set_agent_filter(const std::string& agent_id);
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
     void on_agent_filter_changed();
