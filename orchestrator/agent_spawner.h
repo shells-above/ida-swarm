@@ -19,6 +19,11 @@ public:
                    const std::string& database_path,
                    const json& agent_config);
     
+    // Resurrect a dormant agent for conflict resolution
+    int resurrect_agent(const std::string& agent_id,
+                       const std::string& database_path,
+                       const json& resurrection_config);
+    
     // Check if agent is still running
     bool is_agent_running(int pid) const;
     

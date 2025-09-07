@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <thread>
+#include <chrono>
 
 #ifdef __NT__
 #include <windows.h>
@@ -64,6 +66,93 @@ int AgentSpawner::spawn_agent(const std::string& agent_id,
         ORCH_LOG("AgentSpawner: Launched agent %s with PID %d\n", agent_id.c_str(), pid);
     } else {
         ORCH_LOG("AgentSpawner: Failed to launch agent %s\n", agent_id.c_str());
+    }
+    
+    return pid;
+}
+
+int AgentSpawner::resurrect_agent(const std::string& agent_id,
+                                 const std::string& database_path,
+                                 const json& resurrection_config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    ORCH_LOG("AgentSpawner: Resurrecting agent %s\n", agent_id.c_str());
+    
+    // Find IDA executable
+    std::string ida_exe = find_ida_executable();
+    if (ida_exe.empty()) {
+        ORCH_LOG("AgentSpawner: Could not find IDA executable\n");
+        return -1;
+    }
+    
+    // Create resurrection marker
+    fs::path workspace = fs::path(database_path).parent_path();
+    fs::path resurrection_marker = workspace / ".resurrecting";
+    try {
+        std::ofstream marker(resurrection_marker);
+        if (marker.is_open()) {
+            marker << std::chrono::system_clock::now().time_since_epoch().count();
+            marker.close();
+        }
+    } catch (const std::exception& e) {
+        ORCH_LOG("AgentSpawner: Failed to create resurrection marker: %s\n", e.what());
+    }
+    
+    // Save resurrection config to workspace
+    fs::path resurrection_config_file = workspace / "resurrection_config.json";
+    try {
+        std::ofstream file(resurrection_config_file);
+        if (file.is_open()) {
+            file << resurrection_config.dump(2);
+            file.close();
+            ORCH_LOG("AgentSpawner: Saved resurrection config for %s\n", agent_id.c_str());
+        }
+    } catch (const std::exception& e) {
+        ORCH_LOG("AgentSpawner: Failed to save resurrection config: %s\n", e.what());
+    }
+    
+    // Prepare launch arguments
+    std::vector<std::string> args = {
+        database_path,
+        "-A"  // Auto-analysis
+    };
+    
+    // Launch the resurrected process
+    int pid = launch_process(ida_exe, args);
+    
+    if (pid > 0) {
+        active_processes_[pid] = agent_id;
+        ORCH_LOG("AgentSpawner: Resurrected agent %s with PID %d\n", agent_id.c_str(), pid);
+        
+        // Wait for agent to clear the resurrection marker (signals it's ready)
+        ORCH_LOG("AgentSpawner: Waiting for agent to signal ready...\n");
+        const int max_wait_seconds = 30;
+        const int poll_interval_ms = 500;
+        int waited_ms = 0;
+        
+        while (fs::exists(resurrection_marker) && waited_ms < (max_wait_seconds * 1000)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+            waited_ms += poll_interval_ms;
+        }
+        
+        if (fs::exists(resurrection_marker)) {
+            // Agent didn't clear it in time, remove it ourselves
+            ORCH_LOG("AgentSpawner: Agent didn't clear marker after %d seconds, removing manually\n", max_wait_seconds);
+            try {
+                fs::remove(resurrection_marker);
+            } catch (const std::exception& e) {
+                ORCH_LOG("AgentSpawner: Failed to remove resurrection marker: %s\n", e.what());
+            }
+        } else {
+            ORCH_LOG("AgentSpawner: Agent signaled ready after %d ms\n", waited_ms);
+        }
+    } else {
+        ORCH_LOG("AgentSpawner: Failed to resurrect agent %s\n", agent_id.c_str());
+        
+        // Clean up resurrection marker on failure
+        try {
+            fs::remove(resurrection_marker);
+        } catch (...) {}
     }
     
     return pid;

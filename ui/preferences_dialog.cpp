@@ -417,10 +417,6 @@ void PreferencesDialog::createIrcTab() {
     conflictChannelFormatEdit_->setPlaceholderText("#conflict_{address}_{type}");
     formatLayout->addRow("Conflict Channel:", conflictChannelFormatEdit_);
     
-    privateChannelFormatEdit_ = new QLineEdit(formatGroup);
-    privateChannelFormatEdit_->setPlaceholderText("#private_{agent1}_{agent2}");
-    formatLayout->addRow("Private Channel:", privateChannelFormatEdit_);
-    
     // Format help
     ircFormatHelp_ = new QTextEdit(widget);
     ircFormatHelp_->setReadOnly(true);
@@ -613,7 +609,6 @@ void PreferencesDialog::loadConfiguration() {
     ircServerEdit_->setText(QString::fromStdString(config.irc.server));
     ircPortSpin_->setValue(config.irc.port);
     conflictChannelFormatEdit_->setText(QString::fromStdString(config.irc.conflict_channel_format));
-    privateChannelFormatEdit_->setText(QString::fromStdString(config.irc.private_channel_format));
     
     configModified_ = false;
 }
@@ -663,7 +658,6 @@ void PreferencesDialog::saveConfiguration() {
     config.irc.server = ircServerEdit_->text().toStdString();
     config.irc.port = ircPortSpin_->value();
     config.irc.conflict_channel_format = conflictChannelFormatEdit_->text().toStdString();
-    config.irc.private_channel_format = privateChannelFormatEdit_->text().toStdString();
     
     // Save to file
     config.save();
@@ -729,13 +723,6 @@ bool PreferencesDialog::validateConfiguration() {
         showValidationError("Conflict channel format cannot be empty");
         tabWidget_->setCurrentIndex(3);
         conflictChannelFormatEdit_->setFocus();
-        return false;
-    }
-    
-    if (privateChannelFormatEdit_->text().isEmpty()) {
-        showValidationError("Private channel format cannot be empty");
-        tabWidget_->setCurrentIndex(3);
-        privateChannelFormatEdit_->setFocus();
         return false;
     }
     

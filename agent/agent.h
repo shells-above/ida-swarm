@@ -16,6 +16,7 @@
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
 #include <fstream>
+#include <filesystem>
 #include <format>
 #include <thread>
 #include <chrono>
@@ -247,10 +248,13 @@ struct AgentTask {
 
 // Main agent
 class Agent {
+protected:
+    // Needs to be accessible to SwarmAgent for restoration
+    AgentExecutionState execution_state_;  // Execution and conversation state
+    
 private:
     // State management
     AgentState state_;
-    AgentExecutionState execution_state_;  // Execution and conversation state
     std::string last_error_;
 
     // Token tracking
@@ -789,11 +793,14 @@ protected:  // Changed to protected so SwarmAgent can access
 
             // Execute tool
             claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
-            results.push_back(result_msg);
+            
+            // Check and trim tool result if it's too large for context
+            claude::messages::Message trimmed_result = check_and_trim_tool_result(result_msg);
+            results.push_back(trimmed_result);
 
-            // Extract result content
+            // Extract result content (from trimmed result for event logging)
             json result_json;
-            for (const std::unique_ptr<claude::messages::Content>& content: result_msg.contents()) {
+            for (const std::unique_ptr<claude::messages::Content>& content: trimmed_result.contents()) {
                 if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
                     try {
                         result_json = json::parse(tool_result->content);
@@ -1020,6 +1027,100 @@ private:
         claude::TokenUsage usage = token_stats_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         return total_tokens > config_.agent.context_limit;
+    }
+
+    // Estimate current conversation token count
+    int estimate_current_conversation_tokens() const {
+        int total_tokens = 0;
+        
+        // Estimate tokens from execution state messages
+        for (const claude::messages::Message& msg : execution_state_.get_messages()) {
+            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
+            if (text) {
+                total_tokens += text->length() / 4;  // Simple token estimation
+            }
+            
+            // Add tokens for tool calls and results
+            auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+            for (const auto* tool : tool_calls) {
+                total_tokens += tool->name.length() / 4;
+                total_tokens += tool->input.dump().length() / 4;
+            }
+        }
+        
+        return total_tokens;
+    }
+
+    // Check and trim tool result if it would exceed context limits
+    claude::messages::Message check_and_trim_tool_result(claude::messages::Message result_msg) {
+        // Extract tool result content
+        const std::vector<std::unique_ptr<claude::messages::Content>>& contents = result_msg.contents();
+        if (contents.empty()) {
+            return result_msg;  // No content to check
+        }
+        
+        // Find the tool result content
+        claude::messages::ToolResultContent* tool_result = nullptr;
+        for (const std::unique_ptr<claude::messages::Content>& content: contents) {
+            if (auto* tr = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                tool_result = tr;
+                break;
+            }
+        }
+        
+        if (!tool_result) {
+            return result_msg;  // No tool result found
+        }
+        
+        // Estimate tokens in tool result
+        int tool_result_tokens = tool_result->content.length() / 4;
+        int current_conversation_tokens = estimate_current_conversation_tokens();
+        int available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
+        
+        // Check if we need to trim
+        if (tool_result_tokens <= available_tokens) {
+            return result_msg;  // Fits within limits
+        }
+        
+        // Calculate how much to keep (in characters)
+        int chars_to_keep = available_tokens * 4;  // Convert tokens back to characters
+        if (chars_to_keep < 100) {  // Always keep at least 100 characters
+            chars_to_keep = 100;
+        }
+        
+        // Trim the content and add truncation notice
+        std::string original_content = tool_result->content;
+        std::string trimmed_content;
+        
+        if (chars_to_keep < (int)original_content.length()) {
+            trimmed_content = original_content.substr(0, chars_to_keep);
+            int truncated_tokens = (original_content.length() - chars_to_keep) / 4;
+            trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits]", truncated_tokens);
+            
+            emit_log(LogLevel::WARNING, std::format("Trimmed tool result from {} to {} characters ({} tokens truncated)", 
+                original_content.length(), trimmed_content.length(), truncated_tokens));
+        } else {
+            trimmed_content = original_content;
+        }
+        
+        // Create new message with trimmed content
+        claude::messages::Message trimmed_msg(result_msg.role());
+        for (const auto& content : contents) {
+            if (auto* tr = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                // Replace with trimmed version, preserving other attributes
+                trimmed_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                    tr->tool_use_id,
+                    trimmed_content,
+                    tr->is_error,
+                    tr->cache_control
+                ));
+            } else {
+                // Keep other content as-is
+                trimmed_msg.add_content(content->clone());
+            }
+        }
+        
+        return trimmed_msg;
     }
 
     // Trigger context consolidation
@@ -1367,9 +1468,12 @@ private:
                             emit_log(LogLevel::INFO, "Grader approved investigation");
                             grader_approved = true;
                             
-                            // Emit final report event
+                            // Get the agent's actual findings (not the grader's assessment)
+                            std::string final_findings = extract_last_assistant_message();
+                            
+                            // Emit final report event with agent's findings
                             event_bus_.publish(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
-                                {"report", grade.response}
+                                {"report", final_findings}
                             }));
                             change_state(AgentState::Status::Completed);
                         } else {
@@ -1412,8 +1516,8 @@ private:
             event_bus_.emit_error(agent_id_, "Unknown API error");
             change_state(AgentState::Status::Completed);
             last_error_ = "Unknown API error";
-            // Force exit on unknown error
-            _exit(1);
+            // Graceful shutdown on unknown error
+            request_graceful_shutdown();
             return;
         }
 
@@ -1445,8 +1549,8 @@ private:
             execution_state_.set_valid(false);
             last_error_ = "API Error: " + error_msg;
             
-            // Send completion message and exit
-            _exit(1);
+            // Graceful shutdown on unrecoverable error
+            request_graceful_shutdown();
             
         } else {
             // Recoverable error - implement retry with delay
@@ -1473,8 +1577,15 @@ private:
             last_error_ = std::format("API Error (recoverable, attempt {}/{}): {}",
                                      api_retry_count_, MAX_API_RETRIES, error_msg);
             
-            // The agent will automatically resume from the paused state
+            // Queue a resume task to retry the operation
             emit_log(LogLevel::INFO, "Will retry after delay...");
+            
+            // Queue resume task for the worker thread
+            {
+                qmutex_locker_t lock(queue_mutex_);
+                task_queue_.push(AgentTask::resume());
+            }
+            qsem_post(task_semaphore_); // Signal the worker thread
         }
     }
 
@@ -1496,6 +1607,7 @@ private:
     }
 
 
+protected:
     // Helper to extract the last assistant message from conversation
     std::string extract_last_assistant_message() {
         std::vector<claude::messages::Message> messages = execution_state_.get_messages();
@@ -1511,7 +1623,7 @@ private:
             }
         }
         
-        return "Investigation complete (no findings extracted)";
+        return "Failed to extract final report.";
     }
     
     // changes state and emits event
@@ -1570,17 +1682,212 @@ private:
         
         emit_log(LogLevel::INFO, summary);
         
-        // Emit metrics event with properly serialized token usage
-        event_bus_.emit_metric(agent_id_, {
+        // Emit token update event with cumulative totals and per-iteration values
+        claude::TokenUsage cumulative_total = get_cumulative_token_usage();
+        // Use the 'usage' parameter which contains per-iteration values for context calculation
+        event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, agent_id_, {
+            {"agent_id", agent_id_},
             {"tokens", {
+                {"input_tokens", cumulative_total.input_tokens},
+                {"output_tokens", cumulative_total.output_tokens},
+                {"cache_read_tokens", cumulative_total.cache_read_tokens},
+                {"cache_creation_tokens", cumulative_total.cache_creation_tokens},
+                {"estimated_cost", cumulative_total.estimated_cost()},
+                {"model", model_to_string(cumulative_total.model)}
+            }},
+            {"session_tokens", {
                 {"input_tokens", usage.input_tokens},
                 {"output_tokens", usage.output_tokens},
                 {"cache_read_tokens", usage.cache_read_tokens},
-                {"cache_creation_tokens", usage.cache_creation_tokens},
-                {"estimated_cost", usage.estimated_cost()}
+                {"cache_creation_tokens", usage.cache_creation_tokens}
             }},
             {"iteration", iteration}
-        });
+        }));
+    }
+
+    // Graceful shutdown methods
+    virtual void request_graceful_shutdown() {
+        emit_log(LogLevel::INFO, "Requesting graceful shutdown...");
+        
+        // Stop and clean up worker thread FIRST
+        emit_log(LogLevel::INFO, "Stopping worker thread...");
+        stop();
+        cleanup_thread();
+        emit_log(LogLevel::INFO, "Worker thread stopped");
+        
+        // Save the current IDA database
+        if (!save_ida_database()) {
+            emit_log(LogLevel::WARNING, "Failed to save IDA database");
+        }
+        
+        // Save conversation state
+        save_conversation_state();
+        
+        // Mark as completed if not already
+        if (state_.get_status() != AgentState::Status::Completed) {
+            change_state(AgentState::Status::Completed);
+        }
+        
+        // Request IDA to exit gracefully
+        request_ida_exit();
+    }
+
+protected:
+    // Save the current IDA database
+    bool save_ida_database() {
+        emit_log(LogLevel::INFO, "Saving IDA database...");
+        
+        struct SaveDatabaseRequest : exec_request_t {
+            bool result = false;
+            virtual ssize_t idaapi execute() override {
+                result = save_database();
+                return 0;
+            }
+        };
+        
+        SaveDatabaseRequest req;
+        execute_sync(req, MFF_WRITE);
+        
+        if (req.result) {
+            emit_log(LogLevel::INFO, "IDA database saved successfully");
+        }
+        return req.result;
+    }
+
+    // Save conversation state to file
+    void save_conversation_state() {
+        emit_log(LogLevel::INFO, "Saving conversation state...");
+        
+        try {
+            // Get the agent workspace directory
+            std::filesystem::path workspace = get_agent_workspace_path();
+            std::filesystem::path state_file = workspace / "conversation_state.json";
+            
+            // Create state JSON
+            json state = {
+                {"agent_id", get_agent_id()},
+                {"task", state_.get_task()},
+                {"status", static_cast<int>(state_.get_status())},
+                {"conversation", serialize_conversation()},
+                {"tool_history", serialize_tool_history()},
+                {"timestamp", std::chrono::system_clock::now().time_since_epoch().count()},
+                {"iteration", execution_state_.get_iteration()},
+                {"token_stats", serialize_token_stats()}
+            };
+            
+            // Write to file
+            std::ofstream file(state_file);
+            if (file.is_open()) {
+                file << state.dump(2);
+                file.close();
+                emit_log(LogLevel::INFO, "Conversation state saved to: " + state_file.string());
+            } else {
+                emit_log(LogLevel::ERROR, "Failed to open state file for writing");
+            }
+        } catch (const std::exception& e) {
+            emit_log(LogLevel::ERROR, std::string("Failed to save conversation state: ") + e.what());
+        }
+    }
+    
+    // Get agent workspace path
+    std::filesystem::path get_agent_workspace_path() const {
+        // Extract from current database path
+        const char* idb_path = get_path(PATH_TYPE_IDB);
+        if (idb_path) {
+            std::filesystem::path db_path(idb_path);
+            return db_path.parent_path();  // Should be workspace/agents/agent_X/
+        }
+        // Fallback to temp directory
+        return std::filesystem::temp_directory_path() / "ida_swarm_workspace" / "agents" / agent_id_;
+    }
+    
+    // Serialize conversation to JSON
+    json serialize_conversation() const {
+        json messages_json = json::array();
+        
+        for (const claude::messages::Message& msg: execution_state_.get_messages()) {
+            // Convert role enum to string
+            std::string role_str = (msg.role() == claude::messages::Role::User) ? "user" : "assistant";
+            
+            json msg_json = {
+                {"role", role_str},
+                {"content", json::array()}
+            };
+            
+            // Serialize all content blocks
+            for (const std::unique_ptr<claude::messages::Content>& content: msg.contents()) {
+                // Use dynamic_cast to check content type
+                if (auto* text = dynamic_cast<const claude::messages::TextContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "text"},
+                        {"text", text->text}
+                    });
+                } else if (auto* tool_use = dynamic_cast<const claude::messages::ToolUseContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "tool_use"},
+                        {"id", tool_use->id},
+                        {"name", tool_use->name},
+                        {"input", tool_use->input}
+                    });
+                } else if (auto* tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "tool_result"},
+                        {"tool_use_id", tool_result->tool_use_id},
+                        {"content", tool_result->content},
+                        {"is_error", tool_result->is_error}
+                    });
+                }
+            }
+            
+            messages_json.push_back(msg_json);
+        }
+        
+        return messages_json;
+    }
+    
+    // Serialize tool history
+    json serialize_tool_history() const {
+        json tools = json::array();
+        
+        for (const auto& [tool_id, iteration] : execution_state_.get_tool_iterations()) {
+            std::optional<std::string> tool_name = execution_state_.get_tool_name(tool_id);
+            tools.push_back({
+                {"id", tool_id},
+                {"name", tool_name.value_or("unknown")},
+                {"iteration", iteration}
+            });
+        }
+        
+        return tools;
+    }
+    
+    // Serialize token statistics
+    json serialize_token_stats() const {
+        claude::TokenUsage total = token_stats_.get_total();
+        return {
+            {"total_input_tokens", total.input_tokens},
+            {"total_output_tokens", total.output_tokens},
+            {"total_cache_read_tokens", total.cache_read_tokens},
+            {"total_cache_creation_tokens", total.cache_creation_tokens},
+            {"total_estimated_cost", total.estimated_cost()},
+            {"sessions", stats_sessions_.size() + 1}
+        };
+    }
+    
+    // Request IDA to exit gracefully
+    void request_ida_exit() {
+        emit_log(LogLevel::INFO, "Requesting IDA to exit gracefully...");
+        
+        struct ExitRequest : exec_request_t {
+            virtual ssize_t idaapi execute() override {
+                // Request IDA to exit gracefully
+                qexit(0);
+                return 0;
+            }
+        };
+        
+        ExitRequest req;
+        execute_sync(req, MFF_WRITE);
     }
 };
 

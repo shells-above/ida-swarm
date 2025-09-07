@@ -37,7 +37,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["irc"]["server"] = irc.server;
         j["irc"]["port"] = irc.port;
         j["irc"]["conflict_channel_format"] = irc.conflict_channel_format;
-        j["irc"]["private_channel_format"] = irc.private_channel_format;
 
         // Orchestrator settings
         j["orchestrator"]["model"]["model"] = claude::model_to_string(orchestrator.model.model);
@@ -112,7 +111,6 @@ bool Config::load_from_file(const std::string& path) {
             irc.server = j["irc"].value("server", irc.server);
             irc.port = j["irc"].value("port", irc.port);
             irc.conflict_channel_format = j["irc"].value("conflict_channel_format", irc.conflict_channel_format);
-            irc.private_channel_format = j["irc"].value("private_channel_format", irc.private_channel_format);
         }
 
         // Orchestrator settings

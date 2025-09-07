@@ -1,18 +1,20 @@
 #pragma once
 
+#include <QScrollArea>
+
 #include "ui_common.h"
 #include <QTreeWidgetItem>
 #include <set>
 
 namespace llm_re::ui {
-
-// Forward declarations
-class TaskPanel;
-class AgentMonitor;
-class IRCViewer;
-class ToolCallTracker;
-class MetricsPanel;
-class LogWindow;
+    // Forward declarations
+    class TaskPanel;
+    class AgentMonitor;
+    class IRCViewer;
+    class ToolCallTracker;
+    class TokenTracker;
+    class MetricsPanel;
+    class LogWindow;
 
 // Main UI window that observes the EventBus
 class OrchestratorUI : public QMainWindow {
@@ -36,7 +38,6 @@ private slots:
     // UI actions
     void on_task_submitted();
     void on_clear_console();
-    void on_pause_resume_clicked();
     void on_preferences_clicked();
     
     // Bridge signals
@@ -48,6 +49,7 @@ private slots:
 private:
     // Setup methods
     void setup_ui();
+    void create_menus();
     void setup_event_subscriptions();
     
     // Main components
@@ -56,6 +58,7 @@ private:
     IRCViewer* irc_viewer_;
     ToolCallTracker* tool_tracker_;
     MetricsPanel* metrics_panel_;
+    TokenTracker* token_tracker_;  // Real-time token usage for all agents
     LogWindow* log_window_;
     
     // Layout
@@ -67,9 +70,6 @@ private:
     // EventBus subscription
     std::string event_subscription_id_;
     EventBus& event_bus_ = get_event_bus();
-    
-    // State
-    bool is_paused_ = false;
 };
 
 // Task input and orchestrator response panel
@@ -223,7 +223,15 @@ public:
     // Update metrics
     void update_token_usage(size_t input_tokens, size_t output_tokens, 
                           size_t cache_read = 0, size_t cache_write = 0);
+    void set_token_usage(size_t input_tokens, size_t output_tokens,
+                        size_t cache_read = 0, size_t cache_write = 0);
     void update_context_usage(double percent);
+    
+    // Update agent-specific context usage
+    void update_agent_context(const std::string& agent_id, double percent, 
+                            size_t input_tokens, size_t output_tokens, size_t cache_read_tokens);
+    void clear_agent_contexts();
+    void remove_agent_context(const std::string& agent_id);
 
 private:
     // Token usage
@@ -234,14 +242,72 @@ private:
     QLabel* cache_write_label_;
     QLabel* cost_label_;
     
-    // Context usage
+    // Context usage - orchestrator
     QProgressBar* context_bar_;
     QLabel* context_label_;
+    
+    // Agent context usage
+    struct AgentContextBar {
+        QProgressBar* bar;
+        QLabel* label;
+        QLabel* tokens_label;
+        double percentage = 0.0;
+    };
+    QScrollArea* agent_context_scroll_;
+    QWidget* agent_context_container_;
+    QVBoxLayout* agent_context_layout_;
+    std::map<std::string, AgentContextBar> agent_contexts_;
     
     size_t total_input_tokens_ = 0;
     size_t total_output_tokens_ = 0;
     size_t total_cache_read_tokens_ = 0;
     size_t total_cache_write_tokens_ = 0;
+    
+    // Helper to create styled progress bar
+    QProgressBar* create_context_bar();
+    void update_context_bar_style(QProgressBar* bar, double percentage);
+};
+
+// Real-time token usage tracker for all agents and orchestrator
+class TokenTracker : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit TokenTracker(QWidget* parent = nullptr);
+    
+    // Update token usage for an agent or orchestrator
+    void update_agent_tokens(const std::string& agent_id, const json& token_data);
+    
+    // Mark an agent as completed
+    void mark_agent_completed(const std::string& agent_id);
+    
+    // Clear all token data
+    void clear_all();
+    
+    // Get total usage across all agents
+    claude::TokenUsage get_total_usage() const;
+
+private:
+    struct AgentTokens {
+        claude::TokenUsage current;
+        double estimated_cost = 0.0;  // Store pre-calculated cost from agent
+        bool is_active = false;
+        bool is_completed = false;  // Track if agent has completed
+        std::chrono::steady_clock::time_point last_update;
+        int iteration = 0;
+    };
+    
+    // UI Components
+    QTableWidget* token_table_;
+    QLabel* total_cost_label_;
+
+    // Data
+    std::map<std::string, AgentTokens> agent_tokens_;
+    
+    // Update the display
+    void refresh_display();
+    QString format_tokens(const claude::TokenUsage& usage);
+    QString format_cost(double cost);
 };
 
 } // namespace llm_re::ui

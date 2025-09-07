@@ -42,14 +42,6 @@ public:
     std::set<int> get_clients() const;
 };
 
-// Agent information for tracking
-struct AgentInfo {
-    std::string agent_id;
-    std::string task;
-    std::chrono::steady_clock::time_point last_seen;
-    int client_fd;
-};
-
 // Simple IRC server
 class IRCServer {
 private:
@@ -59,7 +51,6 @@ private:
     std::thread accept_thread_;
     std::map<int, std::string> client_nicks_;  // fd -> nickname
     std::map<std::string, std::unique_ptr<Channel>> channels_;
-    std::map<std::string, AgentInfo> active_agents_;  // agent_id -> info
     sqlite3* db_;
     std::string binary_name_;
     mutable std::mutex mutex_;
@@ -69,11 +60,7 @@ private:
     void process_message(int client_fd, const Message& msg);
     void log_to_db(const std::string& channel, const std::string& nick, const std::string& message);
     void init_database();
-    
-    // Agent management
-    void handle_agent_leave(int client_fd);
-    void broadcast_agent_join(const std::string& agent_id);
-    
+
 public:
     IRCServer(int port, const std::string& binary_name);
     ~IRCServer();

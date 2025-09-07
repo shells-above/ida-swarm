@@ -222,11 +222,8 @@ void IRCServer::handle_client(int client_fd) {
         }
     }
     
-    // Client disconnected - remove from all channels and handle agent leave
+    // Client disconnected - remove from all channels
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    // If this was an agent, handle its departure
-    handle_agent_leave(client_fd);
     
     for (auto& [name, channel] : channels_) {
         channel->remove_client(client_fd);
@@ -266,19 +263,7 @@ void IRCServer::process_message(int client_fd, const Message& msg) {
         join_msg.params = {channel_name};
         channels_[channel_name]->broadcast(join_msg);
         
-        // If joining #agents channel and this is an agent, just track it
-        if (channel_name == "#agents" && client_nicks_[client_fd].find("agent_") == 0) {
-            // Just track the agent - don't broadcast yet
-            std::string agent_id = client_nicks_[client_fd];
-            
-            // Create placeholder entry - will be updated when task is announced
-            AgentInfo info;
-            info.agent_id = agent_id;
-            info.task = "";
-            info.last_seen = std::chrono::steady_clock::now();
-            info.client_fd = client_fd;
-            active_agents_[agent_id] = info;
-        }
+        // No longer track agents joining - only needed for conflicts
         
         // Send channel history to new client
         for (const auto& hist_msg : channels_[channel_name]->get_history()) {
@@ -304,24 +289,7 @@ void IRCServer::process_message(int client_fd, const Message& msg) {
             pos += 1;
         }
         
-        // Handle task announcement from agents
-        if (text.find("MY_TASK: ") == 0) {
-            std::string task = text.substr(9);
-            std::string agent_id = client_nicks_[client_fd];
-            
-            // Update agent's task and broadcast join
-            auto it = active_agents_.find(agent_id);
-            if (it != active_agents_.end()) {
-                bool is_new_agent = it->second.task.empty();
-                it->second.task = task;
-                
-                // Only broadcast join if this is the first task announcement
-                if (is_new_agent) {
-                    broadcast_agent_join(agent_id);
-                }
-            }
-            return; // Don't broadcast the MY_TASK message itself
-        }
+        // MY_TASK messages no longer handled - not needed for conflict-only communication
         
         if (channels_.find(channel_name) != channels_.end()) {
             Message privmsg;
@@ -406,43 +374,5 @@ std::vector<std::string> IRCServer::list_channels() const {
     return names;
 }
 
-void IRCServer::broadcast_agent_join(const std::string& agent_id) {
-    // Get agent's task
-    std::string task = "";
-    auto it = active_agents_.find(agent_id);
-    if (it != active_agents_.end()) {
-        task = it->second.task;
-    }
-    
-    // Only broadcast if we have a task
-    if (!task.empty() && channels_.find("#agents") != channels_.end()) {
-        Message system_msg;
-        system_msg.prefix = "SYSTEM";
-        system_msg.command = "PRIVMSG";
-        system_msg.params = {"#agents", "AGENT_JOIN: " + agent_id + "|" + task};
-        channels_["#agents"]->broadcast(system_msg);
-    }
-}
-
-void IRCServer::handle_agent_leave(int client_fd) {
-    // Find and remove agent by client_fd
-    for (auto it = active_agents_.begin(); it != active_agents_.end(); ++it) {
-        if (it->second.client_fd == client_fd) {
-            std::string agent_id = it->first;
-            active_agents_.erase(it);
-            
-            // Broadcast SYSTEM message about agent departure
-            if (channels_.find("#agents") != channels_.end()) {
-                Message leave_msg;
-                leave_msg.prefix = "SYSTEM";
-                leave_msg.command = "PRIVMSG";
-                leave_msg.params = {"#agents", "AGENT_LEAVE: " + agent_id};
-                channels_["#agents"]->broadcast(leave_msg);
-            }
-            
-            printf("IRC Server: Agent %s left\n", agent_id.c_str());
-            break;
-        }
-    }
-}
+// Agent tracking methods removed - not needed for conflict-only communication
 } // namespace llm_re::irc

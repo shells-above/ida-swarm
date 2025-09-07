@@ -143,7 +143,6 @@ private:
     QLineEdit* ircServerEdit_;
     QSpinBox* ircPortSpin_;
     QLineEdit* conflictChannelFormatEdit_;
-    QLineEdit* privateChannelFormatEdit_;
     QPushButton* testIrcButton_;
     QLabel* ircStatusLabel_;
     QTextEdit* ircFormatHelp_;

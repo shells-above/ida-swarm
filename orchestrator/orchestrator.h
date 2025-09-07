@@ -93,6 +93,18 @@ private:
     
     // Event bus for UI communication
     EventBus& event_bus_ = get_event_bus();
+    
+    // Conflict resolution tracking
+    struct ConflictSession {
+        std::string channel;
+        std::set<std::string> participating_agents;
+        std::map<std::string, std::string> agreements;  // agent_id -> agreement text
+        bool grader_invoked = false;
+        bool resolved = false;
+        std::chrono::steady_clock::time_point started;
+    };
+    std::map<std::string, ConflictSession> active_conflicts_;  // channel -> session
+    std::mutex conflicts_mutex_;
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
@@ -114,6 +126,12 @@ private:
     
     // Handle IRC messages (for agent results)
     void handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message);
+    
+    // Conflict resolution management
+    void handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message);
+    void check_conflict_consensus(const std::string& channel);
+    void invoke_consensus_grader(const std::string& channel);
+    void broadcast_grader_result(const std::string& channel, bool consensus, const std::string& reasoning);
     
     // Context consolidation for orchestrator
     bool should_consolidate_context() const;

@@ -36,6 +36,7 @@
 #include <QKeyEvent>
 #include <QClipboard>
 #include <QApplication>
+#include <QScrollArea>
 
 namespace llm_re::ui {
 
@@ -84,8 +85,9 @@ void OrchestratorUI::setup_ui() {
     right_splitter_ = new QSplitter(Qt::Vertical);
     
     metrics_panel_ = new MetricsPanel(this);
+    token_tracker_ = new TokenTracker(this);  // Create token tracker
     
-    // Bottom tabs for IRC, Tool calls, and Logs
+    // Bottom tabs for IRC, Tool calls, Token Usage, and Logs
     bottom_tabs_ = new QTabWidget(this);
     irc_viewer_ = new IRCViewer(this);
     tool_tracker_ = new ToolCallTracker(this);
@@ -93,6 +95,7 @@ void OrchestratorUI::setup_ui() {
     
     bottom_tabs_->addTab(irc_viewer_, "IRC Communication");
     bottom_tabs_->addTab(tool_tracker_, "Tool Calls");
+    bottom_tabs_->addTab(token_tracker_, "Token Usage");  // Add token tracker tab
     bottom_tabs_->addTab(log_window_, "Orchestrator Logs");
     
     right_splitter_->addWidget(metrics_panel_);
@@ -135,8 +138,23 @@ void OrchestratorUI::setup_ui() {
                        Qt::AutoConnection);
     msg("OrchestratorUI: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
+    // Create menu bar
+    create_menus();
+    
     // Status bar
     statusBar()->showMessage("Ready");
+}
+
+void OrchestratorUI::create_menus() {
+    // Create File menu  
+    QMenu* fileMenu = menuBar()->addMenu("&File");
+    
+    // Add preferences action with standard keyboard shortcut
+    QAction* preferencesAction = new QAction("&Preferences...", this);
+    // Use standard preferences shortcut (Cmd+, on Mac, Ctrl+, on other platforms)
+    preferencesAction->setShortcut(QKeySequence::Preferences);
+    connect(preferencesAction, &QAction::triggered, this, &OrchestratorUI::on_preferences_clicked);
+    fileMenu->addAction(preferencesAction);
 }
 
 void OrchestratorUI::setup_event_subscriptions() {
@@ -223,34 +241,14 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             tool_tracker_->add_tool_call(event.source, event.payload);
             break;
             
-        case AgentEvent::METRIC:
-            if (event.payload.contains("input_tokens") && event.payload.contains("output_tokens")) {
-                // Get cache tokens if provided
-                size_t cache_read = 0;
-                size_t cache_write = 0;
-                if (event.payload.contains("cache_read_input_tokens")) {
-                    cache_read = event.payload["cache_read_input_tokens"];
-                }
-                if (event.payload.contains("cache_creation_input_tokens")) {
-                    cache_write = event.payload["cache_creation_input_tokens"];
-                }
-                
-                metrics_panel_->update_token_usage(
-                    event.payload["input_tokens"],
-                    event.payload["output_tokens"],
-                    cache_read,
-                    cache_write
-                );
-            }
-            if (event.payload.contains("context_percentage")) {
-                metrics_panel_->update_context_usage(
-                    event.payload["context_percentage"]
-                );
-            }
-            break;
+        // Removed METRIC handler - all token updates now use AGENT_TOKEN_UPDATE
             
         case AgentEvent::TASK_COMPLETE:
             agent_monitor_->on_agent_completed(event.source);
+            // Remove the agent's context bar when it completes
+            metrics_panel_->remove_agent_context(event.source);
+            // Mark agent as completed in token tracker
+            token_tracker_->mark_agent_completed(event.source);
             break;
             
         case AgentEvent::MESSAGE:
@@ -282,6 +280,75 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                 log_window_->add_log(level, event.source, message);
             }
             break;
+            
+        case AgentEvent::AGENT_TOKEN_UPDATE:
+            // Real-time token updates from agents and orchestrator
+            if (event.payload.contains("agent_id") && event.payload.contains("tokens")) {
+                std::string agent_id = event.payload["agent_id"];
+                json token_data = event.payload["tokens"];
+                
+                msg("DEBUG: Received AGENT_TOKEN_UPDATE for %s: %s", 
+                    agent_id.c_str(), token_data.dump().c_str());
+                
+                token_tracker_->update_agent_tokens(agent_id, token_data);
+                
+                // Get the TOTAL usage across all agents and orchestrator
+                claude::TokenUsage total_usage = token_tracker_->get_total_usage();
+                
+                // Update main metrics panel with TOTAL tokens (orchestrator + all agents)
+                metrics_panel_->set_token_usage(
+                    total_usage.input_tokens, 
+                    total_usage.output_tokens,
+                    total_usage.cache_read_tokens, 
+                    total_usage.cache_creation_tokens
+                );
+                
+                // Update context bars
+                if (agent_id == "orchestrator") {
+                    // Calculate and update orchestrator context usage
+                    size_t input_tokens = token_data.value("input_tokens", 0);
+                    size_t output_tokens = token_data.value("output_tokens", 0);
+                    size_t cache_read_tokens = token_data.value("cache_read_tokens", 0);
+                    
+                    // Orchestrator uses 200k context (hardcoded in orchestrator.cpp)
+                    const size_t orchestrator_context_limit = 200000;
+                    size_t total_context_used = input_tokens + cache_read_tokens + output_tokens;
+                    double context_percent = (total_context_used * 100.0) / orchestrator_context_limit;
+                    metrics_panel_->update_context_usage(context_percent);
+                    
+                } else {
+                    // Update agent context bars
+                    size_t input_tokens = token_data.value("input_tokens", 0);
+                    size_t output_tokens = token_data.value("output_tokens", 0);
+                    size_t cache_read_tokens = token_data.value("cache_read_tokens", 0);
+                    
+                    // Get per-iteration tokens for context calculation if available
+                    json session_tokens = event.payload.value("session_tokens", json());
+                    size_t session_input = session_tokens.value("input_tokens", input_tokens);
+                    size_t session_output = session_tokens.value("output_tokens", output_tokens);
+                    size_t session_cache_read = session_tokens.value("cache_read_tokens", cache_read_tokens);
+                    
+                    msg("DEBUG: Agent %s cumulative - In: %zu, Out: %zu, Cache Read: %zu",
+                        agent_id.c_str(), input_tokens, output_tokens, cache_read_tokens);
+                    msg("DEBUG: Agent %s per-iteration - In: %zu, Out: %zu, Cache Read: %zu",
+                        agent_id.c_str(), session_input, session_output, session_cache_read);
+                    
+                    // Calculate context percentage using per-iteration tokens
+                    // Total context = input + cache_read + output
+                    const Config& config = Config::instance();
+                    size_t max_context_tokens = config.agent.context_limit;
+                    size_t total_context_used = session_input + session_cache_read + session_output;
+                    double context_percent = (total_context_used * 100.0) / max_context_tokens;
+                    
+                    msg("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)",
+                        agent_id.c_str(), total_context_used, max_context_tokens, context_percent);
+                    
+                    // Update the agent's context bar with per-iteration percentage but cumulative token counts
+                    metrics_panel_->update_agent_context(agent_id, context_percent, 
+                                                        input_tokens, output_tokens, cache_read_tokens);
+                }
+            }
+            break;
     }
 }
 
@@ -309,11 +376,8 @@ void OrchestratorUI::on_clear_console() {
     agent_monitor_->clear_agents();
     irc_viewer_->clear_messages();
     tool_tracker_->clear_calls();
-}
-
-void OrchestratorUI::on_pause_resume_clicked() {
-    is_paused_ = !is_paused_;
-    statusBar()->showMessage(is_paused_ ? "Paused" : "Resumed");
+    token_tracker_->clear_all();
+    metrics_panel_->clear_agent_contexts();
 }
 
 void OrchestratorUI::on_preferences_clicked() {
@@ -1203,73 +1267,105 @@ bool ToolCallTracker::eventFilter(QObject* obj, QEvent* event) {
 // MetricsPanel implementation
 MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
+    layout->setSpacing(5);
+    layout->setContentsMargins(5, 5, 5, 5);
     
-    // Token usage section
-    auto* token_group = new QGroupBox("Token Usage", this);
-    auto* token_layout = new QGridLayout(token_group);
+    // Compact token usage section (horizontal layout)
+    auto* token_group = new QGroupBox("Total Token Usage", this);
+    token_group->setMaximumHeight(80);
+    auto* token_layout = new QHBoxLayout(token_group);
     
-    // Row 0: Input tokens
-    token_layout->addWidget(new QLabel("Input:", this), 0, 0);
+    // Input/Output tokens
+    auto* io_layout = new QVBoxLayout();
+    auto* input_line = new QHBoxLayout();
+    input_line->addWidget(new QLabel("In:", this));
     input_tokens_label_ = new QLabel("0", this);
-    token_layout->addWidget(input_tokens_label_, 0, 1);
+    input_line->addWidget(input_tokens_label_);
+    input_line->addStretch();
+    io_layout->addLayout(input_line);
     
-    // Row 1: Output tokens
-    token_layout->addWidget(new QLabel("Output:", this), 1, 0);
+    auto* output_line = new QHBoxLayout();
+    output_line->addWidget(new QLabel("Out:", this));
     output_tokens_label_ = new QLabel("0", this);
-    token_layout->addWidget(output_tokens_label_, 1, 1);
+    output_line->addWidget(output_tokens_label_);
+    output_line->addStretch();
+    io_layout->addLayout(output_line);
+    token_layout->addLayout(io_layout);
     
-    // Row 2: Cache read
-    token_layout->addWidget(new QLabel("Cache Read:", this), 2, 0);
+    // Cache tokens
+    auto* cache_layout = new QVBoxLayout();
+    auto* cache_read_line = new QHBoxLayout();
+    cache_read_line->addWidget(new QLabel("Cache R:", this));
     cache_read_label_ = new QLabel("0", this);
     cache_read_label_->setStyleSheet("QLabel { color: #0080ff; }");
-    token_layout->addWidget(cache_read_label_, 2, 1);
+    cache_read_line->addWidget(cache_read_label_);
+    cache_read_line->addStretch();
+    cache_layout->addLayout(cache_read_line);
     
-    // Row 3: Cache write  
-    token_layout->addWidget(new QLabel("Cache Write:", this), 3, 0);
+    auto* cache_write_line = new QHBoxLayout();
+    cache_write_line->addWidget(new QLabel("Cache W:", this));
     cache_write_label_ = new QLabel("0", this);
     cache_write_label_->setStyleSheet("QLabel { color: #ff8000; }");
-    token_layout->addWidget(cache_write_label_, 3, 1);
+    cache_write_line->addWidget(cache_write_label_);
+    cache_write_line->addStretch();
+    cache_layout->addLayout(cache_write_line);
+    token_layout->addLayout(cache_layout);
     
-    // Row 4: Total with separator
-    auto* separator = new QFrame(this);
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    token_layout->addWidget(separator, 4, 0, 1, 2);
-    
-    token_layout->addWidget(new QLabel("Total:", this), 5, 0);
+    // Total and cost
+    auto* total_layout = new QVBoxLayout();
+    auto* total_line = new QHBoxLayout();
+    total_line->addWidget(new QLabel("Total:", this));
     total_tokens_label_ = new QLabel("0", this);
-    total_tokens_label_->setStyleSheet("QLabel { font-weight: bold; font-size: 14px; }");
-    token_layout->addWidget(total_tokens_label_, 5, 1);
+    total_tokens_label_->setStyleSheet("QLabel { font-weight: bold; }");
+    total_line->addWidget(total_tokens_label_);
+    total_line->addStretch();
+    total_layout->addLayout(total_line);
     
-    // Row 6: Estimated cost
-    token_layout->addWidget(new QLabel("Est. Cost:", this), 6, 0);
+    auto* cost_line = new QHBoxLayout();
+    cost_line->addWidget(new QLabel("Cost:", this));
     cost_label_ = new QLabel("$0.00", this);
     cost_label_->setStyleSheet("QLabel { color: #008000; font-weight: bold; }");
-    token_layout->addWidget(cost_label_, 6, 1);
+    cost_line->addWidget(cost_label_);
+    cost_line->addStretch();
+    total_layout->addLayout(cost_line);
+    token_layout->addLayout(total_layout);
     
-    // Context usage section
-    auto* context_group = new QGroupBox("Context Usage", this);
-    auto* context_layout = new QVBoxLayout(context_group);
+    // Orchestrator context section
+    auto* orch_context_group = new QGroupBox("Orchestrator Context", this);
+    orch_context_group->setMaximumHeight(80);
+    auto* orch_context_layout = new QVBoxLayout(orch_context_group);
     
-    context_bar_ = new QProgressBar(this);
-    context_bar_->setMinimum(0);
-    context_bar_->setMaximum(100);
-    context_bar_->setValue(0);
-    context_bar_->setTextVisible(false);  // Hide the default percentage text
-    // Remove custom stylesheet to use default theme appearance
-    // The bar will use the system's default progress bar styling
-    context_layout->addWidget(context_bar_);
+    // Create orchestrator context bar with label on same line
+    auto* orch_bar_layout = new QHBoxLayout();
+    context_label_ = new QLabel("0%", this);
+    context_label_->setMinimumWidth(40);
+    context_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    orch_bar_layout->addWidget(context_label_);
     
-    context_label_ = new QLabel("0% of context used", this);
-    context_label_->setAlignment(Qt::AlignCenter);
-    context_label_->setStyleSheet("QLabel { font-size: 12px; }");
-    context_layout->addWidget(context_label_);
+    context_bar_ = create_context_bar();
+    orch_bar_layout->addWidget(context_bar_);
+    orch_context_layout->addLayout(orch_bar_layout);
     
+    // Agent context usage section with scroll area
+    auto* agent_context_group = new QGroupBox("Agent Context Usage", this);
+    auto* agent_group_layout = new QVBoxLayout(agent_context_group);
+    
+    agent_context_scroll_ = new QScrollArea(this);
+    agent_context_scroll_->setWidgetResizable(true);
+    agent_context_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    
+    agent_context_container_ = new QWidget();
+    agent_context_layout_ = new QVBoxLayout(agent_context_container_);
+    agent_context_layout_->setSpacing(2);
+    agent_context_layout_->addStretch();
+    
+    agent_context_scroll_->setWidget(agent_context_container_);
+    agent_group_layout->addWidget(agent_context_scroll_);
     
     // Add all groups to main layout
     layout->addWidget(token_group);
-    layout->addWidget(context_group);
-    layout->addStretch();
+    layout->addWidget(orch_context_group);
+    layout->addWidget(agent_context_group, 1); // Give it stretch priority
 }
 
 void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens, 
@@ -1303,27 +1399,369 @@ void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens,
     cost_label_->setText(QString("$%1").arg(total_cost, 0, 'f', 4));
 }
 
-void MetricsPanel::update_context_usage(double percent) {
-    context_bar_->setValue(static_cast<int>(percent));
-    context_label_->setText(QString("%1% of context used").arg(percent, 0, 'f', 1));
+void MetricsPanel::set_token_usage(size_t input_tokens, size_t output_tokens, 
+                                   size_t cache_read, size_t cache_write) {
+    // Set absolute values (not incremental)
+    total_input_tokens_ = input_tokens;
+    total_output_tokens_ = output_tokens;
+    total_cache_read_tokens_ = cache_read;
+    total_cache_write_tokens_ = cache_write;
     
-    // Color code based on usage with smooth gradients
-    QString color;
-    if (percent > 80) {
-        color = "#e74c3c";  // Red
-    } else if (percent > 60) {
-        color = "#f39c12";  // Orange
-    } else if (percent > 40) {
-        color = "#f1c40f";  // Yellow
-    } else {
-        color = "#27ae60";  // Green
-    }
+    input_tokens_label_->setText(QString::number(total_input_tokens_));
+    output_tokens_label_->setText(QString::number(total_output_tokens_));
     
-    // Only style the chunk (filled portion), let the background use default theme
-    context_bar_->setStyleSheet(QString(
-        "QProgressBar::chunk { background: %1; }").arg(color)
-    );
+    // Update cache labels
+    cache_read_label_->setText(QString::number(total_cache_read_tokens_));
+    cache_write_label_->setText(QString::number(total_cache_write_tokens_));
+    
+    // Calculate total
+    size_t total = total_input_tokens_ + total_output_tokens_;
+    total_tokens_label_->setText(QString::number(total));
+    
+    // Calculate cost using PricingModel from SDK with the model from config
+    const Config& config = Config::instance();
+    claude::TokenUsage usage;
+    usage.model = config.orchestrator.model.model;  // Use the actual model from config
+    usage.input_tokens = total_input_tokens_;
+    usage.output_tokens = total_output_tokens_;
+    usage.cache_creation_tokens = total_cache_write_tokens_;
+    usage.cache_read_tokens = total_cache_read_tokens_;
+    
+    double total_cost = claude::usage::PricingModel::calculate_cost(usage);
+    cost_label_->setText(QString("$%1").arg(total_cost, 0, 'f', 4));
 }
 
+void MetricsPanel::update_context_usage(double percent) {
+    context_bar_->setValue(static_cast<int>(percent));
+    update_context_bar_style(context_bar_, percent);
+    context_label_->setText(QString("%1%").arg(percent, 0, 'f', 1));
+}
+
+void MetricsPanel::update_agent_context(const std::string& agent_id, double percent,
+                                       size_t input_tokens, size_t output_tokens, size_t cache_read_tokens) {
+    // Find or create agent context bar
+    if (agent_contexts_.find(agent_id) == agent_contexts_.end()) {
+        // Create new agent context bar
+        AgentContextBar& agent_bar = agent_contexts_[agent_id];
+        
+        // Create horizontal layout for this agent
+        auto* agent_layout = new QHBoxLayout();
+        agent_layout->setSpacing(5);
+        
+        // Agent name label
+        agent_bar.label = new QLabel(QString::fromStdString(agent_id), this);
+        agent_bar.label->setMinimumWidth(80);
+        agent_bar.label->setMaximumWidth(100);
+        agent_layout->addWidget(agent_bar.label);
+        
+        // Percentage label
+        agent_bar.tokens_label = new QLabel("0%", this);
+        agent_bar.tokens_label->setMinimumWidth(40);
+        agent_bar.tokens_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        agent_layout->addWidget(agent_bar.tokens_label);
+        
+        // Progress bar
+        agent_bar.bar = create_context_bar();
+        agent_layout->addWidget(agent_bar.bar, 1); // Give it stretch
+        
+        // Insert before the stretch at the end
+        int insert_pos = agent_context_layout_->count() - 1; // Before stretch
+        agent_context_layout_->insertLayout(insert_pos, agent_layout);
+    }
+    
+    // Update the agent's context bar
+    AgentContextBar& agent_bar = agent_contexts_[agent_id];
+    agent_bar.percentage = percent;
+    agent_bar.bar->setValue(static_cast<int>(percent));
+    update_context_bar_style(agent_bar.bar, percent);
+    
+    // Update label with percentage and token count
+    QString tokens_text = QString("%1%").arg(percent, 0, 'f', 1);
+    agent_bar.tokens_label->setText(tokens_text);
+    
+    // Add tooltip with detailed info
+    QString tooltip = QString("%1\nInput: %2 tokens\nCache Read: %3 tokens\nOutput: %4 tokens\nContext Used: %5%")
+        .arg(QString::fromStdString(agent_id))
+        .arg(input_tokens)
+        .arg(cache_read_tokens)
+        .arg(output_tokens)
+        .arg(percent, 0, 'f', 1);
+    agent_bar.bar->setToolTip(tooltip);
+}
+
+void MetricsPanel::clear_agent_contexts() {
+    // Clear all agent context bars
+    for (auto& [id, agent_bar] : agent_contexts_) {
+        delete agent_bar.bar;
+        delete agent_bar.label;
+        delete agent_bar.tokens_label;
+    }
+    agent_contexts_.clear();
+    
+    // Clear the layout
+    QLayoutItem* item;
+    while ((item = agent_context_layout_->takeAt(0)) != nullptr) {
+        if (item->layout()) {
+            QLayoutItem* subItem;
+            while ((subItem = item->layout()->takeAt(0)) != nullptr) {
+                delete subItem;
+            }
+        }
+        delete item;
+    }
+    
+    // Re-add the stretch
+    agent_context_layout_->addStretch();
+}
+
+void MetricsPanel::remove_agent_context(const std::string& agent_id) {
+    auto it = agent_contexts_.find(agent_id);
+    if (it == agent_contexts_.end()) {
+        return;
+    }
+    
+    // Find and remove the layout containing this agent's widgets
+    for (int i = 0; i < agent_context_layout_->count() - 1; i++) {  // -1 to skip the stretch
+        QLayoutItem* item = agent_context_layout_->itemAt(i);
+        if (item && item->layout()) {
+            QHBoxLayout* hlayout = qobject_cast<QHBoxLayout*>(item->layout());
+            if (hlayout && hlayout->count() > 0) {
+                QLabel* label = qobject_cast<QLabel*>(hlayout->itemAt(0)->widget());
+                if (label && label->text() == QString::fromStdString(agent_id)) {
+                    // Found it - remove the layout
+                    agent_context_layout_->takeAt(i);
+                    
+                    // Delete all widgets in the layout
+                    while (QLayoutItem* subItem = hlayout->takeAt(0)) {
+                        if (subItem->widget()) {
+                            delete subItem->widget();
+                        }
+                        delete subItem;
+                    }
+                    delete hlayout;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Remove from map
+    agent_contexts_.erase(it);
+    
+    // Force layout update
+    if (agent_context_container_) {
+        agent_context_container_->update();
+    }
+}
+
+QProgressBar* MetricsPanel::create_context_bar() {
+    auto* bar = new QProgressBar(this);
+    bar->setMinimum(0);
+    bar->setMaximum(100);
+    bar->setValue(0);
+    bar->setTextVisible(false);
+    bar->setMaximumHeight(20);
+    return bar;
+}
+
+void MetricsPanel::update_context_bar_style(QProgressBar* bar, double percentage) {
+    if (percentage < 50) {
+        // Green - safe zone
+        bar->setStyleSheet(
+            "QProgressBar::chunk {"
+            "    background-color: #27ae60;"
+            "}"
+        );
+    } else if (percentage < 80) {
+        // Yellow - warning zone
+        bar->setStyleSheet(
+            "QProgressBar::chunk {"
+            "    background-color: #f39c12;"
+            "}"
+        );
+    } else {
+        // Red - critical zone
+        bar->setStyleSheet(
+            "QProgressBar::chunk {"
+            "    background-color: #e74c3c;"
+            "}"
+        );
+    }
+}
+
+
+// TokenTracker implementation
+TokenTracker::TokenTracker(QWidget* parent) : QWidget(parent) {
+    auto* layout = new QVBoxLayout(this);
+    
+    // Create header with total cost
+    auto* header_layout = new QHBoxLayout();
+    auto* title_label = new QLabel("<b>Real-time Token Usage</b>");
+    total_cost_label_ = new QLabel("Total Cost: $0.0000");
+    total_cost_label_->setAlignment(Qt::AlignRight);
+    header_layout->addWidget(title_label);
+    header_layout->addStretch();
+    header_layout->addWidget(total_cost_label_);
+    layout->addLayout(header_layout);
+    
+    // Create token table
+    token_table_ = new QTableWidget(this);
+    token_table_->setColumnCount(7);
+    token_table_->setHorizontalHeaderLabels({
+        "Agent/Orchestrator", "Status", "Input", "Output", "Cache Read", "Cache Write", "Cost"
+    });
+    
+    // Set column widths
+    token_table_->setColumnWidth(0, 150);  // Agent ID
+    token_table_->setColumnWidth(1, 80);   // Status
+    token_table_->setColumnWidth(2, 80);   // Input tokens
+    token_table_->setColumnWidth(3, 80);   // Output tokens
+    token_table_->setColumnWidth(4, 90);   // Cache read tokens
+    token_table_->setColumnWidth(5, 90);   // Cache write tokens
+    token_table_->setColumnWidth(6, 100);  // Cost
+    
+    token_table_->horizontalHeader()->setStretchLastSection(true);
+    token_table_->setAlternatingRowColors(true);
+    token_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    token_table_->setSortingEnabled(true);
+    
+    layout->addWidget(token_table_);
+}
+
+void TokenTracker::update_agent_tokens(const std::string& agent_id, const json& token_data) {
+    msg("TokenTracker: Updating tokens for %s with data: %s", 
+        agent_id.c_str(), token_data.dump().c_str());
+    
+    // Update or create agent entry
+    AgentTokens& agent = agent_tokens_[agent_id];
+    
+    // Parse token data
+    if (token_data.contains("input_tokens")) {
+        agent.current.input_tokens = token_data["input_tokens"];
+    }
+    if (token_data.contains("output_tokens")) {
+        agent.current.output_tokens = token_data["output_tokens"];
+    }
+    if (token_data.contains("cache_read_tokens")) {
+        agent.current.cache_read_tokens = token_data["cache_read_tokens"];
+    }
+    if (token_data.contains("cache_creation_tokens")) {
+        agent.current.cache_creation_tokens = token_data["cache_creation_tokens"];
+    }
+    
+    // Always set the model if provided
+    if (token_data.contains("model")) {
+        std::string model_str = token_data["model"];
+        agent.current.model = claude::model_from_string(model_str);
+    }
+    
+    // Always calculate cost from cumulative totals
+    // The estimated_cost from agent is per-iteration, but we want total cost
+    agent.estimated_cost = agent.current.estimated_cost();
+    
+    if (token_data.contains("iteration")) {
+        agent.iteration = token_data["iteration"];
+    }
+    
+    agent.is_active = true;
+    agent.last_update = std::chrono::steady_clock::now();
+    
+    // Update display
+    refresh_display();
+}
+
+void TokenTracker::mark_agent_completed(const std::string& agent_id) {
+    auto it = agent_tokens_.find(agent_id);
+    if (it != agent_tokens_.end()) {
+        it->second.is_completed = true;
+        it->second.is_active = false;  // No longer active
+        refresh_display();
+    }
+}
+
+void TokenTracker::clear_all() {
+    agent_tokens_.clear();
+    token_table_->setRowCount(0);
+    total_cost_label_->setText("Total Cost: $0.0000");
+}
+
+claude::TokenUsage TokenTracker::get_total_usage() const {
+    claude::TokenUsage total;
+    for (const auto& [id, agent] : agent_tokens_) {
+        total += agent.current;
+    }
+    return total;
+}
+
+void TokenTracker::refresh_display() {
+    // Update table rows
+    token_table_->setRowCount(agent_tokens_.size());
+    
+    int row = 0;
+    double total_cost = 0.0;
+    
+    for (const auto& [agent_id, agent] : agent_tokens_) {
+        // Agent/Orchestrator name
+        auto* id_item = new QTableWidgetItem(QString::fromStdString(agent_id));
+        if (agent_id == "orchestrator") {
+            id_item->setFont(QFont("", -1, QFont::Bold));
+        }
+        token_table_->setItem(row, 0, id_item);
+        
+        // Status (active/completed)
+        QString status;
+        if (agent.is_completed) {
+            status = "Completed";
+        } else {
+            status = "Active";
+        }
+        
+        auto* status_item = new QTableWidgetItem(status);
+        status_item->setForeground(QColor(39, 174, 96)); // Green for both
+        token_table_->setItem(row, 1, status_item);
+        
+        // Input tokens
+        auto* input_item = new QTableWidgetItem(QString::number(agent.current.input_tokens));
+        input_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        token_table_->setItem(row, 2, input_item);
+        
+        // Output tokens
+        auto* output_item = new QTableWidgetItem(QString::number(agent.current.output_tokens));
+        output_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        token_table_->setItem(row, 3, output_item);
+        
+        // Cache read tokens
+        auto* cache_read_item = new QTableWidgetItem(QString::number(agent.current.cache_read_tokens));
+        cache_read_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        token_table_->setItem(row, 4, cache_read_item);
+        
+        // Cache write tokens
+        auto* cache_write_item = new QTableWidgetItem(QString::number(agent.current.cache_creation_tokens));
+        cache_write_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        token_table_->setItem(row, 5, cache_write_item);
+        
+        // Cost (use pre-calculated cost from agent)
+        double cost = agent.estimated_cost;
+        total_cost += cost;
+        auto* cost_item = new QTableWidgetItem(format_cost(cost));
+        cost_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        token_table_->setItem(row, 6, cost_item);
+        
+        row++;
+    }
+    
+    // Update total cost
+    total_cost_label_->setText(QString("Total Cost: %1").arg(format_cost(total_cost)));
+}
+
+QString TokenTracker::format_tokens(const claude::TokenUsage& usage) {
+    return QString("%1 in / %2 out")
+        .arg(usage.input_tokens)
+        .arg(usage.output_tokens);
+}
+
+QString TokenTracker::format_cost(double cost) {
+    return QString("$%1").arg(cost, 0, 'f', 4);
+}
 
 } // namespace llm_re::ui

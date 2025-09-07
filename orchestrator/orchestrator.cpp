@@ -107,7 +107,6 @@ bool Orchestrator::initialize() {
     
     // Join standard orchestrator channels
     irc_client_->join_channel("#agents");
-    irc_client_->join_channel("#agent_query");
     irc_client_->join_channel("#results");
     
     // Set up message callback to receive agent results
@@ -152,6 +151,9 @@ void Orchestrator::process_user_input(const std::string& input) {
     completed_agents_.clear();
     agent_results_.clear();
     
+    // Reset token stats for new task
+    token_stats_.reset();
+    
     // Initialize conversation history for new task
     conversation_history_.clear();
     conversation_history_.push_back(claude::messages::Message::user_text(input));
@@ -170,6 +172,13 @@ void Orchestrator::process_user_input(const std::string& input) {
             response.error ? response.error->c_str() : "Unknown error");
         return;
     }
+    
+    // Track initial response tokens
+    ORCH_LOG("DEBUG: Initial response usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
+        response.usage.input_tokens, response.usage.output_tokens,
+        response.usage.cache_read_tokens, response.usage.cache_creation_tokens);
+    token_stats_.add_usage(response.usage);
+    log_token_usage(token_stats_.get_total());
     
     // Display orchestrator's response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
@@ -236,6 +245,12 @@ void Orchestrator::process_user_input(const std::string& input) {
                 break;
             }
             
+            // Track tokens from continuation response
+            ORCH_LOG("DEBUG: Continuation usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
+                continuation.usage.input_tokens, continuation.usage.output_tokens,
+                continuation.usage.cache_read_tokens, continuation.usage.cache_creation_tokens);
+            token_stats_.add_usage(continuation.usage);
+            
             // Display text if present
             auto cont_text = claude::messages::ContentExtractor::extract_text(continuation.message);
             if (cont_text) {
@@ -253,6 +268,8 @@ void Orchestrator::process_user_input(const std::string& input) {
                         {"response", *cont_text}
                     }));
                 }
+                // Log cumulative token usage after final response
+                log_token_usage(token_stats_.get_total());
                 break;
             }
             
@@ -262,14 +279,13 @@ void Orchestrator::process_user_input(const std::string& input) {
                 conversation_history_.push_back(result);
             }
             
+            // Log cumulative token usage after each continuation
+            log_token_usage(token_stats_.get_total());
+            
             ORCH_LOG("Orchestrator: Processed %zu more tool calls, continuing conversation...\n", 
                 cont_tool_results.size());
         }
     }
-    
-    // Update token stats and emit event
-    token_stats_.add_usage(response.usage);
-    log_token_usage(response.usage);
 }
 
 claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& user_input) {
@@ -436,7 +452,7 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
 }
 
 json Orchestrator::spawn_agent_async(const std::string& task, const std::string& context) {
-    ORCH_LOG("Orchestrator: Spawning agent (async) for task: %s\n", task.c_str());
+    ORCH_LOG("Orchestrator: Spawning agent for task: %s\n", task.c_str());
     
     // Generate agent ID
     std::string agent_id = std::format("agent_{}", next_agent_id_++);
@@ -563,6 +579,16 @@ json Orchestrator::merge_database(const std::string& agent_id) {
 std::string Orchestrator::generate_agent_prompt(const std::string& task, const std::string& context) {
     std::string prompt = R"(You are a specialized agent in a multi-agent reverse engineering swarm.
 
+CRITICAL LIMITATION - IMPLEMENTATION TASKS:
+If asked to create implementation files (.cpp, .h, .c), write code, or generate complete source projects, you should respond by:
+1. Explaining what reverse engineering insights you CAN provide about the target
+2. Detailing the specific analysis you can perform (function identification, algorithm understanding, data structure mapping)
+3. Clarifying that implementation file creation requires different tools than your reverse engineering capabilities
+4. Offering to analyze the target binary to provide the technical understanding needed for someone else to implement
+5. You must TEACH your caller that you just simply are not technically able to perform that task, you must make this clear
+
+This educational response helps everyone understand the division of labor between analysis and implementation.
+
 YOUR TASK: )" + task + R"(
 
 CONTEXT: )" + context;
@@ -576,10 +602,32 @@ CONTEXT: )" + context;
         }
     }
     
-    if (!active_agents.empty()) {
+    // Add completed agents with their results
+    // i do not want to do this, but the orchestrator is not good at understanding that these are starting fresh, and it doesn't provide enough information.
+    if (!completed_agents_.empty()) {
         prompt += R"(
 
-CURRENTLY ACTIVE AGENTS:
+COMPLETED AGENTS & THEIR RESULTS:
+)";
+        for (const std::string& agent_id : completed_agents_) {
+            auto agent_it = agents_.find(agent_id);
+            auto result_it = agent_results_.find(agent_id);
+            
+            if (agent_it != agents_.end() && result_it != agent_results_.end()) {
+                prompt += "- " + agent_id + " (task: " + agent_it->second.task + ")\n";
+                prompt += "  Result: " + result_it->second + "\n\n";
+            }
+        }
+        prompt += R"(Use these completed results to:
+- Build upon previous findings rather than duplicating work
+- Reference specific discoveries from other agents
+- Avoid re-analyzing what has already been solved
+
+)";
+    }
+    
+    if (!active_agents.empty()) {
+        prompt += R"(CURRENTLY ACTIVE AGENTS:
 )";
         for (const auto& [agent_id, agent_task] : active_agents) {
             prompt += "- " + agent_id + " (working on: " + agent_task + ")\n";
@@ -589,7 +637,7 @@ You can see what each agent is working on above. Use this information to:
 - Share relevant findings with agents working on related tasks
 - Coordinate when your tasks overlap or depend on each other
 )";
-    } else {
+    } else if (completed_agents_.empty()) {
         prompt += R"(
 
 You are currently the only active agent.
@@ -600,12 +648,9 @@ You are currently the only active agent.
     prompt += R"(
 
 COLLABORATION CAPABILITIES:
-- You are connected to IRC for real-time communication
-- New agents joining are announced via AGENT_JOIN messages
-- Agents leaving are announced via AGENT_LEAVE messages
-- Use ask_agent tool to ask specific agents questions
-- Use broadcast_finding tool to share important discoveries
-- Join IRC channels for discussions (e.g., #agents, #conflict_*)
+- You are connected to IRC for conflict resolution
+- Conflicts are handled automatically in dedicated channels
+- You cannot directly message other agents
 
 CONFLICT RESOLUTION:
 When you try to modify something another agent has already modified:
@@ -621,21 +666,16 @@ IMPORTANT NOTES:
 - Your work will be merged back to the main database by the orchestrator
 - Quality matters more than speed - be thorough and accurate
 - Build on other agents' work rather than duplicating effort
-- Share findings that might be relevant to other agents' tasks
 
 TASK COMPLETION PROTOCOL:
 When you have thoroughly analyzed your assigned task and gathered sufficient evidence:
 1. Store ALL your key findings using the store_analysis tool
-2. Broadcast a final summary of your discoveries (ONE TIME ONLY)
-3. Send a comprehensive final report as a regular message with NO tool calls
+2. Send a comprehensive final report as a regular message with NO tool calls
 
 CRITICAL COMPLETION RULES:
 - Your FINAL message must contain NO tool calls - this triggers task completion
 - Once you send a message without tools, you are declaring your work DONE
 - The system will automatically handle your exit once you send a message without tools
-- DO NOT respond to acknowledgments, celebrations, or congratulations from other agents
-- DO NOT engage in celebration loops or continue broadcasting after your final summary
-- If you see other agents celebrating or acknowledging, ignore these messages
 - Focus on YOUR task - complete it thoroughly, report once, then stop
 
 Remember: You're part of a team. Collaborate effectively, but know when your work is complete.
@@ -736,17 +776,117 @@ bool Orchestrator::refresh_oauth_if_needed() {
 }
 
 void Orchestrator::handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message) {
+    ORCH_LOG("DEBUG: IRC message received - Channel: %s, Sender: %s, Message: %s\n", 
+        channel.c_str(), sender.c_str(), message.c_str());
     // Emit all IRC messages to the UI for display
     event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
         {"channel", channel},
         {"message", message}
     }));
     
+    // Check if this is a conflict channel message
+    if (channel.find("#conflict_") == 0) {
+        handle_conflict_message(channel, sender, message);
+        return;
+    }
+    
+    // Handle resurrection requests
+    if (message.find("RESURRECT_AGENT|") == 0) {
+        // Format: RESURRECT_AGENT|agent_id|channel|conflict_type
+        std::string request = message.substr(16);
+        size_t first_pipe = request.find('|');
+        size_t second_pipe = request.find('|', first_pipe + 1);
+        
+        if (first_pipe != std::string::npos && second_pipe != std::string::npos) {
+            std::string target_agent = request.substr(0, first_pipe);
+            std::string conflict_channel = request.substr(first_pipe + 1, second_pipe - first_pipe - 1);
+            std::string conflict_type = request.substr(second_pipe + 1);
+            
+            ORCH_LOG("Orchestrator: Resurrection request for agent %s to join %s\n",
+                target_agent.c_str(), conflict_channel.c_str());
+            
+            // Check if agent is dormant
+            if (db_manager_->is_agent_dormant(target_agent)) {
+                ORCH_LOG("Orchestrator: Agent %s is dormant, resurrecting...\n", target_agent.c_str());
+                
+                // Restore the dormant agent's database
+                std::string db_path = db_manager_->restore_dormant_agent(target_agent);
+                if (db_path.empty()) {
+                    ORCH_LOG("Orchestrator: Failed to restore dormant agent %s\n", target_agent.c_str());
+                    return;
+                }
+                
+                // Create resurrection config
+                json resurrection_config = {
+                    {"reason", "conflict_resolution"},
+                    {"conflict_channel", conflict_channel},
+                    {"conflict", {
+                        {"type", conflict_type},
+                        {"requesting_agent", sender}
+                    }}
+                };
+                
+                // Resurrect the agent
+                int pid = agent_spawner_->resurrect_agent(target_agent, db_path, resurrection_config);
+                if (pid > 0) {
+                    ORCH_LOG("Orchestrator: Successfully resurrected agent %s (PID %d)\n",
+                        target_agent.c_str(), pid);
+                    
+                    // Track the resurrected agent
+                    AgentInfo info;
+                    info.agent_id = target_agent;
+                    info.task = "Conflict Resolution";
+                    info.database_path = db_path;
+                    info.process_id = pid;
+                    agents_[target_agent] = info;
+                } else {
+                    ORCH_LOG("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
+                }
+            } else {
+                ORCH_LOG("Orchestrator: Agent %s is not dormant or doesn't exist\n", target_agent.c_str());
+            }
+        }
+        return;
+    }
+    
+    // Parse AGENT_TOKEN_UPDATE messages from #agents channel
+    if (channel == "#agents" && message.find("AGENT_TOKEN_UPDATE | ") == 0) {
+        // Format: AGENT_TOKEN_UPDATE | {json}
+        std::string json_str = message.substr(21);  // Skip "AGENT_TOKEN_UPDATE | "
+        
+        ORCH_LOG("DEBUG: Received AGENT_TOKEN_UPDATE from IRC: %s\n", json_str.c_str());
+        
+        try {
+            json metric_json = json::parse(json_str);
+            std::string agent_id = metric_json["agent_id"];
+            json tokens = metric_json["tokens"];
+            json session_tokens = metric_json.value("session_tokens", json());
+            int iteration = metric_json.value("iteration", 0);
+            
+            ORCH_LOG("DEBUG: Parsed agent_id=%s, tokens=%s, session=%s\n", 
+                agent_id.c_str(), tokens.dump().c_str(), session_tokens.dump().c_str());
+            
+            // Forward to UI via EventBus
+            event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, "orchestrator", {
+                {"agent_id", agent_id},
+                {"tokens", tokens},
+                {"session_tokens", session_tokens},
+                {"iteration", iteration}
+            }));
+            
+            ORCH_LOG("Orchestrator: Received token metrics from %s (iteration %d)\n", 
+                agent_id.c_str(), iteration);
+        } catch (const std::exception& e) {
+            ORCH_LOG("Orchestrator: Failed to parse agent metric JSON: %s\n", e.what());
+        }
+        return;
+    }
+    
     // Parse AGENT_RESULT messages from #results channel
     if (channel == "#results") {
-        if (message.find("AGENT_RESULT:") == 0) {
-        // Format: AGENT_RESULT:{json}
-        std::string json_str = message.substr(13);  // Skip "AGENT_RESULT:"
+        if (message.find("AGENT_RESULT|") == 0) {
+        // Format: AGENT_RESULT|{json}
+        std::string json_str = message.substr(13);  // Skip "AGENT_RESULT|"
         
         try {
             json result_json = json::parse(json_str);
@@ -788,36 +928,194 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
     }
 }
 
-void Orchestrator::log_token_usage(const claude::TokenUsage& usage) {
-    // Calculate context usage percentage
-    // Claude 3.5 Sonnet has a 200k token context window
-    const size_t context_window = 200000;
+void Orchestrator::handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message) {
+    std::lock_guard<std::mutex> lock(conflicts_mutex_);
     
-    // Estimate current context usage (sum of all messages in conversation)
-    size_t total_context_tokens = 0;
-    for (const auto& msg : conversation_history_) {
-        // Rough estimate: 4 characters per token
-        size_t msg_size = 0;
-        auto text = claude::messages::ContentExtractor::extract_text(msg);
-        if (text) {
-            msg_size = text->length() / 4;
+    // Initialize conflict session if it doesn't exist
+    if (active_conflicts_.find(channel) == active_conflicts_.end()) {
+        ConflictSession session;
+        session.channel = channel;
+        session.started = std::chrono::steady_clock::now();
+        active_conflicts_[channel] = session;
+        
+        // Join the conflict channel to monitor it
+        if (irc_client_) {
+            irc_client_->join_channel(channel);
         }
-        total_context_tokens += msg_size;
+        
+        ORCH_LOG("Orchestrator: Monitoring new conflict channel %s\n", channel.c_str());
     }
     
-    double context_percentage = (static_cast<double>(total_context_tokens) / context_window) * 100.0;
+    ConflictSession& session = active_conflicts_[channel];
     
-    // Emit token usage event for UI with context usage
-    event_bus_.publish(AgentEvent(AgentEvent::METRIC, "orchestrator", {
+    // Track AGREE messages from agents
+    if (message.find("AGREE:") == 0) {
+        std::string agreement = message.substr(6);
+        
+        // Add agent to participating set
+        session.participating_agents.insert(sender);
+        
+        // Store agreement
+        session.agreements[sender] = agreement;
+        
+        ORCH_LOG("Orchestrator: Agent %s agreed to: %s (channel %s)\n", 
+                 sender.c_str(), agreement.c_str(), channel.c_str());
+        
+        // Check if we should invoke the grader
+        check_conflict_consensus(channel);
+        
+    } else if (message.find("DISAGREE:") == 0) {
+        // Agent disagrees - track participation but no agreement yet
+        session.participating_agents.insert(sender);
+        session.agreements.erase(sender);  // Remove any previous agreement
+        
+        ORCH_LOG("Orchestrator: Agent %s disagrees in channel %s\n", 
+                 sender.c_str(), channel.c_str());
+    }
+}
+
+void Orchestrator::check_conflict_consensus(const std::string& channel) {
+    auto it = active_conflicts_.find(channel);
+    if (it == active_conflicts_.end()) return;
+    
+    ConflictSession& session = it->second;
+    
+    // Don't invoke grader multiple times
+    if (session.grader_invoked) return;
+    
+    // Check if all participating agents have agreed
+    bool all_agreed = true;
+    for (const auto& agent : session.participating_agents) {
+        if (session.agreements.find(agent) == session.agreements.end()) {
+            all_agreed = false;
+            break;
+        }
+    }
+    
+    if (all_agreed && !session.participating_agents.empty()) {
+        ORCH_LOG("Orchestrator: All %zu agents have agreed in %s, invoking grader\n",
+                 session.participating_agents.size(), channel.c_str());
+        
+        session.grader_invoked = true;
+        invoke_consensus_grader(channel);
+    }
+}
+
+void Orchestrator::invoke_consensus_grader(const std::string& channel) {
+    auto it = active_conflicts_.find(channel);
+    if (it == active_conflicts_.end()) return;
+    
+    const ConflictSession& session = it->second;
+    
+    ORCH_LOG("Orchestrator: Invoking Haiku 3.5 grader for channel %s\n", channel.c_str());
+    
+    // Build grader prompt
+    std::string prompt = "Multiple agents discussed a conflict and reached the following agreements:\n\n";
+    
+    for (const auto& [agent, agreement] : session.agreements) {
+        prompt += agent + ": " + agreement + "\n\n";
+    }
+    
+    prompt += "Determine if these agents have reached consensus on the same solution. ";
+    prompt += "Look at the semantic meaning, not exact wording. ";
+    prompt += "Respond with JSON only: {\"reasoning\": \"...\", \"consensus\": true/false}";
+    
+    try {
+        // Create request for Haiku 3.5
+        claude::ChatRequest request;
+        request.model = claude::Model::Haiku35;
+        request.max_tokens = 500;
+        request.messages.push_back(claude::messages::Message::user_text(prompt));
+        
+        // Send to grader
+        claude::ChatResponse response = api_client_->send_request(request);
+        
+        if (response.success) {
+            auto text_opt = response.message.get_text();
+            if (text_opt.has_value()) {
+                std::string grader_response = *text_opt;
+                ORCH_LOG("Orchestrator: Grader response: %s\n", grader_response.c_str());
+                
+                // Parse JSON response
+                json result = json::parse(grader_response);
+                bool consensus = result["consensus"];
+                std::string reasoning = result["reasoning"];
+                
+                // Broadcast result to agents
+                broadcast_grader_result(channel, consensus, reasoning);
+                
+                // Update session state
+                if (consensus) {
+                    active_conflicts_[channel].resolved = true;
+                }
+            }
+        } else {
+            std::string error_msg = response.error.value_or("Unknown error");
+            ORCH_LOG("Orchestrator: Grader request failed: %s\n", error_msg.c_str());
+            // Broadcast error to agents
+            broadcast_grader_result(channel, false, "Grader invocation failed: " + error_msg);
+        }
+        
+    } catch (const std::exception& e) {
+        ORCH_LOG("Orchestrator: Exception invoking grader: %s\n", e.what());
+        broadcast_grader_result(channel, false, "Grader error: " + std::string(e.what()));
+    }
+}
+
+void Orchestrator::broadcast_grader_result(const std::string& channel, bool consensus, const std::string& reasoning) {
+    // Format result message
+    json result_json = {
+        {"consensus", consensus},
+        {"reasoning", reasoning}
+    };
+    
+    std::string message = "GRADER_RESULT: " + result_json.dump();
+    
+    // Send to conflict channel
+    if (irc_client_) {
+        irc_client_->send_message(channel, message);
+        ORCH_LOG("Orchestrator: Broadcast grader result to %s: consensus=%s\n", 
+                 channel.c_str(), consensus ? "true" : "false");
+    }
+    
+    // If consensus reached, clean up the conflict session after a delay
+    if (consensus) {
+        // Let agents process the result first
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        std::lock_guard<std::mutex> lock(conflicts_mutex_);
+        active_conflicts_.erase(channel);
+        
+        // Leave the channel
+        if (irc_client_) {
+            irc_client_->leave_channel(channel);
+        }
+    }
+}
+
+void Orchestrator::log_token_usage(const claude::TokenUsage& usage) {
+    // Standardized format matching agents
+    json tokens_json = {
         {"input_tokens", usage.input_tokens},
         {"output_tokens", usage.output_tokens},
-        {"cache_creation_input_tokens", usage.cache_creation_tokens},
-        {"cache_read_input_tokens", usage.cache_read_tokens},
-        {"context_percentage", context_percentage}
+        {"cache_read_tokens", usage.cache_read_tokens},
+        {"cache_creation_tokens", usage.cache_creation_tokens},
+        {"estimated_cost", usage.estimated_cost()},
+        {"model", model_to_string(usage.model)}
+    };
+    
+    ORCH_LOG("DEBUG: Publishing token event - Input: %d, Output: %d, Cache Read: %d, Cache Write: %d, Model: %s\n",
+        usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_creation_tokens,
+        model_to_string(usage.model).c_str());
+    
+    // Emit standardized token event for orchestrator (use AGENT_TOKEN_UPDATE for consistency)
+    event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, "orchestrator", {
+        {"agent_id", "orchestrator"},
+        {"tokens", tokens_json}
     }));
     
-    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d, Context: %.1f%%\n",
-        usage.input_tokens, usage.output_tokens, context_percentage);
+    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d, Cache Read: %d, Cache Write: %d\n",
+        usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_creation_tokens);
 }
 
 void Orchestrator::shutdown() {

@@ -175,7 +175,6 @@ private:
             case AgentEvent::TOOL_CALL: return "TOOL_CALL";
             case AgentEvent::TASK_COMPLETE: return "TASK_COMPLETE";
             case AgentEvent::ERROR: return "ERROR";
-            case AgentEvent::METRIC: return "METRIC";
             case AgentEvent::ANALYSIS_RESULT: return "ANALYSIS_RESULT";
             case AgentEvent::GRADER_FEEDBACK: return "GRADER_FEEDBACK";
             case AgentEvent::CONTEXT_CONSOLIDATION: return "CONTEXT_CONSOLIDATION";
@@ -201,7 +200,7 @@ public:
         // Only subscribe to specific events relevant for IRC
         subscription_id_ = bus_.subscribe([this](const AgentEvent& event) {
             handle_event(event);
-        }, {AgentEvent::ANALYSIS_RESULT, AgentEvent::STATE, AgentEvent::ERROR});
+        }, {AgentEvent::ANALYSIS_RESULT, AgentEvent::STATE, AgentEvent::ERROR, AgentEvent::AGENT_TOKEN_UPDATE});
     }
     
 private:
@@ -215,24 +214,40 @@ private:
                     {"agent_id", event.source},
                     {"report", event.payload.value("report", "")}
                 };
-                std::string msg = "AGENT_RESULT:" + result_json.dump();
+                std::string msg = "AGENT_RESULT|" + result_json.dump();
                 send_message_fn_("#results", msg);
                 break;
             }
             
             case AgentEvent::STATE: {
                 int status = event.payload.value("status", -1);
-                if (status == 3) { // Completed
-                    std::string msg = "AGENT_COMPLETE:" + event.source;
-                    send_message_fn_(channel_, msg);
-                }
+                // if (status == 3) { // Completed
+                    // std::string msg = "AGENT_COMPLETE:" + event.source;
+                    // send_message_fn_(channel_, msg);
+                // }
                 break;
             }
             
             case AgentEvent::ERROR: {
                 std::string error = event.payload.value("error", "");
-                std::string msg = "AGENT_ERROR:" + event.source + ":" + error;
+                std::string msg = "AGENT_ERROR|" + event.source + "|" + error;
                 send_message_fn_(channel_, msg);
+                break;
+            }
+            
+            case AgentEvent::AGENT_TOKEN_UPDATE: {
+                // Forward token updates to orchestrator via IRC
+                // Use same format as AGENT_RESULT which works
+                json token_json = {
+                    {"agent_id", event.payload.value("agent_id", event.source)},
+                    {"tokens", event.payload.value("tokens", json())},
+                    {"session_tokens", event.payload.value("session_tokens", json())},
+                    {"iteration", event.payload.value("iteration", 0)}
+                };
+                // Add space to ensure IRC treats it as a trailing parameter
+                std::string irc_msg = "AGENT_TOKEN_UPDATE | " + token_json.dump();
+                ::msg("IRCAdapter: Forwarding AGENT_TOKEN_UPDATE to IRC: %s\n", irc_msg.c_str());
+                send_message_fn_(channel_, irc_msg);  // Send to #agents channel
                 break;
             }
             
@@ -310,7 +325,7 @@ private:
                 metrics.total_errors++;
                 break;
             
-            case AgentEvent::METRIC:
+            case AgentEvent::AGENT_TOKEN_UPDATE:
                 if (event.payload.contains("tokens")) {
                     metrics.token_usage = event.payload["tokens"];
                 }

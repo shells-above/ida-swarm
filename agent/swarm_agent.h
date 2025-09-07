@@ -6,6 +6,7 @@
 #include "../irc/irc_client.h"
 #include "../orchestrator/tool_call_tracker.h"
 #include <memory>
+#include <set>
 
 namespace llm_re::agent {
 
@@ -17,6 +18,15 @@ struct AgentPeerInfo {
     std::string agent_id;
     std::string task;
     std::chrono::steady_clock::time_point discovered_at;
+};
+
+// Simple conflict state for tracking discussions
+struct SimpleConflictState {
+    ToolConflict initial_conflict;              // The original conflict that started this
+    std::string channel;                        // IRC channel for discussion
+    std::set<std::string> participating_agents; // Dynamically updated as agents join
+    std::map<std::string, std::string> agreements; // agent_id -> what they said after "AGREE|"
+    bool resolved = false;
 };
 
 // Extended agent for swarm operation
@@ -37,8 +47,8 @@ public:
     // Override trigger_shutdown for IRC cleanup  
     void trigger_shutdown() override;
     
-    // Get agent ID
-    std::string get_agent_id() const { return agent_id_; }
+    // Override graceful shutdown to save additional swarm state
+    void request_graceful_shutdown() override;
     
     // Get known peers (for ListActiveAgents tool)
     std::map<std::string, AgentPeerInfo> get_known_peers() const { return known_peers_; }
@@ -50,27 +60,22 @@ public:
     // Send message to IRC
     void send_irc_message(const std::string& channel, const std::string& message);
     
-    // Start private conversation with another agent
-    void start_private_conversation(const std::string& target_agent, const std::string& initial_message);
-    
-    // Leave current private channel
-    std::string leave_private_channel();
-    
-    // Force join a conflict channel (called by conflict detector)
-    void force_join_conflict_channel(const std::string& channel, const ToolConflict& conflict);
-    
     // Join IRC channel for discussion
     void join_irc_channel(const std::string& channel);
+    
+    // Restore conversation history for resurrection
+    void restore_conversation_history(const json& saved_conversation);
+    
+    // Inject a user message into the conversation
+    void inject_user_message(const std::string& message) override {
+        Agent::inject_user_message(message);
+    }
     
 protected:
     // Override tool processing to add conflict detection for ALL tools
     std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) override;
 
-    // Handle conflict through IRC deliberation
-    void initiate_conflict_deliberation(const ToolConflict& conflict, const std::string& channel);
-    
 private:
-    std::string agent_id_;
     std::string binary_name_;
     json swarm_config_;
     std::unique_ptr<ConflictDetector> conflict_detector_;
@@ -85,20 +90,18 @@ private:
     std::map<std::string, AgentPeerInfo> known_peers_;
     
     // Conflict handling state
-    std::map<std::string, ToolConflict> active_conflicts_;  // channel -> conflict
-    
-    // Private conversation tracking
-    std::string current_private_channel_;  // Current private/conflict channel we're in
+    std::optional<SimpleConflictState> active_conflict_;  // Current active conflict (if any)
     
     // Connect to IRC server
     bool connect_to_irc();
-    
-    // Register additional swarm tools
-    void register_swarm_tools();
 
-    // Agent discovery methods
-    void announce_presence();
-    void handle_peer_departure(const std::string& agent_id);
+    // Save swarm-specific state
+    void save_swarm_state();
+    
+    // Simplified conflict handling
+    void check_if_all_participating_agents_agreed();
+    void process_grader_result(const std::string& result_json);
+    std::string generate_conflict_channel(const ToolConflict& conflict) const;
     
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;

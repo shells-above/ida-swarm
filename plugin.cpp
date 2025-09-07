@@ -28,8 +28,9 @@ namespace llm_re {
 class llm_re_plugin_t : public plugmod_t, public event_listener_t {
 public:
     enum Mode {
-        ORCHESTRATOR,  // Normal IDA - user interacts with orchestrator
-        SWARM_AGENT    // Spawned IDA - runs as automated swarm agent
+        ORCHESTRATOR,     // Normal IDA - user interacts with orchestrator
+        SWARM_AGENT,      // Spawned IDA - runs as automated swarm agent
+        RESURRECTED_AGENT // Resurrected agent for conflict resolution
     };
 
 private:
@@ -75,6 +76,10 @@ public:
         if (mode_ == SWARM_AGENT && !swarm_agent_ && !agent_config_.empty()) {
             start_swarm_agent();
         }
+        // In resurrected mode, start with restored state
+        else if (mode_ == RESURRECTED_AGENT && !swarm_agent_ && !agent_config_.empty()) {
+            start_resurrected_agent();
+        }
         // In orchestrator mode, call the orchestrator
         else if (mode_ == ORCHESTRATOR) {
             start_orchestrator();
@@ -116,6 +121,8 @@ private:
             setup_orchestrator_mode();
         } else if (mode_ == SWARM_AGENT) {
             setup_swarm_agent_mode();
+        } else if (mode_ == RESURRECTED_AGENT) {
+            setup_resurrected_agent_mode();
         }
     }
     
@@ -136,8 +143,18 @@ private:
             
             if (parent.filename().string().substr(0, 6) == "agent_") {
                 agent_id_ = parent.filename().string();
-                mode_ = SWARM_AGENT;
-                msg("LLM RE: Detected SWARM AGENT mode (ID: %s)\n", agent_id_.c_str());
+                
+                // Check if this is a resurrection by looking for saved state
+                fs::path conversation_state = parent / "conversation_state.json";
+                fs::path resurrection_marker = parent / ".resurrecting";
+                
+                if (fs::exists(resurrection_marker)) {
+                    mode_ = RESURRECTED_AGENT;
+                    msg("LLM RE: Detected RESURRECTED AGENT mode (ID: %s)\n", agent_id_.c_str());
+                } else {
+                    mode_ = SWARM_AGENT;
+                    msg("LLM RE: Detected SWARM AGENT mode (ID: %s)\n", agent_id_.c_str());
+                }
                 return;
             }
         }
@@ -172,6 +189,82 @@ private:
         } else {
             msg("LLM RE: Failed to load agent config\n");
             mode_ = ORCHESTRATOR;  // Fall back to orchestrator mode
+        }
+    }
+    
+    void setup_resurrected_agent_mode() {
+        msg("LLM RE: Setting up resurrected agent %s\n", agent_id_.c_str());
+        
+        // Load both the original config and the saved state
+        if (load_agent_config() && load_saved_state()) {
+            msg("LLM RE: Loaded config and state for resurrected agent %s\n", agent_id_.c_str());
+            // Start the resurrected agent
+            run(0);
+        } else {
+            msg("LLM RE: Failed to resurrect agent %s\n", agent_id_.c_str());
+            mode_ = ORCHESTRATOR;  // Fall back to orchestrator mode
+        }
+    }
+    
+    bool load_saved_state() {
+        fs::path db_path(idb_path_.c_str());
+        fs::path workspace = db_path.parent_path();
+        
+        // Load conversation state
+        fs::path conversation_state_file = workspace / "conversation_state.json";
+        fs::path swarm_state_file = workspace / "swarm_state.json";
+        
+        if (!fs::exists(conversation_state_file)) {
+            msg("LLM RE: No conversation state found for resurrection\n");
+            return false;
+        }
+        
+        try {
+            // Load conversation state
+            std::ifstream conv_file(conversation_state_file);
+            json conversation_state;
+            conv_file >> conversation_state;
+            conv_file.close();
+            
+            // Load swarm state if it exists
+            json swarm_state;
+            if (fs::exists(swarm_state_file)) {
+                std::ifstream swarm_file(swarm_state_file);
+                swarm_file >> swarm_state;
+                swarm_file.close();
+            }
+            
+            // Merge states into agent config for resurrection
+            agent_config_["resurrection_mode"] = true;
+            agent_config_["saved_conversation"] = conversation_state["conversation"];
+            agent_config_["saved_task"] = conversation_state["task"];
+            agent_config_["saved_iteration"] = conversation_state["iteration"];
+            agent_config_["saved_token_stats"] = conversation_state["token_stats"];
+            
+            if (!swarm_state.empty()) {
+                agent_config_["saved_swarm_state"] = swarm_state;
+            }
+            
+            // Load resurrection config if present
+            fs::path resurrection_config = workspace / "resurrection_config.json";
+            if (fs::exists(resurrection_config)) {
+                std::ifstream res_file(resurrection_config);
+                json res_config;
+                res_file >> res_config;
+                res_file.close();
+                
+                // Merge resurrection-specific config
+                agent_config_["conflict"] = res_config["conflict"];
+                agent_config_["conflict_channel"] = res_config["conflict_channel"];
+                agent_config_["resurrection_reason"] = res_config["reason"];
+            }
+            
+            msg("LLM RE: Successfully loaded saved state for resurrection\n");
+            return true;
+            
+        } catch (const std::exception& e) {
+            msg("LLM RE: Failed to load saved state: %s\n", e.what());
+            return false;
         }
     }
     
@@ -259,11 +352,104 @@ private:
             if (event.type == AgentEvent::STATE && event.source == agent_id_) {
                 int status = event.payload.value("status", -1);
                 if (status == (int)AgentState::Status::Completed) {
-                    msg("LLM RE: Task completed for swarm agent, requesting IDA exit\n");
+                    msg("LLM RE: Task completed for swarm agent, graceful shutdown initiated\n");
                     if (!shutting_down_) {
-                        // Give some time for final messages to send
-                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                        _exit(0);  // Force process termination
+                        shutting_down_ = true;
+                        // Request graceful shutdown to save database and exit IDA
+                        if (swarm_agent_) {
+                            swarm_agent_->request_graceful_shutdown();
+                        }
+                    }
+                }
+            }
+        }, {AgentEvent::STATE});
+    }
+    
+    void start_resurrected_agent() {
+        if (swarm_agent_) return;
+        
+        msg("LLM RE: start_resurrected_agent() called for %s\n", agent_id_.c_str());
+        
+        // Create the SwarmAgent with resurrection config
+        try {
+            swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
+        } catch (const std::exception& e) {
+            msg("LLM RE: Exception creating resurrected SwarmAgent: %s\n", e.what());
+            return;
+        }
+        
+        msg("LLM RE: Resurrected SwarmAgent object created\n");
+        
+        // Initialize with resurrection config
+        if (!swarm_agent_->initialize(agent_config_)) {
+            msg("LLM RE: Failed to initialize resurrected agent\n");
+            delete swarm_agent_;
+            swarm_agent_ = nullptr;
+            return;
+        }
+        
+        // Restore conversation history if available
+        if (agent_config_.contains("saved_conversation")) {
+            msg("LLM RE: Restoring conversation history...\n");
+            swarm_agent_->restore_conversation_history(agent_config_["saved_conversation"]);
+        }
+        
+        // If this is for conflict resolution, jump directly to conflict
+        if (agent_config_.contains("conflict_channel")) {
+            std::string conflict_channel = agent_config_["conflict_channel"];
+            msg("LLM RE: Joining conflict channel %s\n", conflict_channel.c_str());
+            
+            // Join the conflict channel
+            swarm_agent_->join_irc_channel(conflict_channel);
+            
+            // Inject conflict context
+            std::string conflict_prompt = "You have been resurrected to resolve a conflict. ";
+            if (agent_config_.contains("conflict")) {
+                json conflict = agent_config_["conflict"];
+                conflict_prompt += std::format(
+                    "The conflict is at address 0x{:x} regarding {}. "
+                    "Review your previous analysis and engage in the discussion in channel {}.",
+                    conflict.value("address", 0),
+                    conflict.value("type", "unknown"),
+                    conflict_channel
+                );
+            }
+            
+            swarm_agent_->inject_user_message(conflict_prompt);
+        } else {
+            // Resume normal task
+            std::string task = agent_config_.value("saved_task", "Continue analysis");
+            swarm_agent_->start_task(task);
+        }
+        
+        msg("LLM RE: Resurrected agent %s is now active\n", agent_id_.c_str());
+        
+        // Clear the resurrection marker to signal spawner that we're ready
+        fs::path db_path(idb_path_.c_str());
+        fs::path workspace = db_path.parent_path();
+        fs::path resurrection_marker = workspace / ".resurrecting";
+        if (fs::exists(resurrection_marker)) {
+            try {
+                fs::remove(resurrection_marker);
+                msg("LLM RE: Cleared resurrection marker\n");
+            } catch (const std::exception& e) {
+                msg("LLM RE: Failed to clear resurrection marker: %s\n", e.what());
+            }
+        }
+        
+        // Subscribe to state changes
+        auto& bus = get_event_bus();
+        state_subscription_id_ = bus.subscribe([this](const AgentEvent& event) {
+            if (event.type == AgentEvent::STATE && event.source == agent_id_) {
+                int status = event.payload.value("status", -1);
+                if (status == (int)AgentState::Status::Completed) {
+                    msg("LLM RE: Resurrected agent completed, graceful shutdown\n");
+                    if (!shutting_down_) {
+                        shutting_down_ = true;
+                        // Request graceful shutdown to save database and exit IDA
+                        if (swarm_agent_) {
+                            swarm_agent_->request_graceful_shutdown();
+                        }
                     }
                 }
             }

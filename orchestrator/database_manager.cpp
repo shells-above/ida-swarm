@@ -18,8 +18,7 @@ DatabaseManager::DatabaseManager(const std::string& main_db_path, const std::str
 }
 
 DatabaseManager::~DatabaseManager() {
-    // Clean up on destruction
-    cleanup_all_agent_databases();
+    // No cleanup on destruction
 }
 
 bool DatabaseManager::initialize() {
@@ -148,28 +147,27 @@ bool DatabaseManager::cleanup_agent_database(const std::string& agent_id) {
         return false;
     }
     
-    // Remove the agent's directory
+    // IMPORTANT: We now preserve agent workspaces for potential resurrection
+    // Only mark it as inactive, don't delete the files
+    
     fs::path agent_dir = fs::path(workspace_dir_) / "agents" / agent_id;
     
-    // Remove the agent's config file
-    fs::path config_file = fs::path(workspace_dir_) / "configs" / (agent_id + "_config.json");
-    
     try {
-        if (fs::exists(agent_dir)) {
-            fs::remove_all(agent_dir);
-            ORCH_LOG("DatabaseManager: Cleaned up agent database for %s\n", agent_id.c_str());
+        // Mark the agent as dormant by creating a marker file
+        fs::path dormant_marker = agent_dir / ".dormant";
+        std::ofstream marker(dormant_marker);
+        if (marker.is_open()) {
+            marker << std::chrono::system_clock::now().time_since_epoch().count();
+            marker.close();
+            ORCH_LOG("DatabaseManager: Marked agent %s as dormant (workspace preserved)\n", agent_id.c_str());
         }
         
-        if (fs::exists(config_file)) {
-            fs::remove(config_file);
-            ORCH_LOG("DatabaseManager: Cleaned up agent config for %s\n", agent_id.c_str());
-        }
-        
+        // Remove from active tracking but keep the files
         agent_databases_.erase(it);
         return true;
         
     } catch (const fs::filesystem_error& e) {
-        ORCH_LOG("DatabaseManager: Failed to cleanup agent database: %s\n", e.what());
+        ORCH_LOG("DatabaseManager: Failed to mark agent as dormant: %s\n", e.what());
         return false;
     }
 }
@@ -244,6 +242,80 @@ bool DatabaseManager::copy_database_files(const std::string& source, const std::
         ORCH_LOG("DatabaseManager: Copy failed: %s\n", e.what());
         return false;
     }
+}
+
+bool DatabaseManager::is_agent_dormant(const std::string& agent_id) const {
+    fs::path agent_dir = fs::path(workspace_dir_) / "agents" / agent_id;
+    fs::path dormant_marker = agent_dir / ".dormant";
+    return fs::exists(dormant_marker);
+}
+
+std::vector<std::string> DatabaseManager::get_dormant_agents() const {
+    std::vector<std::string> dormant_agents;
+    
+    fs::path agents_dir = fs::path(workspace_dir_) / "agents";
+    if (!fs::exists(agents_dir)) {
+        return dormant_agents;
+    }
+    
+    try {
+        for (const auto& entry : fs::directory_iterator(agents_dir)) {
+            if (entry.is_directory()) {
+                std::string agent_id = entry.path().filename().string();
+                if (is_agent_dormant(agent_id)) {
+                    dormant_agents.push_back(agent_id);
+                }
+            }
+        }
+    } catch (const fs::filesystem_error& e) {
+        ORCH_LOG("DatabaseManager: Error listing dormant agents: %s\n", e.what());
+    }
+    
+    return dormant_agents;
+}
+
+std::string DatabaseManager::restore_dormant_agent(const std::string& agent_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!is_agent_dormant(agent_id)) {
+        ORCH_LOG("DatabaseManager: Agent %s is not dormant\n", agent_id.c_str());
+        return "";
+    }
+    
+    fs::path agent_dir = fs::path(workspace_dir_) / "agents" / agent_id;
+    
+    // Remove dormant marker
+    fs::path dormant_marker = agent_dir / ".dormant";
+    try {
+        if (fs::exists(dormant_marker)) {
+            fs::remove(dormant_marker);
+        }
+    } catch (const fs::filesystem_error& e) {
+        ORCH_LOG("DatabaseManager: Failed to remove dormant marker: %s\n", e.what());
+    }
+    
+    // Find the database file
+    fs::path base_name = fs::path(main_database_path_).filename();
+    fs::path agent_db = agent_dir / base_name;
+    
+    if (!fs::exists(agent_db)) {
+        // Try .i64 file
+        fs::path i64_file = agent_dir / (base_name.stem().string() + ".i64");
+        if (fs::exists(i64_file)) {
+            agent_db = i64_file;
+        } else {
+            ORCH_LOG("DatabaseManager: Database not found for dormant agent %s\n", agent_id.c_str());
+            return "";
+        }
+    }
+    
+    // Track the restored agent
+    agent_databases_[agent_id] = agent_db.string();
+    
+    ORCH_LOG("DatabaseManager: Restored dormant agent %s with database %s\n",
+        agent_id.c_str(), agent_db.string().c_str());
+    
+    return agent_db.string();
 }
 
 } // namespace llm_re::orchestrator

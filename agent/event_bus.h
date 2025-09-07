@@ -38,7 +38,8 @@ struct AgentEvent {
         AGENT_SPAWN_COMPLETE,    // Agent spawned successfully
         AGENT_SPAWN_FAILED,      // Agent spawn failed
         SWARM_RESULT,           // Collected result from swarm
-        ORCHESTRATOR_INPUT      // User input to orchestrator
+        ORCHESTRATOR_INPUT,     // User input to orchestrator
+        AGENT_TOKEN_UPDATE      // Real-time token usage from agent
     };
     
     Type type;
@@ -154,9 +155,6 @@ public:
         }));
     }
     
-    void emit_metric(const std::string& source, const json& metrics) {
-        publish(AgentEvent(AgentEvent::METRIC, source, metrics));
-    }
 };
 
 // Global event bus instance (or could be passed around)
