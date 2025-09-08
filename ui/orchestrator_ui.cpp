@@ -1422,7 +1422,7 @@ void MetricsPanel::update_context_usage(double percent) {
 }
 
 void MetricsPanel::update_agent_context(const std::string& agent_id, double percent,
-                                       size_t input_tokens, size_t output_tokens, size_t cache_read_tokens) {
+                                       size_t input_tokens, size_t cache_read_tokens) {
     // Find or create agent context bar
     if (agent_contexts_.find(agent_id) == agent_contexts_.end()) {
         // Create new agent context bar
@@ -1464,11 +1464,10 @@ void MetricsPanel::update_agent_context(const std::string& agent_id, double perc
     agent_bar.tokens_label->setText(tokens_text);
     
     // Add tooltip with detailed info
-    QString tooltip = QString("%1\nInput: %2 tokens\nCache Read: %3 tokens\nOutput: %4 tokens\nContext Used: %5%")
+    QString tooltip = QString("%1\nInput: %2 tokens\nCache Read: %3 tokens\nContext Used: %5%")
         .arg(QString::fromStdString(agent_id))
         .arg(input_tokens)
         .arg(cache_read_tokens)
-        .arg(output_tokens)
         .arg(percent, 0, 'f', 1);
     agent_bar.bar->setToolTip(tooltip);
 }

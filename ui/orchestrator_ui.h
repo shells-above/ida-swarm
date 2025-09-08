@@ -221,16 +221,13 @@ public:
     explicit MetricsPanel(QWidget* parent = nullptr);
     
     // Update metrics
-    void update_token_usage(size_t input_tokens, size_t output_tokens, 
-                          size_t cache_read = 0, size_t cache_write = 0);
-    void set_token_usage(size_t input_tokens, size_t output_tokens,
-                        size_t cache_read = 0, size_t cache_write = 0);
+    void update_token_usage(size_t input_tokens, size_t output_tokens, size_t cache_read = 0, size_t cache_write = 0);
+    void set_token_usage(size_t input_tokens, size_t output_tokens, size_t cache_read = 0, size_t cache_write = 0);
     void set_total_cost(double cost);
     void update_context_usage(double percent);
     
     // Update agent-specific context usage
-    void update_agent_context(const std::string& agent_id, double percent, 
-                            size_t input_tokens, size_t output_tokens, size_t cache_read_tokens);
+    void update_agent_context(const std::string& agent_id, double percent, size_t input_tokens, size_t cache_read_tokens);
     void clear_agent_contexts();
     void remove_agent_context(const std::string& agent_id);
 
