@@ -225,6 +225,7 @@ public:
                           size_t cache_read = 0, size_t cache_write = 0);
     void set_token_usage(size_t input_tokens, size_t output_tokens,
                         size_t cache_read = 0, size_t cache_write = 0);
+    void set_total_cost(double cost);
     void update_context_usage(double percent);
     
     // Update agent-specific context usage
@@ -286,6 +287,9 @@ public:
     
     // Get total usage across all agents
     claude::TokenUsage get_total_usage() const;
+    
+    // Get total cost across all agents (using their pre-calculated costs)
+    double get_total_cost() const;
 
 private:
     struct AgentTokens {

@@ -303,49 +303,49 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                     total_usage.cache_creation_tokens
                 );
                 
+                // Set the correct total cost (sum of pre-calculated costs from all agents)
+                double total_cost = token_tracker_->get_total_cost();
+                metrics_panel_->set_total_cost(total_cost);
+                
                 // Update context bars
                 if (agent_id == "orchestrator") {
                     // Calculate and update orchestrator context usage
                     size_t input_tokens = token_data.value("input_tokens", 0);
-                    size_t output_tokens = token_data.value("output_tokens", 0);
                     size_t cache_read_tokens = token_data.value("cache_read_tokens", 0);
                     
                     // Orchestrator uses 200k context (hardcoded in orchestrator.cpp)
                     const size_t orchestrator_context_limit = 200000;
-                    size_t total_context_used = input_tokens + cache_read_tokens + output_tokens;
+                    size_t total_context_used = input_tokens + cache_read_tokens;
                     double context_percent = (total_context_used * 100.0) / orchestrator_context_limit;
                     metrics_panel_->update_context_usage(context_percent);
                     
                 } else {
                     // Update agent context bars
                     size_t input_tokens = token_data.value("input_tokens", 0);
-                    size_t output_tokens = token_data.value("output_tokens", 0);
                     size_t cache_read_tokens = token_data.value("cache_read_tokens", 0);
                     
                     // Get per-iteration tokens for context calculation if available
                     json session_tokens = event.payload.value("session_tokens", json());
                     size_t session_input = session_tokens.value("input_tokens", input_tokens);
-                    size_t session_output = session_tokens.value("output_tokens", output_tokens);
                     size_t session_cache_read = session_tokens.value("cache_read_tokens", cache_read_tokens);
                     
-                    msg("DEBUG: Agent %s cumulative - In: %zu, Out: %zu, Cache Read: %zu",
-                        agent_id.c_str(), input_tokens, output_tokens, cache_read_tokens);
-                    msg("DEBUG: Agent %s per-iteration - In: %zu, Out: %zu, Cache Read: %zu",
-                        agent_id.c_str(), session_input, session_output, session_cache_read);
+                    msg("DEBUG: Agent %s cumulative - In: %zu, Cache Read: %zu",
+                        agent_id.c_str(), input_tokens, cache_read_tokens);
+                    msg("DEBUG: Agent %s per-iteration - In: %zu, Cache Read: %zu",
+                        agent_id.c_str(), session_input, session_cache_read);
                     
                     // Calculate context percentage using per-iteration tokens
-                    // Total context = input + cache_read + output
+                    // Total context = input + cache_read
                     const Config& config = Config::instance();
                     size_t max_context_tokens = config.agent.context_limit;
-                    size_t total_context_used = session_input + session_cache_read + session_output;
+                    size_t total_context_used = session_input + session_cache_read;
                     double context_percent = (total_context_used * 100.0) / max_context_tokens;
                     
                     msg("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)",
                         agent_id.c_str(), total_context_used, max_context_tokens, context_percent);
                     
                     // Update the agent's context bar with per-iteration percentage but cumulative token counts
-                    metrics_panel_->update_agent_context(agent_id, context_percent, 
-                                                        input_tokens, output_tokens, cache_read_tokens);
+                    metrics_panel_->update_agent_context(agent_id, context_percent, input_tokens, cache_read_tokens);
                 }
             }
             break;
@@ -1386,17 +1386,7 @@ void MetricsPanel::update_token_usage(size_t input_tokens, size_t output_tokens,
     size_t total = total_input_tokens_ + total_output_tokens_;
     total_tokens_label_->setText(QString::number(total));
     
-    // Calculate cost using PricingModel from SDK with the model from config
-    const Config& config = Config::instance();
-    claude::TokenUsage usage;
-    usage.model = config.orchestrator.model.model;  // Use the actual model from config
-    usage.input_tokens = total_input_tokens_;
-    usage.output_tokens = total_output_tokens_;
-    usage.cache_creation_tokens = total_cache_write_tokens_;
-    usage.cache_read_tokens = total_cache_read_tokens_;
-    
-    double total_cost = claude::usage::PricingModel::calculate_cost(usage);
-    cost_label_->setText(QString("$%1").arg(total_cost, 0, 'f', 4));
+    // Cost is now set separately via set_total_cost() to use correct per-agent pricing
 }
 
 void MetricsPanel::set_token_usage(size_t input_tokens, size_t output_tokens, 
@@ -1418,17 +1408,11 @@ void MetricsPanel::set_token_usage(size_t input_tokens, size_t output_tokens,
     size_t total = total_input_tokens_ + total_output_tokens_;
     total_tokens_label_->setText(QString::number(total));
     
-    // Calculate cost using PricingModel from SDK with the model from config
-    const Config& config = Config::instance();
-    claude::TokenUsage usage;
-    usage.model = config.orchestrator.model.model;  // Use the actual model from config
-    usage.input_tokens = total_input_tokens_;
-    usage.output_tokens = total_output_tokens_;
-    usage.cache_creation_tokens = total_cache_write_tokens_;
-    usage.cache_read_tokens = total_cache_read_tokens_;
-    
-    double total_cost = claude::usage::PricingModel::calculate_cost(usage);
-    cost_label_->setText(QString("$%1").arg(total_cost, 0, 'f', 4));
+    // Cost is now set separately via set_total_cost() to use correct per-agent pricing
+}
+
+void MetricsPanel::set_total_cost(double cost) {
+    cost_label_->setText(QString("$%1").arg(cost, 0, 'f', 4));
 }
 
 void MetricsPanel::update_context_usage(double percent) {
@@ -1691,6 +1675,14 @@ claude::TokenUsage TokenTracker::get_total_usage() const {
         total += agent.current;
     }
     return total;
+}
+
+double TokenTracker::get_total_cost() const {
+    double total_cost = 0.0;
+    for (const auto& [id, agent] : agent_tokens_) {
+        total_cost += agent.estimated_cost;
+    }
+    return total_cost;
 }
 
 void TokenTracker::refresh_display() {
