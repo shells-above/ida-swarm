@@ -175,7 +175,7 @@ public:
     static ea_t get_name_address(const std::string& name);
     static bool is_function(ea_t address);
 
-    // Consolidated search functions
+    // Search functions
     static std::vector<std::tuple<ea_t, std::string, bool>> search_functions(const std::string& pattern, bool named_only, int max_results);
     static std::vector<std::tuple<ea_t, std::string, std::string, std::string>> search_globals(const std::string& pattern, int max_results);
     static std::vector<std::pair<ea_t, std::string>> search_strings_unified(const std::string& pattern, int min_length, int max_results);
@@ -185,15 +185,15 @@ public:
     static DataInfo get_data_info(ea_t address, int max_xrefs = 20);
     static std::string dump_data(ea_t address, size_t size, int bytes_per_line = 16);
 
-    // Cross-reference operations (kept for detailed analysis)
+    // Cross-reference operations
     static std::vector<std::pair<ea_t, std::string>> get_xrefs_to_with_names(ea_t address, int max_count = -1);
     static std::vector<std::pair<ea_t, std::string>> get_xrefs_from_with_names(ea_t address, int max_count = -1);
 
-    // Disassembly and decompilation (kept for analyze_function)
+    // Disassembly and decompilation
     static std::string get_function_disassembly(ea_t address);
     static std::string get_function_decompilation(ea_t address);
 
-    // Function operations (simplified)
+    // Function operations
     static std::string get_function_name(ea_t address);
     static std::vector<std::string> get_function_string_refs(ea_t address, int max_count = -1);
     static std::vector<ea_t> get_function_data_refs(ea_t address, int max_count = -1);
@@ -201,15 +201,15 @@ public:
     // Unified name setter
     static bool set_addr_name(ea_t address, const std::string& name);
 
-    // Comment operations (kept as is)
+    // Comment operations
     static bool add_disassembly_comment(ea_t address, const std::string& comment);
     static bool add_pseudocode_comment(ea_t address, const std::string& comment);
     static bool clear_disassembly_comment(ea_t address);
     static bool clear_pseudocode_comments(ea_t address);
 
-    // Binary info operations (kept as is)
+    // Binary info operations
     static std::map<std::string, std::vector<std::string>> get_imports();
-    static std::vector<std::tuple<ea_t, std::string, std::string>> get_entry_points();
+    static std::vector<std::tuple<ea_t, std::string, std::string>> get_exports();
 
     // Decompilation-related functions
     static FunctionPrototypeInfo get_function_prototype(ea_t address);

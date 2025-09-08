@@ -155,10 +155,10 @@ bool OAuthManager::has_credentials() const {
     return std::filesystem::exists(credentials_file) && std::filesystem::exists(key_file);
 }
 
-std::optional<OAuthCredentials> OAuthManager::get_credentials() {
+std::shared_ptr<OAuthCredentials> OAuthManager::get_credentials() {
     // Check cache first
     auto now = std::chrono::steady_clock::now();
-    if (cached_credentials.has_value()) {
+    if (cached_credentials) {
         long long elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cache_time).count();
         if (elapsed < CACHE_DURATION_SECONDS) {
             return cached_credentials;
@@ -168,53 +168,59 @@ std::optional<OAuthCredentials> OAuthManager::get_credentials() {
     // Check if files exist
     if (!has_credentials()) {
         last_error = "OAuth credentials not found in " + config_dir.string();
-        return std::nullopt;
+        return nullptr;
     }
     
     // Read encryption key
     std::optional<std::string> key_data = read_file(key_file);
     if (!key_data) {
         last_error = "Failed to read encryption key";
-        return std::nullopt;
+        return nullptr;
     }
     
     // Read encrypted credentials
     std::optional<std::string> encrypted_data = read_file(credentials_file);
     if (!encrypted_data) {
         last_error = "Failed to read credentials file";
-        return std::nullopt;
+        return nullptr;
     }
     
     // Decrypt credentials
     std::optional<std::string> decrypted_data = decrypt_data(*encrypted_data, *key_data);
     if (!decrypted_data) {
         last_error = "Failed to decrypt credentials";
-        return std::nullopt;
+        return nullptr;
     }
     
     // Parse JSON
     std::optional<json> creds_json = parse_credentials_json(*decrypted_data);
     if (!creds_json) {
         last_error = "Failed to parse credentials JSON";
-        return std::nullopt;
+        return nullptr;
     }
     
     // Extract OAuth credentials
     try {
         OAuthCredentials creds = extract_oauth_credentials(*creds_json);
         
-        // Cache the credentials
-        cached_credentials = creds;
+        // If we have existing cached credentials, update them in-place
+        // This ensures all clients sharing the pointer get the update
+        if (cached_credentials) {
+            *cached_credentials = creds;
+        } else {
+            // First time, create new shared instance
+            cached_credentials = std::make_shared<OAuthCredentials>(creds);
+        }
         cache_time = now;
         
-        return creds;
+        return cached_credentials;
     } catch (const std::exception& e) {
         last_error = std::string("Failed to extract OAuth credentials: ") + e.what();
-        return std::nullopt;
+        return nullptr;
     }
 }
 
-std::optional<OAuthCredentials> OAuthManager::get_cached_credentials() const {
+std::shared_ptr<OAuthCredentials> OAuthManager::get_cached_credentials() const {
     return cached_credentials;
 }
 
@@ -224,6 +230,11 @@ void OAuthManager::clear_cache() {
 
 bool OAuthManager::save_credentials(const OAuthCredentials& creds) {
     try {
+        // Ensure config directory exists
+        if (!std::filesystem::exists(config_dir)) {
+            std::filesystem::create_directories(config_dir);
+        }
+        
         // Create the credentials JSON structure
         json oauth_tokens;
         oauth_tokens["claude_ai"] = {
@@ -297,8 +308,13 @@ bool OAuthManager::save_credentials(const OAuthCredentials& creds) {
         chmod(credentials_file.c_str(), 0600);
 #endif
         
-        // Update cache
-        cached_credentials = creds;
+        // Update cache - if we already have a shared instance, update it in-place
+        // This ensures all clients see the update
+        if (cached_credentials) {
+            *cached_credentials = creds;
+        } else {
+            cached_credentials = std::make_shared<OAuthCredentials>(creds);
+        }
         cache_time = std::chrono::steady_clock::now();
         
         return true;
@@ -601,10 +617,10 @@ bool OAuthManager::needs_refresh() {
         }
     }
 
-    return creds->is_expired(300);
+    return creds && creds->is_expired(300);
 }
 
-std::optional<OAuthCredentials> OAuthManager::refresh_if_needed() {
+std::shared_ptr<OAuthCredentials> OAuthManager::refresh_if_needed() {
     // Check if refresh is needed
     if (!needs_refresh()) {
         return get_cached_credentials();
@@ -613,18 +629,18 @@ std::optional<OAuthCredentials> OAuthManager::refresh_if_needed() {
     return force_refresh();
 }
 
-std::optional<OAuthCredentials> OAuthManager::force_refresh() {
+std::shared_ptr<OAuthCredentials> OAuthManager::force_refresh() {
     // Get current credentials
     auto current_creds = get_credentials();
     if (!current_creds) {
         last_error = "No OAuth credentials available to refresh";
-        return std::nullopt;
+        return nullptr;
     }
     
     // Check if we have a refresh token
     if (current_creds->refresh_token.empty()) {
         last_error = "No refresh token available";
-        return std::nullopt;
+        return nullptr;
     }
     
     try {
@@ -636,21 +652,26 @@ std::optional<OAuthCredentials> OAuthManager::force_refresh() {
             current_creds->account_uuid
         );
         
-        // Save the updated credentials
-        if (!save_credentials(new_creds)) {
-            last_error = "Failed to save refreshed credentials";
-            return std::nullopt;
+        // Update the shared credentials in-place
+        // This ensures all clients immediately see the new credentials
+        if (cached_credentials) {
+            *cached_credentials = new_creds;
+        } else {
+            cached_credentials = std::make_shared<OAuthCredentials>(new_creds);
         }
-        
-        // Update cache
-        cached_credentials = new_creds;
         cache_time = std::chrono::steady_clock::now();
         
-        return new_creds;
+        // Save the updated credentials to disk
+        if (!save_credentials(new_creds)) {
+            last_error = "Failed to save refreshed credentials";
+            // Still return the updated credentials since they're valid
+        }
+        
+        return cached_credentials;
         
     } catch (const std::exception& e) {
         last_error = std::string("Token refresh failed: ") + e.what();
-        return std::nullopt;
+        return nullptr;
     }
 }
 

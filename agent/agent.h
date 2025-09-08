@@ -10,23 +10,18 @@
 #include "sdk/claude_sdk.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
+#include "agent/event_bus.h"
 #include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
 #include <fstream>
+#include <filesystem>
+#include <format>
+#include <thread>
+#include <chrono>
 
 namespace llm_re {
-
-// Unified message types for agent callbacks
-enum class AgentMessageType {
-    Log,                    // Special: passes claude::messages::Message* with log text
-    NewMessage,             // Direct message: passes claude::messages::Message*
-    StateChanged,           // {status: int} - still uses JSON for now
-    ToolStarted,            // {tool_id: string, tool_name: string, input: json} - still uses JSON
-    ToolExecuted,           // {tool_id: string, tool_name: string, input: json, result: json} - still uses JSON
-    FinalReport             // {report: string} - still uses JSON
-};
 
 // Agent state management
 class AgentState {
@@ -253,35 +248,18 @@ struct AgentTask {
 
 // Main agent
 class Agent {
-public:
-    // Single unified callback - supports both messages and JSON for transition
-    struct CallbackData {
-        const claude::messages::Message* message = nullptr;
-        json json_data;
-    };
-
+protected:
+    // Needs to be accessible to SwarmAgent for restoration
+    AgentExecutionState execution_state_;  // Execution and conversation state
+    
 private:
-    // Core components
-    std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
-    std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
-    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
-    std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
-    std::unique_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth credential manager for token refresh
-    std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
-    claude::tools::ToolRegistry tool_registry_;                      // registry for tools
-    claude::Client api_client_;                                      // agent api client
-
     // State management
     AgentState state_;
-    AgentExecutionState execution_state_;  // Execution and conversation state
-    const Config& config_;
     std::string last_error_;
 
     // Token tracking
     claude::usage::TokenStats token_stats_;
     std::vector<claude::usage::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
-
-    static constexpr int CONTEXT_LIMIT_TOKENS = 150000;  // When to trigger consolidation
 
     // context management
     struct ContextManagementState {
@@ -307,9 +285,18 @@ private:
     // User message injection
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
+    
+    // API error retry tracking
+    int api_retry_count_ = 0;
+    static constexpr int MAX_API_RETRIES = 5;
+    std::chrono::steady_clock::time_point last_api_error_time_;
 
-    // Callback for messages
-    std::function<void(AgentMessageType, const CallbackData&)> message_callback_;
+protected:  // Make these accessible to SwarmAgent
+    // Event bus for all communication
+    EventBus& event_bus_;
+    std::string agent_id_;
+    
+private:
 
     // System prompt
     // note that if you start getting errors about Qt MOC making a llm_re::llm_re:: namespace it probably
@@ -423,25 +410,31 @@ Tips:
 What's your next step to complete the reversal?)";
 
     // Helper function to create AnthropicClient based on config
-    static claude::Client create_api_client(const Config& config, claude::auth::OAuthManager* oauth_mgr = nullptr) {
-        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_mgr) {
+    claude::Client create_api_client(const Config& config) {
+        // Create our own OAuth manager if using OAuth authentication
+        if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+            oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
+        }
+        
+        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
             // Try to refresh if needed (checks expiry and refreshes automatically)
-            std::optional<claude::OAuthCredentials> oauth_creds = oauth_mgr->refresh_if_needed();
+            std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->refresh_if_needed();
             
             if (!oauth_creds) {
                 // Fallback to getting credentials without refresh
-                oauth_creds = oauth_mgr->get_credentials();
+                oauth_creds = oauth_manager_->get_credentials();
             }
             
             if (!oauth_creds) {
                 msg("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n", 
-                    oauth_mgr->get_last_error().c_str());
+                    oauth_manager_->get_last_error().c_str());
                 msg("LLM RE: WARNING - Falling back to API key authentication\n");
                 msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
                 return claude::Client(config.api.api_key, config.api.base_url);
             }
             
-            return claude::Client(*oauth_creds, config.api.base_url);
+            // Pass the shared_ptr so all clients share the same credentials
+            return claude::Client(oauth_creds, config.api.base_url);
         }
         
         // Default to API key
@@ -456,25 +449,28 @@ What's your next step to complete the reversal?)";
         
         auto refreshed_creds = oauth_manager_->force_refresh();
         if (!refreshed_creds) {
-            send_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
+            emit_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
             return false;
         }
         
-        // Update the API client with new credentials
-        api_client_.set_oauth_credentials(*refreshed_creds);
-        send_log(LogLevel::INFO, "Successfully refreshed OAuth token");
+        // Update the API client with the shared credentials pointer
+        // Note: The credentials are already updated in-place by force_refresh, 
+        // but we set it again to be explicit
+        api_client_.set_oauth_credentials(refreshed_creds);
+        emit_log(LogLevel::INFO, "Successfully refreshed OAuth token");
         return true;
     }
 
 public:
-    Agent(const Config& config)
+    Agent(const Config& config, const std::string& agent_id = "agent")
         : config_(config),
+          agent_id_(agent_id),
+          event_bus_(get_event_bus()),
           memory_(std::make_shared<BinaryMemory>()),
           executor_(std::make_shared<ActionExecutor>(memory_)),
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
-          oauth_manager_(config.api.auth_method == claude::AuthMethod::OAUTH ? std::make_unique<claude::auth::OAuthManager>(config.api.oauth_config_dir) : nullptr),
-          api_client_(create_api_client(config, oauth_manager_.get())),
-          grader_(std::make_unique<AnalysisGrader>(config)) {
+          api_client_(create_api_client(config)),
+          grader_(config.grader.enabled ? std::make_unique<AnalysisGrader>(config) : nullptr) {
 
         // Clear the API request log file on startup
         std::ofstream clear_log("/tmp/anthropic_requests.log", std::ios::trunc);
@@ -491,20 +487,20 @@ public:
         // Initialize patch manager
         patch_manager_ = std::make_shared<PatchManager>();
         if (!patch_manager_->initialize()) {
-            send_log(LogLevel::WARNING, "Failed to initialize patch manager");
+            emit_log(LogLevel::WARNING, "Failed to initialize patch manager");
             patch_manager_ = nullptr;
         }
 
         // Register tools
-        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_);
+        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_, config_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
-            send_log(level, msg);
+            emit_log(level, msg);
         });
     }
 
-    ~Agent() {
+    virtual ~Agent() {
         stop();
         cleanup_thread();
         if (task_semaphore_) {
@@ -519,7 +515,7 @@ public:
     }
 
     // Start/stop agent
-    void start() {
+    virtual void start() {
         if (worker_thread_) return;
 
         stop_requested_ = false;
@@ -529,7 +525,7 @@ public:
         }, this);
     }
 
-    void stop() {
+    virtual void stop() {
         if (!worker_thread_) return;
 
         stop_requested_ = true;
@@ -538,10 +534,10 @@ public:
         if (task_semaphore_) {
             qsem_post(task_semaphore_);
         }
-
-        // Don't block UI thread - worker will report completion via logs/state changes
     }
 
+    virtual void trigger_shutdown() { }
+    
     void cleanup_thread() {
         if (worker_thread_) {
             qthread_join(worker_thread_);
@@ -551,7 +547,7 @@ public:
     }
 
     // Task management
-    void set_task(const std::string& task) {
+    virtual void set_task(const std::string& task) {
         {
             qmutex_locker_t lock(queue_mutex_);
 
@@ -576,7 +572,7 @@ public:
 
     void resume() {
         if (!state_.is_paused() || !execution_state_.is_valid()) {
-            send_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
+            emit_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
             return;
         }
 
@@ -591,7 +587,7 @@ public:
 
     void continue_with_task(const std::string& additional_task) {
         if (!state_.is_completed() && !state_.is_idle()) {
-            send_log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
+            emit_log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
             return;
         }
 
@@ -608,17 +604,13 @@ public:
     void clear_last_error() { last_error_.clear(); }
     
     // User message injection (thread-safe)
-    void inject_user_message(const std::string& message) {
+    virtual void inject_user_message(const std::string& message) {
         qmutex_locker_t lock(pending_messages_mutex_);
         pending_user_messages_.push(message);
     }
 
-    // Single callback setter
-    void set_message_callback(std::function<void(AgentMessageType, const CallbackData&)> callback) {
-        message_callback_ = callback;
-        
-        // We'll remove the API client message logger - we'll handle messages directly after responses
-    }
+    // Get agent ID
+    const std::string& get_agent_id() const { return agent_id_; }
 
     // State queries
     AgentState::Status get_status() const { return state_.get_status(); }
@@ -650,7 +642,7 @@ public:
     }
     
     // Manual tool execution support
-    json execute_manual_tool(const std::string& tool_name, const json& input) {
+    virtual json execute_manual_tool(const std::string& tool_name, const json& input) {
         // Find the tool
         claude::tools::Tool* tool = tool_registry_.get_tool(tool_name);
         if (!tool) {
@@ -717,9 +709,9 @@ public:
         if (file.is_open()) {
             file << memory_->export_memory_snapshot().dump(2);
             file.close();
-            send_log(LogLevel::INFO, "Memory saved to " + filename);
+            emit_log(LogLevel::INFO, "Memory saved to " + filename);
         } else {
-            send_log(LogLevel::ERROR, "Failed to save memory to " + filename);
+            emit_log(LogLevel::ERROR, "Failed to save memory to " + filename);
         }
     }
 
@@ -730,9 +722,9 @@ public:
             file >> snapshot;
             memory_->import_memory_snapshot(snapshot);
             file.close();
-            send_log(LogLevel::INFO, "Memory loaded from " + filename);
+            emit_log(LogLevel::INFO, "Memory loaded from " + filename);
         } else {
-            send_log(LogLevel::ERROR, "Failed to load memory from " + filename);
+            emit_log(LogLevel::ERROR, "Failed to load memory from " + filename);
         }
     }
 
@@ -760,66 +752,126 @@ public:
         return cumulative;
     }
 
+protected:  // Changed to protected so SwarmAgent can access
+    // Configuration
+    const Config& config_;
+    
+    // Core components
+    std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
+    std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
+    std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
+    std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
+    std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
+    claude::tools::ToolRegistry tool_registry_;                      // registry for tools
+    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
+    claude::Client api_client_;                                      // agent api client
+    
+    // Emit log event
+    void emit_log(LogLevel level, const std::string& msg) {
+        event_bus_.emit_log(agent_id_, level, msg);
+    }
+
+    // Process tool calls from assistant message
+    virtual std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) {
+        std::vector<claude::messages::Message> results;
+
+        std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+
+        for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
+            emit_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
+
+            // Track tool call
+            execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
+
+            // Emit tool started event
+            event_bus_.emit_tool_call(agent_id_, {
+                {"phase", "started"},
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input}
+            });
+
+            // Execute tool
+            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
+            
+            // Check and trim tool result if it's too large for context
+            claude::messages::Message trimmed_result = check_and_trim_tool_result(result_msg);
+            results.push_back(trimmed_result);
+
+            // Extract result content (from trimmed result for event logging)
+            json result_json;
+            for (const std::unique_ptr<claude::messages::Content>& content: trimmed_result.contents()) {
+                if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
+                    try {
+                        result_json = json::parse(tool_result->content);
+                    } catch (...) {
+                        result_json = {{"content", tool_result->content}};
+                    }
+                    break;
+                }
+            }
+
+            // Emit tool completed event
+            event_bus_.emit_tool_call(agent_id_, {
+                {"phase", "completed"},
+                {"tool_id", tool_use->id},
+                {"tool_name", tool_use->name},
+                {"input", tool_use->input},
+                {"result", result_json}
+            });
+        }
+
+        return results;
+    }
+
 private:
     // Helper to send messages through callback
-    void send_api_message(const claude::messages::Message* msg) {
-        if (message_callback_) {
-            CallbackData data;
-            data.message = msg;
-            message_callback_(AgentMessageType::NewMessage, data);
-        }
+    void emit_api_message(const claude::messages::Message* msg) {
+        // Extract message content for event
+        json message_data = {
+            {"role", static_cast<int>(msg->role())},
+            {"content", claude::messages::ContentExtractor::extract_text(*msg).value_or("")}
+        };
+        event_bus_.emit_message(agent_id_, message_data);
     }
     
-    // Helper to send grader messages to console only (not conversation UI)
-    void send_grader_message_to_console(const claude::messages::Message& msg) {
+    // Helper to emit grader messages
+    void emit_grader_message(const claude::messages::Message& msg) {
         // Log grader thinking blocks
         for (const auto& content : msg.contents()) {
             if (auto* thinking = dynamic_cast<const claude::messages::ThinkingContent*>(content.get())) {
-                send_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
+                emit_log(LogLevel::DEBUG, "[Grader Thinking] " + thinking->thinking);
             }
         }
         
         // Log grader text content
         std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
         if (text && !text->empty()) {
-            send_log(LogLevel::INFO, "[Grader Response] " + *text);
-        }
-    }
-    
-    void send_log(LogLevel level, const std::string& msg) {
-        // For now, logs still need some way to be sent - create a temporary message
-        // TODO: separate log callback
-        claude::messages::Message log_msg(claude::messages::Role::System);
-        log_msg.add_content(std::make_unique<claude::messages::TextContent>(
-            std::format("[LOG:{}] {}", static_cast<int>(level), msg)
-        ));
-        if (message_callback_) {
-            CallbackData data;
-            data.message = &log_msg;
-            message_callback_(AgentMessageType::Log, data);
-        }
-    }
-    
-    // Helper for JSON messages (for tool messages, state changes, etc.)
-    void send_json_message(AgentMessageType type, const json& json_data) {
-        if (message_callback_) {
-            CallbackData data;
-            data.json_data = json_data;
-            message_callback_(type, data);
+            emit_log(LogLevel::INFO, "[Grader Response] " + *text);
+            event_bus_.publish(AgentEvent(AgentEvent::GRADER_FEEDBACK, agent_id_, {
+                {"feedback", *text}
+            }));
         }
     }
 
     // Worker thread main loop
     void worker_loop() {
-        send_log(LogLevel::INFO, "Agent worker thread started");
+        emit_log(LogLevel::INFO, "Agent worker thread started");
         while (!stop_requested_) {
+            // Wait for semaphore signal or timeout
+            qsem_wait(task_semaphore_, 100);
+            
+            // Check for stop request
+            if (stop_requested_) {
+                break;
+            }
+            
             AgentTask task;
             // Get next task
             {
                 qmutex_locker_t lock(queue_mutex_);
                 if (task_queue_.empty()) {
-                    // Wait for task with timeout
-                    qsem_wait(task_semaphore_, 100);
+                    // Spurious wakeup or timeout, continue waiting
                     continue;
                 }
 
@@ -843,7 +895,7 @@ private:
                         break;
                 }
             } catch (const std::exception& e) {
-                send_log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
+                emit_log(LogLevel::ERROR, "Exception in worker loop: " + std::string(e.what()));
                 change_state(AgentState::Status::Idle);
             }
         }
@@ -858,7 +910,7 @@ private:
 
     // Process new task
     void process_new_task(const std::string& task) {
-        send_log(LogLevel::INFO, "Starting new task");
+        emit_log(LogLevel::INFO, "Starting new task");
         
         // Clear execution state for new task
         execution_state_.clear();
@@ -896,12 +948,12 @@ private:
     // Process resume
     void process_resume() {
         if (!execution_state_.is_valid()) {
-            send_log(LogLevel::ERROR, "No valid saved state to resume from");
+            emit_log(LogLevel::ERROR, "No valid saved state to resume from");
             change_state(AgentState::Status::Idle);
             return;
         }
 
-        send_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
+        emit_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
 
         // Continue from saved state
         run_analysis_loop();
@@ -909,10 +961,10 @@ private:
 
     // Process continue
     void process_continue(const std::string& additional) {
-        send_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
+        emit_log(LogLevel::INFO, "Continuing with additional instructions: " + additional);
 
         if (!execution_state_.is_valid()) {
-            send_log(LogLevel::WARNING, "No saved state found while continuing");
+            emit_log(LogLevel::WARNING, "No saved state found while continuing");
             change_state(AgentState::Status::Idle);
             return;
         }
@@ -920,10 +972,7 @@ private:
         // Add user message to execution state
         claude::messages::Message continue_msg = claude::messages::Message::user_text(additional);
 
-        // Check for cache invalidation scenario
-        if (execution_state_.get_request().enable_thinking && has_non_tool_result_content(continue_msg)) {
-            send_log(LogLevel::WARNING, "Non-tool-result user message will invalidate thinking block cache.");
-        }
+        // will invalidate cache
 
         execution_state_.add_message(continue_msg);
 
@@ -977,12 +1026,109 @@ private:
 
         claude::TokenUsage usage = token_stats_.get_last_usage();
         int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
-        return total_tokens > CONTEXT_LIMIT_TOKENS;
+        return total_tokens > config_.agent.context_limit;
+    }
+
+    // Estimate current conversation token count
+    int estimate_current_conversation_tokens() const {
+        int total_tokens = 0;
+        
+        // Estimate tokens from execution state messages
+        for (const claude::messages::Message& msg : execution_state_.get_messages()) {
+            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
+            if (text) {
+                total_tokens += text->length() / 4;  // Simple token estimation
+            }
+            
+            // Add tokens for tool calls and results
+            auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
+            for (const auto* tool : tool_calls) {
+                total_tokens += tool->name.length() / 4;
+                total_tokens += tool->input.dump().length() / 4;
+            }
+        }
+        
+        return total_tokens;
+    }
+
+    // Check and trim tool result if it would exceed context limits
+    claude::messages::Message check_and_trim_tool_result(claude::messages::Message result_msg) {
+        // Extract tool result content
+        const std::vector<std::unique_ptr<claude::messages::Content>>& contents = result_msg.contents();
+        if (contents.empty()) {
+            return result_msg;  // No content to check
+        }
+        
+        // Find the tool result content
+        claude::messages::ToolResultContent* tool_result = nullptr;
+        for (const std::unique_ptr<claude::messages::Content>& content: contents) {
+            if (auto* tr = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                tool_result = tr;
+                break;
+            }
+        }
+        
+        if (!tool_result) {
+            return result_msg;  // No tool result found
+        }
+        
+        // Estimate tokens in tool result
+        int tool_result_tokens = tool_result->content.length() / 4;
+        int current_conversation_tokens = estimate_current_conversation_tokens();
+        int available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
+        
+        // Check if we need to trim
+        if (tool_result_tokens <= available_tokens) {
+            return result_msg;  // Fits within limits
+        }
+        
+        // Calculate how much to keep (in characters)
+        int chars_to_keep = available_tokens * 4;  // Convert tokens back to characters
+        if (chars_to_keep < 100) {  // Always keep at least 100 characters
+            chars_to_keep = 100;
+        }
+        
+        // Trim the content and add truncation notice
+        std::string original_content = tool_result->content;
+        std::string trimmed_content;
+        
+        if (chars_to_keep < (int)original_content.length()) {
+            trimmed_content = original_content.substr(0, chars_to_keep);
+            int truncated_tokens = (original_content.length() - chars_to_keep) / 4;
+            trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits]", truncated_tokens);
+            
+            emit_log(LogLevel::WARNING, std::format("Trimmed tool result from {} to {} characters ({} tokens truncated)", 
+                original_content.length(), trimmed_content.length(), truncated_tokens));
+        } else {
+            trimmed_content = original_content;
+        }
+        
+        // Create new message with trimmed content
+        claude::messages::Message trimmed_msg(result_msg.role());
+        for (const auto& content : contents) {
+            if (auto* tr = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                // Replace with trimmed version, preserving other attributes
+                trimmed_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                    tr->tool_use_id,
+                    trimmed_content,
+                    tr->is_error,
+                    tr->cache_control
+                ));
+            } else {
+                // Keep other content as-is
+                trimmed_msg.add_content(content->clone());
+            }
+        }
+        
+        return trimmed_msg;
     }
 
     // Trigger context consolidation
     void trigger_context_consolidation() {
-        send_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+        emit_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
+        event_bus_.publish(AgentEvent(AgentEvent::CONTEXT_CONSOLIDATION, agent_id_, {
+            {"status", "starting"}
+        }));
 
         context_state_.consolidation_in_progress = true;
         context_state_.consolidation_count++;
@@ -1013,7 +1159,7 @@ private:
             result.summary = *text_content;
             result.success = true;
         } else {
-            send_log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
+            emit_log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
 
             // Fallback summary in case LLM didn't make one (which would be bad)
             result.summary = std::format("Consolidated {} findings to memory. Keys: {}",
@@ -1027,7 +1173,7 @@ private:
 
     // Rebuild conversation after consolidation
     void rebuild_after_consolidation(const ConsolidationResult& consolidation) {
-        send_log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
+        emit_log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
 
         // Save current task and token stats
         std::string original_task = state_.get_task();
@@ -1071,7 +1217,7 @@ private:
         execution_state_.reset_with_request(builder.build());
 
         // Log consolidation stats
-        send_log(LogLevel::INFO, std::format(
+        emit_log(LogLevel::INFO, std::format(
             "Context consolidated. Stored {} keys. Token usage before: {} in, {} out, {} cache read, {} cache write. Cost so far: ${:.4f}",
             consolidation.stored_keys.size(),
             total_usage_before.input_tokens,
@@ -1166,7 +1312,7 @@ private:
 
         while (iteration < config_.agent.max_iterations && !stop_requested_ && !grader_approved && state_.is_running()) {
             if (stop_requested_) {
-                send_log(LogLevel::INFO, "Analysis interrupted by stop request");
+                emit_log(LogLevel::INFO, "Analysis interrupted by stop request");
                 break;
             }
 
@@ -1174,7 +1320,7 @@ private:
             execution_state_.set_iteration(iteration);
             api_client_.set_iteration(iteration);
 
-            send_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
+            emit_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
 
             // Apply caching for continuation
             if (iteration > 1) {
@@ -1197,14 +1343,14 @@ private:
             if (!response.success && response.error && 
                 response.error->find("OAuth token has expired") != std::string::npos) {
                 
-                send_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
+                emit_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
                 
                 if (refresh_oauth_credentials()) {
                     // Retry the request with refreshed credentials
-                    send_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
+                    emit_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
                     response = api_client_.send_request(current_request);
                 } else {
-                    send_log(LogLevel::ERROR, "Failed to refresh OAuth token");
+                    emit_log(LogLevel::ERROR, "Failed to refresh OAuth token");
                 }
             }
 
@@ -1212,16 +1358,19 @@ private:
                 handle_api_error(response);
                 break;
             }
+            
+            // Reset retry counter on successful API call
+            api_retry_count_ = 0;
 
             // Send the response message directly to the UI!
-            send_api_message(&response.message);
+            emit_api_message(&response.message);
 
             // Log thinking information
             if (response.has_thinking()) {
                 std::vector<const claude::messages::ThinkingContent*> thinking_blocks = response.get_thinking_blocks();
                 std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
-                send_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
+                emit_log(LogLevel::INFO, std::format("Response contains {} thinking blocks and {} redacted blocks", thinking_blocks.size(), redacted_blocks.size()));
             }
 
             validate_thinking_preservation(response);
@@ -1273,7 +1422,10 @@ private:
                         std::string user_msg = pending_user_messages_.front();
                         pending_user_messages_.pop();
                         
-                        send_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
+                        emit_log(LogLevel::INFO, "Injecting user guidance: " + user_msg);
+                        event_bus_.publish(AgentEvent(AgentEvent::USER_MESSAGE, agent_id_, {
+                            {"message", user_msg}
+                        }));
                         
                         // If we just added tool results, append the user message to them
                         if (!tool_results.empty() && execution_state_.message_count() > 0) {
@@ -1303,118 +1455,137 @@ private:
             if (response.stop_reason == claude::StopReason::EndTurn && !response.has_tool_calls()) {
                 if (iteration > 1 && !context_state_.consolidation_in_progress) {
                     // Agent has naturally stopped - they're satisfied with their understanding
-                    send_log(LogLevel::INFO, "Agent stopped investigation");
+                    emit_log(LogLevel::INFO, "Agent stopped investigation");
 
-                    // Check with grader
-                    AnalysisGrader::GradeResult grade = check_with_grader();
-                    
-                    // Log grader's full response (with thinking) to console
-                    send_grader_message_to_console(grade.fullMessage);
-                    
-                    if (grade.complete) {
-                        send_log(LogLevel::INFO, "Grader approved investigation");
+                    // Check with grader if enabled
+                    if (grader_) {
+                        AnalysisGrader::GradeResult grade = check_with_grader();
+                        
+                        // Log grader's full response (with thinking) to console
+                        emit_grader_message(grade.fullMessage);
+                        
+                        if (grade.complete) {
+                            emit_log(LogLevel::INFO, "Grader approved investigation");
+                            grader_approved = true;
+                            
+                            // Get the agent's actual findings (not the grader's assessment)
+                            std::string final_findings = extract_last_assistant_message();
+                            
+                            // Emit final report event with agent's findings
+                            event_bus_.publish(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
+                                {"report", final_findings}
+                            }));
+                            change_state(AgentState::Status::Completed);
+                        } else {
+                            emit_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
+                            
+                            // Add grader's questions as user message and continue
+                            // Mark this as grader feedback with a special prefix we can filter
+                            claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
+                            execution_state_.add_message(continue_msg);
+                        }
+                    } else {
+                        // No grader - extract and send the actual findings
+                        emit_log(LogLevel::INFO, "Grader disabled - extracting final findings");
                         grader_approved = true;
                         
-                        // Send final report - this will be shown in conversation UI
-                        send_json_message(AgentMessageType::FinalReport, {
-                            {"report", grade.response}
-                        });
-                        change_state(AgentState::Status::Completed);
-                    } else {
-                        send_log(LogLevel::INFO, "Investigation needs more work - sending questions back to agent");
+                        // Get the last assistant message which contains the actual findings
+                        std::string final_findings = extract_last_assistant_message();
                         
-                        // Add grader's questions as user message and continue
-                        // Mark this as grader feedback with a special prefix we can filter
-                        claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
-                        execution_state_.add_message(continue_msg);
+                        // Emit the actual findings as the final report
+                        event_bus_.publish(AgentEvent(AgentEvent::ANALYSIS_RESULT, agent_id_, {
+                            {"report", final_findings}
+                        }));
+                        change_state(AgentState::Status::Completed);
                     }
                 }
             }
         }
 
         if (iteration >= config_.agent.max_iterations) {
-            send_log(LogLevel::WARNING, "Reached maximum iterations");
+            emit_log(LogLevel::WARNING, "Reached maximum iterations");
             change_state(AgentState::Status::Completed);
         }
-    }
-
-    // Process tool calls from assistant message
-    std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) {
-        std::vector<claude::messages::Message> results;
-
-        std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-
-        for (const claude::messages::ToolUseContent* tool_use: tool_calls) {
-            send_log(LogLevel::INFO, std::format("Executing tool: {} with input: {}", tool_use->name, tool_use->input.dump()));
-
-            // Track tool call
-            execution_state_.track_tool_call(tool_use->id, tool_use->name, iteration);
-
-            // Send tool started message
-            send_json_message(AgentMessageType::ToolStarted, {
-                {"tool_id", tool_use->id},
-                {"tool_name", tool_use->name},
-                {"input", tool_use->input}
-            });
-
-            // Execute tool
-            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
-            results.push_back(result_msg);
-
-            // Extract result content
-            json result_json;
-            for (const std::unique_ptr<claude::messages::Content>& content: result_msg.contents()) {
-                if (auto tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
-                    try {
-                        result_json = json::parse(tool_result->content);
-                    } catch (...) {
-                        result_json = {{"content", tool_result->content}};
-                    }
-                    break;
-                }
-            }
-
-            // Send tool executed message
-            send_json_message(AgentMessageType::ToolExecuted, {
-                {"tool_id", tool_use->id},
-                {"tool_name", tool_use->name},
-                {"input", tool_use->input},
-                {"result", result_json}
-            });
-        }
-
-        return results;
     }
 
 
     // Handle API errors
     void handle_api_error(const claude::ChatResponse& response) {
         if (!response.error) {
-            send_log(LogLevel::ERROR, "Unknown API error");
-            change_state(AgentState::Status::Idle);
+            emit_log(LogLevel::ERROR, "Unknown API error");
+            event_bus_.emit_error(agent_id_, "Unknown API error");
+            change_state(AgentState::Status::Completed);
             last_error_ = "Unknown API error";
+            // Graceful shutdown on unknown error
+            request_graceful_shutdown();
             return;
         }
 
         std::string error_msg = *response.error;
+        bool is_recoverable = claude::Client::is_recoverable_error(response);
+        
+        // Check if this is a prompt length error (unrecoverable)
+        bool is_prompt_too_long = error_msg.find("prompt is too long") != std::string::npos ||
+                                  error_msg.find("maximum") != std::string::npos;
 
         // Check for thinking-specific errors
         if (error_msg.find("thinking") != std::string::npos ||
             error_msg.find("budget_tokens") != std::string::npos) {
-            send_log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
-            send_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
+            emit_log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
+            emit_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
+            event_bus_.emit_error(agent_id_, error_msg);
         }
 
-        if (claude::Client::is_recoverable_error(response)) {
-            send_log(LogLevel::INFO, "You can resume the analysis");
-            change_state(AgentState::Status::Paused);
-            execution_state_.set_valid(true);
-            last_error_ = "API Error (recoverable): " + error_msg;
-        } else {
-            send_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
-            change_state(AgentState::Status::Idle);
+        // Handle unrecoverable errors or max retries reached
+        if (!is_recoverable || is_prompt_too_long || api_retry_count_ >= MAX_API_RETRIES) {
+            if (api_retry_count_ >= MAX_API_RETRIES) {
+                emit_log(LogLevel::ERROR, std::format("Max retries ({}) reached. Giving up.", MAX_API_RETRIES));
+            } else {
+                emit_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
+            }
+            
+            event_bus_.emit_error(agent_id_, error_msg);
+            change_state(AgentState::Status::Completed);
             execution_state_.set_valid(false);
             last_error_ = "API Error: " + error_msg;
+            
+            // Graceful shutdown on unrecoverable error
+            request_graceful_shutdown();
+            
+        } else {
+            // Recoverable error - implement retry with delay
+            api_retry_count_++;
+            auto now = std::chrono::steady_clock::now();
+            auto time_since_last_error = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_api_error_time_).count();
+            
+            emit_log(LogLevel::WARNING, std::format(
+                "Recoverable API error (attempt {}/{}): {}", 
+                api_retry_count_, MAX_API_RETRIES, error_msg));
+            
+            // If less than 60 seconds since last error, wait
+            if (time_since_last_error < 60) {
+                int wait_time = 60 - time_since_last_error;
+                emit_log(LogLevel::INFO, std::format(
+                    "Waiting {} seconds before retry...", wait_time));
+                std::this_thread::sleep_for(std::chrono::seconds(wait_time));
+            }
+            
+            last_api_error_time_ = now;
+            change_state(AgentState::Status::Paused);
+            execution_state_.set_valid(true);
+            last_error_ = std::format("API Error (recoverable, attempt {}/{}): {}",
+                                     api_retry_count_, MAX_API_RETRIES, error_msg);
+            
+            // Queue a resume task to retry the operation
+            emit_log(LogLevel::INFO, "Will retry after delay...");
+            
+            // Queue resume task for the worker thread
+            {
+                qmutex_locker_t lock(queue_mutex_);
+                task_queue_.push(AgentTask::resume());
+            }
+            qsem_post(task_semaphore_); // Signal the worker thread
         }
     }
 
@@ -1428,26 +1599,42 @@ private:
         std::vector<const claude::messages::RedactedThinkingContent*> redacted_blocks = response.get_redacted_thinking_blocks();
 
         if (thinking_blocks.empty() && redacted_blocks.empty()) {
-            send_log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
+            emit_log(LogLevel::WARNING, "Tool calls present but no thinking blocks found - this might indicate an issue");
         } else {
-            send_log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
+            emit_log(LogLevel::DEBUG, std::format("Preserving {} thinking blocks with tool calls",
                 thinking_blocks.size() + redacted_blocks.size()));
         }
     }
 
 
-    // changes and notifies ui of agent state
+protected:
+    // Helper to extract the last assistant message from conversation
+    std::string extract_last_assistant_message() {
+        std::vector<claude::messages::Message> messages = execution_state_.get_messages();
+        
+        // Iterate in reverse to find last assistant message
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->role() == claude::messages::Role::Assistant) {
+                // Extract text content from the message
+                auto text = claude::messages::ContentExtractor::extract_text(*it);
+                if (text && !text->empty()) {
+                    return *text;
+                }
+            }
+        }
+        
+        return "Failed to extract final report.";
+    }
+    
+    // changes state and emits event
     void change_state(AgentState::Status new_status) {
         state_.set_status(new_status);
-
-        send_json_message(AgentMessageType::StateChanged, {
-            {"status", static_cast<int>(new_status)}
-        });
+        event_bus_.emit_state(agent_id_, static_cast<int>(new_status));
     }
 
     // Check with grader to evaluate agent's work
     AnalysisGrader::GradeResult check_with_grader() {
-        send_log(LogLevel::INFO, "Evaluating analysis quality...");
+        emit_log(LogLevel::INFO, "Evaluating analysis quality...");
         
         // Build grading context
         AnalysisGrader::GradingContext context;
@@ -1493,7 +1680,214 @@ private:
             summary = token_stats_.get_iteration_summary(usage, iteration);
         }
         
-        send_log(LogLevel::INFO, "[Agent] " + summary);
+        emit_log(LogLevel::INFO, summary);
+        
+        // Emit token update event with cumulative totals and per-iteration values
+        claude::TokenUsage cumulative_total = get_cumulative_token_usage();
+        // Use the 'usage' parameter which contains per-iteration values for context calculation
+        event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, agent_id_, {
+            {"agent_id", agent_id_},
+            {"tokens", {
+                {"input_tokens", cumulative_total.input_tokens},
+                {"output_tokens", cumulative_total.output_tokens},
+                {"cache_read_tokens", cumulative_total.cache_read_tokens},
+                {"cache_creation_tokens", cumulative_total.cache_creation_tokens},
+                {"estimated_cost", cumulative_total.estimated_cost()},
+                {"model", model_to_string(cumulative_total.model)}
+            }},
+            {"session_tokens", {
+                {"input_tokens", usage.input_tokens},
+                {"output_tokens", usage.output_tokens},
+                {"cache_read_tokens", usage.cache_read_tokens},
+                {"cache_creation_tokens", usage.cache_creation_tokens}
+            }},
+            {"iteration", iteration}
+        }));
+    }
+
+    // Graceful shutdown methods
+    virtual void request_graceful_shutdown() {
+        emit_log(LogLevel::INFO, "Requesting graceful shutdown...");
+        
+        // Stop and clean up worker thread FIRST
+        emit_log(LogLevel::INFO, "Stopping worker thread...");
+        stop();
+        cleanup_thread();
+        emit_log(LogLevel::INFO, "Worker thread stopped");
+        
+        // Save the current IDA database
+        if (!save_ida_database()) {
+            emit_log(LogLevel::WARNING, "Failed to save IDA database");
+        }
+        
+        // Save conversation state
+        save_conversation_state();
+        
+        // Mark as completed if not already
+        if (state_.get_status() != AgentState::Status::Completed) {
+            change_state(AgentState::Status::Completed);
+        }
+        
+        // Request IDA to exit gracefully
+        request_ida_exit();
+    }
+
+protected:
+    // Save the current IDA database
+    bool save_ida_database() {
+        emit_log(LogLevel::INFO, "Saving IDA database...");
+        
+        struct SaveDatabaseRequest : exec_request_t {
+            bool result = false;
+            virtual ssize_t idaapi execute() override {
+                result = save_database();
+                return 0;
+            }
+        };
+        
+        SaveDatabaseRequest req;
+        execute_sync(req, MFF_WRITE);
+        
+        if (req.result) {
+            emit_log(LogLevel::INFO, "IDA database saved successfully");
+        }
+        return req.result;
+    }
+
+    // Save conversation state to file
+    void save_conversation_state() {
+        emit_log(LogLevel::INFO, "Saving conversation state...");
+        
+        try {
+            // Get the agent workspace directory
+            std::filesystem::path workspace = get_agent_workspace_path();
+            std::filesystem::path state_file = workspace / "conversation_state.json";
+            
+            // Create state JSON
+            json state = {
+                {"agent_id", get_agent_id()},
+                {"task", state_.get_task()},
+                {"status", static_cast<int>(state_.get_status())},
+                {"conversation", serialize_conversation()},
+                {"tool_history", serialize_tool_history()},
+                {"timestamp", std::chrono::system_clock::now().time_since_epoch().count()},
+                {"iteration", execution_state_.get_iteration()},
+                {"token_stats", serialize_token_stats()}
+            };
+            
+            // Write to file
+            std::ofstream file(state_file);
+            if (file.is_open()) {
+                file << state.dump(2);
+                file.close();
+                emit_log(LogLevel::INFO, "Conversation state saved to: " + state_file.string());
+            } else {
+                emit_log(LogLevel::ERROR, "Failed to open state file for writing");
+            }
+        } catch (const std::exception& e) {
+            emit_log(LogLevel::ERROR, std::string("Failed to save conversation state: ") + e.what());
+        }
+    }
+    
+    // Get agent workspace path
+    std::filesystem::path get_agent_workspace_path() const {
+        // Extract from current database path
+        const char* idb_path = get_path(PATH_TYPE_IDB);
+        if (idb_path) {
+            std::filesystem::path db_path(idb_path);
+            return db_path.parent_path();  // Should be workspace/agents/agent_X/
+        }
+        // Fallback to temp directory
+        return std::filesystem::temp_directory_path() / "ida_swarm_workspace" / "agents" / agent_id_;
+    }
+    
+    // Serialize conversation to JSON
+    json serialize_conversation() const {
+        json messages_json = json::array();
+        
+        for (const claude::messages::Message& msg: execution_state_.get_messages()) {
+            // Convert role enum to string
+            std::string role_str = (msg.role() == claude::messages::Role::User) ? "user" : "assistant";
+            
+            json msg_json = {
+                {"role", role_str},
+                {"content", json::array()}
+            };
+            
+            // Serialize all content blocks
+            for (const std::unique_ptr<claude::messages::Content>& content: msg.contents()) {
+                // Use dynamic_cast to check content type
+                if (auto* text = dynamic_cast<const claude::messages::TextContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "text"},
+                        {"text", text->text}
+                    });
+                } else if (auto* tool_use = dynamic_cast<const claude::messages::ToolUseContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "tool_use"},
+                        {"id", tool_use->id},
+                        {"name", tool_use->name},
+                        {"input", tool_use->input}
+                    });
+                } else if (auto* tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
+                    msg_json["content"].push_back({
+                        {"type", "tool_result"},
+                        {"tool_use_id", tool_result->tool_use_id},
+                        {"content", tool_result->content},
+                        {"is_error", tool_result->is_error}
+                    });
+                }
+            }
+            
+            messages_json.push_back(msg_json);
+        }
+        
+        return messages_json;
+    }
+    
+    // Serialize tool history
+    json serialize_tool_history() const {
+        json tools = json::array();
+        
+        for (const auto& [tool_id, iteration] : execution_state_.get_tool_iterations()) {
+            std::optional<std::string> tool_name = execution_state_.get_tool_name(tool_id);
+            tools.push_back({
+                {"id", tool_id},
+                {"name", tool_name.value_or("unknown")},
+                {"iteration", iteration}
+            });
+        }
+        
+        return tools;
+    }
+    
+    // Serialize token statistics
+    json serialize_token_stats() const {
+        claude::TokenUsage total = token_stats_.get_total();
+        return {
+            {"total_input_tokens", total.input_tokens},
+            {"total_output_tokens", total.output_tokens},
+            {"total_cache_read_tokens", total.cache_read_tokens},
+            {"total_cache_creation_tokens", total.cache_creation_tokens},
+            {"total_estimated_cost", total.estimated_cost()},
+            {"sessions", stats_sessions_.size() + 1}
+        };
+    }
+    
+    // Request IDA to exit gracefully
+    void request_ida_exit() {
+        emit_log(LogLevel::INFO, "Requesting IDA to exit gracefully...");
+        
+        struct ExitRequest : exec_request_t {
+            virtual ssize_t idaapi execute() override {
+                // Request IDA to exit gracefully
+                qexit(0);
+                return 0;
+            }
+        };
+        
+        ExitRequest req;
+        execute_sync(req, MFF_WRITE);
     }
 };
 

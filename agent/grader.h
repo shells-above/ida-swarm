@@ -3,6 +3,7 @@
 
 #include "core/config.h"
 #include "sdk/claude_sdk.h"
+#include "sdk/auth/oauth_manager.h"
 #include "analysis/memory.h"
 
 namespace llm_re {
@@ -38,20 +39,23 @@ public:
     };
 
 private:
-    std::unique_ptr<claude::Client> api_client_;
+    mutable std::unique_ptr<claude::Client> api_client_;  // Mutable to allow token refresh in const methods
     const Config& config_;
     mutable qmutex_t mutex_;
+    mutable std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;  // OAuth manager for this grader instance
     
     
     // Grader system prompt
-    static constexpr const char* GRADER_SYSTEM_PROMPT = R"(You are a peer reviewer examining a reverse engineering investigation.
+    static constexpr const char* GRADER_SYSTEM_PROMPT = R"(You are a quality control reviewer examining a reverse engineering investigation.
 
 Your colleague (the agent) has been investigating privately and believes they're done.
 Review their work: their thinking, findings, and stored analyses.
 
-CRITICAL: If the investigation is sufficient, your response becomes the final report to the user.
-Do not mention the investigation process, evaluation, or agent in your final response.
-The user only sees your synthesis, not your evaluation process.
+CRITICAL: Your role is to EVALUATE quality, not to write the final report.
+The agent's own findings will be sent to the user if you approve.
+You are a gatekeeper ensuring thoroughness, not a report writer.
+
+Your job is to decide: Is the investigation complete enough to answer the user's request?
 
 USE THINKING BLOCKS EXTENSIVELY - your thinking is where the real evaluation happens.
 
@@ -114,26 +118,22 @@ does this investigation provide what they asked for at the level they expected?
 
 After your thorough thinking process:
 
-### If the investigation answers what the user asked:
+### If the investigation sufficiently answers what the user asked:
 
-**Write a response FOR THE USER, not about the investigation.**
+**Simply state: "Investigation complete."**
 
-Synthesize the findings into a direct answer to their question.
-- Answer as if you are delivering the final report
-- Don't mention the investigation, agent, or evaluation process
-- Present the findings as the definitive answer
-- Include evidence and details at the level they requested
-
-You are now speaking directly to the user with their answer.
+The agent's findings will be sent to the user.
+You don't need to summarize or rewrite - the agent's work stands on its own.
+Your approval triggers sending the agent's actual technical report.
 
 ### If there are gaps that matter:
 
-Identify what specific investigation is still needed:
-- What gaps prevent answering the user's question
-- What specific work would complete the analysis
+Provide specific questions or areas the agent needs to address:
+- What specific gaps prevent answering the user's question
+- What additional investigation would complete the analysis
 - Be precise about what needs to be done
 
-These are instructions back to the agent, not a report to the user.
+These questions will be sent back to the agent to continue their work.
 
 ## Remember Your Purpose
 
@@ -157,9 +157,9 @@ Think deeply. Derive your standards. Don't apply predetermined rules.)";
     GradeResult parse_grader_response(const claude::messages::Message& response) const;
     claude::messages::Message create_grading_request(const GradingContext& context) const;
     bool classify_completion(const std::string& grader_response) const;
+    bool refresh_oauth_credentials() const;  // Refresh OAuth tokens when expired
     
-    // Token estimation and pruning
-    static size_t estimate_tokens(const std::string& text);
+    // Token estimation and pruning (using shared TokenUtils)
     struct MessagePriority {
         const claude::messages::Message* message;
         int priority;  // 0=low, 1=medium, 2=high

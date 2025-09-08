@@ -599,10 +599,10 @@ json ActionExecutor::get_imports(int max_results) {
     return result;
 }
 
-json ActionExecutor::get_entry_points(int max_results) {
+json ActionExecutor::get_exports(int max_results) {
     json result;
     try {
-        std::vector<std::tuple<ea_t, std::string, std::string>> entries = IDAUtils::get_entry_points();
+        std::vector<std::tuple<ea_t, std::string, std::string>> entries = IDAUtils::get_exports();
         result["success"] = true;
         json entries_json = json::array();
 

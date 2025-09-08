@@ -41,7 +41,7 @@ public:
 
     // Binary info actions
     json get_imports(int max_results);
-    json get_entry_points(int max_results);
+    json get_exports(int max_results);
 
     // Decompilation-related actions
     json get_function_prototype(ea_t address);

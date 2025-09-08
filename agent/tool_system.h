@@ -9,6 +9,19 @@
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
+#include "core/config.h"
+#include <fstream>
+#include <filesystem>
+#include <random>
+#include <chrono>
+#include <sstream>
+#ifdef __NT__
+#include <windows.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
 
 namespace llm_re::tools {
 
@@ -238,9 +251,13 @@ public:
 
     std::string description() const override {
         return "Deep dive into a function with optional disassembly and decompilation (Includes cross-references, strings, data refs as well). "
+               "Disassembly includes address prefixes (e.g., '0x401000: mov eax, [ebp+8]') for precise instruction identification. "
                "This is your primary tool for understanding code. As you analyze, consider: "
                "What would make this function clear to another reverse engineer? "
-               "What names, types, and comments would tell its story?";
+               "What names, types, and comments would tell its story? "
+               "Note, decompilation can be incorrect! If something doesn't make sense (ex: decompilation is empty or appears incomplete), check the disassembly! "
+               "Use the decompilation to get the idea for the function, and then use disassembly if you need the specifics. The disassembly has what is ACTUALLY happening, but is more expensive "
+               "If the decompilation looks like a NOP, it PROBABLY IS NOT. CHECK WITH THE DISASSEMBLY!";
     }
 
     json parameters_schema() const override {
@@ -276,7 +293,7 @@ public:
     }
 
     std::string description() const override {
-        return "Your detective's notebook for the investigation. Store hypotheses, patterns, questions, "
+        return "Your PRIVATE (will not be shown to ANYONE) detective's notebook for the investigation. Store hypotheses, patterns, questions, "  // analyses will be provided to grader also
                "observations that might make sense later, TODOs, and connections you're still exploring. "
                "This is your thinking space - for permanent findings, use IDA's annotation tools "
                "(set_name for functions/data, set_comment for logic/discoveries, set_local_type for structures).";
@@ -494,22 +511,22 @@ public:
     using IDAToolBase::IDAToolBase;
 
     std::string name() const override {
-        return "get_entry_points";
+        return "get_exports";
     }
 
     std::string description() const override {
-        return "Get all entry points of the binary (main entry, exports, TLS callbacks). Shows where execution can begin.";
+        return "Get all exports of the binary (entry points, exports, TLS callbacks). Shows where execution can begin.";
     }
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
-            .add_integer("max_count", "Max number of entry points to return")
+            .add_integer("max_count", "Max number of exports to return")
             .build();
     }
 
     claude::tools::ToolResult execute(const json& input) override {
         try {
-            return claude::tools::ToolResult::success(executor->get_entry_points(input.at("max_count")));
+            return claude::tools::ToolResult::success(executor->get_exports(input.at("max_count")));
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(e.what());
         }
@@ -996,16 +1013,16 @@ public:
 // Patch bytes tool
 class PatchBytesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
-    
+
 public:
     PatchBytesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<PatchManager> pm) : IDAToolBase(mem, exec), patch_manager_(pm) {}
-    
+
     std::string name() const override {
         return "patch_bytes";
     }
-    
+
     std::string description() const override {
-        return "⚠️ EXTREMELY DANGEROUS - Patch raw bytes at a specific address. "
+        return "⚠️ EXTREMELY DANGEROUS - Patch raw bytes at a specific address. Before using this, ask yourself, can you accomplish this with patch_assembly? If you can, use patch_assembly, if you can't, use patch_bytes. "
                "CRITICAL: You MUST be 100% certain about your patch before using this tool! "
                "MANDATORY: Verify original bytes match EXACTLY before patching. "
                "WARNING: If new_bytes length > original_bytes length, YOU WILL OVERWRITE adjacent data/code! "
@@ -1013,7 +1030,7 @@ public:
                "ALWAYS: 1) Check instruction boundaries, 2) Verify patch size, 3) Understand what follows the patch location. "
                "This tool modifies the binary permanently - mistakes can break the entire program!";
     }
-    
+
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "Target address to patch - MUST be exact start of instruction/data")
@@ -1022,26 +1039,26 @@ public:
             .add_string("description", "REQUIRED: Detailed explanation of patch purpose and why it's safe (for audit trail)")
             .build();
     }
-    
+
     claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
             return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
-        
+
         try {
             // Parse and validate parameters
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string original_hex = input.at("original_bytes");
             std::string new_hex = input.at("new_bytes");
             std::string description = input.at("description");  // Required for audit trail
-            
+
             if (description.empty()) {
                 return claude::tools::ToolResult::failure("Description is required for audit trail");
             }
-            
-            // Apply the byte patch with verification (thread safety handled in PatchManager)
-            auto patch_result = patch_manager_->apply_byte_patch(address, original_hex, new_hex, description);
-            
+
+            // Apply the byte patch with verification
+            BytePatchResult patch_result = patch_manager_-> apply_byte_patch(address, original_hex, new_hex, description);
+
             if (patch_result.success) {
                 json data;
                 data["address"] = HexAddress(address);
@@ -1054,7 +1071,7 @@ public:
             } else {
                 return claude::tools::ToolResult::failure(patch_result.error_message);
             }
-            
+
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
@@ -1064,19 +1081,20 @@ public:
 // Patch assembly tool
 class PatchAssemblyTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
-    
+
 public:
     PatchAssemblyTool(std::shared_ptr<BinaryMemory> mem,
                       std::shared_ptr<ActionExecutor> exec,
                       std::shared_ptr<PatchManager> pm)
         : IDAToolBase(mem, exec), patch_manager_(pm) {}
-    
+
     std::string name() const override {
         return "patch_assembly";
     }
-    
+
     std::string description() const override {
         return "⚠️ EXTREMELY DANGEROUS - Patch assembly instructions at a specific address. "
+               "Use addresses from analyze_function's disassembly output (e.g., '0x401000: mov eax, [ebp+8]' means address 0x401000). "
                "CRITICAL: You MUST be 100% certain about your patch before using this tool! "
                "MANDATORY: Verify original assembly matches EXACTLY before patching. "
                "WARNING: If assembled bytes > original instruction size, YOU WILL OVERWRITE following instructions! "
@@ -1085,7 +1103,7 @@ public:
                "NOTE: Tool adds NOPs only if new instruction is SMALLER - it will NOT prevent overwriting if larger! "
                "This tool modifies the binary permanently - incorrect patches can destroy program functionality!";
     }
-    
+
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "Target instruction address - MUST be exact start of instruction")
@@ -1094,27 +1112,26 @@ public:
             .add_string("description", "REQUIRED: Detailed explanation of patch purpose and safety analysis (for audit trail)")
             .build();
     }
-    
+
     claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
             return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
-        
+
         try {
             // Parse and validate parameters
             ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
             std::string original_asm = input.at("original_asm");
             std::string new_asm = input.at("new_asm");
             std::string description = input.at("description");  // Required for audit trail
-            
+
             if (description.empty()) {
                 return claude::tools::ToolResult::failure("Description is required for audit trail");
             }
-            
-            // Apply the assembly patch with verification (thread safety handled in PatchManager)
-            auto patch_result = patch_manager_->apply_assembly_patch(
-                address, original_asm, new_asm, description);
-            
+
+            // Apply the assembly patch with verification
+            AssemblyPatchResult patch_result = patch_manager_->apply_assembly_patch(address, original_asm, new_asm, description);
+
             if (patch_result.success) {
                 json data;
                 data["address"] = HexAddress(address);
@@ -1130,7 +1147,7 @@ public:
             } else {
                 return claude::tools::ToolResult::failure(patch_result.error_message);
             }
-            
+
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
@@ -1140,38 +1157,38 @@ public:
 // Revert patches tool
 class RevertPatchTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
-    
+
 public:
     RevertPatchTool(std::shared_ptr<BinaryMemory> mem,
                     std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
         : IDAToolBase(mem, exec), patch_manager_(pm) {}
-    
+
     std::string name() const override {
         return "revert_patch";
     }
-    
+
     std::string description() const override {
         return "Revert a previously applied patch at a specific address or revert all patches. "
                "Restores original bytes from before the patch was applied.";
     }
-    
+
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "Address of patch to revert", false)
             .add_boolean("revert_all", "Revert all patches", false)
             .build();
     }
-    
+
     claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
             return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
-        
+
         try {
             json data;
             bool success = false;
-            
+
             if (input.value("revert_all", false)) {
                 // Revert all patches
                 success = patch_manager_->revert_all();
@@ -1190,60 +1207,307 @@ public:
             } else {
                 return claude::tools::ToolResult::failure("Must specify address or revert_all");
             }
-            
+
             if (!success) {
                 return claude::tools::ToolResult::failure("No patch found at specified address");
             }
-            
+
             return claude::tools::ToolResult::success(data);
-            
+
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
     }
 };
 
+// Run Python code tool
+class RunPythonTool : public IDAToolBase {
+public:
+    using IDAToolBase::IDAToolBase;
+
+    std::string name() const override {
+        return "run_python";
+    }
+
+    std::string description() const override {
+        return "Execute Python code whatever task you deem necessary. Use this to perform computation you couldn't have done yourself. "
+               "IMPORTANT: Use ONLY Python standard library - no external packages. "
+               "EXTREMELY IMPORTANT: **this tool IS EXPENSIVE!!** ONLY USE THIS TOOL WHEN IT WILL GREATLY ENHANCE YOUR ABILITIES. Do NOT WASTE IT. "  // it's not expensive, but the LLM like to run python and have it print out its reasoning, which i don't want it doing
+               "BE VERY CAREFUL WITH WHAT YOU DO HERE! If you aren't careful, it will flood your context window with useless information! Make sure you know EXACTLY what you are doing! "
+               "NEVER perform network operations (not needed for RE tasks).";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("code", "Python code to execute (standard library only)")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string python_code = input.at("code");
+
+            // Create temp directory if it doesn't exist
+            std::filesystem::path temp_dir = "/tmp/agent_python";
+            if (!std::filesystem::exists(temp_dir)) {
+                std::filesystem::create_directories(temp_dir);
+            }
+
+            // Generate random filename
+            auto now = std::chrono::system_clock::now();
+            auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<> dis(1000, 9999);
+
+            std::string filename = std::format("script_{}_{}.py", timestamp, dis(gen));
+            std::filesystem::path script_path = temp_dir / filename;
+
+            // Write Python code to file
+            std::ofstream script_file(script_path);
+            if (!script_file.is_open()) {
+                return claude::tools::ToolResult::failure("Failed to create temporary Python file");
+            }
+            script_file << python_code;
+            script_file.close();
+
+            // Execute Python script and capture output
+            std::string output = execute_python_script(script_path.string());
+
+            // Clean up temp file
+            std::filesystem::remove(script_path);
+
+            json result;
+            result["output"] = output;
+
+            return claude::tools::ToolResult::success(result);
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+
+private:
+    std::string execute_python_script(const std::string& script_path) {
+#ifdef __NT__
+        return execute_windows_python(script_path);
+#else
+        return execute_unix_python(script_path);
+#endif
+    }
+
+#ifndef __NT__
+    std::string execute_unix_python(const std::string& script_path) {
+        int pipefd[2];
+        if (pipe(pipefd) == -1) {
+            return "Error: Failed to create pipe";
+        }
+
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+        posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+        const char* python_cmd = "python3";
+        std::vector<char*> argv = {
+            const_cast<char*>(python_cmd),
+            const_cast<char*>(script_path.c_str()),
+            nullptr
+        };
+
+        pid_t pid;
+        int result = posix_spawn(&pid, "/usr/bin/python3", &actions, nullptr, argv.data(), environ);
+
+        close(pipefd[1]);
+        posix_spawn_file_actions_destroy(&actions);
+
+        if (result != 0) {
+            close(pipefd[0]);
+            // Try with just "python" if python3 fails
+            if (pipe(pipefd) == -1) {
+                return "Error: Failed to create pipe";
+            }
+
+            posix_spawn_file_actions_init(&actions);
+            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+            posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+            posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+            python_cmd = "python";
+            argv[0] = const_cast<char*>(python_cmd);
+            result = posix_spawn(&pid, "/usr/bin/python", &actions, nullptr, argv.data(), environ);
+
+            close(pipefd[1]);
+            posix_spawn_file_actions_destroy(&actions);
+
+            if (result != 0) {
+                close(pipefd[0]);
+                return std::format("Error: Failed to execute Python (tried python3 and python): {}", strerror(result));
+            }
+        }
+
+        // Read output with size limit
+        std::string output;
+        char buffer[4096];
+        ssize_t bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
+
+        while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            output += buffer;
+            
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (read(pipefd[0], buffer, sizeof(buffer) - 1) > 0) {
+                    // Just discard it
+                }
+                break;
+            }
+        }
+        close(pipefd[0]);
+
+        // Wait for process to complete using IDA's thread-safe qwait
+        int status;
+        qwait(&status, pid, 0);
+
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            output = "Python execution failed with exit code " + std::to_string(WEXITSTATUS(status)) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
+        }
+
+        return output.empty() ? "(no output)" : output;
+    }
+#else
+    std::string execute_windows_python(const std::string& script_path) {
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+
+        HANDLE hReadPipe, hWritePipe;
+        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+            return "Error: Failed to create pipe";
+        }
+
+        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOA si = {0};
+        si.cb = sizeof(STARTUPINFOA);
+        si.hStdOutput = hWritePipe;
+        si.hStdError = hWritePipe;
+        si.dwFlags |= STARTF_USESTDHANDLES;
+
+        PROCESS_INFORMATION pi = {0};
+
+        std::string command = "python \"" + script_path + "\"";
+
+        if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(hWritePipe);
+            CloseHandle(hReadPipe);
+
+            // Try python3 if python fails
+            command = "python3 \"" + script_path + "\"";
+            if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+                return "Error: Failed to execute Python (tried python and python3)";
+            }
+        }
+
+        CloseHandle(hWritePipe);
+
+        // Read output with size limit
+        std::string output;
+        char buffer[4096];
+        DWORD bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
+
+        while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+            output += buffer;
+            
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
+                    // Just discard it
+                }
+                break;
+            }
+        }
+
+        CloseHandle(hReadPipe);
+
+        // Wait for process to complete
+        WaitForSingleObject(pi.hProcess, INFINITE);
+
+        DWORD exit_code;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        if (exit_code != 0) {
+            output = "Python execution failed with exit code " + std::to_string(exit_code) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
+        }
+
+        return output.empty() ? "(no output)" : output;
+    }
+#endif
+};
+
 // List patches tool
 class ListPatchesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
-    
+
 public:
     ListPatchesTool(std::shared_ptr<BinaryMemory> mem,
                     std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
         : IDAToolBase(mem, exec), patch_manager_(pm) {}
-    
+
     std::string name() const override {
         return "list_patches";
     }
-    
+
     std::string description() const override {
         return "List all applied patches with their descriptions, timestamps, and original/new bytes. "
                "Shows the complete audit trail of all modifications.";
     }
-    
+
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "List only patch at specific address", false)
             .build();
     }
-    
+
     claude::tools::ToolResult execute(const json& input) override {
         if (!patch_manager_) {
             return claude::tools::ToolResult::failure("Patch manager not initialized");
         }
-        
+
         try {
             json data;
             json patches_json = json::array();
-            
+
             if (input.contains("address")) {
                 // Get single patch
                 ea_t address = ActionExecutor::parse_single_address_value(input.at("address"));
-                auto patch_info = patch_manager_->get_patch_info(address);
-                
+                std::optional<PatchInfo> patch_info = patch_manager_->get_patch_info(address);
+
                 if (patch_info.has_value()) {
-                    const auto& patch = patch_info.value();
+                    const PatchInfo& patch = patch_info.value();
                     json patch_json;
                     patch_json["address"] = HexAddress(patch.address);
                     patch_json["original_bytes"] = patch.original_bytes_hex;
@@ -1251,19 +1515,19 @@ public:
                     patch_json["description"] = patch.description;
                     patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
                     patch_json["is_assembly_patch"] = patch.is_assembly_patch;
-                    
+
                     if (patch.is_assembly_patch) {
                         patch_json["original_asm"] = patch.original_asm;
                         patch_json["patched_asm"] = patch.patched_asm;
                     }
-                    
+
                     patches_json.push_back(patch_json);
                 }
             } else {
                 // List all patches
-                auto all_patches = patch_manager_->list_patches();
-                
-                for (const auto& patch : all_patches) {
+                std::vector<PatchInfo> all_patches = patch_manager_->list_patches();
+
+                for (const PatchInfo &patch: all_patches) {
                     json patch_json;
                     patch_json["address"] = HexAddress(patch.address);
                     patch_json["original_bytes"] = patch.original_bytes_hex;
@@ -1271,28 +1535,28 @@ public:
                     patch_json["description"] = patch.description;
                     patch_json["timestamp"] = std::chrono::system_clock::to_time_t(patch.timestamp);
                     patch_json["is_assembly_patch"] = patch.is_assembly_patch;
-                    
+
                     if (patch.is_assembly_patch) {
                         patch_json["original_asm"] = patch.original_asm;
                         patch_json["patched_asm"] = patch.patched_asm;
                     }
-                    
+
                     patches_json.push_back(patch_json);
                 }
             }
-            
+
             data["patches"] = patches_json;
             data["count"] = patches_json.size();
-            
+
             // Add statistics
-            auto stats = patch_manager_->get_statistics();
+            PatchStatistics stats = patch_manager_->get_statistics();
             data["statistics"]["total_patches"] = stats.total_patches;
             data["statistics"]["assembly_patches"] = stats.assembly_patches;
             data["statistics"]["byte_patches"] = stats.byte_patches;
             data["statistics"]["total_bytes_patched"] = stats.total_bytes_patched;
-            
+
             return claude::tools::ToolResult::success(data);
-            
+
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
         }
@@ -1303,7 +1567,8 @@ inline void register_ida_tools(claude::tools::ToolRegistry& registry,
                                std::shared_ptr<BinaryMemory> memory,
                                std::shared_ptr<ActionExecutor> executor,
                                std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,
-                               std::shared_ptr<PatchManager> patch_manager) {
+                               std::shared_ptr<PatchManager> patch_manager,
+                               const Config& config) {
     // Core navigation and info tools
     registry.register_tool_type<GetXrefsTool>(memory, executor);
     registry.register_tool_type<GetFunctionInfoTool>(memory, executor);
@@ -1345,6 +1610,11 @@ inline void register_ida_tools(claude::tools::ToolRegistry& registry,
         registry.register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
         registry.register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
         registry.register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
+    }
+
+    // Python execution tool (only if enabled in config)
+    if (config.agent.enable_python_tool) {
+        registry.register_tool_type<RunPythonTool>(memory, executor);
     }
 
     // Deep analysis

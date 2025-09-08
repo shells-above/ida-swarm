@@ -24,28 +24,26 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["enable_thinking"] = agent.enable_thinking;
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
+        j["agent"]["enable_python_tool"] = agent.enable_python_tool;
+        j["agent"]["context_limit"] = agent.context_limit;
 
         // Grader settings
+        j["grader"]["enabled"] = grader.enabled;
         j["grader"]["model"] = claude::model_to_string(grader.model);
         j["grader"]["max_tokens"] = grader.max_tokens;
         j["grader"]["max_thinking_tokens"] = grader.max_thinking_tokens;
 
-        // UI settings
-        j["ui"]["log_buffer_size"] = ui.log_buffer_size;
-        j["ui"]["auto_scroll"] = ui.auto_scroll;
-        j["ui"]["theme_name"] = ui.theme_name;
-        j["ui"]["font_size"] = ui.font_size;
-        j["ui"]["show_timestamps"] = ui.show_timestamps;
-        j["ui"]["show_tool_details"] = ui.show_tool_details;
-        
-        // Window management
-        j["ui"]["start_minimized"] = ui.start_minimized;
-        j["ui"]["remember_window_state"] = ui.remember_window_state;
-        
-        // Conversation view
-        j["ui"]["auto_save_conversations"] = ui.auto_save_conversations;
-        j["ui"]["auto_save_interval"] = ui.auto_save_interval;
-        j["ui"]["density_mode"] = ui.density_mode;
+        // IRC settings (now at top level)
+        j["irc"]["server"] = irc.server;
+        j["irc"]["port"] = irc.port;
+        j["irc"]["conflict_channel_format"] = irc.conflict_channel_format;
+
+        // Orchestrator settings
+        j["orchestrator"]["model"]["model"] = claude::model_to_string(orchestrator.model.model);
+        j["orchestrator"]["model"]["max_tokens"] = orchestrator.model.max_tokens;
+        j["orchestrator"]["model"]["max_thinking_tokens"] = orchestrator.model.max_thinking_tokens;
+        j["orchestrator"]["model"]["temperature"] = orchestrator.model.temperature;
+        j["orchestrator"]["model"]["enable_thinking"] = orchestrator.model.enable_thinking;
 
         // Write to file
         std::ofstream file(path);
@@ -94,10 +92,13 @@ bool Config::load_from_file(const std::string& path) {
             agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
             agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);
+            agent.enable_python_tool = j["agent"].value("enable_python_tool", agent.enable_python_tool);
+            agent.context_limit = j["agent"].value("context_limit", agent.context_limit);
         }
 
         // Grader settings
         if (j.contains("grader")) {
+            grader.enabled = j["grader"].value("enabled", grader.enabled);
             if (j["grader"].contains("model")) {
                 grader.model = claude::model_from_string(j["grader"]["model"]);
             }
@@ -105,30 +106,45 @@ bool Config::load_from_file(const std::string& path) {
             grader.max_thinking_tokens = j["grader"].value("max_thinking_tokens", grader.max_thinking_tokens);
         }
 
-        // UI settings
-        if (j.contains("ui")) {
-            ui.log_buffer_size = j["ui"].value("log_buffer_size", ui.log_buffer_size);
-            ui.auto_scroll = j["ui"].value("auto_scroll", ui.auto_scroll);
-            ui.theme_name = j["ui"].value("theme_name", ui.theme_name);
-            ui.font_size = j["ui"].value("font_size", ui.font_size);
-            ui.show_timestamps = j["ui"].value("show_timestamps", ui.show_timestamps);
-            ui.show_tool_details = j["ui"].value("show_tool_details", ui.show_tool_details);
-            
-            // Window management
-            ui.start_minimized = j["ui"].value("start_minimized", ui.start_minimized);
-            ui.remember_window_state = j["ui"].value("remember_window_state", ui.remember_window_state);
-            
-            // Conversation view
-            ui.auto_save_conversations = j["ui"].value("auto_save_conversations", ui.auto_save_conversations);
-            ui.auto_save_interval = j["ui"].value("auto_save_interval", ui.auto_save_interval);
-            ui.density_mode = j["ui"].value("density_mode", ui.density_mode);
+        // IRC settings
+        if (j.contains("irc")) {
+            irc.server = j["irc"].value("server", irc.server);
+            irc.port = j["irc"].value("port", irc.port);
+            irc.conflict_channel_format = j["irc"].value("conflict_channel_format", irc.conflict_channel_format);
         }
 
+        // Orchestrator settings
+        if (j.contains("orchestrator")) {
+            
+            if (j["orchestrator"].contains("model")) {
+                if (j["orchestrator"]["model"].contains("model")) {
+                    orchestrator.model.model = claude::model_from_string(j["orchestrator"]["model"]["model"]);
+                }
+                orchestrator.model.max_tokens = j["orchestrator"]["model"].value("max_tokens", orchestrator.model.max_tokens);
+                orchestrator.model.max_thinking_tokens = j["orchestrator"]["model"].value("max_thinking_tokens", orchestrator.model.max_thinking_tokens);
+                orchestrator.model.temperature = j["orchestrator"]["model"].value("temperature", orchestrator.model.temperature);
+                orchestrator.model.enable_thinking = j["orchestrator"]["model"].value("enable_thinking", orchestrator.model.enable_thinking);
+            }
+        }
 
         return true;
     } catch (const std::exception& e) {
         msg("LLM RE: Error loading config: %s\n", e.what());
         return false;
+    }
+}
+
+void Config::load() {
+    // Get default config path
+    char config_path[QMAXPATH];
+    qstrncpy(config_path, get_user_idadir(), sizeof(config_path));
+    qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
+    
+    // Try to load from file, ignore if it doesn't exist (will use defaults)
+    if (load_from_file(config_path)) {
+        msg("LLM RE: Configuration loaded from: %s\n", config_path);
+    } else {
+        msg("LLM RE: Using default configuration (no config file found or load failed)\n");
     }
 }
 

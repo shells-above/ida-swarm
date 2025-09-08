@@ -5,20 +5,48 @@ project(ida_llm_agent)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# IDA SDK path
-set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
+# IDA SDK path - platform specific
+if(APPLE)
+    set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
+elseif(UNIX AND NOT APPLE)
+    set(IDASDK_PATH "/home/one/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
+else()
+    set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
+endif()
 
-# IDA Pro plugins directory path
-set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
+# IDA Pro plugins directory path - platform specific
+if(APPLE)
+    set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
+elseif(UNIX AND NOT APPLE)
+    set(IDA_PLUGINS_PATH "/home/one/idapro-9.0/plugins" CACHE PATH "Path to IDA Pro plugins directory")
+else()
+    set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
+endif()
 
-# IDA Qt build setup
-set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
+# IDA Qt build setup - platform specific
+if(APPLE)
+    set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
+elseif(UNIX AND NOT APPLE)
+    set(QTDIR "/home/one/Documents/qt-5.15.2-full-IDA84/5.15.2-amd64" CACHE PATH "Path to IDA's custom Qt installation")
+else()
+    set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
+endif()
 add_definitions(-DQT_NAMESPACE=QT)  # SUPER important
 
-# Set Qt tool paths explicitly
-set(QT_MOC_EXECUTABLE "${QTDIR}/bin/moc")
-set(QT_UIC_EXECUTABLE "${QTDIR}/bin/uic")
-set(QT_RCC_EXECUTABLE "${QTDIR}/bin/rcc")
+# Set Qt tool paths explicitly - adjust for Linux build directory structure
+if(APPLE)
+    set(QT_MOC_EXECUTABLE "${QTDIR}/bin/moc")
+    set(QT_UIC_EXECUTABLE "${QTDIR}/bin/uic")
+    set(QT_RCC_EXECUTABLE "${QTDIR}/bin/rcc")
+elseif(UNIX AND NOT APPLE)
+    set(QT_MOC_EXECUTABLE "${QTDIR}/build/qtbase/bin/moc")
+    set(QT_UIC_EXECUTABLE "${QTDIR}/build/qtbase/bin/uic")
+    set(QT_RCC_EXECUTABLE "${QTDIR}/build/qtbase/bin/rcc")
+else()
+    set(QT_MOC_EXECUTABLE "${QTDIR}/bin/moc")
+    set(QT_UIC_EXECUTABLE "${QTDIR}/bin/uic")
+    set(QT_RCC_EXECUTABLE "${QTDIR}/bin/rcc")
+endif()
 
 # Verify Qt tools exist
 if(NOT EXISTS ${QT_MOC_EXECUTABLE})
@@ -41,17 +69,42 @@ set(Qt5Core_VERSION "${Qt5Core_VERSION_MAJOR}.${Qt5Core_VERSION_MINOR}.${Qt5Core
 set_property(DIRECTORY PROPERTY Qt5Core_VERSION_MAJOR ${Qt5Core_VERSION_MAJOR})
 set_property(DIRECTORY PROPERTY Qt5Core_VERSION_MINOR ${Qt5Core_VERSION_MINOR})
 
-# Find Qt frameworks manually
-find_library(QT_CORE_FRAMEWORK QtCore PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+# Find Qt frameworks/libraries manually - adjust for platform
+if(APPLE)
+    find_library(QT_CORE_FRAMEWORK QtCore PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+elseif(UNIX AND NOT APPLE)
+    # On Linux, find the .so files
+    find_library(QT_CORE_FRAMEWORK Qt5Core PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_GUI_FRAMEWORK Qt5Gui PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_WIDGETS_FRAMEWORK Qt5Widgets PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_PRINTSUPPORT_FRAMEWORK Qt5PrintSupport PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_NETWORK_FRAMEWORK Qt5Network PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_CONCURRENT_FRAMEWORK Qt5Concurrent PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_SQL_FRAMEWORK Qt5Sql PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_XML_FRAMEWORK Qt5Xml PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_OPENGL_FRAMEWORK Qt5OpenGL PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+    find_library(QT_TEST_FRAMEWORK Qt5Test PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
+else()
+    find_library(QT_CORE_FRAMEWORK QtCore PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+    find_library(QT_TEST_FRAMEWORK QtTest PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
+endif()
 
 # Create IMPORTED targets for Qt tools so AUTOMOC/AUTOUIC/AUTORCC can find them
 add_executable(Qt5::moc IMPORTED)
@@ -91,7 +144,7 @@ if(APPLE)
 
 elseif(UNIX AND NOT APPLE)
     set(IDA_LIBDIR "${IDASDK_PATH}/lib/x64_linux_gcc_64")
-    add_definitions(-D__LINUX__ -D__EA64__)
+    add_definitions(-D__LINUX__ -D__EA64__ -D__QT__)
     set(PLUGIN_EXT ".so")
 
 elseif(WIN32)
@@ -116,25 +169,66 @@ include_directories(SYSTEM
         ${IDA_PLUGINS_PATH}/hexrays_sdk/include
 )
 
-# Qt include directories (as SYSTEM to suppress warnings)
-include_directories(SYSTEM
-        "${QTDIR}/lib/QtCore.framework/Headers"
-        "${QTDIR}/lib/QtGui.framework/Headers"
-        "${QTDIR}/lib/QtWidgets.framework/Headers"
-        "${QTDIR}/lib/QtPrintSupport.framework/Headers"
-        "${QTDIR}/lib/QtNetwork.framework/Headers"
-        "${QTDIR}/lib/QtConcurrent.framework/Headers"
-        "${QTDIR}/lib/QtSql.framework/Headers"
-        "${QTDIR}/lib/QtXml.framework/Headers"
-        "${QTDIR}/lib/QtOpenGL.framework/Headers"
-)
+# Qt include directories (as SYSTEM to suppress warnings) - platform specific
+if(APPLE)
+    include_directories(SYSTEM
+            "${QTDIR}/lib/QtCore.framework/Headers"
+            "${QTDIR}/lib/QtGui.framework/Headers"
+            "${QTDIR}/lib/QtWidgets.framework/Headers"
+            "${QTDIR}/lib/QtPrintSupport.framework/Headers"
+            "${QTDIR}/lib/QtNetwork.framework/Headers"
+            "${QTDIR}/lib/QtConcurrent.framework/Headers"
+            "${QTDIR}/lib/QtSql.framework/Headers"
+            "${QTDIR}/lib/QtXml.framework/Headers"
+            "${QTDIR}/lib/QtOpenGL.framework/Headers"
+    )
+elseif(UNIX AND NOT APPLE)
+    include_directories(SYSTEM
+            "${QTDIR}/build/qtbase/include"
+            "${QTDIR}/build/qtbase/include/QtCore"
+            "${QTDIR}/build/qtbase/include/QtGui"
+            "${QTDIR}/build/qtbase/include/QtWidgets"
+            "${QTDIR}/build/qtbase/include/QtPrintSupport"
+            "${QTDIR}/build/qtbase/include/QtNetwork"
+            "${QTDIR}/build/qtbase/include/QtConcurrent"
+            "${QTDIR}/build/qtbase/include/QtSql"
+            "${QTDIR}/build/qtbase/include/QtXml"
+            "${QTDIR}/build/qtbase/include/QtOpenGL"
+    )
+else()
+    include_directories(SYSTEM
+            "${QTDIR}/lib/QtCore.framework/Headers"
+            "${QTDIR}/lib/QtGui.framework/Headers"
+            "${QTDIR}/lib/QtWidgets.framework/Headers"
+            "${QTDIR}/lib/QtPrintSupport.framework/Headers"
+            "${QTDIR}/lib/QtNetwork.framework/Headers"
+            "${QTDIR}/lib/QtConcurrent.framework/Headers"
+            "${QTDIR}/lib/QtSql.framework/Headers"
+            "${QTDIR}/lib/QtXml.framework/Headers"
+            "${QTDIR}/lib/QtOpenGL.framework/Headers"
+    )
+endif()
 
-# Find IDA libraries
-find_library(IDA64
-        NAMES ida64
-        PATHS ${IDA_LIBDIR}
-        NO_DEFAULT_PATH
-)
+# Find IDA libraries - platform specific names
+if(APPLE)
+    find_library(IDA64
+            NAMES ida64
+            PATHS ${IDA_LIBDIR}
+            NO_DEFAULT_PATH
+    )
+elseif(UNIX AND NOT APPLE)
+    find_library(IDA64
+            NAMES ida64 libida64
+            PATHS ${IDA_LIBDIR}
+            NO_DEFAULT_PATH
+    )
+else()
+    find_library(IDA64
+            NAMES ida64
+            PATHS ${IDA_LIBDIR}
+            NO_DEFAULT_PATH
+    )
+endif()
 
 if(NOT IDA64)
     message(FATAL_ERROR "Could not find IDA libraries in ${IDA_LIBDIR}")
@@ -145,12 +239,14 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# Find SQLite3 for IRC server
+find_package(SQLite3 REQUIRED)
+
 # Include Keystone build configuration
 include(cmake/BuildKeystone.cmake)
 
-# Source files
-set(SOURCES
-        core/plugin.cpp
+# Common source files (shared between plugins)
+set(COMMON_SOURCES
         core/ida_utils.cpp
         core/config.cpp
         sdk/client/client.cpp
@@ -162,51 +258,32 @@ set(SOURCES
         analysis/memory.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
-        # ui_v2 core
-        ui_v2/core/base_styled_widget.cpp
-        ui_v2/core/theme_manager.cpp
-        ui_v2/core/theme_templates.cpp
-        ui_v2/core/theme_transition_manager.cpp
-        ui_v2/core/theme_undo_manager.cpp
-        ui_v2/core/effects_manager.cpp
-        ui_v2/core/animation_manager.cpp
-        ui_v2/core/focus_manager.cpp
-        ui_v2/core/ui_utils.cpp
-        ui_v2/core/agent_controller.cpp
-        ui_v2/core/settings_manager.cpp
-        ui_v2/core/color_constants.cpp
-        # ui_v2 models
-        ui_v2/models/conversation_model.cpp
-        # ui_v2 views
-        ui_v2/views/main_window.cpp
-        ui_v2/views/conversation_view.cpp
-        ui_v2/views/memory_dock.cpp
-        ui_v2/views/tool_execution_dock.cpp
-        ui_v2/views/console_dock.cpp
-        ui_v2/views/settings_dialog.cpp
-        # ui_v2 theme editor
-        ui_v2/views/theme_editor/theme_editor_dialog.cpp
-        ui_v2/views/theme_editor/widgets/accessibility_tools.cpp
-        ui_v2/views/theme_editor/widgets/animation_config_widget.cpp
-        ui_v2/views/theme_editor/widgets/chart_theme_widget.cpp
-        ui_v2/views/theme_editor/widgets/color_picker_widget.cpp
-        ui_v2/views/theme_editor/widgets/effects_config_widget.cpp
-        ui_v2/views/theme_editor/widgets/theme_preview_widget.cpp
-        ui_v2/views/theme_editor/widgets/theme_template_selector.cpp
-        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.cpp
-        # ui_v2 widgets
-        ui_v2/widgets/message_bubble.cpp
-        ui_v2/widgets/message_group.cpp
-        ui_v2/widgets/markdown_viewer.cpp
-        # ui_v2 custom charts
-        ui_v2/widgets/charts/chart_types.cpp
-        ui_v2/widgets/charts/custom_chart_base.cpp
-        ui_v2/widgets/charts/chart_theme.cpp
-        ui_v2/widgets/charts/line_chart.cpp
-        ui_v2/widgets/charts/circular_chart.cpp
-        ui_v2/widgets/charts/bar_chart.cpp
-        ui_v2/widgets/charts/heatmap_widget.cpp
-        ui_v2/widgets/charts/sparkline_widget.cpp
+        irc/irc_server.cpp
+        irc/irc_client.cpp
+        orchestrator/orchestrator_logger.cpp
+)
+
+# Unified plugin sources - combines all functionality
+set(PLUGIN_SOURCES
+        plugin.cpp  # New unified plugin entry point
+        # Orchestrator components
+        orchestrator/orchestrator.cpp
+        orchestrator/database_manager.cpp
+        orchestrator/agent_spawner.cpp
+        orchestrator/tool_call_tracker.cpp
+        orchestrator/merge_manager.cpp
+        # Agent components
+        agent/swarm_agent.cpp
+        agent/swarm_logger.cpp
+        agent/conflict_detector.cpp
+        # UI components
+        ui/orchestrator_ui.cpp
+        ui/preferences_dialog.cpp
+        ui/orchestrator_worker.cpp
+        ui/ui_orchestrator_bridge.cpp
+        ui/log_window.cpp
+        # Common sources
+        ${COMMON_SOURCES}
 )
 
 # Header files
@@ -234,100 +311,73 @@ set(HEADERS
         agent/agent.h
         agent/tool_system.h
         agent/grader.h
-        # ui_v2 core
-        ui_v2/core/base_styled_widget.h
-        ui_v2/core/theme_manager.h
-        ui_v2/core/theme_constants.h
-        ui_v2/core/theme_transition_manager.h
-        ui_v2/core/theme_undo_manager.h
-        ui_v2/core/effects_manager.h
-        ui_v2/core/animation_manager.h
-        ui_v2/core/focus_manager.h
-        ui_v2/core/ui_constants.h
-        ui_v2/core/ui_utils.h
-        ui_v2/core/agent_controller.h
-        ui_v2/core/settings_manager.h
-        ui_v2/core/ui_v2_common.h
-        ui_v2/core/color_constants.h
-        # ui_v2 models
-        ui_v2/models/conversation_model.h
-        ui_v2/models/tool_execution.h
-        # ui_v2 views
-        ui_v2/views/main_window.h
-        ui_v2/views/conversation_view.h
-        ui_v2/views/memory_dock.h
-        ui_v2/views/tool_execution_dock.h
-        ui_v2/views/settings_dialog.h
-        # ui_v2 theme editor
-        ui_v2/views/theme_editor/theme_editor_dialog.h
-        ui_v2/views/theme_editor/widgets/accessibility_tools.h
-        ui_v2/views/theme_editor/widgets/animation_config_widget.h
-        ui_v2/views/theme_editor/widgets/chart_theme_widget.h
-        ui_v2/views/theme_editor/widgets/color_picker_widget.h
-        ui_v2/views/theme_editor/widgets/effects_config_widget.h
-        ui_v2/views/theme_editor/widgets/theme_preview_widget.h
-        ui_v2/views/theme_editor/widgets/theme_template_selector.h
-        ui_v2/views/theme_editor/widgets/theme_save_as_dialog.h
-        # ui_v2 widgets
-        ui_v2/widgets/message_bubble.h
-        ui_v2/widgets/message_group.h
-        ui_v2/widgets/markdown_viewer.h
-        # ui_v2 custom charts
-        ui_v2/widgets/charts/chart_types.h
-        ui_v2/widgets/charts/custom_chart_base.h
-        ui_v2/widgets/charts/chart_theme.h
-        ui_v2/widgets/charts/line_chart.h
-        ui_v2/widgets/charts/circular_chart.h
-        ui_v2/widgets/charts/bar_chart.h
-        ui_v2/widgets/charts/heatmap_widget.h
-        ui_v2/widgets/charts/sparkline_widget.h
+        agent/event_bus.h
+        # IRC headers
+        irc/irc_server.h
+        irc/irc_client.h
+        # UI headers
+        ui/orchestrator_ui.h
+        ui/preferences_dialog.h
+        ui/orchestrator_worker.h
+        ui/ui_orchestrator_bridge.h
+        ui/ui_integration.h
+        ui/log_window.h
+        # Orchestrator headers
+        orchestrator/orchestrator.h
 )
 
-# Create shared library (end in "64", won't be loaded if it doesn't)
-add_library(ida_llm_agent64 SHARED
-        ${SOURCES}
+# Create unified plugin
+add_library(ida_llm_re64 SHARED
+        ${PLUGIN_SOURCES}
         ${HEADERS}
 )
 
-# Set library properties
-set_target_properties(ida_llm_agent64 PROPERTIES
-        OUTPUT_NAME "ida_llm_agent64"
+# Set unified plugin properties
+set_target_properties(ida_llm_re64 PROPERTIES
+        OUTPUT_NAME "ida_llm_re64"
         PREFIX ""
         SUFFIX ${PLUGIN_EXT}
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# Link libraries including custom Qt frameworks
-target_link_libraries(ida_llm_agent64
+# Common libraries
+set(COMMON_LIBS
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
         OpenSSL::Crypto
         keystone
+        SQLite::SQLite3
+)
+
+# Link libraries for unified plugin
+target_link_libraries(ida_llm_re64
+        ${COMMON_LIBS}
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
-        ${QT_PRINTSUPPORT_FRAMEWORK}
         ${QT_NETWORK_FRAMEWORK}
-        ${QT_CONCURRENT_FRAMEWORK}
-        ${QT_SQL_FRAMEWORK}
-        ${QT_XML_FRAMEWORK}
-        ${QT_OPENGL_FRAMEWORK}
 )
 
-# Post-build: Copy plugin to IDA plugins directory
-add_custom_command(TARGET ida_llm_agent64 POST_BUILD
+# Post-build: Copy unified plugin to IDA plugins directory
+add_custom_command(TARGET ida_llm_re64 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:ida_llm_agent64>
+        $<TARGET_FILE:ida_llm_re64>
         "${IDA_PLUGINS_PATH}/"
-        COMMENT "Copying plugin to IDA plugins directory"
+        COMMENT "Copying unified plugin to IDA plugins directory"
 )
 # put llm_re_config.json into IDA_PLUGINS_PATH dir
 
+# Custom target to build all plugins at once
+add_custom_target(all_plugins
+    DEPENDS ida_llm_re64
+    COMMENT "Building unified IDA plugin"
+)
+
 # Installation
-install(TARGETS ida_llm_agent64
+install(TARGETS ida_llm_re64
         RUNTIME DESTINATION ${IDA_PLUGINS_PATH}
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )

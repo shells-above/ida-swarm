@@ -11,7 +11,7 @@
 #include <ida.hpp>
 #include <idp.hpp>
 #include <loader.hpp>
-// kernwin.hpp is NOT included here - see common.h or ui_v2_common.h
+// kernwin.hpp is NOT included here
 #include <bytes.hpp>
 #include <name.hpp>
 #include <funcs.hpp>

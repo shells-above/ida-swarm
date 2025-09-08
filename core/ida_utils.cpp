@@ -356,7 +356,8 @@ DataInfo IDAUtils::get_data_info(ea_t address, int max_xrefs) {
 std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
     return execute_sync_wrapper([address, size, bytes_per_line]() {
         // Validate input
-        if (!IDAValidators::is_valid_address(address)) {
+        // if (!IDAValidators::is_valid_address(address)) {
+        if (!IDAValidators::is_valid_xref_address(address)) {
             throw std::invalid_argument("Invalid address: " + format_address_hex(address));
         }
 
@@ -364,10 +365,10 @@ std::string IDAUtils::dump_data(ea_t address, size_t size, int bytes_per_line) {
             throw std::invalid_argument("Invalid size: must be between 1 and 65536 bytes");
         }
 
-        // Check if we can read the full range
-        if (!is_mapped(address) || !is_mapped(address + size - 1)) {
-            throw std::invalid_argument("Data range is not fully mapped");
-        }
+        // // Check if we can read the full range
+        // if (!is_mapped(address) || !is_mapped(address + size - 1)) {
+        //     throw std::invalid_argument("Data range is not fully mapped");
+        // }
 
         // Read the bytes
         bytevec_t bytes;
@@ -524,6 +525,8 @@ std::string IDAUtils::get_function_disassembly(ea_t address) {
             // Get the disassembly line
             qstring line;
             if (generate_disasm_line(&line, ea, GENDSM_REMOVE_TAGS | GENDSM_MULTI_LINE)) {
+                // Add address prefix to make it clear what address each instruction is at
+                result += format_address_hex(ea) + ": ";
                 result += line.c_str();
 
                 // Get repeatable comment
@@ -826,7 +829,7 @@ std::map<std::string, std::vector<std::string>> IDAUtils::get_imports() {
     });
 }
 
-std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_entry_points() {
+std::vector<std::tuple<ea_t, std::string, std::string>> IDAUtils::get_exports() {
     return execute_sync_wrapper([]() {
         std::vector<std::tuple<ea_t, std::string, std::string>> result;
 
