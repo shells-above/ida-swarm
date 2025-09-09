@@ -172,15 +172,15 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
     
     prompt << "AGENT'S INVESTIGATION:\n\n";
     
-    // Always include stored analyses (these are consolidated findings)
-    if (!context.stored_analyses.empty()) {
-        prompt << "STORED ANALYSES:\n\n";
-        for (const AnalysisEntry& entry : context.stored_analyses) {
-            std::string analysis_text = "[" + entry.type + ": " + entry.key + "]\n" + entry.content + "\n\n";
-            prompt << analysis_text;
-            total_tokens += analysis_text.length() / 4;
-        }
-    }
+    // // Always include stored analyses (these are consolidated findings)
+    // if (!context.stored_analyses.empty()) {
+    //     prompt << "STORED ANALYSES:\n\n";
+    //     for (const AnalysisEntry& entry : context.stored_analyses) {
+    //         std::string analysis_text = "[" + entry.type + ": " + entry.key + "]\n" + entry.content + "\n\n";
+    //         prompt << analysis_text;
+    //         total_tokens += analysis_text.length() / 4;
+    //     }
+    // }
     
     // Prioritize and potentially prune agent work messages
     auto prioritized = prioritize_messages(context.agent_work);
@@ -244,7 +244,8 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
     
     prompt << "---\n\n";
     prompt << "Evaluate whether this investigation provides what the user asked for.\n";
-    prompt << "If complete, synthesize the findings into a final report for the user.\n";
+    prompt << "Remember that the user will only see the last agent message.\n";
+    // prompt << "If complete, synthesize the findings into a final report for the user.\n";
     prompt << "If incomplete, identify what specific investigation is still needed.\n";
     
     return claude::messages::Message::user_text(prompt.str());

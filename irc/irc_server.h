@@ -65,6 +65,9 @@ public:
     IRCServer(int port, const std::string& binary_name);
     ~IRCServer();
     
+    // Test if a port is available for binding
+    static bool is_port_available(int port);
+    
     bool start();
     void stop();
     bool is_running() const { return running_; }

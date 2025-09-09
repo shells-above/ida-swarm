@@ -404,10 +404,6 @@ void PreferencesDialog::createIrcTab() {
     ircServerEdit_->setPlaceholderText("127.0.0.1");
     serverLayout->addRow("Server Address:", ircServerEdit_);
     
-    ircPortSpin_ = new QSpinBox(serverGroup);
-    ircPortSpin_->setRange(1, 65535);
-    ircPortSpin_->setValue(6667);
-    serverLayout->addRow("Port:", ircPortSpin_);
     
     // Channel formats
     auto* formatGroup = new QGroupBox("Channel Formats", widget);
@@ -429,18 +425,10 @@ void PreferencesDialog::createIrcTab() {
         "• {timestamp} - Unix timestamp"
     );
     
-    // Test connection
-    auto* testLayout = new QHBoxLayout();
-    testIrcButton_ = new QPushButton("Test IRC Connection", widget);
-    ircStatusLabel_ = new QLabel("", widget);
-    testLayout->addWidget(testIrcButton_);
-    testLayout->addWidget(ircStatusLabel_);
-    testLayout->addStretch();
     
     layout->addWidget(serverGroup);
     layout->addWidget(formatGroup);
     layout->addWidget(ircFormatHelp_);
-    layout->addLayout(testLayout);
     layout->addStretch();
     
     tabWidget_->addTab(widget, "IRC");
@@ -463,7 +451,6 @@ void PreferencesDialog::connectSignals() {
     
     // Test buttons
     connect(testApiButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestAPIConnection);
-    connect(testIrcButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestIRCConnection);
     
     // OAuth token refresh button
     connect(refreshTokenButton_, &QPushButton::clicked, this, &PreferencesDialog::onRefreshOAuthToken);
@@ -607,7 +594,6 @@ void PreferencesDialog::loadConfiguration() {
     
     // IRC settings
     ircServerEdit_->setText(QString::fromStdString(config.irc.server));
-    ircPortSpin_->setValue(config.irc.port);
     conflictChannelFormatEdit_->setText(QString::fromStdString(config.irc.conflict_channel_format));
     
     configModified_ = false;
@@ -656,7 +642,6 @@ void PreferencesDialog::saveConfiguration() {
     
     // IRC settings
     config.irc.server = ircServerEdit_->text().toStdString();
-    config.irc.port = ircPortSpin_->value();
     config.irc.conflict_channel_format = conflictChannelFormatEdit_->text().toStdString();
     
     // Save to file
@@ -956,56 +941,6 @@ void PreferencesDialog::onTestAPIConnection() {
     testApiButton_->setEnabled(true);
 }
 
-void PreferencesDialog::onTestIRCConnection() {
-    testIrcButton_->setEnabled(false);
-    ircStatusLabel_->setText("Testing...");
-    ircStatusLabel_->setStyleSheet("QLabel { color: blue; }");
-    
-    // Simple TCP connection test - use QPointer for safe memory management
-    QTcpSocket* rawSocket = new QTcpSocket(this);
-    QPointer<QTcpSocket> socket(rawSocket);
-    
-    // Flag to track if we've already handled the result
-    auto resultHandled = std::make_shared<bool>(false);
-    
-    connect(rawSocket, &QTcpSocket::connected, [this, socket, resultHandled]() {
-        if (*resultHandled || !socket) return;
-        *resultHandled = true;
-        
-        ircStatusLabel_->setText("✓ Connection successful");
-        ircStatusLabel_->setStyleSheet("QLabel { color: green; }");
-        testIrcButton_->setEnabled(true);
-        socket->disconnectFromHost();
-        socket->deleteLater();
-    });
-    
-    connect(rawSocket, &QTcpSocket::errorOccurred, [this, socket, resultHandled](QAbstractSocket::SocketError error) {
-        Q_UNUSED(error);
-        if (*resultHandled || !socket) return;
-        *resultHandled = true;
-        
-        ircStatusLabel_->setText(QString("✗ %1").arg(socket->errorString()));
-        ircStatusLabel_->setStyleSheet("QLabel { color: red; }");
-        testIrcButton_->setEnabled(true);
-        socket->deleteLater();
-    });
-    
-    rawSocket->connectToHost(ircServerEdit_->text(), ircPortSpin_->value());
-    
-    // Timeout after 5 seconds - use QPointer to safely check if socket still exists
-    QTimer::singleShot(5000, [this, socket, resultHandled]() {
-        if (*resultHandled || !socket) return;  // Socket was already deleted or result handled
-        *resultHandled = true;
-        
-        if (socket->state() != QTcpSocket::ConnectedState) {
-            ircStatusLabel_->setText("✗ Connection timeout");
-            ircStatusLabel_->setStyleSheet("QLabel { color: red; }");
-            testIrcButton_->setEnabled(true);
-            socket->abort();
-            socket->deleteLater();
-        }
-    });
-}
 
 void PreferencesDialog::onAuthMethodChanged() {
     bool useApiKey = apiKeyRadio_->isChecked();

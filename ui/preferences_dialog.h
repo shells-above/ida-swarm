@@ -45,7 +45,6 @@ private slots:
     
     // Test buttons
     void onTestAPIConnection();
-    void onTestIRCConnection();
     
     // OAuth management
     void onRefreshOAuthToken();
@@ -141,10 +140,7 @@ private:
     
     // IRC Tab widgets
     QLineEdit* ircServerEdit_;
-    QSpinBox* ircPortSpin_;
     QLineEdit* conflictChannelFormatEdit_;
-    QPushButton* testIrcButton_;
-    QLabel* ircStatusLabel_;
     QTextEdit* ircFormatHelp_;
     
     // Additional buttons

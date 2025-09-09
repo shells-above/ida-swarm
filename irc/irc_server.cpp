@@ -129,6 +129,24 @@ void IRCServer::init_database() {
     }
 }
 
+bool IRCServer::is_port_available(int port) {
+    int test_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (test_fd < 0) return false;
+    
+    // Allow socket reuse
+    int opt = 1;
+    setsockopt(test_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    
+    bool available = bind(test_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
+    close(test_fd);
+    return available;
+}
+
 bool IRCServer::start() {
     if (running_) return false;
     

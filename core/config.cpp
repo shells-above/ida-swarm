@@ -35,7 +35,6 @@ bool Config::save_to_file(const std::string& path) const {
 
         // IRC settings (now at top level)
         j["irc"]["server"] = irc.server;
-        j["irc"]["port"] = irc.port;
         j["irc"]["conflict_channel_format"] = irc.conflict_channel_format;
 
         // Orchestrator settings
@@ -109,7 +108,6 @@ bool Config::load_from_file(const std::string& path) {
         // IRC settings
         if (j.contains("irc")) {
             irc.server = j["irc"].value("server", irc.server);
-            irc.port = j["irc"].value("port", irc.port);
             irc.conflict_channel_format = j["irc"].value("conflict_channel_format", irc.conflict_channel_format);
         }
 

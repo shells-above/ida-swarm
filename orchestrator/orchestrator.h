@@ -79,6 +79,7 @@ private:
     bool initialized_ = false;
     bool shutting_down_ = false;
     std::string current_user_task_;
+    int allocated_irc_port_ = 0;  // Dynamically allocated port for this orchestrator
     
     // Token tracking
     claude::usage::TokenStats token_stats_;
@@ -109,11 +110,14 @@ private:
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
     
+    // Port allocation for IRC server
+    int allocate_unique_port();
+    
     // OAuth token management
     bool refresh_oauth_if_needed();
     
-    // Token usage tracking
-    void log_token_usage(const claude::TokenUsage& usage);
+    // Token usage tracking (per-iteration for context, cumulative for totals)
+    void log_token_usage(const claude::TokenUsage& per_iteration_usage, const claude::TokenUsage& cumulative_usage);
     
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);
@@ -180,6 +184,8 @@ TOOLS AVAILABLE:
 
 Before finishing your spawn_agent call, make sure you provided enough information to the agent.
 The agent **only** knows what ever you tell them, this program *does not do* any additional handling.
+
+If you want to spawn multiple agents in parallel, you have to respond with all your spawn_agent tool calls in one response.
 
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 

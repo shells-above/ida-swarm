@@ -47,9 +47,9 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     console_adapter_ = std::make_unique<ConsoleAdapter>();
     console_adapter_->start();
     
-    // Extract IRC configuration - use provided values or fall back to config defaults
+    // Extract IRC configuration - use provided values or fall back to defaults
     irc_server_ = swarm_config.value("irc_server", config_.irc.server);
-    irc_port_ = swarm_config.value("irc_port", config_.irc.port);
+    irc_port_ = swarm_config.value("irc_port", 0);  // Default to 0 - orchestrator must provide port
     SWARM_LOG("SwarmAgent: IRC config - server: %s, port: %d\n", irc_server_.c_str(), irc_port_);
     
     // Log task if present

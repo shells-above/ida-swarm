@@ -309,13 +309,20 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                 
                 // Update context bars
                 if (agent_id == "orchestrator") {
-                    // Calculate and update orchestrator context usage
-                    size_t input_tokens = token_data.value("input_tokens", 0);
-                    size_t cache_read_tokens = token_data.value("cache_read_tokens", 0);
+                    // Get per-iteration tokens for context calculation
+                    json session_tokens = event.payload.value("session_tokens", json());
+                    size_t session_input = session_tokens.value("input_tokens", 0);
+                    size_t session_cache_read = session_tokens.value("cache_read_tokens", 0);
+                    
+                    // Fall back to cumulative if session_tokens not available (old format)
+                    if (session_tokens.empty()) {
+                        session_input = token_data.value("input_tokens", 0);
+                        session_cache_read = token_data.value("cache_read_tokens", 0);
+                    }
                     
                     // Orchestrator uses 200k context (hardcoded in orchestrator.cpp)
                     const size_t orchestrator_context_limit = 200000;
-                    size_t total_context_used = input_tokens + cache_read_tokens;
+                    size_t total_context_used = session_input + session_cache_read;
                     double context_percent = (total_context_used * 100.0) / orchestrator_context_limit;
                     metrics_panel_->update_context_usage(context_percent);
                     

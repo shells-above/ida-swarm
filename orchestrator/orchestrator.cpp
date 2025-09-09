@@ -86,22 +86,25 @@ bool Orchestrator::initialize() {
     // Start monitoring for new tool calls
     tool_tracker_->start_monitoring();
     
+    // Allocate unique port for IRC server based on binary name
+    allocated_irc_port_ = allocate_unique_port();
+    
     // Start IRC server for agent communication with binary name
     fs::path idb_path(main_database_path_);
     std::string binary_name = idb_path.stem().string();
-    irc_server_ = std::make_unique<irc::IRCServer>(config_.irc.port, binary_name);
+    irc_server_ = std::make_unique<irc::IRCServer>(allocated_irc_port_, binary_name);
     if (!irc_server_->start()) {
-        ORCH_LOG("Orchestrator: Failed to start IRC server\n");
+        ORCH_LOG("Orchestrator: Failed to start IRC server on port %d\n", allocated_irc_port_);
         return false;
     }
     
-    ORCH_LOG("Orchestrator: IRC server started on port %d\n", config_.irc.port);
+    ORCH_LOG("Orchestrator: IRC server started on port %d (unique for %s)\n", allocated_irc_port_, binary_name_.c_str());
     
     // Connect IRC client for orchestrator communication
-    irc_client_ = std::make_unique<irc::IRCClient>("orchestrator", config_.irc.server, config_.irc.port);
+    irc_client_ = std::make_unique<irc::IRCClient>("orchestrator", config_.irc.server, allocated_irc_port_);
     if (!irc_client_->connect()) {
         ORCH_LOG("Orchestrator: Failed to connect IRC client to %s:%d\n", 
-            config_.irc.server.c_str(), config_.irc.port);
+            config_.irc.server.c_str(), allocated_irc_port_);
         return false;
     }
     
@@ -178,7 +181,7 @@ void Orchestrator::process_user_input(const std::string& input) {
         response.usage.input_tokens, response.usage.output_tokens,
         response.usage.cache_read_tokens, response.usage.cache_creation_tokens);
     token_stats_.add_usage(response.usage);
-    log_token_usage(token_stats_.get_total());
+    log_token_usage(response.usage, token_stats_.get_total());
     
     // Display orchestrator's response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
@@ -268,8 +271,8 @@ void Orchestrator::process_user_input(const std::string& input) {
                         {"response", *cont_text}
                     }));
                 }
-                // Log cumulative token usage after final response
-                log_token_usage(token_stats_.get_total());
+                // Log token usage after final response (pass per-iteration for context calc)
+                log_token_usage(continuation.usage, token_stats_.get_total());
                 break;
             }
             
@@ -279,8 +282,8 @@ void Orchestrator::process_user_input(const std::string& input) {
                 conversation_history_.push_back(result);
             }
             
-            // Log cumulative token usage after each continuation
-            log_token_usage(token_stats_.get_total());
+            // Log token usage after each continuation (pass per-iteration for context calc)
+            log_token_usage(continuation.usage, token_stats_.get_total());
             
             ORCH_LOG("Orchestrator: Processed %zu more tool calls, continuing conversation...\n", 
                 cont_tool_results.size());
@@ -486,7 +489,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
         {"prompt", agent_prompt},       // Full prompt with task and collaboration instructions
         {"database", agent_db_path},
         {"irc_server", config_.irc.server},
-        {"irc_port", config_.irc.port}
+        {"irc_port", allocated_irc_port_}  // Use the dynamically allocated port
     };
     
     // Spawn the agent process
@@ -684,6 +687,36 @@ When ready to finish, simply send your final analysis as a message WITHOUT any t
 Begin your analysis now.)";
     
     return prompt;
+}
+
+int Orchestrator::allocate_unique_port() {
+    // Use standard IRC port range starting at 6667
+    constexpr int BASE_PORT = 6667;
+    constexpr int PORT_RANGE = 2000;  // Search in range 6667-8666
+    
+    // Calculate starting port based on binary name hash for predictability
+    std::hash<std::string> hasher;
+    size_t hash = hasher(binary_name_);
+    int start_port = BASE_PORT + (hash % PORT_RANGE);
+    
+    // Try ports starting from hash-based port
+    for (int port = start_port; port < BASE_PORT + PORT_RANGE; ++port) {
+        if (irc::IRCServer::is_port_available(port)) {
+            return port;
+        }
+    }
+    
+    // If no port in upper range, try from base port to start port
+    for (int port = BASE_PORT; port < start_port; ++port) {
+        if (irc::IRCServer::is_port_available(port)) {
+            return port;
+        }
+    }
+    
+    // Should not happen unless system has major port exhaustion
+    ORCH_LOG("Orchestrator: Warning - Could not find available port in range [%d, %d]\n", 
+        BASE_PORT, BASE_PORT + PORT_RANGE - 1);
+    return BASE_PORT;  // Return base port as fallback
 }
 
 void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& agent_ids) {
@@ -1093,29 +1126,38 @@ void Orchestrator::broadcast_grader_result(const std::string& channel, bool cons
     }
 }
 
-void Orchestrator::log_token_usage(const claude::TokenUsage& usage) {
-    // Standardized format matching agents
+void Orchestrator::log_token_usage(const claude::TokenUsage& per_iteration_usage, const claude::TokenUsage& cumulative_usage) {
+    // Use cumulative for totals display
     json tokens_json = {
-        {"input_tokens", usage.input_tokens},
-        {"output_tokens", usage.output_tokens},
-        {"cache_read_tokens", usage.cache_read_tokens},
-        {"cache_creation_tokens", usage.cache_creation_tokens},
-        {"estimated_cost", usage.estimated_cost()},
-        {"model", model_to_string(usage.model)}
+        {"input_tokens", cumulative_usage.input_tokens},
+        {"output_tokens", cumulative_usage.output_tokens},
+        {"cache_read_tokens", cumulative_usage.cache_read_tokens},
+        {"cache_creation_tokens", cumulative_usage.cache_creation_tokens},
+        {"estimated_cost", cumulative_usage.estimated_cost()},
+        {"model", model_to_string(cumulative_usage.model)}
     };
     
-    ORCH_LOG("DEBUG: Publishing token event - Input: %d, Output: %d, Cache Read: %d, Cache Write: %d, Model: %s\n",
-        usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_creation_tokens,
-        model_to_string(usage.model).c_str());
+    // Use per-iteration for context calculation (like agents do)
+    json session_tokens_json = {
+        {"input_tokens", per_iteration_usage.input_tokens},
+        {"output_tokens", per_iteration_usage.output_tokens},
+        {"cache_read_tokens", per_iteration_usage.cache_read_tokens},
+        {"cache_creation_tokens", per_iteration_usage.cache_creation_tokens}
+    };
+    
+    ORCH_LOG("DEBUG: Publishing token event - Cumulative In: %d, Out: %d | Per-iter In: %d, Out: %d\n",
+        cumulative_usage.input_tokens, cumulative_usage.output_tokens,
+        per_iteration_usage.input_tokens, per_iteration_usage.output_tokens);
     
     // Emit standardized token event for orchestrator (use AGENT_TOKEN_UPDATE for consistency)
     event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, "orchestrator", {
         {"agent_id", "orchestrator"},
-        {"tokens", tokens_json}
+        {"tokens", tokens_json},
+        {"session_tokens", session_tokens_json}  // Per-iteration for context calc
     }));
     
-    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d, Cache Read: %d, Cache Write: %d\n",
-        usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_creation_tokens);
+    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d (cumulative)\n",
+        cumulative_usage.input_tokens, cumulative_usage.output_tokens);
 }
 
 void Orchestrator::shutdown() {

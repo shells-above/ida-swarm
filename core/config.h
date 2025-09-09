@@ -37,7 +37,6 @@ public:
     struct IRCSettings {
         // Server configuration
         std::string server = "127.0.0.1";
-        int port = 6667;
         
         // Channel formats
         std::string conflict_channel_format = "#conflict_{address}_{type}";
