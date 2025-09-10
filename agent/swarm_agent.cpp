@@ -175,6 +175,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
     }
     
     // Ignore AGENT_TOKEN_UPDATE messages in #agents channel - they're only for orchestrator
+    // allow AGENT_ERROR through?
     if (channel == "#agents" && message.find("AGENT_TOKEN_UPDATE | ") == 0) {
         return;
     }
