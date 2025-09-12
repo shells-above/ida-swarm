@@ -1076,7 +1076,29 @@ public:
         if (response.success) return false;
         if (!response.error) return false;
 
-        ApiError api_error = ApiError::from_response(*response.error);
+        // Try to extract HTTP status code from error message
+        int status_code = 0;
+        std::string error_msg = *response.error;
+        
+        // Look for patterns like "HTTP 503" or "(HTTP 503)" in the error message
+        size_t http_pos = error_msg.find("HTTP ");
+        if (http_pos != std::string::npos) {
+            // Try to parse the number after "HTTP "
+            size_t num_start = http_pos + 5;
+            size_t num_end = num_start;
+            while (num_end < error_msg.length() && std::isdigit(error_msg[num_end])) {
+                num_end++;
+            }
+            if (num_end > num_start) {
+                try {
+                    status_code = std::stoi(error_msg.substr(num_start, num_end - num_start));
+                } catch (...) {
+                    // Ignore parse errors, status_code remains 0
+                }
+            }
+        }
+
+        ApiError api_error = ApiError::from_response(error_msg, status_code);
         return api_error.is_recoverable();
     }
 };

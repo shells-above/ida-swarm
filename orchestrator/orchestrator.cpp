@@ -314,6 +314,9 @@ void Orchestrator::process_user_input(const std::string& input) {
             
             // If no more tool calls, we're done
             if (cont_tool_results.empty()) {
+                // Add the final continuation message to conversation history
+                conversation_history_.push_back(continuation.message);
+                
                 // Publish the final response to UI before breaking
                 if (cont_text && !cont_text->empty()) {
                     event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
