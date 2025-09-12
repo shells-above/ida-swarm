@@ -421,15 +421,18 @@ What's your next step to complete the reversal?)";
                     oauth_manager_->get_last_error().c_str());
                 msg("LLM RE: WARNING - Falling back to API key authentication\n");
                 msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
-                return claude::Client(config.api.api_key, config.api.base_url);
+                std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
+                return claude::Client(config.api.api_key, config.api.base_url, log_filename);
             }
             
             // Pass the shared_ptr so all clients share the same credentials
-            return claude::Client(oauth_creds, config.api.base_url);
+            std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
+            return claude::Client(oauth_creds, config.api.base_url, log_filename);
         }
         
-        // Default to API key
-        return claude::Client(config.api.api_key, config.api.base_url);
+        // Default to API key with log filename configured
+        std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
+        return claude::Client(config.api.api_key, config.api.base_url, log_filename);
     }
     
     // Refresh OAuth tokens and update API client
@@ -462,13 +465,6 @@ public:
           deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
           api_client_(create_api_client(config)),
           grader_(config.grader.enabled ? std::make_unique<AnalysisGrader>(config) : nullptr) {
-
-        // Clear the API request log file on startup
-        std::ofstream clear_log("/tmp/anthropic_requests.log", std::ios::trunc);
-        if (clear_log.is_open()) {
-            clear_log.close();
-            msg("LLM RE: Cleared API request log\n");
-        }
 
         queue_mutex_ = qmutex_create();
         task_semaphore_ = qsem_create(nullptr, 0);

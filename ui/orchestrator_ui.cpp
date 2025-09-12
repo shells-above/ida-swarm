@@ -562,15 +562,6 @@ void TaskPanel::set_thinking_state(bool thinking) {
 AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     
-    // Header
-    auto* header_layout = new QHBoxLayout();
-    header_layout->addWidget(new QLabel("Active Agents:", this));
-    
-    agent_count_label_ = new QLabel("0 agents", this);
-    agent_count_label_->setStyleSheet("QLabel { font-weight: bold; }");
-    header_layout->addWidget(agent_count_label_);
-    header_layout->addStretch();
-    
     // Agent table
     agent_table_ = new QTableWidget(0, 5, this);
     agent_table_->setHorizontalHeaderLabels(
@@ -596,7 +587,6 @@ AgentMonitor::AgentMonitor(QWidget* parent) : QWidget(parent) {
     connect(duration_timer_, &QTimer::timeout, this, &AgentMonitor::update_durations);
     duration_timer_->start(1000); // Update every second
     
-    layout->addLayout(header_layout);
     layout->addWidget(agent_table_);
 }
 
@@ -758,8 +748,6 @@ void AgentMonitor::update_agent_count() {
             }
         }
     }
-    
-    agent_count_label_->setText(QString("%1 active agent%2").arg(active_count).arg(active_count == 1 ? "" : "s"));
 }
 
 void AgentMonitor::update_durations() {

@@ -122,7 +122,6 @@ protected:
 
 private:
     QTableWidget* agent_table_;
-    QLabel* agent_count_label_;
     QTimer* duration_timer_;
     std::map<std::string, QDateTime> agent_spawn_times_;
     std::map<std::string, QDateTime> agent_completion_times_;

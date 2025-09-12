@@ -40,6 +40,11 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     // From here on, use SWARM_LOG for all logging
     SWARM_LOG("SwarmAgent: Initializing agent %s with binary %s\n", agent_id_.c_str(), binary_name_.c_str());
     
+    // Update API client log filename to include binary name
+    std::string log_filename = std::format("anthropic_requests_{}_{}.log", binary_name_, agent_id_);
+    api_client_.set_request_log_filename(log_filename);
+    SWARM_LOG("SwarmAgent: Set API request log to /tmp/%s\n", log_filename.c_str());
+    
     // Create conflict detector now that we have binary_name
     conflict_detector_ = std::make_unique<ConflictDetector>(agent_id_, binary_name_);
     

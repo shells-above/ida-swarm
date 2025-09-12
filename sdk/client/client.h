@@ -19,6 +19,7 @@
 #include <fstream>
 #include <sstream>
 #include <ctime>
+#include <iomanip>
 #include <format>
 #include <thread>
 #include <curl/curl.h>
@@ -576,6 +577,7 @@ class Client {
     std::shared_ptr<OAuthCredentials> oauth_creds;
     
     std::string api_url = "https://api.anthropic.com/v1/messages";
+    std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/)
 
     // Logging
     std::function<void(const std::string&, const json&, int)> message_logger;
@@ -596,6 +598,17 @@ class Client {
         size_t totalSize = size * nmemb;
         userp->append((char*)contents, totalSize);
         return totalSize;
+    }
+
+    // Generate a timestamped log filename
+    static std::string generate_timestamp_log_filename() {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::stringstream ss;
+        ss << "anthropic_requests_"
+           << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+           << ".log";
+        return ss.str();
     }
 
     static size_t HeaderCallback(char* buffer, size_t size, size_t nitems, std::map<std::string, std::string>* headers) {
@@ -670,13 +683,15 @@ class Client {
 
 public:
     // Constructor for API key authentication
-    explicit Client(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages")
+    explicit Client(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages", const std::string& log_filename = "")
         : auth_method(AuthMethod::API_KEY), api_key(key), api_url(base_url) {
+        request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
     }
     
     // Constructor for OAuth authentication
-    Client(std::shared_ptr<OAuthCredentials> creds, const std::string& base_url = "https://api.anthropic.com/v1/messages")
+    Client(std::shared_ptr<OAuthCredentials> creds, const std::string& base_url = "https://api.anthropic.com/v1/messages", const std::string& log_filename = "")
         : auth_method(AuthMethod::OAUTH), oauth_creds(creds), api_url(base_url) {
+        request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
     }
 
     ~Client() {
@@ -695,6 +710,11 @@ public:
     
     AuthMethod get_auth_method() const {
         return auth_method;
+    }
+    
+    // Set the request log filename (will be in /tmp/)
+    void set_request_log_filename(const std::string& filename) {
+        request_log_filename = filename;
     }
 
     void set_message_logger(std::function<void(const std::string&, const json&, int)> logger) {
@@ -824,7 +844,7 @@ public:
         
         // Temporary file logging for debugging
         {
-            std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+            std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
             if (log_file.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time_t = std::chrono::system_clock::to_time_t(now);
@@ -937,7 +957,7 @@ public:
             if (response_body.empty() || (response_body[0] != '{' && response_body[0] != '[')) {
                 // Log non-JSON response to debug file
                 {
-                    std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+                    std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
                     if (log_file.is_open()) {
                         log_file << "=== NON-JSON RESPONSE for iteration " << current_iteration << "\n";
                         log_file << "HTTP Code: " << http_code << "\n";
@@ -985,7 +1005,7 @@ public:
 
             // Temporary file logging for debugging - log response too
             {
-                std::ofstream log_file("/tmp/anthropic_requests.log", std::ios::app);
+                std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
                 if (log_file.is_open()) {
                     log_file << "=== RESPONSE for iteration " << current_iteration << "\n";
                     log_file << "HTTP Code: " << http_code << "\n";

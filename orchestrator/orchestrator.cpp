@@ -47,6 +47,10 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
         api_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
     }
     
+    // Set log filename for orchestrator to include binary name
+    std::string log_filename = std::format("anthropic_requests_{}_orchestrator.log", binary_name_);
+    api_client_->set_request_log_filename(log_filename);
+    
     // Register orchestrator tools
     register_orchestrator_tools(tool_registry_, this);
 }
