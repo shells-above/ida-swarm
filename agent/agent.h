@@ -992,14 +992,14 @@ private:
         for (const claude::messages::Message& msg : execution_state_.get_messages()) {
             std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
             if (text) {
-                total_tokens += text->length() / 3;  // Conservative token estimation (3 chars per token)
+                total_tokens += text->length() / 2;  // Conservative token estimation (2 chars per token)
             }
             
             // Add tokens for tool calls and results
             auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
             for (const auto* tool : tool_calls) {
-                total_tokens += tool->name.length() / 3;
-                total_tokens += tool->input.dump().length() / 3;
+                total_tokens += tool->name.length() / 2;
+                total_tokens += tool->input.dump().length() / 2;
             }
         }
         
@@ -1028,7 +1028,7 @@ private:
         }
         
         // Estimate tokens in tool result
-        int tool_result_tokens = tool_result->content.length() / 3;  // Conservative estimation
+        int tool_result_tokens = tool_result->content.length() / 2;  // Conservative estimation for tool results
         int current_conversation_tokens = estimate_current_conversation_tokens();
         int available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
         
@@ -1038,7 +1038,7 @@ private:
         }
         
         // Calculate how much to keep (in characters)
-        int chars_to_keep = available_tokens * 3;  // Convert tokens back to characters
+        int chars_to_keep = available_tokens * 2;  // Convert tokens back to characters
         if (chars_to_keep < 100) {  // Always keep at least 100 characters
             chars_to_keep = 100;
         }
@@ -1049,7 +1049,7 @@ private:
         
         if (chars_to_keep < (int)original_content.length()) {
             trimmed_content = original_content.substr(0, chars_to_keep);
-            int truncated_tokens = (original_content.length() - chars_to_keep) / 3;
+            int truncated_tokens = (original_content.length() - chars_to_keep) / 2;
             trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits]", truncated_tokens);
             
             emit_log(LogLevel::WARNING, std::format("Trimmed tool result from {} to {} characters ({} tokens truncated)", 
