@@ -441,9 +441,18 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
     std::vector<claude::messages::Message> results;
     std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
     
+    // If no tool calls, return empty results
+    if (tool_calls.empty()) {
+        return results;
+    }
+    
+    // Create a single User message that will contain all tool results
+    claude::messages::Message combined_result(claude::messages::Role::User);
+    
     // First pass: Execute all tools and collect spawn_agent results
     std::map<std::string, std::string> tool_to_agent; // tool_id -> agent_id
     std::vector<std::string> spawned_agent_ids;
+    std::vector<std::pair<std::string, claude::messages::Message>> non_spawn_results; // Store non-spawn results
     
     for (const claude::messages::ToolUseContent* tool_use : tool_calls) {
         if (tool_use->name == "spawn_agent") {
@@ -478,9 +487,9 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
             }
             // Don't add to results yet - we'll enrich it after waiting
         } else {
-            // Execute other tools normally and add to results immediately
+            // Execute other tools normally and store for later
             ORCH_LOG("Orchestrator: Executing non-spawn_agent tool: %s\n", tool_use->name.c_str());
-            results.push_back(tool_registry_.execute_tool_call(*tool_use));
+            non_spawn_results.push_back({tool_use->id, tool_registry_.execute_tool_call(*tool_use)});
         }
     }
     
@@ -491,7 +500,23 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
         ORCH_LOG("Orchestrator: All %zu agents have completed\n", spawned_agent_ids.size());
     }
     
-    // Second pass: Create enriched results for spawn_agent calls
+    // Add non-spawn_agent results to the combined message first
+    for (const auto& [tool_id, result] : non_spawn_results) {
+        // Extract the ToolResultContent from the result message
+        claude::messages::ContentExtractor extractor;
+        for (const auto& content : result.contents()) {
+            content->accept(extractor);
+        }
+        
+        // Add each tool result content to our combined message
+        for (const auto& tool_result : extractor.get_tool_results()) {
+            combined_result.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                tool_result->tool_use_id, tool_result->content, tool_result->is_error
+            ));
+        }
+    }
+    
+    // Second pass: Add enriched results for spawn_agent calls
     for (const claude::messages::ToolUseContent* tool_use : tool_calls) {
         if (tool_use->name == "spawn_agent") {
             std::map<std::string, std::string>::iterator it = tool_to_agent.find(tool_use->id);
@@ -516,11 +541,10 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                         {"report", report}  // Full agent report added here
                     };
 
-                    auto result_msg = claude::messages::Message(claude::messages::Role::User);;
-                    result_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                    // Add to the combined message
+                    combined_result.add_content(std::make_unique<claude::messages::ToolResultContent>(
                         tool_use->id, result_json.dump(), false
                     ));
-                    results.push_back(result_msg);
                     
                     ORCH_LOG("Orchestrator: Added spawn_agent result with report for %s\n", agent_id.c_str());
                 } else {
@@ -529,16 +553,20 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                         {"error", "Failed to spawn agent"}
                     };
                     
-                    auto result_msg = claude::messages::Message(claude::messages::Role::User);;
-                    result_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                    // Add to the combined message
+                    combined_result.add_content(std::make_unique<claude::messages::ToolResultContent>(
                         tool_use->id, error_json.dump(), true  // is_error = true
                     ));
-                    results.push_back(result_msg);
                     
                     ORCH_LOG("Orchestrator: Added spawn_agent error result\n");
                 }
             }
         }
+    }
+    
+    // Add the single combined message to results (if it has content)
+    if (!combined_result.contents().empty()) {
+        results.push_back(combined_result);
     }
     
     return results;
