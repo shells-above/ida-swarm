@@ -17,7 +17,6 @@ namespace llm_re::ui {
 struct LogEntry {
     QDateTime timestamp;
     claude::LogLevel level;
-    std::string source;
     std::string message;
 };
 
@@ -29,7 +28,7 @@ public:
     explicit LogWindow(QWidget* parent = nullptr);
     
     // Add log entry
-    void add_log(claude::LogLevel level, const std::string& source, const std::string& message);
+    void add_log(claude::LogLevel level, const std::string& message);
     
     // Clear all logs
     void clear_logs();
@@ -43,7 +42,6 @@ protected:
 
 private slots:
     void on_level_filter_changed(int index);
-    void on_source_filter_changed(const QString& text);
     void on_clear_clicked();
     void on_save_clicked();
     void on_auto_scroll_toggled(bool checked);
@@ -52,7 +50,6 @@ private:
     // UI components
     QPlainTextEdit* log_display_;
     QComboBox* level_filter_;
-    QLineEdit* source_filter_;
     QPushButton* clear_button_;
     QPushButton* save_button_;
     QCheckBox* auto_scroll_check_;
@@ -63,7 +60,6 @@ private:
     
     // Current filters
     claude::LogLevel min_level_ = claude::LogLevel::DEBUG;
-    QString source_filter_text_;
     bool auto_scroll_ = true;
     bool first_show_ = true;
     

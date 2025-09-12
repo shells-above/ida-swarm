@@ -32,15 +32,6 @@ LogWindow::LogWindow(QWidget* parent) : QWidget(parent) {
     
     toolbar_layout->addSpacing(20);
     
-    // Source filter
-    toolbar_layout->addWidget(new QLabel("Source:", this));
-    source_filter_ = new QLineEdit(this);
-    source_filter_->setPlaceholderText("Filter by source...");
-    source_filter_->setMaximumWidth(150);
-    toolbar_layout->addWidget(source_filter_);
-    
-    toolbar_layout->addSpacing(20);
-    
     // Auto-scroll checkbox
     auto_scroll_check_ = new QCheckBox("Auto-scroll", this);
     auto_scroll_check_->setChecked(true);
@@ -82,9 +73,6 @@ LogWindow::LogWindow(QWidget* parent) : QWidget(parent) {
     connect(level_filter_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &LogWindow::on_level_filter_changed);
     
-    connect(source_filter_, &QLineEdit::textChanged,
-            this, &LogWindow::on_source_filter_changed);
-    
     connect(clear_button_, &QPushButton::clicked,
             this, &LogWindow::on_clear_clicked);
     
@@ -105,12 +93,11 @@ void LogWindow::showEvent(QShowEvent* event) {
     }
 }
 
-void LogWindow::add_log(claude::LogLevel level, const std::string& source, const std::string& message) {
+void LogWindow::add_log(claude::LogLevel level, const std::string& message) {
     // Create log entry
     LogEntry entry;
     entry.timestamp = QDateTime::currentDateTime();
     entry.level = level;
-    entry.source = source;
     entry.message = message;
     
     // Store in deque (with size limit)
@@ -127,12 +114,6 @@ void LogWindow::add_log(claude::LogLevel level, const std::string& source, const
         show = false;
     }
     
-    // Source filter
-    if (show && !source_filter_text_.isEmpty()) {
-        if (!QString::fromStdString(source).contains(source_filter_text_, Qt::CaseInsensitive)) {
-            show = false;
-        }
-    }
     
     // Append to display if it passes filters
     if (show) {
@@ -169,11 +150,6 @@ void LogWindow::on_level_filter_changed(int index) {
         case 4: min_level_ = claude::LogLevel::ERROR; break;
         default: min_level_ = claude::LogLevel::DEBUG;
     }
-    apply_filters();
-}
-
-void LogWindow::on_source_filter_changed(const QString& text) {
-    source_filter_text_ = text;
     apply_filters();
 }
 
@@ -214,12 +190,6 @@ void LogWindow::apply_filters() {
             show = false;
         }
         
-        // Source filter
-        if (show && !source_filter_text_.isEmpty()) {
-            if (!QString::fromStdString(entry.source).contains(source_filter_text_, Qt::CaseInsensitive)) {
-                show = false;
-            }
-        }
         
         if (show) {
             append_log_to_display(entry);

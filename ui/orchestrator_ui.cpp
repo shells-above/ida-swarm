@@ -283,7 +283,7 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             if (event.payload.contains("level") && event.payload.contains("message")) {
                 auto level = static_cast<claude::LogLevel>(event.payload["level"].get<int>());
                 std::string message = event.payload["message"];
-                log_window_->add_log(level, event.source, message);
+                log_window_->add_log(level, message);
             }
             break;
             
