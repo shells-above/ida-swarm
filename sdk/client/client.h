@@ -578,6 +578,7 @@ class Client {
     
     std::string api_url = "https://api.anthropic.com/v1/messages";
     std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/)
+    bool first_log_write = true;  // Track if this is the first write to clear the log file
 
     // Logging
     std::function<void(const std::string&, const json&, int)> message_logger;
@@ -844,7 +845,12 @@ public:
         
         // Temporary file logging for debugging
         {
-            std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
+            // Use trunc on first write to clear old sessions, then append
+            std::ios_base::openmode mode = first_log_write ? std::ios::trunc : std::ios::app;
+            std::ofstream log_file("/tmp/" + request_log_filename, mode);
+            if (first_log_write && log_file.is_open()) {
+                first_log_write = false;
+            }
             if (log_file.is_open()) {
                 auto now = std::chrono::system_clock::now();
                 auto time_t = std::chrono::system_clock::to_time_t(now);

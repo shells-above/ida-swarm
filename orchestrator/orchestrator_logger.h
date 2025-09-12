@@ -75,9 +75,9 @@ public:
             return false;
         }
         
-        // Open log file with append mode
+        // Open log file with truncate mode to clear previous session
         log_path_ = (log_dir / "orchestrator.log").string();
-        log_file_.open(log_path_, std::ios::out | std::ios::app);
+        log_file_.open(log_path_, std::ios::out | std::ios::trunc);
         
         if (log_file_.is_open()) {
             initialized_ = true;
