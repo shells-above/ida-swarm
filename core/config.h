@@ -69,7 +69,7 @@ public:
         
         // Context management
         int context_limit = 150000;  // Token limit before consolidation
-        int tool_result_trim_buffer = 5000;  // Safety buffer when trimming tool results
+        int tool_result_trim_buffer = 8000;  // Safety buffer when trimming tool results (increased for conservative estimation)
     } agent;
 
     struct GraderSettings {

@@ -561,21 +561,6 @@ public:
         qsem_post(task_semaphore_);
     }
 
-    void resume() {
-        if (!state_.is_paused() || !execution_state_.is_valid()) {
-            emit_log(LogLevel::WARNING, "Cannot resume - agent is not paused or no saved state");
-            return;
-        }
-
-        {
-            qmutex_locker_t lock(queue_mutex_);
-            task_queue_.push(AgentTask::resume());
-        }
-
-        change_state(AgentState::Status::Running);
-        qsem_post(task_semaphore_);
-    }
-
     void continue_with_task(const std::string& additional_task) {
         if (!state_.is_completed() && !state_.is_idle()) {
             emit_log(LogLevel::WARNING, "Cannot continue - agent must be completed or idle");
@@ -1011,14 +996,14 @@ private:
         for (const claude::messages::Message& msg : execution_state_.get_messages()) {
             std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
             if (text) {
-                total_tokens += text->length() / 4;  // Simple token estimation
+                total_tokens += text->length() / 3;  // Conservative token estimation (3 chars per token)
             }
             
             // Add tokens for tool calls and results
             auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
             for (const auto* tool : tool_calls) {
-                total_tokens += tool->name.length() / 4;
-                total_tokens += tool->input.dump().length() / 4;
+                total_tokens += tool->name.length() / 3;
+                total_tokens += tool->input.dump().length() / 3;
             }
         }
         
@@ -1047,7 +1032,7 @@ private:
         }
         
         // Estimate tokens in tool result
-        int tool_result_tokens = tool_result->content.length() / 4;
+        int tool_result_tokens = tool_result->content.length() / 3;  // Conservative estimation
         int current_conversation_tokens = estimate_current_conversation_tokens();
         int available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
         
@@ -1057,7 +1042,7 @@ private:
         }
         
         // Calculate how much to keep (in characters)
-        int chars_to_keep = available_tokens * 4;  // Convert tokens back to characters
+        int chars_to_keep = available_tokens * 3;  // Convert tokens back to characters
         if (chars_to_keep < 100) {  // Always keep at least 100 characters
             chars_to_keep = 100;
         }
@@ -1068,7 +1053,7 @@ private:
         
         if (chars_to_keep < (int)original_content.length()) {
             trimmed_content = original_content.substr(0, chars_to_keep);
-            int truncated_tokens = (original_content.length() - chars_to_keep) / 4;
+            int truncated_tokens = (original_content.length() - chars_to_keep) / 3;
             trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits]", truncated_tokens);
             
             emit_log(LogLevel::WARNING, std::format("Trimmed tool result from {} to {} characters ({} tokens truncated)", 
