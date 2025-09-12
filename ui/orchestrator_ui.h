@@ -94,6 +94,7 @@ public:
 
 signals:
     void task_submitted();
+    void clear_conversation_requested();
     
 private:
     QTextEdit* conversation_display_;

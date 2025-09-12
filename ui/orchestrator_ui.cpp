@@ -115,6 +115,12 @@ void OrchestratorUI::setup_ui() {
     connect(task_panel_, &TaskPanel::task_submitted, 
             this, &OrchestratorUI::on_task_submitted);
     
+    connect(task_panel_, &TaskPanel::clear_conversation_requested,
+            []() {
+                // Clear the orchestrator conversation
+                UIOrchestratorBridge::instance().clear_conversation();
+            });
+    
     // Connect to bridge signals for progress updates
     msg("OrchestratorUI: Connecting to bridge signals...\n");
     
@@ -385,6 +391,9 @@ void OrchestratorUI::on_clear_console() {
     tool_tracker_->clear_calls();
     token_tracker_->clear_all();
     metrics_panel_->clear_agent_contexts();
+    
+    // Also clear the orchestrator conversation
+    UIOrchestratorBridge::instance().clear_conversation();
 }
 
 void OrchestratorUI::on_preferences_clicked() {
@@ -491,6 +500,8 @@ TaskPanel::TaskPanel(QWidget* parent) : QWidget(parent) {
     
     connect(clear_button_, &QPushButton::clicked, [this]() {
         clear_history();
+        // Also clear the orchestrator conversation
+        emit clear_conversation_requested();
     });
 }
 
@@ -734,8 +745,21 @@ int AgentMonitor::find_agent_row(const std::string& agent_id) {
 }
 
 void AgentMonitor::update_agent_count() {
-    int count = agent_table_->rowCount();
-    agent_count_label_->setText(QString("%1 agent%2").arg(count).arg(count == 1 ? "" : "s"));
+    int active_count = 0;
+    
+    // Count only active agents (not completed or failed)
+    for (int i = 0; i < agent_table_->rowCount(); ++i) {
+        if (agent_table_->item(i, 2)) {  // Status column
+            QString status = agent_table_->item(i, 2)->text();
+            // Count agents that are spawning, active, idle, running, or paused
+            // Don't count completed or failed agents
+            if (status != "Completed" && status != "Failed") {
+                active_count++;
+            }
+        }
+    }
+    
+    agent_count_label_->setText(QString("%1 active agent%2").arg(active_count).arg(active_count == 1 ? "" : "s"));
 }
 
 void AgentMonitor::update_durations() {
@@ -1093,6 +1117,7 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
     );
     tool_table_->horizontalHeader()->setStretchLastSection(true);
     tool_table_->setAlternatingRowColors(true);
+    tool_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     
     // Install event filter to handle copy operations with full text
     tool_table_->installEventFilter(this);
@@ -1134,16 +1159,29 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
     // Result status - ToolCallTracker events don't have results, just whether it's a write operation
     if (tool_data.contains("is_write")) {
         bool is_write = tool_data["is_write"];
-        tool_table_->setItem(row, 4, new QTableWidgetItem(is_write ? "Write" : "Read"));
-        tool_table_->item(row, 4)->setBackground(is_write ? QColor(255, 248, 220) : QColor(240, 240, 240));
+        auto* result_item = new QTableWidgetItem(is_write ? "Write" : "Read");
+        if (is_write) {
+            result_item->setForeground(QColor(255, 140, 0));  // Orange text for writes
+            QFont font = result_item->font();
+            font.setBold(true);
+            result_item->setFont(font);
+        } else {
+            result_item->setForeground(QColor(100, 100, 100));  // Gray text for reads
+        }
+        tool_table_->setItem(row, 4, result_item);
     } else if (tool_data.contains("result")) {
         // Legacy format from agents
         if (tool_data["result"].contains("success") && tool_data["result"]["success"] == false) {
-            tool_table_->setItem(row, 4, new QTableWidgetItem("Failed"));
-            tool_table_->item(row, 4)->setBackground(QColor(255, 200, 200));
+            auto* result_item = new QTableWidgetItem("Failed");
+            result_item->setForeground(QColor(200, 0, 0));  // Red text for failures
+            QFont font = result_item->font();
+            font.setBold(true);
+            result_item->setFont(font);
+            tool_table_->setItem(row, 4, result_item);
         } else {
-            tool_table_->setItem(row, 4, new QTableWidgetItem("Success"));
-            tool_table_->item(row, 4)->setBackground(QColor(200, 255, 200));
+            auto* result_item = new QTableWidgetItem("Success");
+            result_item->setForeground(QColor(0, 150, 0));  // Green text for success
+            tool_table_->setItem(row, 4, result_item);
         }
     } else {
         tool_table_->setItem(row, 4, new QTableWidgetItem("-"));

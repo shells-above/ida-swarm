@@ -37,6 +37,10 @@ public:
     // Save logs to file
     bool save_to_file(const QString& filename);
 
+protected:
+    // Override to populate logs when widget is first shown
+    void showEvent(QShowEvent* event) override;
+
 private slots:
     void on_level_filter_changed(int index);
     void on_source_filter_changed(const QString& text);
@@ -61,6 +65,7 @@ private:
     claude::LogLevel min_level_ = claude::LogLevel::DEBUG;
     QString source_filter_text_;
     bool auto_scroll_ = true;
+    bool first_show_ = true;
     
     // Helper methods
     void apply_filters();

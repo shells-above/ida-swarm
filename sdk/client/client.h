@@ -19,6 +19,8 @@
 #include <fstream>
 #include <sstream>
 #include <ctime>
+#include <format>
+#include <thread>
 #include <curl/curl.h>
 
 namespace claude {
@@ -711,7 +713,61 @@ public:
         return stats;
     }
 
+    ChatResponse send_request_with_retry(ChatRequest request) {
+        const int MAX_RETRIES = 5;
+        const int BASE_DELAY_MS = 1000;  // Start with 1 second
+        
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            ChatResponse response = send_request_internal(request);
+            
+            // Success or non-recoverable error - return immediately
+            if (response.success || !is_recoverable_error(response)) {
+                return response;
+            }
+            
+            // Check if we've exhausted retries
+            if (attempt == MAX_RETRIES) {
+                log(LogLevel::ERROR, std::format("Max retries ({}) reached for API request", MAX_RETRIES));
+                return response;
+            }
+            
+            // Recoverable error - prepare for retry
+            ApiError api_error = ApiError::from_response(
+                response.error.value_or("Unknown error"),
+                0,  // status_code is already embedded in the error
+                {}
+            );
+            
+            // Calculate delay with exponential backoff
+            int delay_ms = BASE_DELAY_MS * (1 << attempt);  // 1s, 2s, 4s, 8s, 16s
+            
+            // If we have a retry-after header, use that instead (but cap at 60 seconds)
+            if (api_error.retry_after_seconds.has_value()) {
+                delay_ms = std::min(api_error.retry_after_seconds.value() * 1000, 60000);
+            }
+            
+            log(LogLevel::WARNING, std::format(
+                "Retrying request (attempt {}/{}) after {} ms due to: {}",
+                attempt + 1, MAX_RETRIES, delay_ms, response.error.value_or("Unknown error")
+            ));
+            
+            // Sleep before retry
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        }
+        
+        // Should not reach here, but return a failed response just in case
+        ChatResponse failed_response;
+        failed_response.success = false;
+        failed_response.error = "Unexpected error in retry logic";
+        return failed_response;
+    }
+    
+    // Renamed original method to internal, keeping it for backwards compatibility
     ChatResponse send_request(ChatRequest request) {
+        return send_request_with_retry(request);
+    }
+    
+    ChatResponse send_request_internal(ChatRequest request) {
         stats.total_requests++;
         stats.last_request_time = std::chrono::steady_clock::now();
         
@@ -891,6 +947,36 @@ public:
                     }
                 }
                 
+                // Check if this is a 50X server error with non-JSON response
+                if (http_code >= 500 && http_code < 600) {
+                    // This is a server error, treat it as recoverable
+                    stats.failed_requests++;
+                    response.success = false;
+                    response.error = std::format("Server error (HTTP {}): Non-JSON response - {}",
+                        http_code,
+                        response_body.empty() ? "empty response" : response_body.substr(0, 200));
+                    
+                    // Create an ApiError to ensure it's marked as recoverable
+                    ApiError api_error = ApiError::from_response(
+                        response.error.value(),
+                        static_cast<int>(http_code),
+                        response_headers
+                    );
+                    
+                    if (message_logger) {
+                        json error_log;
+                        error_log["error"] = response.error.value();
+                        error_log["http_code"] = http_code;
+                        error_log["error_type"] = "NON_JSON_SERVER_ERROR";
+                        error_log["is_recoverable"] = api_error.is_recoverable();
+                        message_logger("SERVER_ERROR", error_log, current_iteration);
+                    }
+                    
+                    log(LogLevel::WARNING, std::format("Recoverable server error (HTTP {}): Non-JSON response", http_code));
+                    return response;
+                }
+                
+                // Not a 50X error, throw as before
                 throw std::runtime_error("Response is not valid JSON. First char: '" + 
                     (response_body.empty() ? "empty" : std::string(1, response_body[0])) + "'");
             }

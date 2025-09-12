@@ -226,7 +226,6 @@ public:
 struct AgentTask {
     enum class Type {
         NewTask,  // new task entirely
-        Resume,   // resuming old task after a resumable error (ApiError.is_recoverable)
         Continue  // continuing processing on an old task with new instructions
     };
 
@@ -237,9 +236,6 @@ struct AgentTask {
         return {Type::NewTask, task};
     }
 
-    static AgentTask resume() {
-        return {Type::Resume, ""};
-    }
 
     static AgentTask continue_with(const std::string& additional) {
         return {Type::Continue, additional};
@@ -285,11 +281,6 @@ private:
     // User message injection
     std::queue<std::string> pending_user_messages_;
     mutable qmutex_t pending_messages_mutex_;
-    
-    // API error retry tracking
-    int api_retry_count_ = 0;
-    static constexpr int MAX_API_RETRIES = 5;
-    std::chrono::steady_clock::time_point last_api_error_time_;
 
 protected:  // Make these accessible to SwarmAgent
     // Event bus for all communication
@@ -886,10 +877,6 @@ private:
                         process_new_task(task.content);
                         break;
 
-                    case AgentTask::Type::Resume:
-                        process_resume();
-                        break;
-
                     case AgentTask::Type::Continue:
                         process_continue(task.content);
                         break;
@@ -945,19 +932,6 @@ private:
 
 
 
-    // Process resume
-    void process_resume() {
-        if (!execution_state_.is_valid()) {
-            emit_log(LogLevel::ERROR, "No valid saved state to resume from");
-            change_state(AgentState::Status::Idle);
-            return;
-        }
-
-        emit_log(LogLevel::INFO, "Resuming from saved state at iteration " + std::to_string(execution_state_.get_iteration()));
-
-        // Continue from saved state
-        run_analysis_loop();
-    }
 
     // Process continue
     void process_continue(const std::string& additional) {
@@ -1358,9 +1332,6 @@ private:
                 handle_api_error(response);
                 break;
             }
-            
-            // Reset retry counter on successful API call
-            api_retry_count_ = 0;
 
             // Send the response message directly to the UI!
             emit_api_message(&response.message);
@@ -1522,71 +1493,27 @@ private:
         }
 
         std::string error_msg = *response.error;
-        bool is_recoverable = claude::Client::is_recoverable_error(response);
         
-        // Check if this is a prompt length error (unrecoverable)
-        bool is_prompt_too_long = error_msg.find("prompt is too long") != std::string::npos ||
-                                  error_msg.find("maximum") != std::string::npos;
-
         // Check for thinking-specific errors
         if (error_msg.find("thinking") != std::string::npos ||
             error_msg.find("budget_tokens") != std::string::npos) {
             emit_log(LogLevel::ERROR, "Thinking-related error: " + error_msg);
             emit_log(LogLevel::INFO, "Consider adjusting thinking budget or disabling thinking");
-            event_bus_.emit_error(agent_id_, error_msg);
         }
 
-        // Handle unrecoverable errors or max retries reached
-        if (!is_recoverable || is_prompt_too_long || api_retry_count_ >= MAX_API_RETRIES) {
-            if (api_retry_count_ >= MAX_API_RETRIES) {
-                emit_log(LogLevel::ERROR, std::format("Max retries ({}) reached. Giving up.", MAX_API_RETRIES));
-            } else {
-                emit_log(LogLevel::ERROR, "Unrecoverable API error: " + error_msg);
-            }
-            
-            event_bus_.emit_error(agent_id_, error_msg);
-            change_state(AgentState::Status::Completed);
-            execution_state_.set_valid(false);
-            last_error_ = "API Error: " + error_msg;
-            
-            // Graceful shutdown on unrecoverable error
-            request_graceful_shutdown();
-            
-        } else {
-            // Recoverable error - implement retry with delay
-            api_retry_count_++;
-            auto now = std::chrono::steady_clock::now();
-            auto time_since_last_error = std::chrono::duration_cast<std::chrono::seconds>(
-                now - last_api_error_time_).count();
-            
-            emit_log(LogLevel::WARNING, std::format(
-                "Recoverable API error (attempt {}/{}): {}", 
-                api_retry_count_, MAX_API_RETRIES, error_msg));
-            
-            // If less than 60 seconds since last error, wait
-            if (time_since_last_error < 60) {
-                int wait_time = 60 - time_since_last_error;
-                emit_log(LogLevel::INFO, std::format(
-                    "Waiting {} seconds before retry...", wait_time));
-                std::this_thread::sleep_for(std::chrono::seconds(wait_time));
-            }
-            
-            last_api_error_time_ = now;
-            change_state(AgentState::Status::Paused);
-            execution_state_.set_valid(true);
-            last_error_ = std::format("API Error (recoverable, attempt {}/{}): {}",
-                                     api_retry_count_, MAX_API_RETRIES, error_msg);
-            
-            // Queue a resume task to retry the operation
-            emit_log(LogLevel::INFO, "Will retry after delay...");
-            
-            // Queue resume task for the worker thread
-            {
-                qmutex_locker_t lock(queue_mutex_);
-                task_queue_.push(AgentTask::resume());
-            }
-            qsem_post(task_semaphore_); // Signal the worker thread
-        }
+        // SDK has already handled retries internally, so any error at this point is final
+        emit_log(LogLevel::ERROR, "API error (after retries): " + error_msg);
+        
+        // Emit error to UI
+        event_bus_.emit_error(agent_id_, error_msg);
+        
+        // Mark execution state as invalid and store error
+        change_state(AgentState::Status::Completed);
+        execution_state_.set_valid(false);
+        last_error_ = "API Error: " + error_msg;
+        
+        // Request graceful shutdown
+        request_graceful_shutdown();
     }
 
     void validate_thinking_preservation(const claude::ChatResponse& response) {

@@ -123,6 +123,19 @@ void UIOrchestratorBridge::submit_task(const std::string& task) {
     emit process_task_requested(qtask);
 }
 
+void UIOrchestratorBridge::clear_conversation() {
+    msg("UIOrchestratorBridge: clear_conversation called\n");
+    
+    if (!orchestrator_) {
+        msg("UIOrchestratorBridge: ERROR - orchestrator_ is null\n");
+        return;
+    }
+    
+    // Clear the conversation in the orchestrator
+    orchestrator_->clear_conversation();
+    msg("UIOrchestratorBridge: Conversation cleared in orchestrator\n");
+}
+
 void UIOrchestratorBridge::on_processing_started() {
     msg("UIOrchestratorBridge: on_processing_started called\n");
     is_processing_ = true;

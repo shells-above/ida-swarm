@@ -95,6 +95,16 @@ LogWindow::LogWindow(QWidget* parent) : QWidget(parent) {
             this, &LogWindow::on_auto_scroll_toggled);
 }
 
+void LogWindow::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    
+    // Populate logs on first show
+    if (first_show_) {
+        first_show_ = false;
+        apply_filters();
+    }
+}
+
 void LogWindow::add_log(claude::LogLevel level, const std::string& source, const std::string& message) {
     // Create log entry
     LogEntry entry;
@@ -228,11 +238,10 @@ void LogWindow::append_log_to_display(const LogEntry& entry) {
     QTextCharFormat format;
     format.setForeground(get_level_color(entry.level));
     
-    // Build log line
-    QString log_line = QString("[%1] [%2] [%3] %4")
+    // Build log line (removed source field)
+    QString log_line = QString("[%1] [%2] %3")
         .arg(timestamp)
         .arg(level_to_string(entry.level))
-        .arg(QString::fromStdString(entry.source))
         .arg(QString::fromStdString(entry.message));
     
     // Insert with formatting
@@ -252,10 +261,9 @@ void LogWindow::append_log_to_display(const LogEntry& entry) {
 }
 
 QString LogWindow::format_log_entry(const LogEntry& entry) const {
-    return QString("[%1] [%2] [%3] %4")
+    return QString("[%1] [%2] %3")
         .arg(entry.timestamp.toString("yyyy-MM-dd hh:mm:ss.zzz"))
         .arg(level_to_string(entry.level))
-        .arg(QString::fromStdString(entry.source))
         .arg(QString::fromStdString(entry.message));
 }
 

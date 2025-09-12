@@ -68,44 +68,44 @@ public:
     }
 };
 
-// Merge database tool
-class MergeDatabaseTool : public OrchestratorToolBase {
-public:
-    using OrchestratorToolBase::OrchestratorToolBase;
-    
-    std::string name() const override {
-        return "merge_database";
-    }
-    
-    std::string description() const override {
-        return "Merge an agent's findings and modifications back into the main database. "
-               "This applies all the changes the agent made to their isolated copy. "
-               "For use when you have an agent apply metadata (function name, comments, types, etc.) "
-               "to its database, and you want to merge those changes into the main database.";
-    }
-    
-    json parameters_schema() const override {
-        return claude::tools::ParameterBuilder()
-            .add_string("agent_id", "The ID of the agent whose work to merge")
-            .build();
-    }
-    
-    claude::tools::ToolResult execute(const json& input) override {
-        try {
-            std::string agent_id = input.at("agent_id");
-
-            auto result = orchestrator_->merge_database(agent_id);
-            
-            if (result["success"]) {
-                return claude::tools::ToolResult::success(result);
-            } else {
-                return claude::tools::ToolResult::failure(result["error"]);
-            }
-        } catch (const std::exception& e) {
-            return claude::tools::ToolResult::failure(e.what());
-        }
-    }
-};
+// Merge database tool - REMOVED: Now automatically called when agents complete
+// class MergeDatabaseTool : public OrchestratorToolBase {
+// public:
+//     using OrchestratorToolBase::OrchestratorToolBase;
+//     
+//     std::string name() const override {
+//         return "merge_database";
+//     }
+//     
+//     std::string description() const override {
+//         return "Merge an agent's findings and modifications back into the main database. "
+//                "This applies all the changes the agent made to their isolated copy. "
+//                "For use when you have an agent apply metadata (function name, comments, types, etc.) "
+//                "to its database, and you want to merge those changes into the main database.";
+//     }
+//     
+//     json parameters_schema() const override {
+//         return claude::tools::ParameterBuilder()
+//             .add_string("agent_id", "The ID of the agent whose work to merge")
+//             .build();
+//     }
+//     
+//     claude::tools::ToolResult execute(const json& input) override {
+//         try {
+//             std::string agent_id = input.at("agent_id");
+// 
+//             auto result = orchestrator_->merge_database(agent_id);
+//             
+//             if (result["success"]) {
+//                 return claude::tools::ToolResult::success(result);
+//             } else {
+//                 return claude::tools::ToolResult::failure(result["error"]);
+//             }
+//         } catch (const std::exception& e) {
+//             return claude::tools::ToolResult::failure(e.what());
+//         }
+//     }
+// };
 
 // Write file tool for orchestrator
 class WriteFileTool : public OrchestratorToolBase {
@@ -166,7 +166,7 @@ public:
 // Register all orchestrator tools
 inline void register_orchestrator_tools(claude::tools::ToolRegistry& registry, Orchestrator* orchestrator) {
     registry.register_tool_type<SpawnAgentTool>(orchestrator);
-    registry.register_tool_type<MergeDatabaseTool>(orchestrator);
+    // MergeDatabaseTool removed - now automatically called when agents complete
     registry.register_tool_type<WriteFileTool>(orchestrator);
 }
 

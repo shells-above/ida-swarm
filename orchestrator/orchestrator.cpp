@@ -147,19 +147,57 @@ void Orchestrator::start_interactive_session() {
     }
 }
 
-void Orchestrator::process_user_input(const std::string& input) {
-    current_user_task_ = input;
+void Orchestrator::clear_conversation() {
+    ORCH_LOG("Orchestrator: Clearing conversation and starting fresh\n");
     
-    // Clear any completed agents and results from previous tasks
+    // Clear conversation history
+    conversation_history_.clear();
+    
+    // Clear any completed agents and results
     completed_agents_.clear();
     agent_results_.clear();
     
-    // Reset token stats for new task
+    // Reset token stats
     token_stats_.reset();
     
-    // Initialize conversation history for new task
-    conversation_history_.clear();
-    conversation_history_.push_back(claude::messages::Message::user_text(input));
+    // Mark conversation as inactive
+    conversation_active_ = false;
+    
+    // Clear current task
+    current_user_task_.clear();
+    
+    // Reset consolidation state
+    consolidation_state_.consolidation_in_progress = false;
+    consolidation_state_.consolidation_count = 0;
+    
+    ORCH_LOG("Orchestrator: Conversation cleared, ready for new task\n");
+}
+
+void Orchestrator::process_user_input(const std::string& input) {
+    // Check if this is a continuation of an existing conversation
+    if (conversation_active_) {
+        // Continue existing conversation - just add the new user message
+        conversation_history_.push_back(claude::messages::Message::user_text(input));
+        ORCH_LOG("Orchestrator: Continuing conversation with: %s\n", input.c_str());
+    } else {
+        // New conversation - clear everything and start fresh
+        current_user_task_ = input;
+        
+        // Clear any completed agents and results from previous tasks
+        completed_agents_.clear();
+        agent_results_.clear();
+        
+        // Reset token stats for new task
+        token_stats_.reset();
+        
+        // Initialize conversation history for new task
+        conversation_history_.clear();
+        conversation_history_.push_back(claude::messages::Message::user_text(input));
+        
+        // Mark conversation as active
+        conversation_active_ = true;
+        ORCH_LOG("Orchestrator: Starting new conversation with: %s\n", input.c_str());
+    }
     
     ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
 
@@ -167,8 +205,15 @@ void Orchestrator::process_user_input(const std::string& input) {
     ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_THINKING event\n");
     event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
     
-    // Send to Claude API with deep thinking
-    auto response = send_orchestrator_request(input);
+    // Send to Claude API
+    claude::ChatResponse response;
+    if (conversation_history_.size() == 1) {
+        // First message in conversation - use enhanced thinking prompt
+        response = send_orchestrator_request(input);
+    } else {
+        // Continuing conversation - use the existing history
+        response = send_continuation_request();
+    }
     
     if (!response.success) {
         ORCH_LOG("Orchestrator: Failed to process request: %s\n", 
@@ -289,6 +334,47 @@ void Orchestrator::process_user_input(const std::string& input) {
                 cont_tool_results.size());
         }
     }
+}
+
+claude::ChatResponse Orchestrator::send_continuation_request() {
+    // Check and refresh OAuth token if needed
+    if (!refresh_oauth_if_needed()) {
+        ORCH_LOG("Orchestrator: Warning - OAuth token refresh check failed\n");
+    }
+    
+    // Build request using existing conversation history
+    claude::ChatRequestBuilder builder;
+    builder.with_model(config_.orchestrator.model.model)
+           .with_system_prompt(ORCHESTRATOR_SYSTEM_PROMPT)
+           .with_max_tokens(config_.orchestrator.model.max_tokens)
+           .with_max_thinking_tokens(config_.orchestrator.model.max_thinking_tokens)
+           .with_temperature(config_.orchestrator.model.temperature)
+           .enable_thinking(config_.orchestrator.model.enable_thinking)
+           .enable_interleaved_thinking(false);
+    
+    // Add tools
+    if (tool_registry_.has_tools()) {
+        builder.with_tools(tool_registry_);
+    }
+    
+    // Add all conversation history
+    for (const auto& msg : conversation_history_) {
+        builder.add_message(msg);
+    }
+    
+    auto response = api_client_->send_request(builder.build());
+    
+    // Check for OAuth token expiry and retry if needed
+    if (!response.success && response.error && 
+        (response.error->find("401") != std::string::npos || 
+         response.error->find("unauthorized") != std::string::npos)) {
+        ORCH_LOG("Orchestrator: Got 401, attempting OAuth token refresh...\n");
+        if (refresh_oauth_if_needed()) {
+            response = api_client_->send_request(builder.build());
+        }
+    }
+    
+    return response;
 }
 
 claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& user_input) {
@@ -953,6 +1039,22 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 ORCH_LOG("Agent %s completed task: %s\n", agent_id.c_str(), it->second.task.c_str());
                 ORCH_LOG("Result: %s\n", report.c_str());
                 ORCH_LOG("===========================================\n");
+                
+                // Automatically merge the agent's database changes
+                ORCH_LOG("Orchestrator: Auto-merging database changes from agent %s\n", agent_id.c_str());
+                json merge_result = merge_database(agent_id);
+                
+                if (merge_result["success"]) {
+                    ORCH_LOG("Orchestrator: Successfully auto-merged %d changes from agent %s\n",
+                        merge_result.value("changes_applied", 0), agent_id.c_str());
+                    if (merge_result.value("changes_failed", 0) > 0) {
+                        ORCH_LOG("Orchestrator: Warning - %d changes failed to merge\n",
+                            merge_result.value("changes_failed", 0));
+                    }
+                } else {
+                    ORCH_LOG("Orchestrator: Failed to auto-merge changes from agent %s: %s\n",
+                        agent_id.c_str(), merge_result.value("error", "Unknown error").c_str());
+                }
             }
         } catch (const std::exception& e) {
             ORCH_LOG("Orchestrator: Failed to parse agent result JSON: %s\n", e.what());

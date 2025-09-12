@@ -52,6 +52,12 @@ public:
     // Process user input (public for UI access)
     void process_user_input(const std::string& input);
     
+    // Clear conversation and start fresh
+    void clear_conversation();
+    
+    // Check if conversation is active
+    bool is_conversation_active() const { return conversation_active_; }
+    
 private:
     // Core components
     const Config& config_;
@@ -86,6 +92,7 @@ private:
     
     // Context management for orchestrator
     std::vector<claude::messages::Message> conversation_history_;
+    bool conversation_active_ = false;  // Track if we're in an ongoing conversation
     struct ConsolidationState {
         bool consolidation_in_progress = false;
         int consolidation_count = 0;
@@ -121,6 +128,7 @@ private:
     
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);
+    claude::ChatResponse send_continuation_request();
     
     // Execute orchestrator tool calls
     std::vector<claude::messages::Message> process_orchestrator_tools(const claude::messages::Message& msg);
@@ -150,7 +158,7 @@ CRITICAL RESPONSIBILITIES:
 2. You decompose complex reverse engineering tasks into agent subtasks
 3. You spawn specialized agents to work on isolated database copies
 4. You manage the swarm of agents and their interactions
-5. You merge agent findings back into the main database
+5. Agent findings are automatically merged back into the main database when they complete
 6. You synthesize agent work into coherent responses for the user
 
 DEEP THINKING REQUIREMENTS:
@@ -179,8 +187,8 @@ When crafting prompts for agents, remember:
 - The quality of your prompt directly impacts agent effectiveness
 
 TOOLS AVAILABLE:
-- spawn_agent: Create a new agent with a specific task
-- merge_database: Integrate an agent's findings into the main database
+- spawn_agent: Create a new agent with a specific task (their findings are automatically merged when they complete)
+- write_file: Create implementation files and other file outputs
 
 Before finishing your spawn_agent call, make sure you provided enough information to the agent.
 The agent **only** knows what ever you tell them, this program *does not do* any additional handling.
