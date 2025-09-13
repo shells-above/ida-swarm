@@ -25,23 +25,8 @@ public:
     // Get path to agent's database
     std::string get_agent_database(const std::string& agent_id) const;
     
-    // Clean up agent database
-    bool cleanup_agent_database(const std::string& agent_id);
-    
-    // Clean up all agent databases
-    void cleanup_all_agent_databases();
-    
     // Get workspace directory
     std::string get_workspace_directory() const { return workspace_dir_; }
-    
-    // Check if an agent is dormant (completed but preserved)
-    bool is_agent_dormant(const std::string& agent_id) const;
-    
-    // Get list of all dormant agents
-    std::vector<std::string> get_dormant_agents() const;
-    
-    // Restore a dormant agent's database
-    std::string restore_dormant_agent(const std::string& agent_id);
 
 private:
     std::string main_database_path_;

@@ -19,7 +19,7 @@ public:
                    const std::string& database_path,
                    const json& agent_config);
     
-    // Resurrect a dormant agent for conflict resolution
+    // Resurrect a completed agent for conflict resolution
     int resurrect_agent(const std::string& agent_id,
                        const std::string& database_path,
                        const json& resurrection_config);

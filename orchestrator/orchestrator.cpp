@@ -966,16 +966,18 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             ORCH_LOG("Orchestrator: Resurrection request for agent %s to join %s\n",
                 target_agent.c_str(), conflict_channel.c_str());
             
-            // Check if agent is dormant
-            if (db_manager_->is_agent_dormant(target_agent)) {
-                ORCH_LOG("Orchestrator: Agent %s is dormant, resurrecting...\n", target_agent.c_str());
+            // Check if agent has completed and can be resurrected
+            if (completed_agents_.count(target_agent) > 0) {
+                ORCH_LOG("Orchestrator: Agent %s has completed, resurrecting for conflict resolution...\n", target_agent.c_str());
                 
-                // Restore the dormant agent's database
-                std::string db_path = db_manager_->restore_dormant_agent(target_agent);
-                if (db_path.empty()) {
-                    ORCH_LOG("Orchestrator: Failed to restore dormant agent %s\n", target_agent.c_str());
+                // Get the agent's database path from stored info
+                auto agent_it = agents_.find(target_agent);
+                if (agent_it == agents_.end()) {
+                    ORCH_LOG("Orchestrator: Error - completed agent %s not found in agents map\n", target_agent.c_str());
                     return;
                 }
+                
+                std::string db_path = agent_it->second.database_path;
                 
                 // Create resurrection config
                 json resurrection_config = {
@@ -987,24 +989,25 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     }}
                 };
                 
+                // Remove from completed set since it's being resurrected
+                completed_agents_.erase(target_agent);
+                
                 // Resurrect the agent
                 int pid = agent_spawner_->resurrect_agent(target_agent, db_path, resurrection_config);
                 if (pid > 0) {
                     ORCH_LOG("Orchestrator: Successfully resurrected agent %s (PID %d)\n",
                         target_agent.c_str(), pid);
                     
-                    // Track the resurrected agent
-                    AgentInfo info;
-                    info.agent_id = target_agent;
-                    info.task = "Conflict Resolution";
-                    info.database_path = db_path;
-                    info.process_id = pid;
-                    agents_[target_agent] = info;
+                    // Update the agent info with new PID
+                    agent_it->second.process_id = pid;
+                    agent_it->second.task = "Conflict Resolution";
                 } else {
                     ORCH_LOG("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
+                    // Add back to completed since resurrection failed
+                    completed_agents_.insert(target_agent);
                 }
             } else {
-                ORCH_LOG("Orchestrator: Agent %s is not dormant or doesn't exist\n", target_agent.c_str());
+                ORCH_LOG("Orchestrator: Agent %s is not available for resurrection (either active or doesn't exist)\n", target_agent.c_str());
             }
         }
         return;
