@@ -209,8 +209,8 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         }
         
         // Track agreements
-        if (message.find("AGREE:") == 0) {
-            // Extract everything after "AGREE:" and trim whitespace
+        if (message.find("AGREE|") == 0) {
+            // Extract everything after "AGREE|" and trim whitespace
             std::string agreement = message.substr(6);
             // Trim both leading and trailing whitespace
             size_t start = agreement.find_first_not_of(" \t\n\r");
@@ -226,18 +226,95 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
             
             // Check if all participating agents have agreed
             check_if_all_participating_agents_agreed();  // just logs
-        } else if (message.find("DISAGREE:") == 0) {
+        } else if (message.find("DISAGREE|") == 0) {
             // Clear this agent's previous agreement if they disagree
             active_conflict_->agreements.erase(sender);
             SWARM_LOG("SwarmAgent: Agent %s disagreed\n", sender.c_str());
         }
         
         // Handle grader result from orchestrator
-        if (message.find("GRADER_RESULT: ") == 0 && sender == "orchestrator") {
-            std::string result_json = message.substr(15);  // Skip "GRADER_RESULT: "
+        if (message.find("GRADER_RESULT|") == 0 && sender == "orchestrator") {
+            std::string result_json = message.substr(14);  // Skip "GRADER_RESULT|"
             SWARM_LOG("SwarmAgent: Received grader result from orchestrator\n");
             process_grader_result(result_json);
         }
+    }
+    
+    // Handle CONFLICT_DETAILS messages for resurrected agents
+    if (message.find("CONFLICT_DETAILS|") == 0) {
+        // This is sent by the agent that detected the conflict
+        // Resurrected agents need to parse this to set up their conflict state
+        try {
+            std::string details_json = message.substr(17);  // Skip "CONFLICT_DETAILS|"
+            json details = json::parse(details_json);
+            
+            // Only process if we don't already have an active conflict
+            if (!active_conflict_) {
+                SWARM_LOG("SwarmAgent: Received conflict details, setting up conflict state\n");
+                
+                // Create conflict state from the details
+                SimpleConflictState state;
+                state.channel = channel;
+                state.participating_agents.insert(details["first_agent"]);
+                state.participating_agents.insert(details["second_agent"]);
+                state.resolved = false;
+                
+                // Reconstruct the ToolConflict
+                ToolConflict conflict;
+                conflict.conflict_type = details["conflict_type"];
+                conflict.first_call.tool_name = details["tool_name"];
+                conflict.first_call.agent_id = details["first_agent"];
+                conflict.first_call.address = std::stoul(details["address"].get<std::string>().substr(2), nullptr, 16);
+                conflict.first_call.parameters = details["first_params"];
+                conflict.second_call.agent_id = details["second_agent"];
+                conflict.second_call.address = conflict.first_call.address;
+                conflict.second_call.parameters = details["second_params"];
+                
+                state.initial_conflict = conflict;
+                active_conflict_ = state;
+                
+                // Determine who we are and who the other agent is
+                std::string other_agent;
+                json our_params, their_params;
+                if (details["first_agent"] == agent_id_) {
+                    other_agent = details["second_agent"];
+                    our_params = details["first_params"];
+                    their_params = details["second_params"];
+                } else {
+                    other_agent = details["first_agent"];
+                    our_params = details["second_params"];
+                    their_params = details["first_params"];
+                }
+                
+                // Inject conflict context for the resurrected agent
+                std::string conflict_prompt = std::format(
+                    "CONFLICT RESOLUTION - You've been resurrected\n\n"
+                    "You and {} have conflicting changes at address {}.\n"
+                    "Conflict type: {}\n\n"
+                    "Your previous change: {}\n"
+                    "Their change: {}\n\n"
+                    "You're now in channel {} to discuss.\n"
+                    "Review your previous analysis and present your reasoning.\n"
+                    "When you reach agreement, say: \"AGREE| [the exact value/decision you agree on]\"\n"
+                    "If you disagree, say: \"DISAGREE| [your reasoning]\"\n\n"
+                    "The | (pipe) is important, the syntax is very particular. Use your analysis tools as needed to verify claims.",
+                    other_agent,
+                    details["address"].get<std::string>(),
+                    details["conflict_type"].get<std::string>(),
+                    our_params.dump(2),
+                    their_params.dump(2),
+                    channel
+                );
+                
+                inject_user_message(conflict_prompt);
+                emit_log(LogLevel::INFO, std::format("Set up conflict state from received details in channel {}", channel));
+            }
+        } catch (const std::exception& e) {
+            SWARM_LOG("SwarmAgent: Failed to parse CONFLICT_DETAILS| %s\n", e.what());
+        }
+        
+        // Don't inject CONFLICT_DETAILS as a regular message
+        return;
     }
     
     // Inject messages for the agent to see (except #agents channel - just resurrection requests)
@@ -280,7 +357,7 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
         {"second_agent", conflict.second_call.agent_id},
         {"second_params", conflict.second_call.parameters}
     };
-    send_irc_message(channel, "CONFLICT_DETAILS:" + conflict_details.dump());
+    send_irc_message(channel, "CONFLICT_DETAILS|" + conflict_details.dump());
 
     // Identify the other agent
     std::string other_agent = (conflict.first_call.agent_id == agent_id_) ?
@@ -304,8 +381,8 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
         "Your change: {}\n\n"
         "You're now in channel {} to discuss.\n"
         "Present your evidence and reasoning.\n"
-        "When you reach agreement, say: \"AGREE: [the exact value/decision you agree on]\"\n"
-        "If you disagree, say: \"DISAGREE: [your reasoning]\"\n\n"
+        "When you reach agreement, say: \"AGREE| [the exact value/decision you agree on]\"\n"
+        "If you disagree, say: \"DISAGREE| [your reasoning]\"\n\n"
         "Continue using your analysis tools as needed to verify claims.",
         other_agent,
         conflict.first_call.address,

@@ -1112,9 +1112,9 @@ void Orchestrator::handle_conflict_message(const std::string& channel, const std
     std::lock_guard<std::mutex> lock(conflicts_mutex_);
     
     // Parse CONFLICT_DETAILS message to get original conflict
-    if (message.find("CONFLICT_DETAILS:") == 0) {
+    if (message.find("CONFLICT_DETAILS|") == 0) {
         try {
-            std::string details_json = message.substr(17);  // Skip "CONFLICT_DETAILS:"
+            std::string details_json = message.substr(17);  // Skip "CONFLICT_DETAILS|"
             json details = json::parse(details_json);
             
             // Reconstruct the ToolConflict from the details
@@ -1164,7 +1164,7 @@ void Orchestrator::handle_conflict_message(const std::string& channel, const std
     ConflictSession& session = active_conflicts_[channel];
     
     // Track AGREE messages from agents
-    if (message.find("AGREE:") == 0) {
+    if (message.find("AGREE|") == 0) {
         std::string agreement = message.substr(6);
         
         // Trim both leading and trailing whitespace
@@ -1188,7 +1188,7 @@ void Orchestrator::handle_conflict_message(const std::string& channel, const std
         // Check if we should invoke the grader
         check_conflict_consensus(channel);
         
-    } else if (message.find("DISAGREE:") == 0) {
+    } else if (message.find("DISAGREE|") == 0) {
         // Agent disagrees - track participation but no agreement yet
         session.participating_agents.insert(sender);
         session.agreements.erase(sender);  // Remove any previous agreement
@@ -1293,7 +1293,7 @@ void Orchestrator::broadcast_grader_result(const std::string& channel, bool cons
         {"reasoning", reasoning}
     };
     
-    std::string message = "GRADER_RESULT: " + result_json.dump();
+    std::string message = "GRADER_RESULT|" + result_json.dump();
     
     // Send to conflict channel
     if (irc_client_) {

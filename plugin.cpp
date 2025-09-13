@@ -402,20 +402,10 @@ private:
             // Join the conflict channel
             swarm_agent_->join_irc_channel(conflict_channel);
             
-            // Inject conflict context
-            std::string conflict_prompt = "You have been resurrected to resolve a conflict. ";
-            if (agent_config_.contains("conflict")) {
-                json conflict = agent_config_["conflict"];
-                conflict_prompt += std::format(
-                    "The conflict is at address 0x{:x} regarding {}. "
-                    "Review your previous analysis and engage in the discussion in channel {}.",
-                    conflict.value("address", 0),
-                    conflict.value("type", "unknown"),
-                    conflict_channel
-                );
-            }
-            
-            swarm_agent_->inject_user_message(conflict_prompt);
+            // Start the agent with a conflict resolution task
+            // The actual conflict details will come from the CONFLICT_DETAILS message
+            std::string task = "Participate in conflict resolution discussion in channel " + conflict_channel;
+            swarm_agent_->start_task(task);
         } else {
             // Resume normal task
             std::string task = agent_config_.value("saved_task", "Continue analysis");
