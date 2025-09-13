@@ -1,6 +1,7 @@
 #include "orchestrator.h"
 #include "orchestrator_tools.h"
 #include "orchestrator_logger.h"
+#include "../agent/consensus_executor.h"
 #include "../sdk/auth/oauth_manager.h"
 #include <iostream>
 #include <format>
@@ -938,6 +939,12 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         {"message", message}
     }));
     
+    // Check for manual tool execution results
+    if (message.find("MANUAL_TOOL_RESULT|") == 0) {
+        handle_manual_tool_result(channel, sender, message);
+        return;
+    }
+    
     // Check if this is a conflict channel message
     if (channel.find("#conflict_") == 0) {
         handle_conflict_message(channel, sender, message);
@@ -1101,6 +1108,41 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
 void Orchestrator::handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message) {
     std::lock_guard<std::mutex> lock(conflicts_mutex_);
     
+    // Parse CONFLICT_DETAILS message to get original conflict
+    if (message.find("CONFLICT_DETAILS:") == 0) {
+        try {
+            std::string details_json = message.substr(17);  // Skip "CONFLICT_DETAILS:"
+            json details = json::parse(details_json);
+            
+            // Reconstruct the ToolConflict from the details
+            ToolConflict conflict;
+            conflict.conflict_type = details["conflict_type"];
+            
+            // First call
+            conflict.first_call.agent_id = details["first_agent"];
+            conflict.first_call.tool_name = details["tool_name"];
+            conflict.first_call.address = std::stoull(details["address"].get<std::string>(), nullptr, 0);
+            conflict.first_call.parameters = details["first_params"];
+            conflict.first_call.is_write_operation = true;
+            
+            // Second call
+            conflict.second_call.agent_id = details["second_agent"];
+            conflict.second_call.tool_name = details["tool_name"];
+            conflict.second_call.address = conflict.first_call.address;
+            conflict.second_call.parameters = details["second_params"];
+            conflict.second_call.is_write_operation = true;
+            
+            // Store in session
+            if (active_conflicts_.find(channel) != active_conflicts_.end()) {
+                active_conflicts_[channel].original_conflict = conflict;
+                ORCH_LOG("Orchestrator: Stored conflict details for channel %s\n", channel.c_str());
+            }
+        } catch (const std::exception& e) {
+            ORCH_LOG("Orchestrator: Failed to parse conflict details: %s\n", e.what());
+        }
+        return;  // Don't process CONFLICT_DETAILS as a regular message
+    }
+    
     // Initialize conflict session if it doesn't exist
     if (active_conflicts_.find(channel) == active_conflicts_.end()) {
         ConflictSession session;
@@ -1121,6 +1163,15 @@ void Orchestrator::handle_conflict_message(const std::string& channel, const std
     // Track AGREE messages from agents
     if (message.find("AGREE:") == 0) {
         std::string agreement = message.substr(6);
+        
+        // Trim both leading and trailing whitespace
+        size_t start = agreement.find_first_not_of(" \t\n\r");
+        size_t end = agreement.find_last_not_of(" \t\n\r");
+        if (start != std::string::npos && end != std::string::npos) {
+            agreement = agreement.substr(start, end - start + 1);
+        } else if (start != std::string::npos) {
+            agreement = agreement.substr(start);
+        }
         
         // Add agent to participating set
         session.participating_agents.insert(sender);
@@ -1248,10 +1299,22 @@ void Orchestrator::broadcast_grader_result(const std::string& channel, bool cons
                  channel.c_str(), consensus ? "true" : "false");
     }
     
-    // If consensus reached, clean up the conflict session after a delay
+    // If consensus reached, enforce the agreed value and clean up
     if (consensus) {
-        // Let agents process the result first
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        // Extract and enforce the consensus tool call
+        {
+            std::lock_guard<std::mutex> lock(conflicts_mutex_);
+            auto it = active_conflicts_.find(channel);
+            if (it != active_conflicts_.end()) {
+                json tool_call = extract_consensus_tool_call(channel, it->second);
+                if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
+                    enforce_consensus_tool_execution(channel, tool_call, it->second.participating_agents);
+                }
+            }
+        }
+        
+        // Let agents process the enforcement
+        std::this_thread::sleep_for(std::chrono::seconds(3));
         
         std::lock_guard<std::mutex> lock(conflicts_mutex_);
         active_conflicts_.erase(channel);
@@ -1261,6 +1324,253 @@ void Orchestrator::broadcast_grader_result(const std::string& channel, bool cons
             irc_client_->leave_channel(channel);
         }
     }
+}
+
+json Orchestrator::extract_consensus_tool_call(const std::string& channel, const ConflictSession& session) {
+    ORCH_LOG("Orchestrator: Extracting consensus tool call using ConsensusExecutor\n");
+    
+    // Check if we have the original conflict details
+    if (session.original_conflict.first_call.tool_name.empty()) {
+        ORCH_LOG("Orchestrator: WARNING - No original conflict details, falling back to LLM extraction\n");
+        
+        // Fallback to simple extraction without context
+        json fallback_call = {
+            {"tool_name", "unknown"},
+            {"parameters", {
+                {"__needs_manual", true},
+                {"__reason", "no_conflict_details"}
+            }}
+        };
+        return fallback_call;
+    }
+    
+    try {
+        // Create a temporary consensus executor
+        agent::ConsensusExecutor executor(config_);
+        
+        // Let the executor parse and capture the tool call
+        json tool_call = executor.execute_consensus(session.agreements, session.original_conflict);
+        
+        if (tool_call.is_null() || !tool_call.contains("tool_name")) {
+            ORCH_LOG("Orchestrator: ConsensusExecutor failed to extract tool call\n");
+            
+            // Fallback: use the original conflict tool with manual flag
+            return {
+                {"tool_name", session.original_conflict.first_call.tool_name},
+                {"parameters", {
+                    {"address", std::format("0x{:x}", session.original_conflict.first_call.address)},
+                    {"__needs_manual", true},
+                    {"__reason", "consensus_executor_failed"}
+                }}
+            };
+        }
+        
+        ORCH_LOG("Orchestrator: ConsensusExecutor extracted tool call: %s\n", tool_call.dump().c_str());
+        return tool_call;
+        
+    } catch (const std::exception& e) {
+        ORCH_LOG("Orchestrator: ERROR in ConsensusExecutor: %s\n", e.what());
+        
+        // Return fallback with original tool info
+        return {
+            {"tool_name", session.original_conflict.first_call.tool_name},
+            {"parameters", {
+                {"address", std::format("0x{:x}", session.original_conflict.first_call.address)},
+                {"__needs_manual", true},
+                {"__reason", std::format("exception: {}", e.what())}
+            }}
+        };
+    }
+}
+
+void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
+                                                   const std::set<std::string>& agents) {
+    ORCH_LOG("Orchestrator: Enforcing consensus tool execution for %zu agents\n", agents.size());
+    
+    std::string tool_name = tool_call["tool_name"];
+    json parameters = tool_call["parameters"];
+    
+    // Track responses
+    {
+        std::lock_guard<std::mutex> lock(manual_tool_mutex_);
+        manual_tool_responses_.clear();
+        for (const auto& agent_id : agents) {
+            manual_tool_responses_[agent_id] = false;
+        }
+    }
+    
+    // Send manual tool execution to each agent
+    for (const auto& agent_id : agents) {
+        std::string message = std::format("MANUAL_TOOL_EXEC|{}|{}|{}",
+                                         agent_id, tool_name, parameters.dump());
+        
+        if (irc_client_) {
+            irc_client_->send_message(channel, message);
+            ORCH_LOG("Orchestrator: Sent manual tool exec to %s\n", agent_id.c_str());
+        }
+    }
+    
+    // Wait for responses with timeout
+    auto start_time = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(5);
+    
+    while (true) {
+        // Check if all agents responded
+        bool all_responded = true;
+        {
+            std::lock_guard<std::mutex> lock(manual_tool_mutex_);
+            for (const auto& [agent_id, responded] : manual_tool_responses_) {
+                if (!responded) {
+                    all_responded = false;
+                    break;
+                }
+            }
+        }
+        
+        if (all_responded) {
+            ORCH_LOG("Orchestrator: All agents executed consensus tool successfully\n");
+            break;
+        }
+        
+        // Check timeout
+        if (std::chrono::steady_clock::now() - start_time > timeout) {
+            ORCH_LOG("Orchestrator: WARNING - Timeout waiting for manual tool execution responses\n");
+            
+            // For agents that didn't respond, send fallback message
+            std::lock_guard<std::mutex> lock(manual_tool_mutex_);
+            for (const auto& [agent_id, responded] : manual_tool_responses_) {
+                if (!responded) {
+                    std::string fallback = std::format(
+                        "[SYSTEM] Manual tool execution failed. Please apply the agreed consensus: {} with parameters: {}",
+                        tool_name, parameters.dump(2)
+                    );
+                    
+                    // Send as a regular message that will be injected as user message
+                    if (irc_client_) {
+                        irc_client_->send_message(channel, fallback);
+                    }
+                }
+            }
+            break;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    // Verify consensus was applied correctly
+    ea_t address = 0;
+    if (parameters.contains("address")) {
+        try {
+            if (parameters["address"].is_string()) {
+                address = std::stoull(parameters["address"].get<std::string>(), nullptr, 0);
+            } else if (parameters["address"].is_number()) {
+                address = parameters["address"].get<ea_t>();
+            }
+        } catch (...) {
+            ORCH_LOG("Orchestrator: Could not extract address for verification\n");
+        }
+    }
+    
+    if (address != 0) {
+        // Give a moment for database writes to complete
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        bool verified = verify_consensus_applied(agents, address);
+        if (verified) {
+            ORCH_LOG("Orchestrator: Consensus enforcement verified successfully\n");
+        } else {
+            ORCH_LOG("Orchestrator: WARNING - Consensus enforcement verification failed\n");
+        }
+    }
+}
+
+void Orchestrator::handle_manual_tool_result(const std::string& channel, const std::string& sender, const std::string& message) {
+    // Parse result: MANUAL_TOOL_RESULT|<agent_id>|<success/failure>|<result_json>
+    if (message.find("MANUAL_TOOL_RESULT|") != 0) {
+        return;
+    }
+    
+    std::string content = message.substr(19);  // Skip "MANUAL_TOOL_RESULT|"
+    size_t first_delim = content.find('|');
+    if (first_delim == std::string::npos) return;
+    
+    size_t second_delim = content.find('|', first_delim + 1);
+    if (second_delim == std::string::npos) return;
+    
+    std::string agent_id = content.substr(0, first_delim);
+    std::string status = content.substr(first_delim + 1, second_delim - first_delim - 1);
+    std::string result_json = content.substr(second_delim + 1);
+    
+    ORCH_LOG("Orchestrator: Received manual tool result from %s: %s\n", agent_id.c_str(), status.c_str());
+    
+    // Mark agent as responded
+    {
+        std::lock_guard<std::mutex> lock(manual_tool_mutex_);
+        if (manual_tool_responses_.find(agent_id) != manual_tool_responses_.end()) {
+            manual_tool_responses_[agent_id] = true;
+        }
+    }
+    
+    // Parse and log the result details
+    try {
+        json result = json::parse(result_json);
+        if (result["success"]) {
+            ORCH_LOG("Orchestrator: Agent %s successfully executed manual tool\n", agent_id.c_str());
+        } else {
+            ORCH_LOG("Orchestrator: Agent %s failed manual tool execution: %s\n", 
+                     agent_id.c_str(), result.value("error", "unknown error").c_str());
+        }
+    } catch (const std::exception& e) {
+        ORCH_LOG("Orchestrator: Failed to parse result JSON: %s\n", e.what());
+    }
+}
+
+bool Orchestrator::verify_consensus_applied(const std::set<std::string>& agents, ea_t address) {
+    ORCH_LOG("Orchestrator: Verifying consensus was applied by all agents at address 0x%llx\n", address);
+    
+    if (!tool_tracker_) {
+        ORCH_LOG("Orchestrator: ERROR - Tool tracker not initialized\n");
+        return false;
+    }
+    
+    // Get all manual tool calls at this address
+    std::vector<ToolCall> calls = tool_tracker_->get_address_tool_calls(address);
+    
+    // Filter for manual calls from our agents
+    std::map<std::string, json> agent_params;
+    for (const auto& call : calls) {
+        if (agents.find(call.agent_id) != agents.end() && 
+            call.parameters.contains("__is_manual") && 
+            call.parameters["__is_manual"]) {
+            
+            // Remove metadata fields before comparison
+            json clean_params = call.parameters;
+            clean_params.erase("__is_manual");
+            clean_params.erase("__enforced_by");
+            
+            agent_params[call.agent_id] = clean_params;
+        }
+    }
+    
+    // Check if all agents have the same parameters
+    if (agent_params.empty()) {
+        ORCH_LOG("Orchestrator: WARNING - No manual tool calls found for verification\n");
+        return false;
+    }
+    
+    json reference_params;
+    for (const auto& [agent_id, params] : agent_params) {
+        if (reference_params.is_null()) {
+            reference_params = params;
+        } else if (params != reference_params) {
+            ORCH_LOG("Orchestrator: ERROR - Agent %s applied different parameters: %s vs %s\n",
+                     agent_id.c_str(), params.dump().c_str(), reference_params.dump().c_str());
+            return false;
+        }
+    }
+    
+    ORCH_LOG("Orchestrator: SUCCESS - All %zu agents applied identical values\n", agent_params.size());
+    return true;
 }
 
 void Orchestrator::log_token_usage(const claude::TokenUsage& per_iteration_usage, const claude::TokenUsage& cumulative_usage) {

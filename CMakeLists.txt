@@ -276,6 +276,7 @@ set(PLUGIN_SOURCES
         agent/swarm_agent.cpp
         agent/swarm_logger.cpp
         agent/conflict_detector.cpp
+        agent/consensus_executor.cpp
         # UI components
         ui/orchestrator_ui.cpp
         ui/preferences_dialog.cpp
@@ -370,11 +371,11 @@ add_custom_command(TARGET ida_llm_re64 POST_BUILD
 )
 # put llm_re_config.json into IDA_PLUGINS_PATH dir
 
-# Custom target to build all plugins at once
-add_custom_target(all_plugins
-    DEPENDS ida_llm_re64
-    COMMENT "Building unified IDA plugin"
-)
+## Custom target to build all plugins at once
+#add_custom_target(all_plugins
+#    DEPENDS ida_llm_re64
+#    COMMENT "Building unified IDA plugin"
+#)
 
 # Installation
 install(TARGETS ida_llm_re64

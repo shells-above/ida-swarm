@@ -103,6 +103,12 @@ private:
     void process_grader_result(const std::string& result_json);
     std::string generate_conflict_channel(const ToolConflict& conflict) const;
     
+    // Manual tool execution support
+    void handle_manual_tool_execution(const std::string& channel, const std::string& message);
+    static bool parse_manual_tool_message(const std::string& message, std::string& target_agent,
+                                   std::string& tool_name, json& parameters);
+    void send_manual_tool_result(const std::string& channel, bool success, const json& result);
+    
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;
     std::unique_ptr<IRCAdapter> irc_adapter_;

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <sstream>
 #include <filesystem>
+#include <cstring>
 
 namespace llm_re::orchestrator {
 
@@ -75,7 +76,8 @@ bool ToolCallTracker::create_tables() {
             address INTEGER NOT NULL,
             parameters TEXT NOT NULL,
             timestamp INTEGER NOT NULL,
-            is_write INTEGER NOT NULL
+            is_write INTEGER NOT NULL,
+            is_manual INTEGER DEFAULT 0
         );
         
         CREATE INDEX IF NOT EXISTS idx_agent ON tool_calls(agent_id);
@@ -83,7 +85,32 @@ bool ToolCallTracker::create_tables() {
         CREATE INDEX IF NOT EXISTS idx_tool ON tool_calls(tool_name);
         CREATE INDEX IF NOT EXISTS idx_agent_tool ON tool_calls(agent_id, tool_name);
         CREATE INDEX IF NOT EXISTS idx_address_write ON tool_calls(address, is_write);
+        CREATE INDEX IF NOT EXISTS idx_manual ON tool_calls(is_manual);
     )";
+    
+    // Check if is_manual column exists and add it if not (for existing databases)
+    const char* check_column = "PRAGMA table_info(tool_calls)";
+    sqlite3_stmt* stmt;
+    bool has_manual_column = false;
+    
+    if (sqlite3_prepare_v2(db_, check_column, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* col_name = (const char*)sqlite3_column_text(stmt, 1);
+            if (col_name && strcmp(col_name, "is_manual") == 0) {
+                has_manual_column = true;
+                break;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    // Add column if it doesn't exist
+    if (!has_manual_column) {
+        const char* add_column = "ALTER TABLE tool_calls ADD COLUMN is_manual INTEGER DEFAULT 0";
+        if (!execute_sql(add_column)) {
+            ORCH_LOG("ToolCallTracker: Warning - Could not add is_manual column (may already exist)\n");
+        }
+    }
     
     return execute_sql(sql);
 }
@@ -91,8 +118,8 @@ bool ToolCallTracker::create_tables() {
 bool ToolCallTracker::prepare_statements() {
     // Insert statement
     const char* insert_sql = 
-        "INSERT INTO tool_calls (agent_id, tool_name, address, parameters, timestamp, is_write) "
-        "VALUES (?, ?, ?, ?, ?, ?)";
+        "INSERT INTO tool_calls (agent_id, tool_name, address, parameters, timestamp, is_write, is_manual) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)";
     
     if (sqlite3_prepare_v2(db_, insert_sql, -1, &insert_stmt_, nullptr) != SQLITE_OK) {
         ORCH_LOG("ToolCallTracker: Failed to prepare insert statement: %s\n", sqlite3_errmsg(db_));
@@ -202,6 +229,14 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
     rc = sqlite3_bind_int(insert_stmt_, 6, is_write_tool(tool_name) ? 1 : 0);
     if (rc != SQLITE_OK) {
         ORCH_LOG("ToolCallTracker: Failed to bind is_write: %s\n", sqlite3_errmsg(db_));
+        return false;
+    }
+    
+    // Check if this is a manual execution (look for __is_manual in parameters)
+    bool is_manual = parameters.contains("__is_manual") && parameters["__is_manual"];
+    rc = sqlite3_bind_int(insert_stmt_, 7, is_manual ? 1 : 0);
+    if (rc != SQLITE_OK) {
+        ORCH_LOG("ToolCallTracker: Failed to bind is_manual: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
@@ -344,6 +379,36 @@ bool ToolCallTracker::clear_agent_data(const std::string& agent_id) {
 
 bool ToolCallTracker::is_write_tool(const std::string& tool_name) {
     return std::find(WRITE_TOOLS.begin(), WRITE_TOOLS.end(), tool_name) != WRITE_TOOLS.end();
+}
+
+std::vector<ToolCall> ToolCallTracker::get_manual_tool_calls(const std::string& agent_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<ToolCall> calls;
+    
+    const char* sql = agent_id.empty() ?
+        "SELECT * FROM tool_calls WHERE is_manual = 1 ORDER BY timestamp DESC" :
+        "SELECT * FROM tool_calls WHERE agent_id = ? AND is_manual = 1 ORDER BY timestamp DESC";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        ORCH_LOG("ToolCallTracker: Failed to prepare manual calls query: %s\n", sqlite3_errmsg(db_));
+        return calls;
+    }
+    
+    if (!agent_id.empty()) {
+        sqlite3_bind_text(stmt, 1, agent_id.c_str(), -1, SQLITE_STATIC);
+    }
+    
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        calls.push_back(row_to_tool_call(stmt));
+    }
+    
+    sqlite3_finalize(stmt);
+    
+    ORCH_LOG("ToolCallTracker: Found %zu manual tool calls%s\n", 
+             calls.size(), agent_id.empty() ? "" : (" for agent " + agent_id).c_str());
+    
+    return calls;
 }
 
 bool ToolCallTracker::execute_sql(const char* sql) {

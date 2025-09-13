@@ -69,6 +69,9 @@ public:
     // Get all write operations for merging
     std::vector<ToolCall> get_agent_write_operations(const std::string& agent_id);
     
+    // Get manual tool calls for verification
+    std::vector<ToolCall> get_manual_tool_calls(const std::string& agent_id = "");
+    
     // Clear all data for an agent
     bool clear_agent_data(const std::string& agent_id);
     

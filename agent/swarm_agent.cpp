@@ -185,6 +185,12 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         return;
     }
     
+    // Check for manual tool execution messages
+    if (message.find("MANUAL_TOOL_EXEC|") == 0) {
+        handle_manual_tool_execution(channel, message);
+        return;  // Don't inject as user message
+    }
+    
     SWARM_LOG("SwarmAgent: IRC message in %s from %s: %.100s...\n",
               channel.c_str(), sender.c_str(), message.c_str());
     
@@ -206,9 +212,12 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         if (message.find("AGREE:") == 0) {
             // Extract everything after "AGREE:" and trim whitespace
             std::string agreement = message.substr(6);
-            // Trim leading whitespace
+            // Trim both leading and trailing whitespace
             size_t start = agreement.find_first_not_of(" \t\n\r");
-            if (start != std::string::npos) {
+            size_t end = agreement.find_last_not_of(" \t\n\r");
+            if (start != std::string::npos && end != std::string::npos) {
+                agreement = agreement.substr(start, end - start + 1);
+            } else if (start != std::string::npos) {
                 agreement = agreement.substr(start);
             }
             
@@ -256,6 +265,22 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
 
     // Join the conflict channel
     join_irc_channel(channel);
+    
+    // Small delay to ensure orchestrator has time to join and set up session
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Send conflict details to the channel for orchestrator to track
+    json conflict_details = {
+        {"type", "CONFLICT_DETAILS"},
+        {"tool_name", conflict.first_call.tool_name},
+        {"address", std::format("0x{:x}", conflict.first_call.address)},
+        {"conflict_type", conflict.conflict_type},
+        {"first_agent", conflict.first_call.agent_id},
+        {"first_params", conflict.first_call.parameters},
+        {"second_agent", conflict.second_call.agent_id},
+        {"second_params", conflict.second_call.parameters}
+    };
+    send_irc_message(channel, "CONFLICT_DETAILS:" + conflict_details.dump());
 
     // Identify the other agent
     std::string other_agent = (conflict.first_call.agent_id == agent_id_) ?
@@ -458,6 +483,23 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
                     SWARM_LOG("SwarmAgent: Handling conflict with agent %s\n", conflict.first_call.agent_id.c_str());
                     handle_conflict_notification(conflict);
                 }
+                
+                // CRITICAL: Don't execute the tools if there's a conflict!
+                // Return error results for each tool instead
+                SWARM_LOG("SwarmAgent: Preventing tool execution due to conflict\n");
+                std::vector<claude::messages::Message> error_results;
+                for (const auto* tool_use : tool_uses) {
+                    if (tool_use) {
+                        error_results.push_back(claude::messages::Message::tool_result(
+                            tool_use->id,
+                            json{
+                                {"success", false}, 
+                                {"error", "Tool execution prevented due to conflict. Entering discussion phase to reach consensus."}
+                            }.dump()
+                        ));
+                    }
+                }
+                return error_results;
             }
         }
     }
@@ -659,6 +701,116 @@ std::string SwarmAgent::generate_conflict_channel(const ToolConflict& conflict) 
     }
 
     return format;
+}
+
+bool SwarmAgent::parse_manual_tool_message(const std::string& message, std::string& target_agent, 
+                                          std::string& tool_name, json& parameters) {
+    // Format: MANUAL_TOOL_EXEC|<agent_id>|<tool_name>|<json_parameters>
+    if (message.find("MANUAL_TOOL_EXEC|") != 0) {
+        return false;
+    }
+    
+    std::string content = message.substr(17); // Skip "MANUAL_TOOL_EXEC|"
+    
+    // Find first delimiter
+    size_t first_delim = content.find('|');
+    if (first_delim == std::string::npos) {
+        return false;
+    }
+    
+    // Find second delimiter
+    size_t second_delim = content.find('|', first_delim + 1);
+    if (second_delim == std::string::npos) {
+        return false;
+    }
+    
+    // Extract components
+    target_agent = content.substr(0, first_delim);
+    tool_name = content.substr(first_delim + 1, second_delim - first_delim - 1);
+    std::string params_str = content.substr(second_delim + 1);
+    
+    // Parse JSON parameters
+    try {
+        parameters = json::parse(params_str);
+        return true;
+    } catch (const json::exception& e) {
+        SWARM_LOG("SwarmAgent: Failed to parse tool parameters: %s\n", e.what());
+        return false;
+    }
+}
+
+void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const std::string& message) {
+    std::string target_agent;
+    std::string tool_name;
+    json parameters;
+    
+    if (!parse_manual_tool_message(message, target_agent, tool_name, parameters)) {
+        SWARM_LOG("SwarmAgent: Invalid manual tool execution message format\n");
+        return;
+    }
+    
+    // Check if this message is for us
+    if (target_agent != agent_id_ && target_agent != "*") {
+        // Not for us, ignore
+        return;
+    }
+    
+    SWARM_LOG("SwarmAgent: Executing manual tool call: %s with params: %s\n", 
+              tool_name.c_str(), parameters.dump().c_str());
+    emit_log(LogLevel::INFO, std::format("Executing consensus-enforced tool: {}", tool_name));
+    
+    // Execute the tool using base class method
+    json result = execute_manual_tool(tool_name, parameters);
+    
+    // Record in conflict detector with manual flag
+    if (result["success"]) {
+        // Extract address if present for recording
+        ea_t address = 0;
+        if (parameters.contains("address")) {
+            try {
+                if (parameters["address"].is_string()) {
+                    address = std::stoull(parameters["address"].get<std::string>(), nullptr, 0);
+                } else if (parameters["address"].is_number()) {
+                    address = parameters["address"].get<ea_t>();
+                }
+            } catch (...) {
+                SWARM_LOG("SwarmAgent: Could not parse address from parameters\n");
+            }
+        }
+        
+        // Record as manual execution
+        json params_with_manual = parameters;
+        params_with_manual["__is_manual"] = true;
+        params_with_manual["__enforced_by"] = "orchestrator_consensus";
+        
+        bool recorded = conflict_detector_->record_tool_call(tool_name, address, params_with_manual);
+        if (!recorded) {
+            SWARM_LOG("SwarmAgent: WARNING - Failed to record manual tool call in database\n");
+        }
+        
+        // Inject user message to inform the agent
+        std::string notification = std::format(
+            "[SYSTEM] Consensus enforcement executed: {} with parameters: {}\n"
+            "This action was applied to ensure all agents have identical data after reaching consensus.",
+            tool_name, parameters.dump(2)
+        );
+        inject_user_message(notification);
+    }
+    
+    // Send result back via IRC
+    send_manual_tool_result(channel, result["success"], result);
+}
+
+void SwarmAgent::send_manual_tool_result(const std::string& channel, bool success, const json& result) {
+    // Format: MANUAL_TOOL_RESULT|<agent_id>|<success/failure>|<result_json>
+    std::string status = success ? "success" : "failure";
+    std::string message = std::format("MANUAL_TOOL_RESULT|{}|{}|{}", 
+                                      agent_id_, status, result.dump());
+    
+    send_irc_message(channel, message);
+    
+    SWARM_LOG("SwarmAgent: Sent manual tool result: %s\n", status.c_str());
+    emit_log(LogLevel::INFO, std::format("Manual tool execution {}", status));
 }
 
 

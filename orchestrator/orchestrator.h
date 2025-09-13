@@ -107,12 +107,17 @@ private:
         std::string channel;
         std::set<std::string> participating_agents;
         std::map<std::string, std::string> agreements;  // agent_id -> agreement text
+        ToolConflict original_conflict;  // Store the original conflict for context
         bool grader_invoked = false;
         bool resolved = false;
         std::chrono::steady_clock::time_point started;
     };
     std::map<std::string, ConflictSession> active_conflicts_;  // channel -> session
     std::mutex conflicts_mutex_;
+    
+    // Manual tool execution tracking
+    std::map<std::string, bool> manual_tool_responses_;  // agent_id -> responded
+    std::mutex manual_tool_mutex_;
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);
@@ -144,6 +149,13 @@ private:
     void check_conflict_consensus(const std::string& channel);
     void invoke_consensus_grader(const std::string& channel);
     void broadcast_grader_result(const std::string& channel, bool consensus, const std::string& reasoning);
+    
+    // Consensus value extraction and enforcement
+    json extract_consensus_tool_call(const std::string& channel, const ConflictSession& session);
+    void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call, 
+                                         const std::set<std::string>& agents);
+    void handle_manual_tool_result(const std::string& channel, const std::string& sender, const std::string& message);
+    bool verify_consensus_applied(const std::set<std::string>& agents, ea_t address);
     
     // Context consolidation for orchestrator
     bool should_consolidate_context() const;
