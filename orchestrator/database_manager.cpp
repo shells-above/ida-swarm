@@ -23,19 +23,38 @@ DatabaseManager::~DatabaseManager() {
 
 bool DatabaseManager::initialize() {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     // Create workspace directory
     if (!create_workspace()) {
         ORCH_LOG("DatabaseManager: Failed to create workspace\n");
         return false;
     }
-    
-    // Verify main database exists
+
+    // Check if main database exists, save it if not
     if (!fs::exists(main_database_path_)) {
         ORCH_LOG("DatabaseManager: Main database does not exist: %s\n", main_database_path_.c_str());
-        return false;
+        ORCH_LOG("DatabaseManager: Attempting to save database for first time...\n");
+
+        // Need to unlock mutex before calling save_current_database to avoid deadlock
+        mutex_.unlock();
+        bool save_result = save_current_database();
+        mutex_.lock();
+
+        if (!save_result) {
+            ORCH_LOG("DatabaseManager: Failed to save database\n");
+            return false;
+        }
+
+        // Verify the database file was created
+        if (!fs::exists(main_database_path_)) {
+            ORCH_LOG("DatabaseManager: Database file still doesn't exist after save: %s\n",
+                     main_database_path_.c_str());
+            return false;
+        }
+
+        ORCH_LOG("DatabaseManager: Successfully saved database: %s\n", main_database_path_.c_str());
     }
-    
+
     ORCH_LOG("DatabaseManager: Initialized with workspace: %s\n", workspace_dir_.c_str());
     return true;
 }
