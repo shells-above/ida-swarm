@@ -109,9 +109,10 @@ private:
     struct ConflictSession {
         std::string channel;
         std::set<std::string> participating_agents;
-        std::map<std::string, std::string> agreements;  // agent_id -> agreement text
+        std::map<std::string, std::string> agreements;  // agent_id -> agreement text (deprecated)
+        std::map<std::string, std::string> consensus_statements;  // agent_id -> consensus text
         ToolConflict original_conflict;  // Store the original conflict for context
-        bool grader_invoked = false;
+        bool grader_invoked = false;  // deprecated
         bool resolved = false;
         std::chrono::steady_clock::time_point started;
     };
@@ -149,13 +150,10 @@ private:
     
     // Conflict resolution management
     void handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message);
-    void check_conflict_consensus(const std::string& channel);
-    void invoke_consensus_grader(const std::string& channel);
-    void broadcast_grader_result(const std::string& channel, bool consensus, const std::string& reasoning);
-    
+
     // Consensus value extraction and enforcement
     json extract_consensus_tool_call(const std::string& channel, const ConflictSession& session);
-    void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call, 
+    void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
                                          const std::set<std::string>& agents);
     void handle_manual_tool_result(const std::string& channel, const std::string& sender, const std::string& message);
     bool verify_consensus_applied(const std::set<std::string>& agents, ea_t address);

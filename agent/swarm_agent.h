@@ -27,6 +27,11 @@ struct SimpleConflictState {
     std::set<std::string> participating_agents; // Dynamically updated as agents join
     std::map<std::string, std::string> agreements; // agent_id -> what they said after "AGREE|"
     bool resolved = false;
+
+    // Turn-based discussion tracking
+    bool my_turn = false;                       // Whether it's this agent's turn to speak
+    bool consensus_reached = false;              // Whether consensus has been reached
+    std::string final_consensus;                // The final agreed-upon consensus text
 };
 
 // Extended agent for swarm operation
@@ -74,6 +79,19 @@ public:
     // Set whether agent is waiting for conflict details before starting
     void set_waiting_for_conflict_details(bool wait) {
         waiting_for_conflict_details_ = wait;
+    }
+
+    // Helper methods for MarkConsensusReachedTool
+    bool has_active_conflict() const { return active_conflict_.has_value(); }
+    std::string get_conflict_channel() const {
+        return active_conflict_ ? active_conflict_->channel : "";
+    }
+    std::string get_agent_id() const { return agent_id_; }
+    void mark_local_consensus(const std::string& consensus) {
+        if (active_conflict_) {
+            active_conflict_->consensus_reached = true;
+            active_conflict_->final_consensus = consensus;
+        }
     }
 
 protected:

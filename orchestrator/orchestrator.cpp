@@ -944,24 +944,22 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         handle_manual_tool_result(channel, sender, message);
         return;
     }
-    
+
     // Check if this is a conflict channel message
     if (channel.find("#conflict_") == 0) {
         handle_conflict_message(channel, sender, message);
         return;
     }
-    
-    // Handle resurrection requests
-    if (message.find("RESURRECT_AGENT|") == 0) {
-        // Format: RESURRECT_AGENT|agent_id|channel|conflict_type
-        std::string request = message.substr(16);
-        size_t first_pipe = request.find('|');
-        size_t second_pipe = request.find('|', first_pipe + 1);
-        
-        if (first_pipe != std::string::npos && second_pipe != std::string::npos) {
-            std::string target_agent = request.substr(0, first_pipe);
-            std::string conflict_channel = request.substr(first_pipe + 1, second_pipe - first_pipe - 1);
-            std::string conflict_type = request.substr(second_pipe + 1);
+
+    // Handle simplified resurrection requests
+    if (message.find("RESURRECT|") == 0) {
+        // Format: RESURRECT|agent_id|channel
+        std::string request = message.substr(10);  // Skip "RESURRECT|"
+        size_t pipe = request.find('|');
+
+        if (pipe != std::string::npos) {
+            std::string target_agent = request.substr(0, pipe);
+            std::string conflict_channel = request.substr(pipe + 1);
             
             ORCH_LOG("Orchestrator: Resurrection request for agent %s to join %s\n",
                 target_agent.c_str(), conflict_channel.c_str());
@@ -983,10 +981,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 json resurrection_config = {
                     {"reason", "conflict_resolution"},
                     {"conflict_channel", conflict_channel},
-                    {"conflict", {
-                        {"type", conflict_type},
-                        {"requesting_agent", sender}
-                    }}
+                    {"requesting_agent", sender}
                 };
                 
                 // Remove from completed set since it's being resurrected
@@ -1013,6 +1008,64 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         return;
     }
     
+    // Handle MARKED_CONSENSUS messages from #agents channel
+    if (channel == "#agents" && message.find("MARKED_CONSENSUS|") == 0) {
+        // Format: MARKED_CONSENSUS|agent_id|conflict_channel|consensus
+        std::string content = message.substr(17);  // Skip "MARKED_CONSENSUS|"
+
+        size_t first_pipe = content.find('|');
+        size_t second_pipe = content.find('|', first_pipe + 1);
+
+        if (first_pipe != std::string::npos && second_pipe != std::string::npos) {
+            std::string agent_id = content.substr(0, first_pipe);
+            std::string conflict_channel = content.substr(first_pipe + 1, second_pipe - first_pipe - 1);
+            std::string consensus = content.substr(second_pipe + 1);
+
+            ORCH_LOG("Orchestrator: Agent %s marked consensus for %s: %s\n",
+                     agent_id.c_str(), conflict_channel.c_str(), consensus.c_str());
+
+            // Track the consensus mark
+            {
+                std::lock_guard<std::mutex> lock(conflicts_mutex_);
+                if (active_conflicts_.find(conflict_channel) != active_conflicts_.end()) {
+                    ConflictSession& session = active_conflicts_[conflict_channel];
+                    session.consensus_statements[agent_id] = consensus;
+                    session.participating_agents.insert(agent_id);
+
+                    // Check if all participating agents have marked consensus
+                    bool all_marked = true;
+                    for (const std::string& participant: session.participating_agents) {
+                        if (session.consensus_statements.find(participant) == session.consensus_statements.end()) {
+                            all_marked = false;
+                            break;
+                        }
+                    }
+
+                    if (all_marked && session.participating_agents.size() >= 2) {
+                        ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n",
+                                 conflict_channel.c_str());
+
+                        // Extract and enforce the consensus tool call with all individual consensus texts
+                        json tool_call = extract_consensus_tool_call(conflict_channel, session);
+                        if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
+                            enforce_consensus_tool_execution(conflict_channel, tool_call, session.participating_agents);
+                        }
+
+                        // Clean up after a delay
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        active_conflicts_.erase(conflict_channel);
+
+                        // Leave the channel
+                        if (irc_client_) {
+                            irc_client_->leave_channel(conflict_channel);
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     // Parse AGENT_TOKEN_UPDATE messages from #agents channel
     if (channel == "#agents" && message.find("AGENT_TOKEN_UPDATE | ") == 0) {
         // Format: AGENT_TOKEN_UPDATE | {json}
@@ -1110,233 +1163,60 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
 
 void Orchestrator::handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message) {
     std::lock_guard<std::mutex> lock(conflicts_mutex_);
-    
-    // Parse CONFLICT_DETAILS message to get original conflict
-    if (message.find("CONFLICT_DETAILS|") == 0) {
-        try {
-            std::string details_json = message.substr(17);  // Skip "CONFLICT_DETAILS|"
-            json details = json::parse(details_json);
-            
-            // Reconstruct the ToolConflict from the details
-            ToolConflict conflict;
-            conflict.conflict_type = details["conflict_type"];
-            
-            // First call
-            conflict.first_call.agent_id = details["first_agent"];
-            conflict.first_call.tool_name = details["tool_name"];
-            conflict.first_call.address = std::stoull(details["address"].get<std::string>(), nullptr, 0);
-            conflict.first_call.parameters = details["first_params"];
-            conflict.first_call.is_write_operation = true;
-            
-            // Second call
-            conflict.second_call.agent_id = details["second_agent"];
-            conflict.second_call.tool_name = details["tool_name"];
-            conflict.second_call.address = conflict.first_call.address;
-            conflict.second_call.parameters = details["second_params"];
-            conflict.second_call.is_write_operation = true;
-            
-            // Store in session
-            if (active_conflicts_.find(channel) != active_conflicts_.end()) {
-                active_conflicts_[channel].original_conflict = conflict;
-                ORCH_LOG("Orchestrator: Stored conflict details for channel %s\n", channel.c_str());
-            }
-        } catch (const std::exception& e) {
-            ORCH_LOG("Orchestrator: Failed to parse conflict details: %s\n", e.what());
-        }
-        return;  // Don't process CONFLICT_DETAILS as a regular message
-    }
-    
+
     // Initialize conflict session if it doesn't exist
     if (active_conflicts_.find(channel) == active_conflicts_.end()) {
         ConflictSession session;
         session.channel = channel;
         session.started = std::chrono::steady_clock::now();
         active_conflicts_[channel] = session;
-        
+
         // Join the conflict channel to monitor it
         if (irc_client_) {
             irc_client_->join_channel(channel);
         }
-        
+
         ORCH_LOG("Orchestrator: Monitoring new conflict channel %s\n", channel.c_str());
+
+        // Parse channel name to reconstruct conflict (format: #conflict_addr_toolname)
+        std::string channel_copy = channel;
+        if (channel_copy.find("#conflict_") == 0) {
+            channel_copy = channel_copy.substr(10);  // Remove "#conflict_"
+            size_t addr_end = channel_copy.find('_');
+            if (addr_end != std::string::npos) {
+                std::string addr_str = channel_copy.substr(0, addr_end);
+                std::string tool_name = channel_copy.substr(addr_end + 1);
+
+                // Basic conflict info for consensus extraction
+                ToolConflict conflict;
+                conflict.conflict_type = tool_name;
+                conflict.first_call.tool_name = tool_name;
+                conflict.first_call.address = std::stoull(addr_str, nullptr, 16);
+                conflict.second_call.tool_name = tool_name;
+                conflict.second_call.address = conflict.first_call.address;
+
+                session.original_conflict = conflict;
+            }
+        }
     }
-    
+
     ConflictSession& session = active_conflicts_[channel];
-    
-    // Track AGREE messages from agents
-    if (message.find("AGREE|") == 0) {
-        std::string agreement = message.substr(6);
-        
-        // Trim both leading and trailing whitespace
-        size_t start = agreement.find_first_not_of(" \t\n\r");
-        size_t end = agreement.find_last_not_of(" \t\n\r");
-        if (start != std::string::npos && end != std::string::npos) {
-            agreement = agreement.substr(start, end - start + 1);
-        } else if (start != std::string::npos) {
-            agreement = agreement.substr(start);
-        }
-        
-        // Add agent to participating set
-        session.participating_agents.insert(sender);
-        
-        // Store agreement
-        session.agreements[sender] = agreement;
-        
-        ORCH_LOG("Orchestrator: Agent %s agreed to: %s (channel %s)\n", 
-                 sender.c_str(), agreement.c_str(), channel.c_str());
-        
-        // Check if we should invoke the grader
-        check_conflict_consensus(channel);
-        
-    } else if (message.find("DISAGREE|") == 0) {
-        // Agent disagrees - track participation but no agreement yet
-        session.participating_agents.insert(sender);
-        session.agreements.erase(sender);  // Remove any previous agreement
-        
-        ORCH_LOG("Orchestrator: Agent %s disagrees in channel %s\n", 
-                 sender.c_str(), channel.c_str());
-    }
-}
 
-void Orchestrator::check_conflict_consensus(const std::string& channel) {
-    auto it = active_conflicts_.find(channel);
-    if (it == active_conflicts_.end()) return;
-    
-    ConflictSession& session = it->second;
-    
-    // Don't invoke grader multiple times
-    if (session.grader_invoked) return;
-    
-    // Check if all participating agents have agreed
-    bool all_agreed = true;
-    for (const auto& agent : session.participating_agents) {
-        if (session.agreements.find(agent) == session.agreements.end()) {
-            all_agreed = false;
-            break;
-        }
-    }
-    
-    if (all_agreed && !session.participating_agents.empty()) {
-        ORCH_LOG("Orchestrator: All %zu agents have agreed in %s, invoking grader\n",
-                 session.participating_agents.size(), channel.c_str());
-        
-        session.grader_invoked = true;
-        invoke_consensus_grader(channel);
-    }
-}
+    // Track participants from messages in the channel
+    session.participating_agents.insert(sender);
 
-void Orchestrator::invoke_consensus_grader(const std::string& channel) {
-    auto it = active_conflicts_.find(channel);
-    if (it == active_conflicts_.end()) return;
-    
-    const ConflictSession& session = it->second;
-    
-    ORCH_LOG("Orchestrator: Invoking Haiku 3.5 grader for channel %s\n", channel.c_str());
-    
-    // Build grader prompt
-    std::string prompt = "Multiple agents discussed a conflict and reached the following agreements:\n\n";
-    
-    for (const auto& [agent, agreement] : session.agreements) {
-        prompt += agent + ": " + agreement + "\n\n";
-    }
-    
-    prompt += "Determine if these agents have reached consensus on the same solution. ";
-    prompt += "Look at the semantic meaning, not exact wording. ";
-    prompt += "Respond with JSON only: {\"reasoning\": \"...\", \"consensus\": true/false}";
-    
-    try {
-        // Create request for Haiku 3.5
-        claude::ChatRequest request;
-        request.model = claude::Model::Haiku35;
-        request.max_tokens = 500;
-        request.messages.push_back(claude::messages::Message::user_text(prompt));
-        
-        // Send to grader
-        claude::ChatResponse response = api_client_->send_request(request);
-        
-        if (response.success) {
-            auto text_opt = response.message.get_text();
-            if (text_opt.has_value()) {
-                std::string grader_response = *text_opt;
-                ORCH_LOG("Orchestrator: Grader response: %s\n", grader_response.c_str());
-                
-                // Parse JSON response
-                json result = json::parse(grader_response);
-                bool consensus = result["consensus"];
-                std::string reasoning = result["reasoning"];
-                
-                // Broadcast result to agents
-                broadcast_grader_result(channel, consensus, reasoning);
-                
-                // Update session state
-                if (consensus) {
-                    active_conflicts_[channel].resolved = true;
-                }
-            }
-        } else {
-            std::string error_msg = response.error.value_or("Unknown error");
-            ORCH_LOG("Orchestrator: Grader request failed: %s\n", error_msg.c_str());
-            // Broadcast error to agents
-            broadcast_grader_result(channel, false, "Grader invocation failed: " + error_msg);
-        }
-        
-    } catch (const std::exception& e) {
-        ORCH_LOG("Orchestrator: Exception invoking grader: %s\n", e.what());
-        broadcast_grader_result(channel, false, "Grader error: " + std::string(e.what()));
-    }
-}
-
-void Orchestrator::broadcast_grader_result(const std::string& channel, bool consensus, const std::string& reasoning) {
-    // Format result message
-    json result_json = {
-        {"consensus", consensus},
-        {"reasoning", reasoning}
-    };
-    
-    std::string message = "GRADER_RESULT|" + result_json.dump();
-    
-    // Send to conflict channel
-    if (irc_client_) {
-        irc_client_->send_message(channel, message);
-        ORCH_LOG("Orchestrator: Broadcast grader result to %s: consensus=%s\n", 
-                 channel.c_str(), consensus ? "true" : "false");
-    }
-    
-    // If consensus reached, enforce the agreed value and clean up
-    if (consensus) {
-        // Extract and enforce the consensus tool call
-        {
-            std::lock_guard<std::mutex> lock(conflicts_mutex_);
-            auto it = active_conflicts_.find(channel);
-            if (it != active_conflicts_.end()) {
-                json tool_call = extract_consensus_tool_call(channel, it->second);
-                if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
-                    enforce_consensus_tool_execution(channel, tool_call, it->second.participating_agents);
-                }
-            }
-        }
-        
-        // Let agents process the enforcement
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-        
-        std::lock_guard<std::mutex> lock(conflicts_mutex_);
-        active_conflicts_.erase(channel);
-        
-        // Leave the channel
-        if (irc_client_) {
-            irc_client_->leave_channel(channel);
-        }
-    }
+    // Consensus is now handled through MARKED_CONSENSUS messages in #agents channel
+    // This function just tracks participation in the conflict channel
 }
 
 json Orchestrator::extract_consensus_tool_call(const std::string& channel, const ConflictSession& session) {
-    ORCH_LOG("Orchestrator: Extracting consensus tool call using ConsensusExecutor\n");
-    
+    ORCH_LOG("Orchestrator: Extracting consensus tool call from multiple agent statements\n");
+
     // Check if we have the original conflict details
     if (session.original_conflict.first_call.tool_name.empty()) {
-        ORCH_LOG("Orchestrator: WARNING - No original conflict details, falling back to LLM extraction\n");
-        
-        // Fallback to simple extraction without context
+        ORCH_LOG("Orchestrator: WARNING - No original conflict details, falling back\n");
+
+        // Try to extract from consensus texts directly
         json fallback_call = {
             {"tool_name", "unknown"},
             {"parameters", {
@@ -1346,17 +1226,17 @@ json Orchestrator::extract_consensus_tool_call(const std::string& channel, const
         };
         return fallback_call;
     }
-    
+
     try {
         // Create a temporary consensus executor
         agent::ConsensusExecutor executor(config_);
-        
-        // Let the executor parse and capture the tool call
-        json tool_call = executor.execute_consensus(session.agreements, session.original_conflict);
-        
+
+        // Pass all individual consensus statements from each agent
+        json tool_call = executor.execute_consensus(session.consensus_statements, session.original_conflict);
+
         if (tool_call.is_null() || !tool_call.contains("tool_name")) {
             ORCH_LOG("Orchestrator: ConsensusExecutor failed to extract tool call\n");
-            
+
             // Fallback: use the original conflict tool with manual flag
             return {
                 {"tool_name", session.original_conflict.first_call.tool_name},
@@ -1367,13 +1247,13 @@ json Orchestrator::extract_consensus_tool_call(const std::string& channel, const
                 }}
             };
         }
-        
+
         ORCH_LOG("Orchestrator: ConsensusExecutor extracted tool call: %s\n", tool_call.dump().c_str());
         return tool_call;
-        
+
     } catch (const std::exception& e) {
         ORCH_LOG("Orchestrator: ERROR in ConsensusExecutor: %s\n", e.what());
-        
+
         // Return fallback with original tool info
         return {
             {"tool_name", session.original_conflict.first_call.tool_name},
@@ -1385,6 +1265,7 @@ json Orchestrator::extract_consensus_tool_call(const std::string& channel, const
         };
     }
 }
+
 
 void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
                                                    const std::set<std::string>& agents) {
@@ -1403,7 +1284,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
     }
     
     // Send manual tool execution to each agent
-    for (const auto& agent_id : agents) {
+    for (const std::string& agent_id: agents) {
         std::string message = std::format("MANUAL_TOOL_EXEC|{}|{}|{}",
                                          agent_id, tool_name, parameters.dump());
         

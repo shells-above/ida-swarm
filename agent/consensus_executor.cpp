@@ -109,30 +109,24 @@ std::vector<claude::messages::Message> ConsensusExecutor::process_tool_calls(
 std::string ConsensusExecutor::format_consensus_prompt(
     const std::map<std::string, std::string>& agreements,
     const ToolConflict& conflict) {
-    
+
     std::stringstream prompt;
-    
-    // Provide context about the original conflict
-    prompt << "Multiple agents were trying to use the '" << conflict.first_call.tool_name 
-           << "' tool at address 0x" << std::hex << conflict.first_call.address << ".\n\n";
-    
-    prompt << "Original conflicting calls:\n";
-    prompt << "- Agent " << conflict.first_call.agent_id << " wanted to: " 
-           << conflict.first_call.parameters.dump(2) << "\n";
-    prompt << "- Agent " << conflict.second_call.agent_id << " wanted to: " 
-           << conflict.second_call.parameters.dump(2) << "\n\n";
-    
-    prompt << "After discussion, the agents reached consensus:\n\n";
-    
-    for (const auto& [agent_id, agreement] : agreements) {
-        prompt << agent_id << " agreed: " << agreement << "\n";
+
+    // Show each agent's individual consensus statement
+    prompt << "The agents have marked consensus with the following statements:\n\n";
+
+    for (const auto& [agent_id, consensus] : agreements) {
+        prompt << agent_id << " says:\n\"" << consensus << "\"\n\n";
     }
-    
-    prompt << "\nBased on this consensus, execute the '" << conflict.first_call.tool_name 
-           << "' tool with the agreed-upon parameters.\n";
-    prompt << "The address is: 0x" << std::hex << conflict.first_call.address << "\n";
-    prompt << "Make sure to use the exact value that the agents agreed upon.";
-    
+
+    prompt << "Based on these consensus statements, execute the '" << conflict.first_call.tool_name
+           << "' tool at address 0x" << std::hex << conflict.first_call.address
+           << ".\n\n";
+
+    prompt << "Extract the agreed-upon parameters from the consensus statements above. "
+           << "The agents may have slightly different wording but should agree on the core solution. "
+           << "Use your judgment to determine the actual parameters they all agreed upon.";
+
     return prompt.str();
 }
 
