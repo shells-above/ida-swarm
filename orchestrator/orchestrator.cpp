@@ -202,10 +202,32 @@ void Orchestrator::start_mcp_listener() {
 
                             // Process request
                             json response = process_mcp_request(request);
+                            std::string method = request.value("method", "");
 
                             // Send response back
                             std::string response_str = response.dump() + "\n";
                             write(mcp_output_fd_, response_str.c_str(), response_str.length());
+
+                            // Handle shutdown after response is sent
+                            if (method == "shutdown") {
+                                ORCH_LOG("Orchestrator: Shutdown response sent, closing pipes and initiating shutdown...\n");
+
+                                // Close our end of the pipes to signal MCP server we're done
+                                if (mcp_input_fd_ >= 0) {
+                                    close(mcp_input_fd_);
+                                    mcp_input_fd_ = -1;
+                                }
+                                if (mcp_output_fd_ >= 0) {
+                                    close(mcp_output_fd_);
+                                    mcp_output_fd_ = -1;
+                                }
+
+                                // Give MCP server time to detect closure and clean up its end
+                                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+                                shutdown();
+                                break; // Exit listener loop
+                            }
 
                         } catch (const json::exception& e) {
                             ORCH_LOG("Orchestrator: Failed to parse MCP request: %s\n", e.what());
@@ -283,11 +305,8 @@ json Orchestrator::process_mcp_request(const json& request) {
         ORCH_LOG("Orchestrator: Received shutdown request\n");
         response["result"]["status"] = "shutting_down";
 
-        // Trigger shutdown after sending response
-        std::thread([this]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            shutdown();
-        }).detach();
+        // Note: shutdown() will be called after this response is sent
+        // No detached thread needed - prevents hanging process
 
     } else {
         response["error"] = "Unknown method: " + method;
@@ -1706,7 +1725,7 @@ void Orchestrator::shutdown() {
             mcp_listener_thread_.join();
         }
 
-        // Close pipes
+        // Close pipes (only if not already closed)
         if (mcp_input_fd_ >= 0) {
             close(mcp_input_fd_);
             mcp_input_fd_ = -1;
@@ -1744,24 +1763,32 @@ void Orchestrator::shutdown() {
 void Orchestrator::request_ida_graceful_exit() {
     ORCH_LOG("Orchestrator: Requesting graceful IDA exit with database save...\n");
 
-    // Request to save database and exit IDA gracefully
-    struct GracefulExitRequest : exec_request_t {
+    // First, save the database
+    struct DatabaseSaveRequest : exec_request_t {
         virtual ssize_t idaapi execute() override {
-            // First save the database
             if (save_database()) {
                 msg("LLM RE: Database saved successfully\n");
             } else {
                 msg("LLM RE: Warning - Failed to save database\n");
             }
+            return 0;
+        }
+    };
 
-            // Then request graceful exit
+    DatabaseSaveRequest save_req;
+    execute_sync(save_req, MFF_WRITE);
+
+    // Then, request graceful exit
+    struct ExitRequest : exec_request_t {
+        virtual ssize_t idaapi execute() override {
+            msg("LLM RE: Initiating graceful exit...\n");
             qexit(0);
             return 0;
         }
     };
 
-    GracefulExitRequest req;
-    execute_sync(req, MFF_WRITE);
+    ExitRequest exit_req;
+    execute_sync(exit_req, MFF_WRITE);
 
     ORCH_LOG("Orchestrator: Graceful exit request submitted to IDA\n");
 }
