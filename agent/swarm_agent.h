@@ -7,6 +7,7 @@
 #include "../orchestrator/tool_call_tracker.h"
 #include <memory>
 #include <set>
+#include <atomic>
 
 namespace llm_re::agent {
 
@@ -138,6 +139,9 @@ private:
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;
     std::unique_ptr<IRCAdapter> irc_adapter_;
+
+    // Flag to track when we're waiting for a conflict response
+    std::atomic<bool> conflict_waiting_for_response_{false};
 };
 
 } // namespace llm_re::agent

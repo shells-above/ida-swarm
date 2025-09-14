@@ -563,7 +563,38 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
 
     // Now call the base class implementation to actually execute the tools
     // This handles tracking, messaging, and execution
-    return Agent::process_tool_calls(message, iteration);
+    std::vector<claude::messages::Message> results = Agent::process_tool_calls(message, iteration);
+
+    // After sending a message in a conflict channel, wait for the other agent's response
+    if (active_conflict_ && !active_conflict_->my_turn && !active_conflict_->consensus_reached) {
+        SWARM_LOG("SwarmAgent: Not our turn in conflict, waiting for response...\n");
+        emit_log(LogLevel::INFO, "Waiting for other agent's response in conflict discussion");
+
+        // Set a flag to indicate we're waiting
+        conflict_waiting_for_response_ = true;
+
+        // Wait for a message to arrive from the other agent
+        while (conflict_waiting_for_response_) {
+            // Check if it's now our turn (set by handle_irc_message)
+            if (active_conflict_->my_turn) {
+                SWARM_LOG("SwarmAgent: It's now our turn, continuing\n");
+                conflict_waiting_for_response_ = false;
+                break;
+            }
+
+            // Check if consensus was reached
+            if (active_conflict_->consensus_reached) {
+                SWARM_LOG("SwarmAgent: Consensus reached, continuing\n");
+                conflict_waiting_for_response_ = false;
+                break;
+            }
+
+            // Small sleep to avoid busy waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    return results;
 }
 
 bool SwarmAgent::connect_to_irc() {
