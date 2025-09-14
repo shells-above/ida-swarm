@@ -398,14 +398,13 @@ private:
         if (agent_config_.contains("conflict_channel")) {
             std::string conflict_channel = agent_config_["conflict_channel"];
             msg("LLM RE: Joining conflict channel %s\n", conflict_channel.c_str());
-            
+
             // Join the conflict channel
             swarm_agent_->join_irc_channel(conflict_channel);
-            
-            // Start the agent with a conflict resolution task
-            // The actual conflict details will come from the CONFLICT_DETAILS message
-            std::string task = "Participate in conflict resolution discussion in channel " + conflict_channel;
-            swarm_agent_->start_task(task);
+
+            // Don't start task yet - wait for CONFLICT_DETAILS message to provide context
+            swarm_agent_->set_waiting_for_conflict_details(true);
+            msg("LLM RE: Waiting for conflict details before starting task\n");
         } else {
             // Resume normal task
             std::string task = agent_config_.value("saved_task", "Continue analysis");

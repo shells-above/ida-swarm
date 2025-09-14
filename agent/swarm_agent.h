@@ -70,7 +70,12 @@ public:
     void inject_user_message(const std::string& message) override {
         Agent::inject_user_message(message);
     }
-    
+
+    // Set whether agent is waiting for conflict details before starting
+    void set_waiting_for_conflict_details(bool wait) {
+        waiting_for_conflict_details_ = wait;
+    }
+
 protected:
     // Override tool processing to add conflict detection for ALL tools
     std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) override;
@@ -91,7 +96,10 @@ private:
     
     // Conflict handling state
     std::optional<SimpleConflictState> active_conflict_;  // Current active conflict (if any)
-    
+
+    // Flag for delayed task start when waiting for conflict details
+    bool waiting_for_conflict_details_ = false;
+
     // Connect to IRC server
     bool connect_to_irc();
 

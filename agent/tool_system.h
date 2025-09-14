@@ -734,16 +734,17 @@ public:
     }
 
     std::string description() const override {
-        return "Update any variable in a function - arguments or locals. Give them meaningful names and/or correct types. "
-               "Transform 'v1' into 'packetLength', 'a2' into 'clientSocket'. "
-               "Works for both function arguments (a1, a2, etc.) and local variables (v1, v2, etc.). "
+        return "Update local variables in a function. Give them meaningful names and/or correct types. "
+               "Transform 'v1' into 'packetLength', 'v2' into 'responseBuffer'. "
+               "IMPORTANT: This tool only works for local variables (v1, v2, etc.), NOT function arguments. "
+               "To modify function arguments (a1, a2, etc.), use set_function_prototype instead. "
                "Well-named variables make function logic self-documenting.";
     }
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
             .add_integer("address", "The function address")
-            .add_string("variable_name", "Current variable name (e.g., 'v1', 'a2', or existing name)")
+            .add_string("variable_name", "Current local variable name (e.g., 'v1', 'v2', or existing local var name)")
             .add_string("new_name", "New variable name", false)
             .add_string("new_type", "New type (e.g., 'SOCKET', 'char*', 'MY_STRUCT')", false)
             .build();

@@ -1610,6 +1610,13 @@ void Orchestrator::log_token_usage(const claude::TokenUsage& per_iteration_usage
         cumulative_usage.input_tokens, cumulative_usage.output_tokens);
 }
 
+std::vector<std::string> Orchestrator::get_irc_channels() const {
+    if (irc_server_) {
+        return irc_server_->list_channels();
+    }
+    return {};
+}
+
 void Orchestrator::shutdown() {
     if (shutting_down_) return;
     shutting_down_ = true;

@@ -1152,6 +1152,11 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
             throw std::runtime_error("Cannot get function at address");
         }
 
+        // Commented out: Function argument modification removed to prevent conflicts with set_function_prototype tool
+        // When both set_variable and set_function_prototype can modify function arguments, they create
+        // undetected conflicts in the multi-agent system. To fix this, set_variable now only handles
+        // local variables, while set_function_prototype handles all function signature changes.
+        /*
         // First try to modify as a function argument (simpler case)
         // This works even without decompiling the function
         tinfo_t func_type;
@@ -1167,24 +1172,24 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
                         if (!new_type.empty()) {
                             tinfo_t new_tif;
                             qstring dummy_name;
-                            
+
                             // For bare type expressions like "char*", "int", etc., we need to wrap
                             // them in a typedef declaration because parse_decl expects complete declarations
                             std::string typedef_decl = "typedef " + new_type + " __dummy;";
-                            
+
                             if (!parse_decl(&new_tif, &dummy_name, get_idati(), typedef_decl.c_str(), PT_TYP | PT_SIL)) {
                                 // If typedef approach fails, try as a variable declaration
                                 std::string var_decl = new_type + " __dummy";
                                 if (!parse_decl(&new_tif, &dummy_name, get_idati(), var_decl.c_str(), PT_VAR | PT_SIL)) {
-                                    throw std::invalid_argument("Failed to parse type: '" + new_type + 
+                                    throw std::invalid_argument("Failed to parse type: '" + new_type +
                                         "'. Expected formats: 'int', 'char*', 'struct name*', 'unsigned int', etc.");
                                 }
                             }
-                            
+
                             if (!new_tif.is_correct()) {
                                 throw std::invalid_argument("Parsed type is invalid: " + new_type);
                             }
-                            
+
                             ftd[i].type = new_tif;
                             changed = true;
                         }
@@ -1210,6 +1215,16 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
                 }
             }
         }
+        */
+
+        // Check if the variable name looks like a function argument (a1, a2, etc.)
+        // and provide a helpful error message
+        if (variable_name.length() >= 2 && variable_name[0] == 'a' && std::isdigit(variable_name[1])) {
+            throw std::invalid_argument(
+                "Cannot modify function argument '" + variable_name + "' with set_variable. "
+                "Use set_function_prototype to modify function arguments."
+            );
+        }
 
         // Not a function argument - must be a local variable
         // Now we need to decompile to access local variables
@@ -1234,7 +1249,13 @@ bool IDAUtils::set_variable(ea_t address, const std::string& variable_name, cons
         }
 
         if (!target_lvar) {
-            throw std::invalid_argument("Variable not found: " + variable_name);
+            // Check if this might be a function argument that the user is trying to modify
+            // Provide a more helpful error message
+            throw std::invalid_argument(
+                "Variable not found: " + variable_name + ". "
+                "Note: set_variable only works for local variables (v1, v2, etc.). "
+                "To modify function arguments, use set_function_prototype."
+            );
         }
 
         if (target_lvar->is_fake_var()) {

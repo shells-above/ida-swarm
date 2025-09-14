@@ -859,6 +859,13 @@ IRCViewer::IRCViewer(QWidget* parent) : QWidget(parent) {
     channel_combo_->addItem("#agents");
     channel_combo_->addItem("#results");
     channel_combo_->addItem("#conflicts");
+
+    // Style the #conflicts option differently to indicate it's a meta-channel
+    QFont conflicts_font = channel_combo_->font();
+    conflicts_font.setItalic(true);
+    channel_combo_->setItemData(3, conflicts_font, Qt::FontRole);
+    channel_combo_->setItemData(3, "View list of all conflict resolution channels", Qt::ToolTipRole);
+
     channel_combo_->setCurrentIndex(0);
     control_layout->addWidget(channel_combo_);
     
@@ -952,19 +959,22 @@ void IRCViewer::set_channel_filter(const std::string& channel) {
 }
 
 void IRCViewer::on_channel_selected() {
+    if (updating_dropdown_) return;  // Prevent recursion
+
     QString channel = channel_combo_->currentText();
-    
+
     if (channel == "All Channels") {
         current_channel_filter_.clear();
         showing_conflict_list_ = false;
     } else if (channel == "#conflicts") {
-        current_channel_filter_ = "#conflicts";
+        current_channel_filter_.clear();  // FIX: Don't set filter for meta-channel
         showing_conflict_list_ = true;
+        refresh_conflict_channels();  // Proactive discovery
     } else {
         current_channel_filter_ = channel.toStdString();
         showing_conflict_list_ = false;
     }
-    
+
     apply_filters();
 }
 
@@ -980,7 +990,10 @@ void IRCViewer::on_item_double_clicked(QTreeWidgetItem* item, int column) {
             // Switch to viewing this specific conflict channel
             current_channel_filter_ = channel_name.toStdString();
             showing_conflict_list_ = false;
-            
+
+            // Prevent signal loop when updating dropdown
+            updating_dropdown_ = true;
+
             // Update dropdown to reflect we're viewing a specific channel
             // Add the conflict channel to dropdown if not there
             int index = channel_combo_->findText(channel_name);
@@ -989,7 +1002,10 @@ void IRCViewer::on_item_double_clicked(QTreeWidgetItem* item, int column) {
                 index = channel_combo_->count() - 1;
             }
             channel_combo_->setCurrentIndex(index);
-            
+
+            // Re-enable signal handling
+            updating_dropdown_ = false;
+
             apply_filters();
         }
     }
@@ -998,22 +1014,39 @@ void IRCViewer::on_item_double_clicked(QTreeWidgetItem* item, int column) {
 void IRCViewer::show_conflict_channel_list() {
     // Clear tree and show list of discovered conflict channels
     message_tree_->clear();
-    
+
+    // Update headers for conflict list mode
+    message_tree_->setHeaderLabels(QStringList()
+        << "" << "Conflict Channel" << "Status" << "Action");
+
     for (const auto& conflict_channel : discovered_conflict_channels_) {
         auto* item = new QTreeWidgetItem(message_tree_);
-        item->setText(0, "");  // No time for channel list
+        item->setText(0, "");
         item->setText(1, QString::fromStdString(conflict_channel));
-        item->setText(2, "");  // No sender
-        item->setText(3, "Double-click to view messages");
+
+        // Count messages for this channel
+        int msg_count = 0;
+        for (const auto& msg : all_messages_) {
+            if (msg.channel.toStdString() == conflict_channel) {
+                msg_count++;
+            }
+        }
+        item->setText(2, QString("%1 messages").arg(msg_count));
+
+        item->setText(3, "Double-click to view");
         item->setBackground(1, QColor(255, 220, 220));
-        
+
         // Make it stand out as clickable
         QFont font = item->font(1);
         font.setBold(true);
         item->setFont(1, font);
-        item->setFont(3, font);
+
+        // Add tooltip with channel details
+        QString channel_qstr = QString::fromStdString(conflict_channel);
+        item->setToolTip(1, QString("Conflict resolution channel: %1").arg(channel_qstr));
+        item->setToolTip(3, "Double-click to view messages in this conflict channel");
     }
-    
+
     if (discovered_conflict_channels_.empty()) {
         auto* item = new QTreeWidgetItem(message_tree_);
         item->setText(0, "");
@@ -1022,6 +1055,8 @@ void IRCViewer::show_conflict_channel_list() {
         item->setText(3, "No conflict channels active");
         item->setForeground(3, Qt::gray);
     }
+
+    // Restore normal headers when leaving conflict list mode (will be done in apply_filters)
 }
 
 void IRCViewer::apply_filters() {
@@ -1030,7 +1065,10 @@ void IRCViewer::apply_filters() {
         show_conflict_channel_list();
         return;
     }
-    
+
+    // Restore normal headers for message view
+    message_tree_->setHeaderLabels(QStringList() << "Time" << "Channel" << "Sender" << "Message");
+
     // Rebuild tree with all messages and apply filters
     message_tree_->clear();
     
@@ -1065,6 +1103,23 @@ void IRCViewer::apply_filters() {
             // Highlight conflict channels
             if (msg.channel.startsWith("#conflict_")) {
                 item->setBackground(1, QColor(255, 220, 220));
+            }
+        }
+    }
+}
+
+void IRCViewer::refresh_conflict_channels() {
+    // Get orchestrator through bridge
+    auto* bridge = &UIOrchestratorBridge::instance();
+    auto* orch = bridge->get_orchestrator();
+
+    if (orch) {
+        auto channels = orch->get_irc_channels();
+        discovered_conflict_channels_.clear();
+
+        for (const auto& channel : channels) {
+            if (channel.find("#conflict_") == 0) {
+                discovered_conflict_channels_.insert(channel);
             }
         }
     }

@@ -57,6 +57,9 @@ public:
     
     // Check if conversation is active
     bool is_conversation_active() const { return conversation_active_; }
+
+    // Get list of active IRC channels
+    std::vector<std::string> get_irc_channels() const;
     
 private:
     // Core components

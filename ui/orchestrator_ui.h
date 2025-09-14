@@ -162,7 +162,8 @@ private:
     std::string current_channel_filter_;
     std::set<std::string> discovered_conflict_channels_;
     bool showing_conflict_list_ = false;
-    
+    bool updating_dropdown_ = false;  // Prevent signal loops
+
     // Store all messages to repopulate tree when switching views
     struct IRCMessage {
         QString time;
@@ -171,9 +172,10 @@ private:
         QString message;
     };
     std::vector<IRCMessage> all_messages_;
-    
+
     void apply_filters();
     void show_conflict_channel_list();
+    void refresh_conflict_channels();
 };
 
 // Tool call tracking widget

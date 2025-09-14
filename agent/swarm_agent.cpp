@@ -1,5 +1,6 @@
 #include "swarm_agent.h"
 #include "swarm_logger.h"
+#include "agent_irc_tools.h"
 #include "../sdk/messages/types.h"
 #include <format>
 #include <thread>
@@ -89,10 +90,14 @@ bool SwarmAgent::initialize(const json& swarm_config) {
         }
     }, {AgentEvent::ANALYSIS_RESULT});
     
+    // Register SwarmAgent-specific IRC tools
+    SWARM_LOG("SwarmAgent: Registering IRC communication tools\n");
+    register_swarm_irc_tools(tool_registry_, this);
+
     // Start the base agent
     SWARM_LOG("SwarmAgent: Starting base agent worker thread\n");
     start();
-    
+
     SWARM_LOG("SwarmAgent: Agent %s initialization complete\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, std::format("SwarmAgent {} initialized", agent_id_));
     return true;
@@ -293,33 +298,58 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
                     "Conflict type: {}\n\n"
                     "Your previous change: {}\n"
                     "Their change: {}\n\n"
-                    "You're now in channel {} to discuss.\n"
-                    "Review your previous analysis and present your reasoning.\n"
-                    "When you reach agreement, say: \"AGREE| [the exact value/decision you agree on]\"\n"
-                    "If you disagree, say: \"DISAGREE| [your reasoning]\"\n\n"
-                    "The | (pipe) is important, the syntax is very particular. Use your analysis tools as needed to verify claims.",
+                    "You're now in channel {} to discuss.\n\n"
+                    "TO RESPOND TO THE OTHER AGENT:\n"
+                    "1. Review the conflict and their arguments (if any)\n"
+                    "2. Use the 'send_irc_message' tool with:\n"
+                    "   - channel: '{}'\n"
+                    "   - message: Your response starting with either:\n"
+                    "     'AGREE| [exact value/decision]' if you agree\n"
+                    "     'DISAGREE| [your reasoning]' if you disagree\n\n"
+                    "IMPORTANT: Use the send_irc_message tool - don't just write AGREE/DISAGREE!\n"
+                    "The other agent is waiting for your response.\n\n"
+                    "Use your analysis tools as needed to verify claims.",
                     other_agent,
                     details["address"].get<std::string>(),
                     details["conflict_type"].get<std::string>(),
                     our_params.dump(2),
                     their_params.dump(2),
+                    channel,
                     channel
                 );
                 
                 inject_user_message(conflict_prompt);
                 emit_log(LogLevel::INFO, std::format("Set up conflict state from received details in channel {}", channel));
+
+                // If we're waiting for these details (resurrected agent), now start the task
+                if (waiting_for_conflict_details_) {
+                    waiting_for_conflict_details_ = false;
+                    std::string task = "Participate in conflict resolution discussion in channel " + channel;
+                    SWARM_LOG("SwarmAgent: Received conflict details, now starting task: %s\n", task.c_str());
+                    start_task(task);
+                }
             }
         } catch (const std::exception& e) {
             SWARM_LOG("SwarmAgent: Failed to parse CONFLICT_DETAILS| %s\n", e.what());
         }
-        
+
         // Don't inject CONFLICT_DETAILS as a regular message
         return;
     }
     
     // Inject messages for the agent to see (except #agents channel - just resurrection requests)
     if (channel != "#agents") {
-        inject_user_message("[" + channel + "] " + sender + ": " + message);
+        // For conflict channels, provide clearer context about needing to respond
+        if (channel.find("#conflict_") == 0) {
+            std::string prompt = std::format(
+                "[{}] {} sent: {}\n\n"
+                "TO RESPOND: Use the 'send_irc_message' tool with channel='{}' and your message.",
+                channel, sender, message, channel
+            );
+            inject_user_message(prompt);
+        } else {
+            inject_user_message("[" + channel + "] " + sender + ": " + message);
+        }
     }
 }
 
@@ -379,17 +409,25 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
         "Conflict type: {}\n\n"
         "Their change: {}\n"
         "Your change: {}\n\n"
-        "You're now in channel {} to discuss.\n"
-        "Present your evidence and reasoning.\n"
-        "When you reach agreement, say: \"AGREE| [the exact value/decision you agree on]\"\n"
-        "If you disagree, say: \"DISAGREE| [your reasoning]\"\n\n"
-        "Continue using your analysis tools as needed to verify claims.",
+        "You're now in channel {} to discuss.\n\n"
+        "TO COMMUNICATE WITH THE OTHER AGENT:\n"
+        "1. Analyze the conflict and form your position\n"
+        "2. Use the 'send_irc_message' tool with:\n"
+        "   - channel: '{}'\n"
+        "   - message: Your response starting with either:\n"
+        "     'AGREE| [exact value/decision]' if you agree\n"
+        "     'DISAGREE| [your reasoning]' if you disagree\n\n"
+        "IMPORTANT: You MUST use the send_irc_message tool to communicate!\n"
+        "Just writing AGREE/DISAGREE in your response won't send it to {}.\n\n"
+        "Continue using analysis tools as needed. Wait for responses from the other agent.",
         other_agent,
         conflict.first_call.address,
         conflict.conflict_type,
         conflict.first_call.parameters.dump(2),
         conflict.second_call.parameters.dump(2),
-        channel
+        channel,
+        channel,
+        other_agent
     );
 
     inject_user_message(conflict_prompt);
@@ -490,7 +528,7 @@ void SwarmAgent::restore_conversation_history(const json& saved_conversation) {
             execution_state_.add_message(std::move(message));
         }
 
-        SWARM_LOG("SwarmAgent: Restored %zu messages with 100%% content fidelity\n",
+        SWARM_LOG("SwarmAgent: Restored %zu messages\n",
                   execution_state_.message_count());
         emit_log(LogLevel::INFO, std::format("Restored {} messages from saved state with full content preservation",
                                              execution_state_.message_count()));
