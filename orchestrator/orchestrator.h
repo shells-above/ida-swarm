@@ -16,6 +16,9 @@
 #include <vector>
 #include <map>
 #include <chrono>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
 
 namespace llm_re::orchestrator {
 
@@ -30,36 +33,53 @@ struct AgentInfo {
 // The Orchestrator - The ONLY entity that talks to the user
 class Orchestrator {
 public:
-    Orchestrator(const Config& config, const std::string& main_db_path);
+    Orchestrator(const Config& config, const std::string& main_db_path, bool show_ui = true);
     ~Orchestrator();
-    
+
     // Initialize all subsystems
     bool initialize();
-    
+
+    // Initialize for MCP mode (no UI)
+    bool initialize_mcp_mode(const std::string& session_id,
+                           const std::string& input_pipe_path,
+                           const std::string& output_pipe_path);
+
     // Start interactive session with user
     void start_interactive_session();
-    
+
+    // Start MCP IPC listener
+    void start_mcp_listener();
+
     // Shutdown all agents and cleanup
     void shutdown();
-    
+
     // Tool implementations for the orchestrator
     json spawn_agent_async(const std::string& task, const std::string& context);
     json merge_database(const std::string& agent_id);
-    
+
     // Helper to get agent result
     std::string get_agent_result(const std::string& agent_id) const;
-    
+
     // Process user input (public for UI access)
     void process_user_input(const std::string& input);
-    
+
+    // Process MCP request and return response
+    json process_mcp_request(const json& request);
+
     // Clear conversation and start fresh
     void clear_conversation();
-    
+
     // Check if conversation is active
     bool is_conversation_active() const { return conversation_active_; }
 
     // Get list of active IRC channels
     std::vector<std::string> get_irc_channels() const;
+
+    // Get last response text (for MCP mode)
+    std::string get_last_response() const { return last_response_text_; }
+
+    // Request graceful IDA exit with database save
+    void request_ida_graceful_exit();
     
 private:
     // Core components
@@ -122,6 +142,24 @@ private:
     // Manual tool execution tracking
     std::map<std::string, bool> manual_tool_responses_;  // agent_id -> responded
     std::mutex manual_tool_mutex_;
+
+    // MCP mode support
+    bool show_ui_ = true;
+    std::string mcp_session_id_;
+    std::string last_response_text_;
+    int mcp_input_fd_ = -1;   // Read requests from MCP server
+    int mcp_output_fd_ = -1;  // Send responses to MCP server
+    std::thread mcp_listener_thread_;
+    std::atomic<bool> mcp_listener_should_stop_{false};
+
+    // Task completion signaling for MCP mode
+    std::mutex task_completion_mutex_;
+    std::condition_variable task_completion_cv_;
+    bool task_completed_ = false;
+
+    void signal_task_completion();
+    void wait_for_task_completion();
+    void reset_task_completion();
 
     // Generate prompt for agent
     std::string generate_agent_prompt(const std::string& task, const std::string& context);

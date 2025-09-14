@@ -28,9 +28,10 @@ namespace llm_re {
 class llm_re_plugin_t : public plugmod_t, public event_listener_t {
 public:
     enum Mode {
-        ORCHESTRATOR,     // Normal IDA - user interacts with orchestrator
-        SWARM_AGENT,      // Spawned IDA - runs as automated swarm agent
-        RESURRECTED_AGENT // Resurrected agent for conflict resolution
+        ORCHESTRATOR,       // Normal IDA - user interacts with orchestrator
+        SWARM_AGENT,        // Spawned IDA - runs as automated swarm agent
+        RESURRECTED_AGENT,  // Resurrected agent for conflict resolution
+        MCP_ORCHESTRATOR    // MCP mode - orchestrator without UI
     };
 
 private:
@@ -45,7 +46,12 @@ private:
     json agent_config_;
     std::string agent_id_;
     std::string state_subscription_id_;
-    
+
+    // MCP mode data
+    std::string mcp_session_id_;
+    std::string mcp_input_pipe_;
+    std::string mcp_output_pipe_;
+
     // Common
     Config* config_ = nullptr;
     qstring idb_path_;
@@ -95,7 +101,7 @@ public:
                 msg("LLM RE: Database closing, shutting down\n");
                 prepare_for_shutdown();
                 break;
-                
+
             case ui_ready_to_run:
                 on_ida_ready();
                 break;
@@ -123,15 +129,58 @@ private:
             setup_swarm_agent_mode();
         } else if (mode_ == RESURRECTED_AGENT) {
             setup_resurrected_agent_mode();
+        } else if (mode_ == MCP_ORCHESTRATOR) {
+            setup_mcp_orchestrator_mode();
         }
     }
     
     void detect_mode() {
+        // Check for MCP config file first
+        if (!idb_path_.empty()) {
+            fs::path idb_dir = fs::path(idb_path_.c_str()).parent_path();
+            fs::path mcp_config_path = idb_dir / "mcp_orchestrator_config.json";
+
+            if (fs::exists(mcp_config_path)) {
+                msg("LLM RE: Found MCP config file at %s\n", mcp_config_path.string().c_str());
+
+                try {
+                    // Read the config file
+                    std::ifstream config_file(mcp_config_path);
+                    json mcp_config;
+                    config_file >> mcp_config;
+                    config_file.close();
+
+                    // Extract data from config
+                    if (mcp_config.contains("session_id")) {
+                        mcp_session_id_ = mcp_config["session_id"].get<std::string>();
+                    }
+                    if (mcp_config.contains("input_pipe")) {
+                        mcp_input_pipe_ = mcp_config["input_pipe"].get<std::string>();
+                    }
+                    if (mcp_config.contains("output_pipe")) {
+                        mcp_output_pipe_ = mcp_config["output_pipe"].get<std::string>();
+                    }
+
+                    // Delete the config file immediately after reading
+                    fs::remove(mcp_config_path);
+                    msg("LLM RE: Deleted MCP config file after reading\n");
+
+                    mode_ = MCP_ORCHESTRATOR;
+                    msg("LLM RE: Detected MCP orchestrator mode for session %s\n", mcp_session_id_.c_str());
+                    return;
+
+                } catch (const std::exception& e) {
+                    msg("LLM RE: Failed to read MCP config: %s\n", e.what());
+                    // Fall through to other detection methods
+                }
+            }
+        }
+
         if (idb_path_.empty()) {
             mode_ = ORCHESTRATOR;
             return;
         }
-        
+
         // Check if we're in a swarm agent workspace
         if (idb_path_.find("/ida_swarm_workspace/") != qstring::npos &&
             (idb_path_.find("/agents/agent_") != qstring::npos ||
@@ -194,7 +243,7 @@ private:
     
     void setup_resurrected_agent_mode() {
         msg("LLM RE: Setting up resurrected agent %s\n", agent_id_.c_str());
-        
+
         // Load both the original config and the saved state
         if (load_agent_config() && load_saved_state()) {
             msg("LLM RE: Loaded config and state for resurrected agent %s\n", agent_id_.c_str());
@@ -203,6 +252,33 @@ private:
         } else {
             msg("LLM RE: Failed to resurrect agent %s\n", agent_id_.c_str());
             mode_ = ORCHESTRATOR;  // Fall back to orchestrator mode
+        }
+    }
+
+    void setup_mcp_orchestrator_mode() {
+        // Create orchestrator without UI
+        if (!orchestrator_) {
+            if (mcp_session_id_.empty()) {
+                msg("LLM RE: ERROR - MCP session ID not available\n");
+                return;
+            }
+
+            msg("LLM RE: Starting MCP orchestrator for session %s\n", mcp_session_id_.c_str());
+            msg("LLM RE: Input pipe: %s\n", mcp_input_pipe_.c_str());
+            msg("LLM RE: Output pipe: %s\n", mcp_output_pipe_.c_str());
+
+            orchestrator_ = new orchestrator::Orchestrator(*config_, idb_path_.c_str(), false /* no UI */);
+            if (!orchestrator_->initialize_mcp_mode(mcp_session_id_, mcp_input_pipe_, mcp_output_pipe_)) {
+                msg("LLM RE: Failed to initialize MCP orchestrator\n");
+                delete orchestrator_;
+                orchestrator_ = nullptr;
+                return;
+            }
+
+            // Start the MCP listener thread
+            orchestrator_->start_mcp_listener();
+
+            msg("LLM RE: MCP orchestrator ready for session %s\n", mcp_session_id_.c_str());
         }
     }
     
@@ -482,20 +558,20 @@ private:
             get_event_bus().unsubscribe(state_subscription_id_);
             state_subscription_id_.clear();
         }
-        
+
         // Clean up UI
         if (ui_window_) {
             delete ui_window_;
             ui_window_ = nullptr;
         }
-        
+
         // Clean up orchestrator mode
         if (orchestrator_) {
             orchestrator_->shutdown();
             delete orchestrator_;
             orchestrator_ = nullptr;
         }
-        
+
         // Clean up swarm agent mode
         if (swarm_agent_) {
             swarm_agent_->shutdown();

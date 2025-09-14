@@ -10,13 +10,17 @@
 #include <set>
 #include <filesystem>
 #include <signal.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <cstring>
 
 namespace fs = std::filesystem;
 
 namespace llm_re::orchestrator {
 
-Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path)
-    : config_(config), main_database_path_(main_db_path) {
+Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path, bool show_ui)
+    : config_(config), main_database_path_(main_db_path), show_ui_(show_ui) {
     
     // Extract binary name from IDB path
     fs::path idb_path(main_db_path);
@@ -137,6 +141,161 @@ bool Orchestrator::initialize() {
     return true;
 }
 
+bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
+                                      const std::string& input_pipe_path,
+                                      const std::string& output_pipe_path) {
+    mcp_session_id_ = session_id;
+
+    // Initialize ALL orchestrator components (IRC, tool tracker, agent spawner, etc.)
+    // MCP mode needs the full orchestrator functionality
+    if (!initialize()) {
+        return false;
+    }
+
+    ORCH_LOG("Orchestrator: Opening MCP pipes for session %s\n", session_id.c_str());
+    ORCH_LOG("Orchestrator: Input pipe: %s\n", input_pipe_path.c_str());
+    ORCH_LOG("Orchestrator: Output pipe: %s\n", output_pipe_path.c_str());
+
+    // Open input pipe (we read from this)
+    mcp_input_fd_ = open(input_pipe_path.c_str(), O_RDONLY);
+    if (mcp_input_fd_ < 0) {
+        ORCH_LOG("Orchestrator: Failed to open input pipe: %s\n", strerror(errno));
+        return false;
+    }
+
+    // Open output pipe (we write to this)
+    mcp_output_fd_ = open(output_pipe_path.c_str(), O_WRONLY);
+    if (mcp_output_fd_ < 0) {
+        ORCH_LOG("Orchestrator: Failed to open output pipe: %s\n", strerror(errno));
+        close(mcp_input_fd_);
+        return false;
+    }
+
+    ORCH_LOG("Orchestrator: MCP mode initialized for session %s\n", session_id.c_str());
+    return true;
+}
+
+void Orchestrator::start_mcp_listener() {
+    if (!show_ui_ && mcp_input_fd_ >= 0 && mcp_output_fd_ >= 0) {
+        ORCH_LOG("Orchestrator: Starting MCP listener thread\n");
+
+        mcp_listener_thread_ = std::thread([this]() {
+            while (!mcp_listener_should_stop_) {
+                // Read JSON request from pipe
+                std::string buffer;
+                char read_buf[4096];
+
+                ssize_t bytes = read(mcp_input_fd_, read_buf, sizeof(read_buf) - 1);
+                if (bytes > 0) {
+                    read_buf[bytes] = '\0';
+                    buffer += read_buf;
+
+                    // Look for complete JSON (newline-delimited)
+                    size_t newline_pos = buffer.find('\n');
+                    if (newline_pos != std::string::npos) {
+                        std::string json_str = buffer.substr(0, newline_pos);
+                        buffer = buffer.substr(newline_pos + 1);
+
+                        try {
+                            json request = json::parse(json_str);
+                            ORCH_LOG("Orchestrator: Received MCP request: %s\n", request["method"].get<std::string>().c_str());
+
+                            // Process request
+                            json response = process_mcp_request(request);
+
+                            // Send response back
+                            std::string response_str = response.dump() + "\n";
+                            write(mcp_output_fd_, response_str.c_str(), response_str.length());
+
+                        } catch (const json::exception& e) {
+                            ORCH_LOG("Orchestrator: Failed to parse MCP request: %s\n", e.what());
+                        }
+                    }
+                } else if (bytes == 0) {
+                    // Pipe closed
+                    ORCH_LOG("Orchestrator: MCP input pipe closed\n");
+                    break;
+                }
+            }
+        });
+    }
+}
+
+json Orchestrator::process_mcp_request(const json& request) {
+    json response;
+    response["type"] = "response";
+    response["id"] = request.value("id", "unknown");
+
+    std::string method = request.value("method", "");
+
+    if (method == "start_task") {
+        std::string task = request["params"]["task"];
+        ORCH_LOG("Orchestrator: Processing start_task: %s\n", task.c_str());
+
+        // Clear any previous conversation
+        clear_conversation();
+
+        // Reset completion flag
+        reset_task_completion();
+
+        // Process the task in a separate thread to avoid blocking
+        std::thread processing_thread([this, task]() {
+            process_user_input(task);
+        });
+
+        // Wait for task to complete
+        ORCH_LOG("Orchestrator: Waiting for task completion...\n");
+        wait_for_task_completion();
+        ORCH_LOG("Orchestrator: Task completed, sending response\n");
+
+        // Join the processing thread
+        processing_thread.join();
+
+        // Prepare response with final result
+        response["result"]["content"] = last_response_text_;
+        response["result"]["agents_spawned"] = agents_.size();
+
+    } else if (method == "process_input") {
+        std::string input = request["params"]["input"];
+        ORCH_LOG("Orchestrator: Processing follow-up input: %s\n", input.c_str());
+
+        // Reset completion flag for continuation
+        reset_task_completion();
+
+        // Process the input in a separate thread to avoid blocking
+        std::thread processing_thread([this, input]() {
+            process_user_input(input);
+        });
+
+        // Wait for continuation to complete
+        ORCH_LOG("Orchestrator: Waiting for continuation completion...\n");
+        wait_for_task_completion();
+        ORCH_LOG("Orchestrator: Continuation completed, sending response\n");
+
+        // Join the processing thread
+        processing_thread.join();
+
+        // Prepare response with final result
+        response["result"]["content"] = last_response_text_;
+        response["result"]["agents_active"] = agents_.size() - completed_agents_.size();
+
+    } else if (method == "shutdown") {
+        ORCH_LOG("Orchestrator: Received shutdown request\n");
+        response["result"]["status"] = "shutting_down";
+
+        // Trigger shutdown after sending response
+        std::thread([this]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            shutdown();
+        }).detach();
+
+    } else {
+        response["error"] = "Unknown method: " + method;
+    }
+
+    return response;
+}
+
 void Orchestrator::start_interactive_session() {
     // Use IDA's ask_str dialog to get user input
     qstring user_input;
@@ -176,6 +335,22 @@ void Orchestrator::clear_conversation() {
     consolidation_state_.consolidation_count = 0;
     
     ORCH_LOG("Orchestrator: Conversation cleared, ready for new task\n");
+}
+
+void Orchestrator::signal_task_completion() {
+    std::lock_guard<std::mutex> lock(task_completion_mutex_);
+    task_completed_ = true;
+    task_completion_cv_.notify_all();
+}
+
+void Orchestrator::wait_for_task_completion() {
+    std::unique_lock<std::mutex> lock(task_completion_mutex_);
+    task_completion_cv_.wait(lock, [this] { return task_completed_; });
+}
+
+void Orchestrator::reset_task_completion() {
+    std::lock_guard<std::mutex> lock(task_completion_mutex_);
+    task_completed_ = false;
 }
 
 void Orchestrator::process_user_input(const std::string& input) {
@@ -243,10 +418,19 @@ void Orchestrator::process_user_input(const std::string& input) {
             claude::messages::ContentExtractor::extract_tool_uses(response.message);
         if (initial_tool_calls.empty()) {
             // No tool calls, this is the final response
+            if (text && !text->empty()) {
+                last_response_text_ = *text;  // Store for MCP mode
+            }
             ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event (no tools)\n");
-            event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
-                {"response", *text}
-            }));
+            if (show_ui_) {
+                event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+                    {"response", *text}
+                }));
+            }
+            // Signal task completion for MCP mode
+            if (!show_ui_) {
+                signal_task_completion();
+            }
         }
     }
     
@@ -320,12 +504,20 @@ void Orchestrator::process_user_input(const std::string& input) {
                 
                 // Publish the final response to UI before breaking
                 if (cont_text && !cont_text->empty()) {
-                    event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
-                        {"response", *cont_text}
-                    }));
+                    last_response_text_ = *cont_text;  // Store for MCP mode
+                    if (show_ui_) {
+                        event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
+                            {"response", *cont_text}
+                        }));
+                    }
                 }
                 // Log token usage after final response (pass per-iteration for context calc)
                 log_token_usage(continuation.usage, token_stats_.get_total());
+
+                // Signal task completion for MCP mode
+                if (!show_ui_) {
+                    signal_task_completion();
+                }
                 break;
             }
             
@@ -1501,9 +1693,30 @@ std::vector<std::string> Orchestrator::get_irc_channels() const {
 void Orchestrator::shutdown() {
     if (shutting_down_) return;
     shutting_down_ = true;
-    
+
     ORCH_LOG("Orchestrator: Shutting down...\n");
-    
+
+    // Request graceful IDA exit to save database before cleanup
+    request_ida_graceful_exit();
+
+    // Stop MCP listener if running
+    if (!show_ui_) {
+        mcp_listener_should_stop_ = true;
+        if (mcp_listener_thread_.joinable()) {
+            mcp_listener_thread_.join();
+        }
+
+        // Close pipes
+        if (mcp_input_fd_ >= 0) {
+            close(mcp_input_fd_);
+            mcp_input_fd_ = -1;
+        }
+        if (mcp_output_fd_ >= 0) {
+            close(mcp_output_fd_);
+            mcp_output_fd_ = -1;
+        }
+    }
+
     // Terminate all agents
     for (auto& [id, info] : agents_) {
         agent_spawner_->terminate_agent(info.process_id);
@@ -1526,6 +1739,31 @@ void Orchestrator::shutdown() {
     db_manager_.reset();
     
     ORCH_LOG("Orchestrator: Shutdown complete\n");
+}
+
+void Orchestrator::request_ida_graceful_exit() {
+    ORCH_LOG("Orchestrator: Requesting graceful IDA exit with database save...\n");
+
+    // Request to save database and exit IDA gracefully
+    struct GracefulExitRequest : exec_request_t {
+        virtual ssize_t idaapi execute() override {
+            // First save the database
+            if (save_database()) {
+                msg("LLM RE: Database saved successfully\n");
+            } else {
+                msg("LLM RE: Warning - Failed to save database\n");
+            }
+
+            // Then request graceful exit
+            qexit(0);
+            return 0;
+        }
+    };
+
+    GracefulExitRequest req;
+    execute_sync(req, MFF_WRITE);
+
+    ORCH_LOG("Orchestrator: Graceful exit request submitted to IDA\n");
 }
 
 bool Orchestrator::should_consolidate_context() const {

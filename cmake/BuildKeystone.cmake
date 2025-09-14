@@ -18,11 +18,21 @@ endif()
 
 message(STATUS "Found Python: ${PYTHON_EXECUTABLE}")
 
-# Configure ExternalProject to build Keystone
-ExternalProject_Add(keystone_external
+# Check if Keystone is already built
+if(EXISTS ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a AND EXISTS ${KEYSTONE_INSTALL_DIR}/include/keystone/keystone.h)
+    message(STATUS "Keystone already built, skipping build step")
+    # Create a dummy target that does nothing
+    add_custom_target(keystone_external
+        COMMAND ${CMAKE_COMMAND} -E echo "Using existing Keystone build"
+    )
+else()
+    message(STATUS "Building Keystone from source")
+    # Configure ExternalProject to build Keystone
+    ExternalProject_Add(keystone_external
     GIT_REPOSITORY https://github.com/gaasedelen/keystone.git
     GIT_TAG master
     PREFIX ${KEYSTONE_PREFIX}
+    UPDATE_DISCONNECTED TRUE  # Don't check for updates after initial clone
     PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching CMake files for CMake 4.0 compatibility" &&
                   ${CMAKE_COMMAND} -DFILE_PATH=CMakeLists.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchKeystone.cmake &&
                   ${CMAKE_COMMAND} -DFILE_PATH=llvm/CMakeLists.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchKeystone.cmake &&
@@ -39,10 +49,11 @@ ExternalProject_Add(keystone_external
         -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
         -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
         -Wno-dev
-    BUILD_BYPRODUCTS 
+    BUILD_BYPRODUCTS
         ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a
         ${KEYSTONE_INSTALL_DIR}/include/keystone/keystone.h
-)
+    )
+endif()
 
 # Create directory structure for imported target
 file(MAKE_DIRECTORY ${KEYSTONE_INSTALL_DIR}/include)
