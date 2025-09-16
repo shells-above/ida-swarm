@@ -71,16 +71,20 @@ bool IRCClient::connect() {
 
 void IRCClient::disconnect() {
     if (!connected_) return;
-    
+
     running_ = false;
     connected_ = false;
-    
+
+    // Try to send quit message (non-blocking)
     if (socket_fd_ >= 0) {
+        // Ignore errors, we're shutting down anyway
         send_raw("QUIT :Disconnecting\r\n");
+
+        // Close socket to unblock recv() in receive_loop
         close(socket_fd_);
         socket_fd_ = -1;
     }
-    
+
     if (recv_thread_.joinable()) {
         recv_thread_.join();
     }

@@ -187,10 +187,15 @@ bool IRCServer::start() {
 
 void IRCServer::stop() {
     if (!running_) return;
-    
+
     running_ = false;
-    close(server_fd_);
-    
+
+    // Close the server socket to unblock accept()
+    if (server_fd_ >= 0) {
+        close(server_fd_);
+        server_fd_ = -1;
+    }
+
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
