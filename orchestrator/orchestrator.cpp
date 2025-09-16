@@ -1715,9 +1715,6 @@ void Orchestrator::shutdown() {
 
     ORCH_LOG("Orchestrator: Shutting down...\n");
 
-    // Request graceful IDA exit to save database before cleanup
-    request_ida_graceful_exit();
-
     // Stop MCP listener if running
     if (!show_ui_) {
         mcp_listener_should_stop_ = true;
@@ -1760,38 +1757,6 @@ void Orchestrator::shutdown() {
     ORCH_LOG("Orchestrator: Shutdown complete\n");
 }
 
-void Orchestrator::request_ida_graceful_exit() {
-    ORCH_LOG("Orchestrator: Requesting graceful IDA exit with database save...\n");
-
-    // First, save the database
-    struct DatabaseSaveRequest : exec_request_t {
-        virtual ssize_t idaapi execute() override {
-            if (save_database()) {
-                msg("LLM RE: Database saved successfully\n");
-            } else {
-                msg("LLM RE: Warning - Failed to save database\n");
-            }
-            return 0;
-        }
-    };
-
-    DatabaseSaveRequest save_req;
-    execute_sync(save_req, MFF_WRITE);
-
-    // Then, request graceful exit
-    struct ExitRequest : exec_request_t {
-        virtual ssize_t idaapi execute() override {
-            msg("LLM RE: Initiating graceful exit...\n");
-            qexit(0);
-            return 0;
-        }
-    };
-
-    ExitRequest exit_req;
-    execute_sync(exit_req, MFF_WRITE);
-
-    ORCH_LOG("Orchestrator: Graceful exit request submitted to IDA\n");
-}
 
 bool Orchestrator::should_consolidate_context() const {
     if (consolidation_state_.consolidation_in_progress) {

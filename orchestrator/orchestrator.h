@@ -78,9 +78,6 @@ public:
     // Get last response text (for MCP mode)
     std::string get_last_response() const { return last_response_text_; }
 
-    // Request graceful IDA exit with database save
-    void request_ida_graceful_exit();
-    
 private:
     // Core components
     const Config& config_;
