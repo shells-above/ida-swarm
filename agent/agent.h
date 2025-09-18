@@ -1265,7 +1265,7 @@ private:
         int iteration = execution_state_.get_iteration();
         bool grader_approved = false;
 
-        while (iteration < config_.agent.max_iterations && !stop_requested_ && !grader_approved && state_.is_running()) {
+        while (!stop_requested_ && !grader_approved && state_.is_running()) {
             if (stop_requested_) {
                 emit_log(LogLevel::INFO, "Analysis interrupted by stop request");
                 break;
@@ -1452,11 +1452,6 @@ private:
                     }
                 }
             }
-        }
-
-        if (iteration >= config_.agent.max_iterations) {
-            emit_log(LogLevel::WARNING, "Reached maximum iterations");
-            change_state(AgentState::Status::Completed);
         }
     }
 

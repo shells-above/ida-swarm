@@ -358,14 +358,7 @@ void PreferencesDialog::createAgentTab() {
     // Analysis settings
     auto* analysisGroup = new QGroupBox("Analysis Settings", widget);
     auto* analysisLayout = new QFormLayout(analysisGroup);
-    
-    // Max iterations moved here
-    maxIterationsSpin_ = new QSpinBox(analysisGroup);
-    maxIterationsSpin_->setRange(1, 1000);
-    maxIterationsSpin_->setSuffix(" iterations");
-    maxIterationsSpin_->setToolTip("Maximum number of iterations for agent analysis");
-    analysisLayout->addRow("Max Iterations:", maxIterationsSpin_);
-    
+
     enableDeepAnalysisCheck_ = new QCheckBox("Enable deep analysis", analysisGroup);
     enableDeepAnalysisCheck_->setToolTip("Enables advanced binary analysis features");
     analysisLayout->addRow("", enableDeepAnalysisCheck_);
@@ -587,7 +580,6 @@ void PreferencesDialog::loadConfiguration() {
     }
     
     // Agent settings
-    maxIterationsSpin_->setValue(config.agent.max_iterations);
     contextLimitSpin_->setValue(config.agent.context_limit);
     enableDeepAnalysisCheck_->setChecked(config.agent.enable_deep_analysis);
     enablePythonToolCheck_->setChecked(config.agent.enable_python_tool);
@@ -635,7 +627,6 @@ void PreferencesDialog::saveConfiguration() {
     config.orchestrator.model.enable_thinking = orchestratorEnableThinkingCheck_->isChecked();
     
     // Agent settings
-    config.agent.max_iterations = maxIterationsSpin_->value();
     config.agent.context_limit = contextLimitSpin_->value();
     config.agent.enable_deep_analysis = enableDeepAnalysisCheck_->isChecked();
     config.agent.enable_python_tool = enablePythonToolCheck_->isChecked();

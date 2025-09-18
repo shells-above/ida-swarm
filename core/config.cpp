@@ -20,7 +20,6 @@ bool Config::save_to_file(const std::string& path) const {
         j["agent"]["max_tokens"] = agent.max_tokens;
         j["agent"]["max_thinking_tokens"] = agent.max_thinking_tokens;
         j["agent"]["temperature"] = agent.temperature;
-        j["agent"]["max_iterations"] = agent.max_iterations;
         j["agent"]["enable_thinking"] = agent.enable_thinking;
         j["agent"]["enable_interleaved_thinking"] = agent.enable_interleaved_thinking;
         j["agent"]["enable_deep_analysis"] = agent.enable_deep_analysis;
@@ -87,7 +86,6 @@ bool Config::load_from_file(const std::string& path) {
             agent.max_tokens = j["agent"].value("max_tokens", agent.max_tokens);
             agent.max_thinking_tokens = j["agent"].value("max_thinking_tokens", agent.max_thinking_tokens);
             agent.temperature = j["agent"].value("temperature", agent.temperature);
-            agent.max_iterations = j["agent"].value("max_iterations", agent.max_iterations);
             agent.enable_thinking = j["agent"].value("enable_thinking", agent.enable_thinking);
             agent.enable_interleaved_thinking = j["agent"].value("enable_interleaved_thinking", agent.enable_interleaved_thinking);
             agent.enable_deep_analysis = j["agent"].value("enable_deep_analysis", agent.enable_deep_analysis);

@@ -132,7 +132,6 @@ private:
     QCheckBox* orchestratorEnableThinkingCheck_;
     
     // Agent Tab widgets
-    QSpinBox* maxIterationsSpin_;
     QSpinBox* contextLimitSpin_;
     QCheckBox* enableDeepAnalysisCheck_;
     QCheckBox* enablePythonToolCheck_;

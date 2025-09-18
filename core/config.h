@@ -61,7 +61,6 @@ public:
         double temperature = 0.0;
         
         // Agent behavior settings
-        int max_iterations = 1000;
         bool enable_thinking = true;
         bool enable_interleaved_thinking = true;
         bool enable_deep_analysis = false;

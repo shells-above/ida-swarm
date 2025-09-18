@@ -276,7 +276,118 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         }
         return;
     }
-    
+
+    // Handle CONFLICT_DETAILS for resurrected agents
+    if (message.find("CONFLICT_DETAILS|") == 0 && channel == "#agents") {
+        std::string json_str = message.substr(17);  // Skip "CONFLICT_DETAILS|"
+        try {
+            json details = json::parse(json_str);
+            std::string target = details["target_agent"];
+
+            if (target == agent_id_) {
+                std::string conflict_channel = details["channel"];
+                json conflict_info = details["conflict_info"];
+                std::string requesting_agent = details["requesting_agent"];
+
+                SWARM_LOG("SwarmAgent: Received CONFLICT_DETAILS for channel %s\n",
+                         conflict_channel.c_str());
+
+                // Create conflict state from details
+                SimpleConflictState state;
+                state.channel = conflict_channel;
+                state.my_turn = false;  // Requester goes first
+                state.resolved = false;
+
+                // Populate conflict information
+                ToolConflict reconstructed;
+                reconstructed.first_call.tool_name = conflict_info.value("tool_name", "");
+                reconstructed.first_call.address = conflict_info.value("address", 0);
+                reconstructed.first_call.agent_id = conflict_info["initiator"].value("agent_id", "");
+                reconstructed.first_call.parameters = conflict_info["initiator"].value("parameters", json{});
+                reconstructed.second_call.agent_id = conflict_info["second"].value("agent_id", "");
+                reconstructed.second_call.parameters = conflict_info["second"].value("parameters", json{});
+                reconstructed.second_call.tool_name = conflict_info.value("tool_name", "");
+                reconstructed.second_call.address = conflict_info.value("address", 0);
+                reconstructed.conflict_type = conflict_info.value("conflict_type", "");
+
+                state.initial_conflict = reconstructed;
+                state.participating_agents.insert(reconstructed.first_call.agent_id);
+                state.participating_agents.insert(reconstructed.second_call.agent_id);
+
+                active_conflict_ = state;
+
+                // Join the conflict channel
+                join_irc_channel(conflict_channel);
+
+                // Determine who we are and who the other agent is
+                std::string our_agent_id = agent_id_;
+                std::string other_agent_id = (reconstructed.first_call.agent_id == agent_id_) ?
+                                            reconstructed.second_call.agent_id :
+                                            reconstructed.first_call.agent_id;
+
+                json our_params = (reconstructed.first_call.agent_id == agent_id_) ?
+                                 reconstructed.first_call.parameters :
+                                 reconstructed.second_call.parameters;
+
+                json their_params = (reconstructed.first_call.agent_id == agent_id_) ?
+                                   reconstructed.second_call.parameters :
+                                   reconstructed.first_call.parameters;
+
+                // Build comprehensive conflict context
+                std::string conflict_context = std::format(
+                    "You've been resurrected to resolve a conflict at address 0x{:x}.\n\n"
+                    "Conflict Details:\n"
+                    "- Tool: {}\n"
+                    "- Address: 0x{:x}\n"
+                    "- Conflict Type: {}\n"
+                    "- Channel: {}\n\n"
+                    "{} (the initiator) attempted:\n{}\n\n"
+                    "You previously attempted:\n{}\n\n"
+                    "The initiating agent ({}) will speak first. Wait for their opening statement, "
+                    "then discuss using send_irc_message with channel='{}'.\n\n"
+                    "When you BOTH agree on the solution:\n"
+                    "1. Use 'mark_consensus_reached' tool with the complete agreed solution\n"
+                    "2. Include ALL details: exact address, tool name, and ALL parameters\n"
+                    "3. Both agents MUST call this tool for consensus to be valid",
+                    reconstructed.first_call.address,
+                    conflict_info.value("tool_name", "unknown"),
+                    reconstructed.first_call.address,
+                    conflict_info.value("conflict_type", "unknown"),
+                    conflict_channel,
+                    requesting_agent,
+                    their_params.dump(2),
+                    our_params.dump(2),
+                    requesting_agent,
+                    conflict_channel
+                );
+
+                inject_user_message(conflict_context);
+
+                // Start the conflict resolution task if we were waiting
+                if (waiting_for_conflict_details_) {
+                    waiting_for_conflict_details_ = false;
+                    start_task("Resolve the conflict based on the details provided above. Remember to wait for the other agent's opening statement first.");
+                }
+            }
+        } catch (const std::exception& e) {
+            SWARM_LOG("SwarmAgent: Failed to parse CONFLICT_DETAILS: %s\n", e.what());
+        }
+        return;
+    }
+
+    // Handle CONSENSUS_COMPLETE notifications
+    if (message.find("CONSENSUS_COMPLETE|") == 0 && channel == "#agents") {
+        std::string complete_channel = message.substr(18);  // Skip "CONSENSUS_COMPLETE|"
+        if (active_conflict_ && active_conflict_->channel == complete_channel) {
+            active_conflict_->consensus_reached = true;
+            active_conflict_->resolved = true;
+            conflict_waiting_for_response_ = false;
+            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, exiting conflict mode\n", complete_channel.c_str());
+            inject_user_message("[SYSTEM] Consensus has been reached and applied. Conflict resolution complete.");
+        }
+        return;
+    }
+
     // Inject messages for the agent to see (except #agents channel and conflict channels which are handled above)
     if (channel != "#agents" && (!active_conflict_ || channel != active_conflict_->channel)) {
         inject_user_message("[" + channel + "] " + sender + ": " + message);
@@ -316,12 +427,30 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
                           conflict.first_call.parameters :
                           conflict.second_call.parameters;
 
-    // Send resurrection request if needed
+    // Send resurrection request WITH FULL CONFLICT DETAILS
     if (irc_client_ && irc_connected_) {
-        std::string resurrect_msg = std::format("RESURRECT|{}|{}",
-                                                other_agent, channel);
+        // Package all conflict information for the orchestrator
+        json resurrect_data = {
+            {"target", other_agent},
+            {"channel", channel},
+            {"conflict", {
+                {"tool_name", conflict.first_call.tool_name},
+                {"address", conflict.first_call.address},
+                {"initiator", {
+                    {"agent_id", conflict.first_call.agent_id},
+                    {"parameters", conflict.first_call.parameters}
+                }},
+                {"second", {
+                    {"agent_id", conflict.second_call.agent_id},
+                    {"parameters", conflict.second_call.parameters}
+                }},
+                {"conflict_type", conflict.conflict_type}
+            }}
+        };
+
+        std::string resurrect_msg = std::format("RESURRECT|{}", resurrect_data.dump());
         irc_client_->send_message("#agents", resurrect_msg);
-        SWARM_LOG("SwarmAgent: Sent resurrection request for agent %s\n", other_agent.c_str());
+        SWARM_LOG("SwarmAgent: Sent resurrection request for agent %s with full conflict details\n", other_agent.c_str());
     }
 
     // Simple, clear prompt

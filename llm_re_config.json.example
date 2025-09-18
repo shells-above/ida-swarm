@@ -11,7 +11,6 @@
     "max_tokens": 8192,
     "max_thinking_tokens": 2048,
     "temperature": 0.0,
-    "max_iterations": 1000,
     "context_limit": 150000,
     "enable_thinking": true,
     "enable_interleaved_thinking": true,
