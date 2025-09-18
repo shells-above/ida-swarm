@@ -208,7 +208,7 @@ json StdioMCPServer::handle_initialize(const json& params) {
     result["capabilities"] = capabilities;
 
     // Optional instructions
-    result["instructions"] = "Use the available tools to interact with the IDA RE Agent orchestrator";
+    result["instructions"] = "Use the available tools to interact with the IDA Swarm orchestrator";
 
     return result;
 }

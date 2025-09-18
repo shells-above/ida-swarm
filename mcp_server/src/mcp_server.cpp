@@ -40,7 +40,7 @@ bool MCPServer::initialize() {
     session_manager_ = std::make_unique<SessionManager>();
 
     // Create MCP stdio server
-    mcp_server_ = std::make_unique<StdioMCPServer>("IDA RE Agent MCP Server", "1.0.0");
+    mcp_server_ = std::make_unique<StdioMCPServer>("IDA Swarm MCP Server", "1.0.0");
 
     // Register tools
     register_tools();
@@ -55,7 +55,7 @@ bool MCPServer::initialize() {
 }
 
 void MCPServer::start() {
-    std::cerr << "Starting IDA RE Agent MCP Server..." << std::endl;
+    std::cerr << "Starting IDA Swarm MCP Server..." << std::endl;
     std::cerr << "Server ready. Waiting for MCP client connections..." << std::endl;
 
     // Start the MCP server (blocking)
@@ -427,7 +427,7 @@ void MCPServer::load_configuration() {
 // Main entry point
 int main(int argc, char* argv[]) {
     std::cerr << "==============================================\n";
-    std::cerr << "    IDA RE Agent MCP Server v1.0.0\n";
+    std::cerr << "    IDA Swarm MCP Server v1.0.0\n";
     std::cerr << "==============================================\n\n";
 
     llm_re::mcp::MCPServer server;

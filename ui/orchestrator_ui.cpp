@@ -59,7 +59,7 @@ OrchestratorUI::~OrchestratorUI() {
 }
 
 void OrchestratorUI::setup_ui() {
-    setWindowTitle("IDA RE Agent - Orchestrator Control");
+    setWindowTitle("IDA Swarm - Orchestrator Control");
     resize(1400, 900);
     
     // Create central widget and main layout

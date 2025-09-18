@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for IDA RE Agent MCP Server
+Test script for IDA Swarm MCP Server
 Tests the MCP protocol communication with the server
 """
 
