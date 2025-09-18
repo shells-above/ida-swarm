@@ -1,8 +1,8 @@
-# IDA RE Agent - Democratizing Reverse Engineering Through AI
+# IDA Swarm - Democratizing Reverse Engineering Through AI
 
 ## Revolutionary Mission
 
-**IDA RE Agent** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and modify software they own, challenging traditional vendor control and advancing consumer digital rights.
+**IDA Swarm** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and modify software they own, challenging traditional vendor control and advancing consumer digital rights.
 
 ## Why This Matters
 
@@ -29,19 +29,41 @@
 
 ## Architecture Overview
 
+### Primary Mode: Direct IDA Integration
+```
+        ┌──────────────────────────┐
+        │     IDA Pro Instance     │
+        │  ┌────────────────────┐  │
+        │  │    Orchestrator    │  │
+        │  │   (Qt UI Dialog)   │  │
+        │  └──────────┬─────────┘  │
+        └─────────────┼────────────┘
+                      │ Process Spawn
+     ┌────────────────┼────────────────┐
+     ▼                ▼                ▼
+┌─────────┐    ┌─────────┐    ┌─────────┐
+│ Agent 1 │    │ Agent 2 │    │ Agent N │
+│  (IDA)  │◄──►│  (IDA)  │◄──►│  (IDA)  │
+└─────────┘    └─────────┘    └─────────┘
+     ▲                ▲                ▲
+     └────────────────┼────────────────┘
+              IRC Communication
+                  (Swarm)
+```
+
+### Optional: External Tool Integration via MCP
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     External Tools (Claude)                 │
 └────────────────────┬────────────────────────────────────────┘
                      │ MCP Protocol (JSON-RPC)
         ┌────────────▼────────────┐
-        │      MCP Server         │
+        │   MCP Server (Optional) │
         │  (Session Management)   │
         └────────────┬────────────┘
                      │ Named Pipes
         ┌────────────▼────────────┐
         │     Orchestrator        │
-        │  (User Interface)       │
         └────────────┬────────────┘
                      │ Process Spawn
      ┌───────────────┼───────────────┐
@@ -58,10 +80,12 @@
 
 ### Key Components
 
-- **Orchestrator**: Central coordinator, only entity that communicates with users
+- **Orchestrator**: Central coordinator with two interface modes:
+  - **Native mode** (default): Qt dialog interface directly within IDA Pro
+  - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
 - **AI Agents**: Specialized IDA instances performing focused analysis tasks
-- **IRC Server**: Inter-agent communication and conflict resolution
-- **MCP Server**: External tool integration (Claude, etc.)
+- **IRC Server**: Inter-agent communication (WIP) and conflict resolution
+- **MCP Server** (optional): Enables external tool integration (Claude, etc.)
 - **Tool System**: Comprehensive IDA Pro operation framework
 - **Patching Engine**: Multi-architecture binary modification with Keystone
 

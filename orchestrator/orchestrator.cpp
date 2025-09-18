@@ -129,7 +129,67 @@ bool Orchestrator::initialize() {
     );
     
     ORCH_LOG("Orchestrator: IRC client connected\n");
-    
+
+    // Start conflict channel monitoring thread
+    ORCH_LOG("Orchestrator: Starting conflict channel monitor\n");
+    conflict_monitor_thread_ = std::thread([this]() {
+        while (!conflict_monitor_should_stop_ && !shutting_down_) {
+            // Sleep first to give system time to initialize
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            // Check for new conflict channels
+            if (irc_server_ && irc_client_ && irc_client_->is_connected()) {
+                auto channels = irc_server_->list_channels();
+
+                for (const auto& channel : channels) {
+                    if (channel.find("#conflict_") == 0) {
+                        std::lock_guard<std::mutex> lock(conflicts_mutex_);
+
+                        // Check if we're already monitoring this channel
+                        if (active_conflicts_.find(channel) == active_conflicts_.end()) {
+                            // New conflict channel discovered - join it!
+                            irc_client_->join_channel(channel);
+
+                            // Create session to track it
+                            ConflictSession session;
+                            session.channel = channel;
+                            session.started = std::chrono::steady_clock::now();
+
+                            // Parse channel name to get basic info (format: #conflict_addr_toolname)
+                            std::string channel_copy = channel;
+                            if (channel_copy.find("#conflict_") == 0) {
+                                channel_copy = channel_copy.substr(10);  // Remove "#conflict_"
+                                size_t addr_end = channel_copy.find('_');
+                                if (addr_end != std::string::npos) {
+                                    std::string addr_str = channel_copy.substr(0, addr_end);
+                                    std::string tool_name = channel_copy.substr(addr_end + 1);
+
+                                    // Store basic conflict info
+                                    ToolConflict conflict;
+                                    conflict.conflict_type = tool_name;
+                                    conflict.first_call.tool_name = tool_name;
+                                    try {
+                                        conflict.first_call.address = std::stoull(addr_str, nullptr, 16);
+                                    } catch (...) {
+                                        conflict.first_call.address = 0;
+                                    }
+                                    conflict.second_call.tool_name = tool_name;
+                                    conflict.second_call.address = conflict.first_call.address;
+
+                                    session.original_conflict = conflict;
+                                }
+                            }
+
+                            active_conflicts_[channel] = session;
+                            ORCH_LOG("Orchestrator: Proactively joined conflict channel %s\n", channel.c_str());
+                        }
+                    }
+                }
+            }
+        }
+        ORCH_LOG("Orchestrator: Conflict channel monitor thread exiting\n");
+    });
+
     // Initialize database manager
     if (!db_manager_->initialize()) {
         ORCH_LOG("Orchestrator: Failed to initialize database manager\n");
@@ -1433,19 +1493,13 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
 void Orchestrator::handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message) {
     std::lock_guard<std::mutex> lock(conflicts_mutex_);
 
-    // Initialize conflict session if it doesn't exist
+    // The monitor thread should have already created the session and joined the channel
+    // But check just in case this message arrives before the monitor's next cycle
     if (active_conflicts_.find(channel) == active_conflicts_.end()) {
+        // This shouldn't happen often with the monitor thread, but handle it gracefully
         ConflictSession session;
         session.channel = channel;
         session.started = std::chrono::steady_clock::now();
-        active_conflicts_[channel] = session;
-
-        // Join the conflict channel to monitor it
-        if (irc_client_) {
-            irc_client_->join_channel(channel);
-        }
-
-        ORCH_LOG("Orchestrator: Monitoring new conflict channel %s\n", channel.c_str());
 
         // Parse channel name to reconstruct conflict (format: #conflict_addr_toolname)
         std::string channel_copy = channel;
@@ -1460,13 +1514,26 @@ void Orchestrator::handle_conflict_message(const std::string& channel, const std
                 ToolConflict conflict;
                 conflict.conflict_type = tool_name;
                 conflict.first_call.tool_name = tool_name;
-                conflict.first_call.address = std::stoull(addr_str, nullptr, 16);
+                try {
+                    conflict.first_call.address = std::stoull(addr_str, nullptr, 16);
+                } catch (...) {
+                    conflict.first_call.address = 0;
+                }
                 conflict.second_call.tool_name = tool_name;
                 conflict.second_call.address = conflict.first_call.address;
 
                 session.original_conflict = conflict;
             }
         }
+
+        active_conflicts_[channel] = session;
+
+        // Join if not already joined (belt and suspenders)
+        if (irc_client_) {
+            irc_client_->join_channel(channel);
+        }
+
+        ORCH_LOG("Orchestrator: Late initialization of conflict channel %s\n", channel.c_str());
     }
 
     ConflictSession& session = active_conflicts_[channel];
@@ -1772,6 +1839,13 @@ void Orchestrator::shutdown() {
     shutting_down_ = true;
 
     ORCH_LOG("Orchestrator: Shutting down...\n");
+
+    // Stop conflict monitor thread
+    conflict_monitor_should_stop_ = true;
+    if (conflict_monitor_thread_.joinable()) {
+        ORCH_LOG("Orchestrator: Waiting for conflict monitor thread to exit...\n");
+        conflict_monitor_thread_.join();
+    }
 
     // Stop MCP listener if running
     if (!show_ui_) {

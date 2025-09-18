@@ -135,10 +135,14 @@ private:
     };
     std::map<std::string, ConflictSession> active_conflicts_;  // channel -> session
     std::mutex conflicts_mutex_;
-    
+
     // Manual tool execution tracking
     std::map<std::string, bool> manual_tool_responses_;  // agent_id -> responded
     std::mutex manual_tool_mutex_;
+
+    // Conflict channel monitoring thread
+    std::thread conflict_monitor_thread_;
+    std::atomic<bool> conflict_monitor_should_stop_{false};
 
     // MCP mode support
     bool show_ui_ = true;
