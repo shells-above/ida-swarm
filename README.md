@@ -167,7 +167,7 @@ Edit with your API key:
 
 1. Open your target binary in IDA
 2. Wait for initial analysis to complete
-3. Run the plugin: `Edit → Plugins → LLM RE Agent` (if Orchestrator is not initialized, close IDA to save + pack the IDA database so that the Orchestrator)
+3. Run the plugin: `Edit → Plugins → LLM RE Agent`
 4. Enter your analysis request in the dialog
 
 ## Key Features
