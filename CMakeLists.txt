@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ida_llm_agent)
+project(ida_swarm_private)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -328,14 +328,14 @@ set(HEADERS
 )
 
 # Create unified plugin
-add_library(ida_llm_re64 SHARED
+add_library(ida_swarm64 SHARED
         ${PLUGIN_SOURCES}
         ${HEADERS}
 )
 
 # Set unified plugin properties
-set_target_properties(ida_llm_re64 PROPERTIES
-        OUTPUT_NAME "ida_llm_re64"
+set_target_properties(ida_swarm64 PROPERTIES
+        OUTPUT_NAME "ida_swarm64"
         PREFIX ""
         SUFFIX ${PLUGIN_EXT}
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -354,7 +354,7 @@ set(COMMON_LIBS
 )
 
 # Link libraries for unified plugin
-target_link_libraries(ida_llm_re64
+target_link_libraries(ida_swarm64
         ${COMMON_LIBS}
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
@@ -363,19 +363,12 @@ target_link_libraries(ida_llm_re64
 )
 
 # Post-build: Copy unified plugin to IDA plugins directory
-add_custom_command(TARGET ida_llm_re64 POST_BUILD
+add_custom_command(TARGET ida_swarm64 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:ida_llm_re64>
+        $<TARGET_FILE:ida_swarm64>
         "${IDA_PLUGINS_PATH}/"
         COMMENT "Copying unified plugin to IDA plugins directory"
 )
-# put llm_re_config.json into IDA_PLUGINS_PATH dir
-
-## Custom target to build all plugins at once
-#add_custom_target(all_plugins
-#    DEPENDS ida_llm_re64
-#    COMMENT "Building unified IDA plugin"
-#)
 
 # MCP Server executable
 set(MCP_SERVER_SOURCES
@@ -432,7 +425,7 @@ target_link_libraries(ida_re_mcp_server
 )
 
 # Installation
-install(TARGETS ida_llm_re64
+install(TARGETS ida_swarm64
         RUNTIME DESTINATION ${IDA_PLUGINS_PATH}
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )
