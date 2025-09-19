@@ -87,24 +87,34 @@ fi
 echo "Found $total_chunks file(s) with differences."
 echo ""
 
-# Phase 2: Process each chunk with Claude
-echo "Phase 2: Analyzing and applying safe changes..."
-processed=0
-for chunk_file in "$CHUNK_DIR"/chunk_*.txt; do
-    ((processed++))
-    echo "Processing chunk $processed/$total_chunks..."
+# Phase 2: Process each chunk with Claude (parallel processing)
+echo "Phase 2: Analyzing and applying safe changes (parallel processing)..."
+
+# Function to process a single chunk
+process_chunk() {
+    local chunk_file=$1
+    local chunk_num=$2
+    local total=$3
 
     # Extract filename from chunk
-    filename=$(head -1 "$chunk_file" | sed 's/.*: //')
+    local filename=$(head -1 "$chunk_file" | sed 's/.*: //')
+
+    echo "  Starting chunk $chunk_num/$total: $filename"
 
     # Have Claude analyze and apply this specific change
     claude --dangerously-skip-permissions "
-CRITICAL: You are processing ONE SPECIFIC CHANGE from private to public repository.
+CRITICAL: You are processing ONE SPECIFIC FILE in a PARALLEL operation.
+
+PARALLEL PROCESSING CONTEXT:
+- Multiple Claude instances are running simultaneously
+- Each instance handles ONE file independently
+- Other instances are processing other files at the same time
+- You do NOT need to worry about other files - just focus on yours
 
 CONTEXT:
 - Private repo contains OAuth authentication (MUST stay private)
 - Public repo is on GitHub (MUST NOT have OAuth)
-- You are reviewing changes to decide if they're safe for public
+- You are reviewing ONE file's changes to decide if they're safe
 
 FILE BEING PROCESSED: $filename
 
@@ -116,7 +126,8 @@ RULES:
 2. If this change is safe (no auth secrets): Apply it SURGICALLY to /tmp/ida-swarm
 3. For mixed files (like CMakeLists.txt): Apply ONLY non-OAuth parts
 4. For NEW_FILE: Create the new file (preserving full directory structure)
-   - Ensure parent directories exist before creating the file
+   - Use mkdir -p to ensure parent directories exist
+   - Other instances might also be creating directories - that's OK
 
 OAUTH INDICATORS TO EXCLUDE:
 - The sync_to_public.sh script itself (contains security filtering logic)
@@ -127,19 +138,57 @@ OAUTH INDICATORS TO EXCLUDE:
 - OAuth flow implementations
 - Authentication endpoints
 
-IMPORTANT:
-- Be SURGICAL and PRECISE with edits
-- Use Edit or MultiEdit tools for modifications to existing files
+IMPORTANT FOR PARALLEL PROCESSING:
+- Focus ONLY on the file assigned to you
+- Don't worry about dependencies in other files
+- Create parent directories if needed (mkdir -p is safe to run multiple times)
+- Be SURGICAL and PRECISE with your specific file
+- Use Edit or MultiEdit for modifications to existing files
 - Use Write tool for creating new files
-- For new files, only create if completely OAuth-free
-- When modifying CMakeLists.txt, carefully exclude OAuth source files
 
 Analyze this change and apply it to /tmp/ida-swarm if safe.
 If it contains ANY OAuth code, skip it entirely.
 " > /dev/null 2>&1 || true
+
+    echo "  Completed chunk $chunk_num/$total: $filename"
+}
+
+export -f process_chunk  # Export function for parallel to use
+
+# Process chunks in parallel with max 20 concurrent
+processed=0
+batch_size=20
+
+# Process in batches of 20
+for batch_start in $(seq 0 $batch_size $((total_chunks-1))); do
+    batch_end=$((batch_start + batch_size - 1))
+    if [ $batch_end -ge $total_chunks ]; then
+        batch_end=$((total_chunks - 1))
+    fi
+
+    current_batch_size=$((batch_end - batch_start + 1))
+    echo "Processing batch: chunks $((batch_start+1))-$((batch_end+1)) ($current_batch_size chunks in parallel)"
+
+    # Launch parallel processes for this batch
+    pids=()
+    for i in $(seq $batch_start $batch_end); do
+        if [ -f "$CHUNK_DIR/chunk_${i}.txt" ]; then
+            ((processed++))
+            process_chunk "$CHUNK_DIR/chunk_${i}.txt" $processed $total_chunks &
+            pids+=($!)
+        fi
+    done
+
+    # Wait for all parallel processes in this batch to complete
+    for pid in ${pids[@]}; do
+        wait $pid
+    done
+
+    echo "Batch complete. Processed $processed/$total_chunks chunks so far."
+    echo ""
 done
 
-echo "Processed all chunks."
+echo "All chunks processed."
 echo ""
 
 # Phase 3: Generate final diff for verification
@@ -209,7 +258,7 @@ while true; do
     else
         # Try make
         echo "Running make..."
-        if make -j4 > /tmp/make_output.txt 2>&1; then
+        if make -j6 > /tmp/make_output.txt 2>&1; then
             echo "✅ Build successful!"
             break
         fi
@@ -225,7 +274,7 @@ while true; do
 
     # Capture build error
     if [ -z "$CMAKE_ERROR" ]; then
-        BUILD_ERROR=$(make 2>&1 | head -300)
+        BUILD_ERROR=$(make 2>&1)
     else
         BUILD_ERROR="CMAKE ERROR:\n$CMAKE_ERROR"
     fi
@@ -295,7 +344,7 @@ Fix the build now, or abort if it's not OAuth-related.
     echo ""
 done
 
-echo "✅ Build test passed after $attempt attempt(s)"
+echo "✅ Build test passed after $attempt attempts"
 echo ""
 
 # Phase 6: Apply changes to actual public repo
