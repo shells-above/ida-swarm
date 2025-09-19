@@ -598,6 +598,6 @@ plugin_t PLUGIN = {
     nullptr,
     "LLM Multi-Agent RE",
     "Orchestrated multi-agent reverse engineering with LLMs",
-    "LLM RE System",
+    "IDA Swarm",
     "Ctrl+Shift+O"
 };
