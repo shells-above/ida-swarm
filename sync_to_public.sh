@@ -145,6 +145,10 @@ IMPORTANT FOR PARALLEL PROCESSING:
 - Use Edit or MultiEdit for modifications to existing files
 - Use Write tool for creating new files
 
+The public project is named ida_swarm, the private project is named ida_swarm_private
+Make sure the public version appears as ida_swarm and NOT ida_swarm_private.
+If you are working on CMakeLists.txt, make sure you update the project name!
+
 Analyze this change and apply it to /tmp/ida-swarm if safe.
 If it contains ANY OAuth code, skip it entirely.
 " > /dev/null 2>&1 || true
@@ -322,10 +326,6 @@ Common OAuth-related fixes:
 - Remove includes of oauth_*.h files
 - Remove OAuth manager instantiations
 - Remove OAuth flow method calls
-
-The public project is named ida_swarm, the private project is named ida_swarm_private
-Make sure the public version appears as ida_swarm!
-If you are working on CMakeLists.txt, make sure you update the project name!
 
 Take your time. Explore deeply. Think carefully.
 Fix the build now, or abort if it's not OAuth-related.
