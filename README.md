@@ -2,7 +2,11 @@
 
 ## Revolutionary Mission
 
-**IDA Swarm** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and modify software they own, challenging traditional vendor control and advancing consumer digital rights.
+**IDA Swarm** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and modify software they own, advancing software transparency and consumer understanding of digital systems
+
+## Important Context
+
+IDA Swarm is a research and educational tool that extends IDA Pro's capabilities through AI automation. Like IDA Pro itself, hex editors, and debuggers, this tool has legitimate uses in security research, education, and software analysis
 
 ## Why This Matters
 
@@ -209,10 +213,12 @@ This project makes reverse engineering accessible by:
 
 We believe users should be able to:
 - **Understand** software behavior through analysis
-- **Modify** software for personal needs and preferences
+- **Analyze** how software features and mechanisms work
 - **Fix** bugs and security vulnerabilities
-- **Remove** unwanted features or restrictions
+- **Research** software for interoperability and compatibility
 - **Learn** from the software they use
+
+All while respecting intellectual property rights and complying with applicable laws
 
 ## Known Issues & Limitations
 
@@ -245,28 +251,42 @@ IDA Pro 9.0.240807 beta has a broken IDAlib implementation, and since I wanted t
 3. **Agent ↔ Agent**: IRC protocol for real-time collaboration
 4. **Agent → IDA**: Direct API calls within process
 
-## Legal & Ethical Considerations
+## Legal Compliance & Legitimate Use
 
-### Research & Educational Purpose
+### CRITICAL LEGAL NOTICE
 
-This tool is intended for:
-- Security research on software you own
-- Understanding software behavior for compatibility
-- Educational purposes in reverse engineering
-- Personal modification of legally owned software
+This tool includes binary analysis and modification capabilities that are provided EXCLUSIVELY for legitimate purposes protected under U.S. law:
 
-### NOT Intended For:
-- Circumventing protections on software you don't own
-- Commercial piracy or license violations
-- Malicious modification or malware creation
-- Distribution of circumvention tools
+- **Security Research** (17 U.S.C. § 1201(j)): Identifying and documenting vulnerabilities
+- **Interoperability** (17 U.S.C. § 1201(f)): Achieving compatibility between software systems
+- **Educational Use**: Academic instruction and research in computer science
+- **Archival/Preservation**: Maintaining software compatibility for historical preservation
 
-### Your Responsibility
+### Prohibited Uses
 
-Users are responsible for ensuring their use complies with:
-- Local laws and regulations
-- Software license agreements where applicable
-- Ethical guidelines for security research
+This tool must NOT be used for:
+- Circumventing technological protection measures in violation of DMCA
+- Violating software license agreements or terms of service
+- Commercial piracy or unauthorized distribution
+- Any activity that violates local, state, or federal laws
+
+### User Responsibility
+
+By using this tool, you acknowledge that:
+1. You will comply with all applicable laws including DMCA Section 1201
+2. You understand that the tool's capabilities do not grant legal permission for all uses
+3. You are solely responsible for ensuring your use is lawful
+4. The developers are not liable for any misuse of the tool
+
+### Modification Features - Important Notice
+
+While this tool can generate binary modifications for research purposes, users must ensure any actual application of modifications complies with:
+- Copyright law and fair use provisions
+- Software license agreements
+- DMCA anti-circumvention provisions
+- Ethical research guidelines
+
+The ability to technically modify software does not imply legal permission to do so.
 
 ---
 
