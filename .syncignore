@@ -1,0 +1,24 @@
+# Files that must NEVER be synchronized to the public repository
+# This file itself should also never be in the public repo
+
+# Sync infrastructure (contains security logic)
+sync_to_public.sh
+.syncignore
+
+# OAuth and authentication files
+sdk/auth/oauth_manager.cpp
+sdk/auth/oauth_manager.h
+sdk/auth/oauth_flow.cpp
+sdk/auth/oauth_flow.h
+sdk/auth/oauth_authorizer.cpp
+sdk/auth/oauth_authorizer.h
+
+# Any local config with secrets
+llm_re_config.json
+.env
+.env.local
+
+# Private documentation
+*_private.md
+*_oauth.md
+oauth_*.txt
