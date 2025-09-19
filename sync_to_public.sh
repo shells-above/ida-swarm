@@ -37,9 +37,9 @@ find . -type f \
     -not -path "./build/*" \
     -not -path "./cmake-build-*/*" \
     -not -path "./.idea/*" \
+    -not -path "./.claude/*" \
     -not -name ".DS_Store" \
     -not -name "sync_to_public.sh" \
-    -not -name ".syncignore" \
     -not -name "*.swp" \
     -not -name "*.o" \
     -not -name "*.a" \
@@ -88,7 +88,7 @@ echo "Found $total_chunks file(s) with differences."
 echo ""
 
 # Phase 2: Process each chunk with Claude (parallel processing)
-echo "Phase 2: Analyzing and applying safe changes (parallel processing)..."
+echo "Phase 2: Analyzing and applying safe changes..."
 
 # Function to process a single chunk
 process_chunk() {
@@ -131,7 +131,6 @@ RULES:
 
 OAUTH INDICATORS TO EXCLUDE:
 - The sync_to_public.sh script itself (contains security filtering logic)
-- Any .syncignore files (contain security patterns)
 - Files named oauth_* or *oauth*
 - 'oauth', 'OAuth', 'client_secret', 'client_id'
 - 'authorization_code', 'refresh_token', 'bearer_token'
@@ -155,11 +154,10 @@ If it contains ANY OAuth code, skip it entirely.
 
 export -f process_chunk  # Export function for parallel to use
 
-# Process chunks in parallel with max 20 concurrent
+# Process chunks in parallel
 processed=0
-batch_size=20
+batch_size=50
 
-# Process in batches of 20
 for batch_start in $(seq 0 $batch_size $((total_chunks-1))); do
     batch_end=$((batch_start + batch_size - 1))
     if [ $batch_end -ge $total_chunks ]; then
@@ -267,14 +265,14 @@ while true; do
     fi
 
     if [ $attempt -gt $max_attempts ]; then
-        echo "❌ Exceeded maximum repair attempts ($max_attempts)"
+        echo "❌ Exceeded maximum repair attempts: $max_attempts"
         echo "Sync aborted - unable to fix build"
         exit 1
     fi
 
     # Capture build error
     if [ -z "$CMAKE_ERROR" ]; then
-        BUILD_ERROR=$(make 2>&1)
+        BUILD_ERROR=$(make 2>&1 || true)  # Don't exit on make failure
     else
         BUILD_ERROR="CMAKE ERROR:\n$CMAKE_ERROR"
     fi
@@ -324,6 +322,10 @@ Common OAuth-related fixes:
 - Remove includes of oauth_*.h files
 - Remove OAuth manager instantiations
 - Remove OAuth flow method calls
+
+The public project is named ida_swarm, the private project is named ida_swarm_private
+Make sure the public version appears as ida_swarm!
+If you are working on CMakeLists.txt, make sure you update the project name!
 
 Take your time. Explore deeply. Think carefully.
 Fix the build now, or abort if it's not OAuth-related.

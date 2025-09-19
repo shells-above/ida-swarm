@@ -5,7 +5,7 @@ project(ida_swarm_private)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# IDA SDK path - platform specific
+# IDA SDK path
 if(APPLE)
     set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
 elseif(UNIX AND NOT APPLE)
@@ -14,7 +14,7 @@ else()
     set(IDASDK_PATH "/Users/user/Documents/idasdk90" CACHE PATH "Path to IDA SDK")
 endif()
 
-# IDA Pro plugins directory path - platform specific
+# IDA Pro plugins directory path
 if(APPLE)
     set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
 elseif(UNIX AND NOT APPLE)
@@ -23,7 +23,7 @@ else()
     set(IDA_PLUGINS_PATH "/Applications/IDA Professional 9.0.app/Contents/MacOS/plugins" CACHE PATH "Path to IDA Pro plugins directory")
 endif()
 
-# IDA Qt build setup - platform specific
+# IDA Qt build setup
 if(APPLE)
     set(QTDIR "/Users/Shared/Qt/5.15.2-arm64" CACHE PATH "Path to IDA's custom Qt installation")
 elseif(UNIX AND NOT APPLE)
