@@ -203,6 +203,16 @@ private:
     std::string create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const;
 
     // System prompts
+    /*
+    - Plan how agents should collaborate
+
+    - Communicate with each other over IRC
+    - Ask each other questions
+    - Share findings and insights
+
+    - Provide context about other agents if collaboration would help
+    - Agents can see what other agents are working on
+     */
     static constexpr const char* ORCHESTRATOR_SYSTEM_PROMPT = R"(You are the Orchestrator for a multi-agent reverse engineering system. You are the ONLY entity that communicates with the user.
 
 CRITICAL RESPONSIBILITIES:
@@ -218,7 +228,6 @@ Before spawning ANY agent, you MUST:
 - Analyze the task thoroughly to understand what's really being asked
 - Consider multiple approaches and strategies
 - Think about what types of agents would be most effective
-- Plan how agents should collaborate
 - Anticipate potential conflicts and how to resolve them
 - Consider the order of operations
 - Think about dependencies between tasks
@@ -226,20 +235,15 @@ Before spawning ANY agent, you MUST:
 AGENT CAPABILITIES:
 The agents you spawn are EXTRAORDINARILY capable. They can:
 - Perform deep binary analysis with various strategies
-- Communicate with each other over IRC
 - Deliberate conflicts through discussion
-- Ask each other questions
-- Share findings and insights
 - Work in ways you might not fully predict
 
 When crafting prompts for agents, remember:
 - Be specific about the goal but allow flexibility in approach
-- Provide context about other agents if collaboration would help
-- Agents can see what other agents are working on
 - The quality of your prompt directly impacts agent effectiveness
 
 TOOLS AVAILABLE:
-- spawn_agent: Create a new agent with a specific task (their findings are automatically merged when they complete)
+- spawn_agent: Create a new agent with a specific task (their findings and IDA database updates are automatically merged when they complete)
 - write_file: Create implementation files and other file outputs
 
 Before finishing your spawn_agent call, make sure you provided enough information to the agent.
@@ -249,7 +253,7 @@ If you want to spawn multiple agents in parallel, you have to respond with all y
 
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 
-Think deeply. Plan carefully. Orchestrate intelligently.)";
+Think deeply. Plan carefully. Orchestrate intelligently.)";  // "this program *does not do* any additional handling." is not true, it provides past agent results which i will get rid of eventually once i add back in agent collaboration and get it working better
     
     // Orchestrator consolidation prompts
     static constexpr const char* ORCHESTRATOR_CONSOLIDATION_PROMPT = R"(CONTEXT CONSOLIDATION REQUIRED:
@@ -268,18 +272,22 @@ Please provide a comprehensive summary of our coordination session that includes
 Make this summary comprehensive but concise - it will replace our entire conversation history.
 Focus on preserving the essential context needed to continue coordinating agents effectively.)";
 
+    /*
+     *
+     *5. How should agents collaborate on this?
+     *
+     */
     static constexpr const char* DEEP_THINKING_PROMPT = R"(You need to think EXTREMELY deeply about this task. Consider:
 
 1. What is the user really asking for?
 2. What are the different components of this task?
 3. What strategies could be employed?
 4. What kinds of specialized agents would be most effective?
-5. How should agents collaborate on this?
-6. What order should tasks be done in?
-7. What conflicts might arise?
-8. What context does each agent need?
-9. How can agents build on each other's work?
-10. What's the optimal decomposition of this task?
+5. What order should tasks be done in?
+6. What conflicts might arise?
+7. What context does each agent need?
+8. How can agents build on each other's work?
+9. What's the optimal decomposition of this task?
 
 Think step by step through the entire problem before deciding on your approach.)";
 };

@@ -175,10 +175,10 @@ Edit with your API key:
 ### Multi-Agent Collaboration
 - Orchestrator spawns agents for different analysis aspects
 - Agents work in parallel on isolated database copies
-- IRC-based communication enables real-time collaboration
+- IRC-based communication enables real-time collaboration (WIP)
 - Automatic conflict resolution through consensus mechanisms
 
-### AI-Guided Binary Patching
+### Binary Patching
 - Assembly and byte-level patching
 - Multi-architecture support (Keystone)
 - Individual patch generation

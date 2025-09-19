@@ -1000,6 +1000,8 @@ CONTEXT: )" + context;
     
     // Add completed agents with their results
     // i do not want to do this, but the orchestrator is not good at understanding that these are starting fresh, and it doesn't provide enough information.
+    // if agent collaboration was working better that would solve this, but the agents just go and waste eachothers time so i had to remove it
+    // in the future ill redesign all of this (currently super hodgepodge) focused around irc from the get go
     if (!completed_agents_.empty()) {
         prompt += R"(
 
@@ -1040,7 +1042,10 @@ You are currently the only active agent.
 - Other agents may join later and will be announced via IRC
 )";
     }
-    
+
+    /*
+    Remember: You're part of a team. Collaborate effectively, but know when your work is complete.
+    */
     prompt += R"(
 
 COLLABORATION CAPABILITIES:
@@ -1074,7 +1079,6 @@ CRITICAL COMPLETION RULES:
 - The system will automatically handle your exit once you send a message without tools
 - Focus on YOUR task - complete it thoroughly, report once, then stop
 
-Remember: You're part of a team. Collaborate effectively, but know when your work is complete.
 When ready to finish, simply send your final analysis as a message WITHOUT any tool calls.
 
 Begin your analysis now.)";
