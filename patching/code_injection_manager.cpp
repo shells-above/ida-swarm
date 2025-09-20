@@ -654,10 +654,10 @@ bool CodeInjectionManager::add_segment_with_lief(const NewSegment& segment, cons
         }
 
         // Write the modified binary back
-        // Create a backup first
-        std::string backup_path = agent_binary_path_ + ".backup";
-        std::filesystem::copy_file(agent_binary_path_, backup_path,
-                                   std::filesystem::copy_options::overwrite_existing);
+        // // Create a backup first
+        // std::string backup_path = agent_binary_path_ + ".backup";
+        // std::filesystem::copy_file(agent_binary_path_, backup_path,
+        //                            std::filesystem::copy_options::overwrite_existing);
 
         // Build and write the modified binary
         // LIEF uses format-specific builders or direct write
@@ -680,10 +680,8 @@ bool CodeInjectionManager::add_segment_with_lief(const NewSegment& segment, cons
             binary->write(agent_binary_path_);
         }
 
-        msg("CodeInjectionManager: Successfully wrote modified binary to %s\n",
-            agent_binary_path_.c_str());
-        msg("CodeInjectionManager: Original binary backed up to %s\n",
-            backup_path.c_str());
+        msg("CodeInjectionManager: Successfully wrote modified binary to %s\n", agent_binary_path_.c_str());
+        // msg("CodeInjectionManager: Original binary backed up to %s\n", backup_path.c_str());
 
         return true;
 
