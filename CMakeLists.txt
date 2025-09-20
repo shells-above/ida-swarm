@@ -242,6 +242,25 @@ find_package(OpenSSL REQUIRED)
 # Find SQLite3 for IRC server
 find_package(SQLite3 REQUIRED)
 
+# LIEF for binary modification (used in code injection)
+include(FetchContent)
+FetchContent_Declare(
+    LIEF
+    GIT_REPOSITORY https://github.com/lief-project/LIEF
+    GIT_TAG 0.14.1  # Use a stable release
+)
+
+# Configure LIEF build options
+set(LIEF_DOC OFF)
+set(LIEF_PYTHON_API OFF)
+set(LIEF_EXAMPLES OFF)
+set(LIEF_TESTS OFF)
+set(LIEF_PE ON)      # Enable PE support for Windows binaries
+set(LIEF_ELF ON)     # Enable ELF support for Linux binaries
+set(LIEF_MACHO ON)   # Enable Mach-O support for macOS binaries
+
+FetchContent_MakeAvailable(LIEF)
+
 # Include Keystone build configuration
 include(cmake/BuildKeystone.cmake)
 
@@ -258,6 +277,7 @@ set(COMMON_SOURCES
         analysis/memory.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
+        patching/code_injection_manager.cpp
         irc/irc_server.cpp
         irc/irc_client.cpp
         orchestrator/orchestrator_logger.cpp
@@ -272,6 +292,7 @@ set(PLUGIN_SOURCES
         orchestrator/agent_spawner.cpp
         orchestrator/tool_call_tracker.cpp
         orchestrator/merge_manager.cpp
+        orchestrator/nogo_zone_manager.cpp
         # Agent components
         agent/swarm_agent.cpp
         agent/swarm_logger.cpp
@@ -309,6 +330,7 @@ set(HEADERS
         analysis/deep_analysis.h
         analysis/memory.h
         patching/patch_manager.h
+        patching/code_injection_manager.h
         agent/agent.h
         agent/tool_system.h
         agent/grader.h
@@ -351,6 +373,7 @@ set(COMMON_LIBS
         OpenSSL::Crypto
         keystone
         SQLite::SQLite3
+        LIEF::LIEF
 )
 
 # Link libraries for unified plugin
@@ -381,6 +404,7 @@ set(MCP_SERVER_SOURCES
         orchestrator/agent_spawner.cpp
         orchestrator/tool_call_tracker.cpp
         orchestrator/merge_manager.cpp
+        orchestrator/nogo_zone_manager.cpp
         orchestrator/orchestrator_logger.cpp
         # Common sources needed
         core/ida_utils.cpp
@@ -395,6 +419,7 @@ set(MCP_SERVER_SOURCES
         agent/grader.cpp
         agent/consensus_executor.cpp
         patching/patch_manager.cpp
+        patching/code_injection_manager.cpp
         irc/irc_server.cpp
         irc/irc_client.cpp
 )
@@ -422,6 +447,7 @@ target_link_libraries(ida_re_mcp_server
         OpenSSL::Crypto
         keystone
         SQLite::SQLite3
+        LIEF::LIEF
 )
 
 # Installation

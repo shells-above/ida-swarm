@@ -124,9 +124,13 @@ private:
 
     // Save swarm-specific state
     void save_swarm_state();
-    
+
     // Simplified conflict handling
     void check_if_all_participating_agents_agreed();
+
+    // No-go zone and patch replication handlers
+    void handle_no_go_zone_message(const std::string& message);
+    void handle_patch_replication_message(const std::string& message);
     void process_grader_result(const std::string& result_json);
     std::string generate_conflict_channel(const ToolConflict& conflict) const;
     
@@ -142,6 +146,9 @@ private:
 
     // Flag to track when we're waiting for a conflict response
     std::atomic<bool> conflict_waiting_for_response_{false};
+
+    // No-go zones tracking
+    std::vector<orchestrator::NoGoZone> collected_no_go_zones_;
 };
 
 } // namespace llm_re::agent

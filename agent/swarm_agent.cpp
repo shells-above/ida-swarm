@@ -6,6 +6,8 @@
 #include <thread>
 #include <chrono>
 
+#include "orchestrator/nogo_zone_manager.h"
+
 namespace llm_re::agent {
 
 SwarmAgent::SwarmAgent(const Config& config, const std::string& agent_id)
@@ -97,6 +99,13 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     // Start the base agent
     SWARM_LOG("SwarmAgent: Starting base agent worker thread\n");
     start();
+
+    // Apply any collected no-go zones to the CodeInjectionManager if it exists
+    if (code_injection_manager_ && !collected_no_go_zones_.empty()) {
+        code_injection_manager_->set_no_go_zones(collected_no_go_zones_);
+        SWARM_LOG("SwarmAgent: Applied %zu collected no-go zones to CodeInjectionManager\n",
+                  collected_no_go_zones_.size());
+    }
 
     SWARM_LOG("SwarmAgent: Agent %s initialization complete\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, std::format("SwarmAgent {} initialized", agent_id_));
@@ -199,6 +208,18 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
     // Check for manual tool execution messages
     if (message.find("MANUAL_TOOL_EXEC|") == 0) {
         handle_manual_tool_execution(channel, message);
+        return;  // Don't inject as user message
+    }
+
+    // Check for no-go zone messages
+    if (message.find("NOGO|") == 0) {
+        handle_no_go_zone_message(message);
+        return;  // Don't inject as user message
+    }
+
+    // Check for patch replication messages
+    if (message.find("PATCH|") == 0) {
+        handle_patch_replication_message(message);
         return;  // Don't inject as user message
     }
     
@@ -965,5 +986,102 @@ void SwarmAgent::send_manual_tool_result(const std::string& channel, bool succes
     emit_log(LogLevel::INFO, std::format("Manual tool execution {}", status));
 }
 
+void SwarmAgent::handle_no_go_zone_message(const std::string& message) {
+    // Parse format: NOGO|TYPE|agent_id|start_addr|end_addr
+    std::optional<orchestrator::NoGoZone> zone_opt = orchestrator::NoGoZoneManager::deserialize_zone(message);
+
+    if (!zone_opt.has_value()) {
+        SWARM_LOG("SwarmAgent: Failed to parse no-go zone message: %s\n", message.c_str());
+        return;
+    }
+
+    const orchestrator::NoGoZone &zone = zone_opt.value();
+    const char* type_str = (zone.type == orchestrator::NoGoZoneType::TEMP_SEGMENT) ? "TEMP_SEGMENT" : "CODE_CAVE";
+
+    SWARM_LOG("SwarmAgent: Received no-go zone from %s: %s at 0x%llX-0x%llX\n",
+        zone.agent_id.c_str(), type_str,
+        (uint64_t)zone.start_address, (uint64_t)zone.end_address);
+
+    // Add to our collection
+    collected_no_go_zones_.push_back(zone);
+
+    // Pass to CodeInjectionManager if it exists
+    if (code_injection_manager_) {
+        code_injection_manager_->set_no_go_zones(collected_no_go_zones_);
+        SWARM_LOG("SwarmAgent: Updated CodeInjectionManager with %zu no-go zones\n",
+                  collected_no_go_zones_.size());
+    } else {
+        SWARM_LOG("SwarmAgent: CodeInjectionManager not available, stored no-go zone for later\n");
+    }
+
+    emit_log(LogLevel::DEBUG, std::format("Received no-go zone from {}: {:#x}-{:#x}",
+        zone.agent_id, zone.start_address, zone.end_address));
+}
+
+void SwarmAgent::handle_patch_replication_message(const std::string& message) {
+    // Parse format: PATCH|tool_name|agent_id|address|parameters_json
+    std::stringstream ss(message);
+    std::string token;
+    std::vector<std::string> tokens;
+
+    while (std::getline(ss, token, '|')) {
+        tokens.push_back(token);
+    }
+
+    if (tokens.size() != 5 || tokens[0] != "PATCH") {
+        SWARM_LOG("SwarmAgent: Invalid patch replication message format\n");
+        return;
+    }
+
+    std::string tool_name = tokens[1];
+    std::string source_agent = tokens[2];
+
+    // Parse address (handle hex format)
+    ea_t address = BADADDR;
+    try {
+        address = std::stoull(tokens[3], nullptr, 0);
+    } catch (...) {
+        SWARM_LOG("SwarmAgent: Failed to parse address in patch message\n");
+        return;
+    }
+
+    // Parse parameters
+    json parameters;
+    try {
+        parameters = json::parse(tokens[4]);
+    } catch (...) {
+        SWARM_LOG("SwarmAgent: Failed to parse parameters in patch message\n");
+        return;
+    }
+
+    SWARM_LOG("SwarmAgent: Received patch replication from %s: %s at 0x%llX\n",
+        source_agent.c_str(), tool_name.c_str(), (uint64_t)address);
+
+    // Execute the tool locally
+    // Create a ToolUseContent for the tool call
+    claude::messages::ToolUseContent tool_use(
+        std::format("replicated_{}", source_agent),
+        tool_name,
+        parameters
+    );
+
+    // Execute through our tool registry
+    try {
+        claude::messages::Message result = tool_registry_.execute_tool_call(tool_use);
+
+        // Log the result
+        SWARM_LOG("SwarmAgent: Successfully replicated %s from %s\n",
+            tool_name.c_str(), source_agent.c_str());
+
+        // Don't inject this into the conversation - it's background synchronization
+        emit_log(LogLevel::DEBUG, std::format("Replicated {} from {} at {:#x}",
+            tool_name, source_agent, address));
+
+    } catch (const std::exception& e) {
+        SWARM_LOG("SwarmAgent: Failed to replicate patch: %s\n", e.what());
+        emit_log(LogLevel::WARNING, std::format("Failed to replicate {} from {}: {}",
+            tool_name, source_agent, e.what()));
+    }
+}
 
 } // namespace llm_re::agent

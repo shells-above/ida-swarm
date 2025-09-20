@@ -34,6 +34,7 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     agent_spawner_ = std::make_unique<AgentSpawner>(config, binary_name_);
     tool_tracker_ = std::make_unique<ToolCallTracker>(binary_name_, &event_bus_);
     merge_manager_ = std::make_unique<MergeManager>(tool_tracker_.get());
+    nogo_zone_manager_ = std::make_unique<NoGoZoneManager>();
     
     // Create our own OAuth manager if using OAuth authentication
     if (config.api.auth_method == claude::AuthMethod::OAUTH) {
@@ -94,6 +95,15 @@ bool Orchestrator::initialize() {
     
     // Start monitoring for new tool calls
     tool_tracker_->start_monitoring();
+
+    // Subscribe to tool call events for real-time processing
+    event_bus_subscription_id_ = event_bus_.subscribe(
+        [this](const AgentEvent& event) {
+            handle_tool_call_event(event);
+        },
+        {AgentEvent::TOOL_CALL}
+    );
+    ORCH_LOG("Orchestrator: Subscribed to TOOL_CALL events for real-time processing\n");
     
     // Allocate unique port for IRC server based on binary name
     allocated_irc_port_ = allocate_unique_port();
@@ -1976,6 +1986,145 @@ std::string Orchestrator::create_orchestrator_consolidation_summary(const std::v
         agents_.size(),
         consolidation_state_.consolidation_count
     );
+}
+
+void Orchestrator::handle_tool_call_event(const AgentEvent& event) {
+    // Extract tool call data from event
+    if (!event.payload.contains("tool_name") || !event.payload.contains("agent_id")) {
+        return;
+    }
+
+    std::string tool_name = event.payload["tool_name"];
+    std::string agent_id = event.payload["agent_id"];
+    ea_t address = event.payload.value("address", BADADDR);
+    json parameters = event.payload.value("parameters", json::object());
+
+    // Handle code injection tool calls
+    if (tool_name == "allocate_code_workspace") {
+        // Extract allocation details from parameters
+        if (parameters.contains("temp_address") && parameters.contains("allocated_size")) {
+            ea_t start_addr = parameters["temp_address"];
+            size_t size = parameters["allocated_size"];
+            ea_t end_addr = start_addr + size;
+
+            // Create no-go zone
+            NoGoZone zone;
+            zone.start_address = start_addr;
+            zone.end_address = end_addr;
+            zone.agent_id = agent_id;
+            zone.type = NoGoZoneType::TEMP_SEGMENT;
+            zone.timestamp = std::chrono::system_clock::now();
+
+            // Add to manager
+            nogo_zone_manager_->add_zone(zone);
+
+            // Broadcast to all agents
+            broadcast_no_go_zone(zone);
+
+            ORCH_LOG("Orchestrator: Broadcasted temp segment no-go zone from %s: 0x%llX-0x%llX\n",
+                agent_id.c_str(), (uint64_t)start_addr, (uint64_t)end_addr);
+        }
+    }
+    else if (tool_name == "finalize_code_injection") {
+        // Check if a code cave was used
+        if (parameters.contains("relocation_method") &&
+            parameters["relocation_method"] == "code_cave" &&
+            parameters.contains("new_permanent_address") &&
+            parameters.contains("code_size")) {
+
+            ea_t cave_addr = parameters["new_permanent_address"];
+            size_t size = parameters["code_size"];
+
+            // Create no-go zone for the used code cave
+            NoGoZone zone;
+            zone.start_address = cave_addr;
+            zone.end_address = cave_addr + size;
+            zone.agent_id = agent_id;
+            zone.type = NoGoZoneType::CODE_CAVE;
+            zone.timestamp = std::chrono::system_clock::now();
+
+            // Add to manager
+            nogo_zone_manager_->add_zone(zone);
+
+            // Broadcast to all agents
+            broadcast_no_go_zone(zone);
+
+            ORCH_LOG("Orchestrator: Broadcasted code cave no-go zone from %s: 0x%llX-0x%llX\n",
+                agent_id.c_str(), (uint64_t)cave_addr, (uint64_t)(cave_addr + size));
+        }
+    }
+    // Handle patch tool calls for instant replication
+    else if (tool_name == "patch_bytes" || tool_name == "patch_assembly" ||
+             tool_name == "revert_patch" || tool_name == "revert_all") {
+
+        // Create a ToolCall structure
+        ToolCall call;
+        call.agent_id = agent_id;
+        call.tool_name = tool_name;
+        call.address = address;
+        call.parameters = parameters;
+        call.timestamp = std::chrono::system_clock::now();
+        call.is_write_operation = true;
+
+        // Replicate to all other agents
+        replicate_patch_to_agents(agent_id, call);
+
+        ORCH_LOG("Orchestrator: Replicating %s from %s to all other agents\n",
+            tool_name.c_str(), agent_id.c_str());
+    }
+}
+
+void Orchestrator::broadcast_no_go_zone(const NoGoZone& zone) {
+    // Serialize the zone
+    std::string message = NoGoZoneManager::serialize_zone(zone);
+
+    // Broadcast to all agents via IRC
+    if (irc_client_ && irc_client_->is_connected()) {
+        irc_client_->send_message("#agents", message);
+        ORCH_LOG("Orchestrator: Broadcasted no-go zone via IRC: %s\n", message.c_str());
+    } else {
+        ORCH_LOG("Orchestrator: WARNING - Could not broadcast no-go zone, IRC not connected\n");
+    }
+}
+
+void Orchestrator::replicate_patch_to_agents(const std::string& source_agent, const ToolCall& call) {
+    // Get all active agents except the source
+    for (const auto& [agent_id, agent_info] : agents_) {
+        if (agent_id == source_agent) {
+            continue;  // Skip the agent that made the patch
+        }
+
+        // Get the agent's database path
+        std::string agent_db = db_manager_->get_agent_database(agent_id);
+        if (agent_db.empty()) {
+            ORCH_LOG("Orchestrator: Could not find database for agent %s\n", agent_id.c_str());
+            continue;
+        }
+
+        // Prepare modified parameters with prefixed description
+        json modified_params = call.parameters;
+        if (modified_params.contains("description")) {
+            std::string original_desc = modified_params["description"];
+            modified_params["description"] = "[" + source_agent + "]: " + original_desc;
+        } else {
+            modified_params["description"] = "[" + source_agent + "]: Replicated patch";
+        }
+
+        // Execute the tool on the agent's database
+        // Note: This is a simplified version - in practice, we'd need to execute
+        // the tool in the context of the agent's database
+        // For now, broadcast via IRC for the agent to handle
+
+        std::string patch_msg = std::format("PATCH|{}|{}|{:#x}|{}",
+            call.tool_name, source_agent, call.address, modified_params.dump());
+
+        if (irc_client_ && irc_client_->is_connected()) {
+            // Send to specific agent channel
+            std::string agent_channel = "#agent_" + agent_id;
+            irc_client_->send_message(agent_channel, patch_msg);
+            ORCH_LOG("Orchestrator: Sent patch replication to %s\n", agent_id.c_str());
+        }
+    }
 }
 
 } // namespace llm_re::orchestrator

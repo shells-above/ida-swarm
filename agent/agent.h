@@ -15,6 +15,8 @@
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
+#include "patching/code_injection_manager.h"
+#include <nalt.hpp>  // For get_input_file_path
 #include <fstream>
 #include <filesystem>
 #include <format>
@@ -478,8 +480,35 @@ public:
             patch_manager_ = nullptr;
         }
 
+        // Get the binary path for this agent (the copy being analyzed)
+        std::string binary_path;
+        char input_path[MAXSTR];
+        if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
+            binary_path = input_path;
+            emit_log(LogLevel::DEBUG, "Agent binary path: " + binary_path);
+        } else {
+            emit_log(LogLevel::WARNING, "Could not get binary path for dual patching");
+        }
+
+        // Set binary path on patch manager for dual patching
+        if (!binary_path.empty() && patch_manager_) {
+            patch_manager_->set_binary_path(binary_path);
+            emit_log(LogLevel::DEBUG, "Enabled dual patching (IDA DB + file)");
+
+            // Create code injection manager
+            code_injection_manager_ = std::make_shared<CodeInjectionManager>(patch_manager_.get(), binary_path);
+            if (code_injection_manager_->initialize()) {
+                // Connect patch manager to code injection manager
+                patch_manager_->set_code_injection_manager(code_injection_manager_.get());
+                emit_log(LogLevel::DEBUG, "Code injection manager initialized");
+            } else {
+                emit_log(LogLevel::WARNING, "Failed to initialize code injection manager");
+                code_injection_manager_ = nullptr;
+            }
+        }
+
         // Register tools
-        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_, config_);
+        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_, code_injection_manager_, config_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
@@ -733,6 +762,7 @@ protected:  // Changed to protected so SwarmAgent can access
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
+    std::shared_ptr<CodeInjectionManager> code_injection_manager_;   // code injection manager
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance

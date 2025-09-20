@@ -1,36 +1,64 @@
 #include "merge_manager.h"
 #include "orchestrator_logger.h"
 #include "../core/config.h"
+#include "../patching/code_injection_manager.h"
 #include <format>
+#include <nalt.hpp>  // For get_input_file_path
 
 namespace llm_re::orchestrator {
 
 // Define the set of write tools
 const std::set<std::string> MergeManager::WRITE_TOOLS = {
     "set_name",
-    "set_comment", 
+    "set_comment",
     "set_function_prototype",
     "set_variable",
     "set_local_type",
     "patch_bytes",
-    "patch_assembly"
+    "patch_assembly",
+    "allocate_code_workspace",
+    "preview_code_injection",
+    "finalize_code_injection"
 };
 
 MergeManager::MergeManager(ToolCallTracker* tracker)
     : tool_tracker_(tracker) {
-    
+
     // Initialize components for main database context
     memory_ = std::make_shared<BinaryMemory>();
     executor_ = std::make_shared<ActionExecutor>(memory_);
     patch_manager_ = std::make_shared<PatchManager>();
-    
+
     // Initialize the patch manager
     if (!patch_manager_->initialize()) {
         ORCH_LOG("MergeManager: WARNING - Failed to initialize patch manager, patching operations will fail\n");
     }
-    
+
+    // Get the main binary path for dual patching
+    std::string binary_path;
+    char input_path[MAXSTR];
+    if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
+        binary_path = input_path;
+        ORCH_LOG("MergeManager: Main binary path: %s\n", binary_path.c_str());
+    } else {
+        ORCH_LOG("MergeManager: WARNING - Could not get binary path\n");
+    }
+
+    // Set up code injection if we have a binary path
+    if (!binary_path.empty() && patch_manager_) {
+        // Create code injection manager
+        code_injection_manager_ = std::make_shared<CodeInjectionManager>(patch_manager_.get(), binary_path);
+        if (code_injection_manager_->initialize()) {
+            patch_manager_->set_code_injection_manager(code_injection_manager_.get());
+            ORCH_LOG("MergeManager: Code injection manager initialized\n");
+        } else {
+            ORCH_LOG("MergeManager: WARNING - Failed to initialize code injection manager\n");
+            code_injection_manager_ = nullptr;
+        }
+    }
+
     // Register the same tools that agents use (pass Config instance for conditional tool registration)
-    tools::register_ida_tools(tool_registry_, memory_, executor_, nullptr, patch_manager_, Config::instance());
+    tools::register_ida_tools(tool_registry_, memory_, executor_, nullptr, patch_manager_, code_injection_manager_, Config::instance());
     
     ORCH_LOG("MergeManager: Initialized with tool registry and patch manager\n");
 }

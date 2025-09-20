@@ -179,27 +179,86 @@ Edit with your API key:
 ### Multi-Agent Collaboration
 - Orchestrator spawns agents for different analysis aspects
 - Agents work in parallel on isolated database copies
-- IRC-based communication enables real-time collaboration (WIP)
+- IRC-based communication enables real-time collaboration
 - Automatic conflict resolution through consensus mechanisms
 
-### Binary Patching
-- Assembly and byte-level patching
-- Multi-architecture support (Keystone)
-- Individual patch generation
+### Binary Patching System
+- **Assembly and byte-level patching** with multi-architecture support via Keystone
+- **Dual patching**: Synchronizes changes to both IDA database and actual binary file
+- **Real-time patch replication**: All patches instantly broadcast to all agents
+- **Conflict resolution**: When agents patch the same location differently, they must debate and reach consensus
+- **Attribution tracking**: Every patch is tagged with the agent that created it
 
-### Comprehensive Analysis Tools
+### Code Injection System
+- **Temporary workspace allocation**: Agents develop code in temporary IDA segments
+- **No-go zones**: Prevents agents from allocating overlapping memory regions
+- **Code cave detection**: Automatically finds and claims unused space in binaries
+- **Relocation**: Code developed in temp segments is relocated to permanent locations
+
+### Analysis Tools
 - Function analysis and cross-referencing
 - Data structure identification
 - String and constant analysis
 - Control flow understanding
 - Decompilation integration
 
+### The Design Tension: Independence vs Collaboration
+
+We faced a fundamental design choice that affects the entire system:
+
+#### Option 1: Complete Independence
+- Each agent has its own isolated database
+- Agents reach conclusions independently without bias
+- Conflicts arise naturally when conclusions differ
+- Never merge changes to main database
+- **Pro**: No agent can bias another's analysis
+- **Con**: No benefit from collaborative discovery
+
+#### Option 2: Full Collaboration
+- All write operations instantly replicated to all agents
+- Agents work on the same database together
+- **Pro**: Maximum information sharing and efficiency
+- **Con**: Early decisions by one agent bias all others
+
+#### Our Hybrid Approach
+We implemented a complex (this may not be ideal, but it is what was made) middle ground:
+
+1. **For Analysis**: Agents work independently, then merge results after completion
+   - Preserves independent reasoning for reverse engineering tasks
+   - Function names, comments, types can conflict and be resolved
+   - Final merged result benefits all future agents
+
+2. **For Patching**: Real-time replication with conflict resolution
+   - Patches are instantly shared to keep binaries in sync
+   - Prevents binary divergence that would be impossible to merge
+   - But creates the "multiple truths" problem:
+     - Agent A patches address X to disable a feature
+     - Agent B patches address X to modify the feature
+     - Unlike metadata conflicts, neither is "more correct"
+   - Resolution requires negotiation in conflict channels
+
+3. **For Code Injection**: Coordinated allocation with no-go zones
+   - Temporary segments and code caves are immediately claimed
+   - Prevents allocation conflicts while maintaining independence
+   - Deterministic addressing ensures consistency
+
+### The Unsolvable Problem
+
+Unlike metadata conflicts where agents seek the "most accurate" answer, patching conflicts have no objective truth:
+- Two agents can validly patch the same code for different purposes
+- Both modifications might be "correct" for different goals
+- The conflict channel becomes a negotiation rather than a search for truth
+
+This is why patches are replicated immediately - to surface these conflicts early rather than discovering incompatible binary states during merge.
+
 ### Conflict Resolution
 When agents disagree on modifications:
 1. Dedicated IRC channel created (`#conflict_address_tool`)
 2. Agents debate and provide reasoning
-3. Consensus must be reached by all parties
-4. Orchestrator enforces agreed solution
+3. For metadata: Agents seek the most accurate representation
+4. For patches: Agents must negotiate compatible modifications
+5. Consensus must be reached by all parties
+6. Orchestrator enforces agreed solution
 
 ## Project Philosophy
 

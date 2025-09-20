@@ -28,10 +28,22 @@ public:
     // Get workspace directory
     std::string get_workspace_directory() const { return workspace_dir_; }
 
+    // Get agent's binary path
+    std::string get_agent_binary(const std::string& agent_id) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = agent_binaries_.find(agent_id);
+        if (it != agent_binaries_.end()) {
+            return it->second;
+        }
+        return "";
+    }
+
 private:
     std::string main_database_path_;
     std::string workspace_dir_;
+    std::string binary_file_path_;  // The original binary being analyzed
     std::map<std::string, std::string> agent_databases_;  // agent_id -> db_path
+    std::map<std::string, std::string> agent_binaries_;   // agent_id -> binary_path
     mutable std::mutex mutex_;
     
     // Create workspace directory structure

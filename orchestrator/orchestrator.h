@@ -10,6 +10,7 @@
 #include "agent_spawner.h"
 #include "tool_call_tracker.h"
 #include "merge_manager.h"
+#include "nogo_zone_manager.h"
 #include "../irc/irc_server.h"
 #include "../irc/irc_client.h"
 #include <memory>
@@ -87,6 +88,7 @@ private:
     std::unique_ptr<AgentSpawner> agent_spawner_;
     std::unique_ptr<ToolCallTracker> tool_tracker_;
     std::unique_ptr<MergeManager> merge_manager_;
+    std::unique_ptr<NoGoZoneManager> nogo_zone_manager_;
     std::unique_ptr<irc::IRCServer> irc_server_;
     std::unique_ptr<irc::IRCClient> irc_client_;
     
@@ -170,6 +172,12 @@ private:
     
     // OAuth token management
     bool refresh_oauth_if_needed();
+
+    // Real-time tool call monitoring
+    void handle_tool_call_event(const AgentEvent& event);
+    void broadcast_no_go_zone(const NoGoZone& zone);
+    void replicate_patch_to_agents(const std::string& source_agent, const ToolCall& call);
+    std::string event_bus_subscription_id_;
     
     // Token usage tracking (per-iteration for context, cumulative for totals)
     void log_token_usage(const claude::TokenUsage& per_iteration_usage, const claude::TokenUsage& cumulative_usage);

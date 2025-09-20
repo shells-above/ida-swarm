@@ -44,6 +44,9 @@ struct PatchStatistics {
     size_t total_bytes_patched;
 };
 
+// Forward declarations
+class CodeInjectionManager;
+
 // Simplified PatchManager with embedded patchers
 class PatchManager {
 public:
@@ -52,6 +55,16 @@ public:
 
     // Initialize patch manager (creates backup, initializes Keystone)
     bool initialize();
+
+    // Set binary path for dual patching (IDA DB + file)
+    void set_binary_path(const std::string& path) {
+        binary_path_ = path;
+    }
+
+    // Set the code injection manager for integrated patching
+    void set_code_injection_manager(CodeInjectionManager* cim) {
+        code_injection_manager_ = cim;
+    }
 
     // Core 4 methods for the LLM tools
     
@@ -97,6 +110,12 @@ private:
     // Patches storage
     std::unordered_map<ea_t, PatchEntry> patches_;
 
+    // Binary path for file patching
+    std::string binary_path_;
+
+    // Integration with code injection system
+    CodeInjectionManager* code_injection_manager_ = nullptr;
+
     // Safety validation methods
     bool validate_address(ea_t address, std::string& error_msg);
     bool validate_instruction_boundary(ea_t address, std::string& error_msg);
@@ -121,6 +140,9 @@ private:
     std::vector<uint8_t> read_bytes(ea_t address, size_t size);
     bool write_bytes(ea_t address, const std::vector<uint8_t>& bytes);
     void trigger_reanalysis(ea_t address, size_t size);
+
+    // File patching utilities
+    bool apply_to_file(uint32_t offset, const std::vector<uint8_t>& bytes);
 };
 
 } // namespace llm_re

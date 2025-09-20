@@ -9,6 +9,7 @@
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
+#include "patching/code_injection_manager.h"
 #include "core/config.h"
 #include <fstream>
 #include <filesystem>
@@ -24,6 +25,13 @@ extern char **environ;
 #endif
 
 namespace llm_re::tools {
+
+// Helper function to format address as hex (defined early so it can be used by all tools)
+inline std::string HexAddress(ea_t addr) {
+    std::stringstream ss;
+    ss << "0x" << std::hex << std::uppercase << addr;
+    return ss.str();
+}
 
 // IDA-specific base tool that extends the api Tool interface
 class IDAToolBase : public claude::tools::Tool {
@@ -1011,6 +1019,253 @@ public:
     }
 };
 
+class RunPythonTool : public IDAToolBase {
+public:
+    using IDAToolBase::IDAToolBase;
+
+    std::string name() const override {
+        return "run_python";
+    }
+
+    std::string description() const override {
+        return "Execute Python code whatever task you deem necessary. Use this to perform computation you couldn't have done yourself. "
+               "IMPORTANT: Use ONLY Python standard library - no external packages. "
+               "EXTREMELY IMPORTANT: **this tool IS EXPENSIVE!!** ONLY USE THIS TOOL WHEN IT WILL GREATLY ENHANCE YOUR ABILITIES. Do NOT WASTE IT. "  // it's not expensive, but the LLM like to run python and have it print out its reasoning, which i don't want it doing
+               "BE VERY CAREFUL WITH WHAT YOU DO HERE! If you aren't careful, it will flood your context window with useless information! Make sure you know EXACTLY what you are doing! "
+               "NEVER perform network operations (not needed for RE tasks).";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("code", "Python code to execute (standard library only)")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string python_code = input.at("code");
+
+            // Create temp directory if it doesn't exist
+            std::filesystem::path temp_dir = "/tmp/agent_python";
+            if (!std::filesystem::exists(temp_dir)) {
+                std::filesystem::create_directories(temp_dir);
+            }
+
+            // Generate random filename
+            auto now = std::chrono::system_clock::now();
+            auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<> dis(1000, 9999);
+
+            std::string filename = std::format("script_{}_{}.py", timestamp, dis(gen));
+            std::filesystem::path script_path = temp_dir / filename;
+
+            // Write Python code to file
+            std::ofstream script_file(script_path);
+            if (!script_file.is_open()) {
+                return claude::tools::ToolResult::failure("Failed to create temporary Python file");
+            }
+            script_file << python_code;
+            script_file.close();
+
+            // Execute Python script and capture output
+            std::string output = execute_python_script(script_path.string());
+
+            // Clean up temp file
+            std::filesystem::remove(script_path);
+
+            json result;
+            result["output"] = output;
+
+            return claude::tools::ToolResult::success(result);
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+
+private:
+    std::string execute_python_script(const std::string& script_path) {
+#ifdef __NT__
+        return execute_windows_python(script_path);
+#else
+        return execute_unix_python(script_path);
+#endif
+    }
+
+#ifndef __NT__
+    std::string execute_unix_python(const std::string& script_path) {
+        int pipefd[2];
+        if (pipe(pipefd) == -1) {
+            return "Error: Failed to create pipe";
+        }
+
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+        posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+        const char* python_cmd = "python3";
+        std::vector<char*> argv = {
+            const_cast<char*>(python_cmd),
+            const_cast<char*>(script_path.c_str()),
+            nullptr
+        };
+
+        pid_t pid;
+        int result = posix_spawn(&pid, "/usr/bin/python3", &actions, nullptr, argv.data(), environ);
+
+        close(pipefd[1]);
+        posix_spawn_file_actions_destroy(&actions);
+
+        if (result != 0) {
+            close(pipefd[0]);
+            // Try with just "python" if python3 fails
+            if (pipe(pipefd) == -1) {
+                return "Error: Failed to create pipe";
+            }
+
+            posix_spawn_file_actions_init(&actions);
+            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+            posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+            posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+            python_cmd = "python";
+            argv[0] = const_cast<char*>(python_cmd);
+            result = posix_spawn(&pid, "/usr/bin/python", &actions, nullptr, argv.data(), environ);
+
+            close(pipefd[1]);
+            posix_spawn_file_actions_destroy(&actions);
+
+            if (result != 0) {
+                close(pipefd[0]);
+                return std::format("Error: Failed to execute Python (tried python3 and python): {}", strerror(result));
+            }
+        }
+
+        // Read output with size limit
+        std::string output;
+        char buffer[4096];
+        ssize_t bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
+
+        while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            output += buffer;
+
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (read(pipefd[0], buffer, sizeof(buffer) - 1) > 0) {
+                    // Just discard it
+                }
+                break;
+            }
+        }
+        close(pipefd[0]);
+
+        // Wait for process to complete using IDA's thread-safe qwait
+        int status;
+        qwait(&status, pid, 0);
+
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            output = "Python execution failed with exit code " + std::to_string(WEXITSTATUS(status)) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
+        }
+
+        return output.empty() ? "(no output)" : output;
+    }
+#else
+    std::string execute_windows_python(const std::string& script_path) {
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+
+        HANDLE hReadPipe, hWritePipe;
+        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+            return "Error: Failed to create pipe";
+        }
+
+        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOA si = {0};
+        si.cb = sizeof(STARTUPINFOA);
+        si.hStdOutput = hWritePipe;
+        si.hStdError = hWritePipe;
+        si.dwFlags |= STARTF_USESTDHANDLES;
+
+        PROCESS_INFORMATION pi = {0};
+
+        std::string command = "python \"" + script_path + "\"";
+
+        if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(hWritePipe);
+            CloseHandle(hReadPipe);
+
+            // Try python3 if python fails
+            command = "python3 \"" + script_path + "\"";
+            if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+                return "Error: Failed to execute Python (tried python and python3)";
+            }
+        }
+
+        CloseHandle(hWritePipe);
+
+        // Read output with size limit
+        std::string output;
+        char buffer[4096];
+        DWORD bytes_read;
+        const size_t MAX_OUTPUT_SIZE = 10000;
+
+        while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+            output += buffer;
+
+            // Check if output is getting too large
+            if (output.size() > MAX_OUTPUT_SIZE) {
+                // Consume remaining output to prevent pipe blocking
+                while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
+                    // Just discard it
+                }
+                break;
+            }
+        }
+
+        CloseHandle(hReadPipe);
+
+        // Wait for process to complete
+        WaitForSingleObject(pi.hProcess, INFINITE);
+
+        DWORD exit_code;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        if (exit_code != 0) {
+            output = "Python execution failed with exit code " + std::to_string(exit_code) + "\n" + output;
+        }
+
+        // Add trimming message if output was truncated
+        if (output.size() >= MAX_OUTPUT_SIZE) {
+            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
+        }
+
+        return output.empty() ? "(no output)" : output;
+    }
+#endif
+};
+
+
 // Patch bytes tool
 class PatchBytesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
@@ -1221,253 +1476,6 @@ public:
     }
 };
 
-// Run Python code tool
-class RunPythonTool : public IDAToolBase {
-public:
-    using IDAToolBase::IDAToolBase;
-
-    std::string name() const override {
-        return "run_python";
-    }
-
-    std::string description() const override {
-        return "Execute Python code whatever task you deem necessary. Use this to perform computation you couldn't have done yourself. "
-               "IMPORTANT: Use ONLY Python standard library - no external packages. "
-               "EXTREMELY IMPORTANT: **this tool IS EXPENSIVE!!** ONLY USE THIS TOOL WHEN IT WILL GREATLY ENHANCE YOUR ABILITIES. Do NOT WASTE IT. "  // it's not expensive, but the LLM like to run python and have it print out its reasoning, which i don't want it doing
-               "BE VERY CAREFUL WITH WHAT YOU DO HERE! If you aren't careful, it will flood your context window with useless information! Make sure you know EXACTLY what you are doing! "
-               "NEVER perform network operations (not needed for RE tasks).";
-    }
-
-    json parameters_schema() const override {
-        return claude::tools::ParameterBuilder()
-            .add_string("code", "Python code to execute (standard library only)")
-            .build();
-    }
-
-    claude::tools::ToolResult execute(const json& input) override {
-        try {
-            std::string python_code = input.at("code");
-
-            // Create temp directory if it doesn't exist
-            std::filesystem::path temp_dir = "/tmp/agent_python";
-            if (!std::filesystem::exists(temp_dir)) {
-                std::filesystem::create_directories(temp_dir);
-            }
-
-            // Generate random filename
-            auto now = std::chrono::system_clock::now();
-            auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_int_distribution<> dis(1000, 9999);
-
-            std::string filename = std::format("script_{}_{}.py", timestamp, dis(gen));
-            std::filesystem::path script_path = temp_dir / filename;
-
-            // Write Python code to file
-            std::ofstream script_file(script_path);
-            if (!script_file.is_open()) {
-                return claude::tools::ToolResult::failure("Failed to create temporary Python file");
-            }
-            script_file << python_code;
-            script_file.close();
-
-            // Execute Python script and capture output
-            std::string output = execute_python_script(script_path.string());
-
-            // Clean up temp file
-            std::filesystem::remove(script_path);
-
-            json result;
-            result["output"] = output;
-
-            return claude::tools::ToolResult::success(result);
-
-        } catch (const std::exception& e) {
-            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
-        }
-    }
-
-private:
-    std::string execute_python_script(const std::string& script_path) {
-#ifdef __NT__
-        return execute_windows_python(script_path);
-#else
-        return execute_unix_python(script_path);
-#endif
-    }
-
-#ifndef __NT__
-    std::string execute_unix_python(const std::string& script_path) {
-        int pipefd[2];
-        if (pipe(pipefd) == -1) {
-            return "Error: Failed to create pipe";
-        }
-
-        posix_spawn_file_actions_t actions;
-        posix_spawn_file_actions_init(&actions);
-        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
-        posix_spawn_file_actions_addclose(&actions, pipefd[0]);
-        posix_spawn_file_actions_addclose(&actions, pipefd[1]);
-
-        const char* python_cmd = "python3";
-        std::vector<char*> argv = {
-            const_cast<char*>(python_cmd),
-            const_cast<char*>(script_path.c_str()),
-            nullptr
-        };
-
-        pid_t pid;
-        int result = posix_spawn(&pid, "/usr/bin/python3", &actions, nullptr, argv.data(), environ);
-
-        close(pipefd[1]);
-        posix_spawn_file_actions_destroy(&actions);
-
-        if (result != 0) {
-            close(pipefd[0]);
-            // Try with just "python" if python3 fails
-            if (pipe(pipefd) == -1) {
-                return "Error: Failed to create pipe";
-            }
-
-            posix_spawn_file_actions_init(&actions);
-            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-            posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
-            posix_spawn_file_actions_addclose(&actions, pipefd[0]);
-            posix_spawn_file_actions_addclose(&actions, pipefd[1]);
-
-            python_cmd = "python";
-            argv[0] = const_cast<char*>(python_cmd);
-            result = posix_spawn(&pid, "/usr/bin/python", &actions, nullptr, argv.data(), environ);
-
-            close(pipefd[1]);
-            posix_spawn_file_actions_destroy(&actions);
-
-            if (result != 0) {
-                close(pipefd[0]);
-                return std::format("Error: Failed to execute Python (tried python3 and python): {}", strerror(result));
-            }
-        }
-
-        // Read output with size limit
-        std::string output;
-        char buffer[4096];
-        ssize_t bytes_read;
-        const size_t MAX_OUTPUT_SIZE = 10000;
-
-        while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0';
-            output += buffer;
-            
-            // Check if output is getting too large
-            if (output.size() > MAX_OUTPUT_SIZE) {
-                // Consume remaining output to prevent pipe blocking
-                while (read(pipefd[0], buffer, sizeof(buffer) - 1) > 0) {
-                    // Just discard it
-                }
-                break;
-            }
-        }
-        close(pipefd[0]);
-
-        // Wait for process to complete using IDA's thread-safe qwait
-        int status;
-        qwait(&status, pid, 0);
-
-        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-            output = "Python execution failed with exit code " + std::to_string(WEXITSTATUS(status)) + "\n" + output;
-        }
-
-        // Add trimming message if output was truncated
-        if (output.size() >= MAX_OUTPUT_SIZE) {
-            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
-        }
-
-        return output.empty() ? "(no output)" : output;
-    }
-#else
-    std::string execute_windows_python(const std::string& script_path) {
-        SECURITY_ATTRIBUTES sa;
-        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-        sa.bInheritHandle = TRUE;
-        sa.lpSecurityDescriptor = NULL;
-
-        HANDLE hReadPipe, hWritePipe;
-        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
-            return "Error: Failed to create pipe";
-        }
-
-        SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
-
-        STARTUPINFOA si = {0};
-        si.cb = sizeof(STARTUPINFOA);
-        si.hStdOutput = hWritePipe;
-        si.hStdError = hWritePipe;
-        si.dwFlags |= STARTF_USESTDHANDLES;
-
-        PROCESS_INFORMATION pi = {0};
-
-        std::string command = "python \"" + script_path + "\"";
-
-        if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-            CloseHandle(hWritePipe);
-            CloseHandle(hReadPipe);
-
-            // Try python3 if python fails
-            command = "python3 \"" + script_path + "\"";
-            if (!CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-                return "Error: Failed to execute Python (tried python and python3)";
-            }
-        }
-
-        CloseHandle(hWritePipe);
-
-        // Read output with size limit
-        std::string output;
-        char buffer[4096];
-        DWORD bytes_read;
-        const size_t MAX_OUTPUT_SIZE = 10000;
-
-        while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
-            buffer[bytes_read] = '\0';
-            output += buffer;
-            
-            // Check if output is getting too large
-            if (output.size() > MAX_OUTPUT_SIZE) {
-                // Consume remaining output to prevent pipe blocking
-                while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL) && bytes_read > 0) {
-                    // Just discard it
-                }
-                break;
-            }
-        }
-
-        CloseHandle(hReadPipe);
-
-        // Wait for process to complete
-        WaitForSingleObject(pi.hProcess, INFINITE);
-
-        DWORD exit_code;
-        GetExitCodeProcess(pi.hProcess, &exit_code);
-
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-
-        if (exit_code != 0) {
-            output = "Python execution failed with exit code " + std::to_string(exit_code) + "\n" + output;
-        }
-
-        // Add trimming message if output was truncated
-        if (output.size() >= MAX_OUTPUT_SIZE) {
-            output += "\n\n[OUTPUT TRUNCATED: Output exceeded " + std::to_string(MAX_OUTPUT_SIZE) + " characters and was trimmed]";
-        }
-
-        return output.empty() ? "(no output)" : output;
-    }
-#endif
-};
-
 // List patches tool
 class ListPatchesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
@@ -1564,11 +1572,221 @@ public:
     }
 };
 
+class AllocateCodeWorkspaceTool : public IDAToolBase {
+    std::shared_ptr<CodeInjectionManager> code_injection_manager_;
+
+public:
+    AllocateCodeWorkspaceTool(std::shared_ptr<BinaryMemory> mem,
+                              std::shared_ptr<ActionExecutor> exec,
+                              std::shared_ptr<CodeInjectionManager> cim)
+        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+
+    std::string name() const override {
+        return "allocate_code_workspace";
+    }
+
+    std::string description() const override {
+        return "Allocate a TEMPORARY workspace in IDA for developing code injections. "
+               "CRITICAL: This creates a segment that exists ONLY in the IDA database for development. "
+               "The returned address (0xXXXXXXXX) is TEMPORARY and WILL NEED TO BE RELOCATED when finalized. "
+               "You are using IDA as an IDE to iteratively develop your assembly code. "
+               "IMPORTANT: Track ALL references to this temporary address - you MUST update them after relocation! "
+               "Request 2x the size you think you need - it's better to overestimate. "
+               "After developing your code (using patching), you MUST call preview_code_injection then finalize_code_injection.";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_integer("size_bytes", "Estimated size needed in bytes (will be increased by 50% automatically)")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        if (!code_injection_manager_) {
+            return claude::tools::ToolResult::failure("Code injection manager not initialized");
+        }
+
+        try {
+            size_t size = input.at("size_bytes");
+
+            if (size == 0 || size > 0x100000) {  // Max 1MB
+                return claude::tools::ToolResult::failure("Size must be between 1 and 1048576 bytes");
+            }
+
+            WorkspaceAllocation result = code_injection_manager_->allocate_code_workspace(size);
+
+            if (result.success) {
+                json data;
+                data["success"] = true;
+                data["temp_address"] = HexAddress(result.temp_segment_ea);
+                data["allocated_size"] = result.allocated_size;
+                data["segment_name"] = result.segment_name;
+                data["warning"] = "REMEMBER: This address is TEMPORARY and will change! Track all references!";
+                data["next_steps"] = "Use patch_bytes or patch_assembly to develop code at this address, "
+                                    "then preview_code_injection and finalize_code_injection when done.";
+                return claude::tools::ToolResult::success(data);
+            } else {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+class PreviewCodeInjectionTool : public IDAToolBase {
+    std::shared_ptr<CodeInjectionManager> code_injection_manager_;
+
+public:
+    PreviewCodeInjectionTool(std::shared_ptr<BinaryMemory> mem,
+                            std::shared_ptr<ActionExecutor> exec,
+                            std::shared_ptr<CodeInjectionManager> cim)
+        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+
+    std::string name() const override {
+        return "preview_code_injection";
+    }
+
+    std::string description() const override {
+        return "⚠️ MANDATORY before finalization - Preview the code you've developed in your temporary workspace. "
+               "This tool shows the final assembly that will be relocated and injected into the binary. "
+               "CRITICAL: You MUST call this before finalize_code_injection or finalization will fail! "
+               "Review the disassembly carefully - after finalization, this code becomes permanent. "
+               "The preview validates that your code is complete and ready for relocation.";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_integer("start_address", "Start address of your code in the temp workspace")
+            .add_integer("end_address", "End address (exclusive) of your code in the temp workspace")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        if (!code_injection_manager_) {
+            return claude::tools::ToolResult::failure("Code injection manager not initialized");
+        }
+
+        try {
+            ea_t start = ActionExecutor::parse_single_address_value(input.at("start_address"));
+            ea_t end = ActionExecutor::parse_single_address_value(input.at("end_address"));
+
+            CodePreviewResult result = code_injection_manager_->preview_code_injection(start, end);
+
+            if (result.success) {
+                json data;
+                data["success"] = true;
+                data["start_address"] = HexAddress(result.start_ea);
+                data["end_address"] = HexAddress(result.end_ea);
+                data["code_size"] = result.code_size;
+                data["disassembly"] = result.disassembly;
+                data["bytes_hex"] = bytes_to_hex_string(result.final_bytes);
+                data["ready_to_finalize"] = true;
+                data["next_step"] = "Call finalize_code_injection with the same start/end addresses";
+                return claude::tools::ToolResult::success(data);
+            } else {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+
+private:
+    static std::string bytes_to_hex_string(const std::vector<uint8_t>& bytes) {
+        std::stringstream ss;
+        for (uint8_t b : bytes) {
+            ss << std::hex << std::setfill('0') << std::setw(2) << (int)b;
+        }
+        return ss.str();
+    }
+};
+
+class FinalizeCodeInjectionTool : public IDAToolBase {
+    std::shared_ptr<CodeInjectionManager> code_injection_manager_;
+
+public:
+    FinalizeCodeInjectionTool(std::shared_ptr<BinaryMemory> mem,
+                              std::shared_ptr<ActionExecutor> exec,
+                              std::shared_ptr<CodeInjectionManager> cim)
+        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+
+    std::string name() const override {
+        return "finalize_code_injection";
+    }
+
+    std::string description() const override {
+        return "⚠️ PERMANENT OPERATION - Finalize your code injection and relocate it to a permanent location. "
+               "This will: 1) Find a code cave or create a new segment, 2) Copy your code there, "
+               "3) Delete the temporary workspace, 4) Apply changes to the actual binary file. "
+               "CRITICAL: You MUST have called preview_code_injection first with these exact addresses! "
+               "IMPORTANT: After this succeeds, you MUST call list_patches and update ALL references to the old address! "
+               "The tool will remind you to update ALL references - you must track and fix them! ";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_integer("start_address", "Start address (must match preview)")
+            .add_integer("end_address", "End address (must match preview)")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        if (!code_injection_manager_) {
+            return claude::tools::ToolResult::failure("Code injection manager not initialized");
+        }
+
+        try {
+            ea_t start = ActionExecutor::parse_single_address_value(input.at("start_address"));
+            ea_t end = ActionExecutor::parse_single_address_value(input.at("end_address"));
+
+            CodeFinalizationResult result = code_injection_manager_->finalize_code_injection(start, end);
+
+            if (result.success) {
+                json data;
+                data["success"] = true;
+                data["old_temp_address"] = HexAddress(result.old_temp_address);
+                data["new_permanent_address"] = HexAddress(result.new_permanent_address);
+                data["code_size"] = result.code_size;
+                data["relocation_method"] = result.relocation_method;
+
+                // Critical instructions for the LLM
+                data["critical_action_required"] = "UPDATE ALL REFERENCES TO THE OLD ADDRESS!";
+
+                // Build step strings before adding to array
+                std::string step2 = std::string("2. Review each patch for any references to ") + HexAddress(result.old_temp_address);
+                std::string step3 = std::string("3. Update any patches containing the old address ") + HexAddress(result.old_temp_address) +
+                                   std::string(" to use the new address ") + HexAddress(result.new_permanent_address);
+
+                data["next_steps"] = json::array();
+                data["next_steps"].push_back("1. Call list_patches to see all your patches");
+                data["next_steps"].push_back(step2);
+                data["next_steps"].push_back(step3);
+                data["next_steps"].push_back("4. This includes JMP, CALL, MOV, LEA or any instruction referencing the old address, or ANYTHING you patched to be offset from the old temporary address.");
+                data["warning"] = "The code will NOT work correctly until you update all address references!";
+                data["old_address_to_find"] = HexAddress(result.old_temp_address);
+                data["new_address_to_use"] = HexAddress(result.new_permanent_address);
+
+                data["message"] = "Code successfully relocated, examine the code and make sure it was done correctly or if you need to do anything to it. YOU MUST NOW UPDATE ALL PATCHES REFERENCING THE OLD ADDRESS OR THAT CODE *WILL CAUSE A CRASH*!";
+                return claude::tools::ToolResult::success(data);
+            } else {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
 inline void register_ida_tools(claude::tools::ToolRegistry& registry,
                                std::shared_ptr<BinaryMemory> memory,
                                std::shared_ptr<ActionExecutor> executor,
                                std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,
                                std::shared_ptr<PatchManager> patch_manager,
+                               std::shared_ptr<CodeInjectionManager> code_injection_manager,
                                const Config& config) {
     // Core navigation and info tools
     registry.register_tool_type<GetXrefsTool>(memory, executor);
@@ -1611,6 +1829,13 @@ inline void register_ida_tools(claude::tools::ToolRegistry& registry,
         registry.register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
         registry.register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
         registry.register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
+    }
+
+    // Code injection tools
+    if (code_injection_manager) {
+        registry.register_tool_type<AllocateCodeWorkspaceTool>(memory, executor, code_injection_manager);
+        registry.register_tool_type<PreviewCodeInjectionTool>(memory, executor, code_injection_manager);
+        registry.register_tool_type<FinalizeCodeInjectionTool>(memory, executor, code_injection_manager);
     }
 
     // Python execution tool (only if enabled in config)

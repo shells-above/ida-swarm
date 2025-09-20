@@ -3,8 +3,11 @@
 //
 
 #include "patching/patch_manager.h"
+#include "patching/code_injection_manager.h"
 #include "core/ida_utils.h"
 #include "core/ida_validators.h"
+#include <loader.hpp>
+#include <fstream>
 
 namespace llm_re {
 
@@ -1013,23 +1016,45 @@ bool PatchManager::write_bytes(ea_t address, const std::vector<uint8_t>& bytes) 
         msg("ERROR: Cannot write empty byte array\n");
         return false;
     }
-    
+
     // Check if address is valid and writable
     if (!is_mapped(address)) {
         msg("ERROR: Address 0x%llX is not mapped\n", (uint64_t)address);
         return false;
     }
-    
+
     // Check if we can write to this segment
     segment_t* seg = getseg(address);
     if (!seg) {
         msg("ERROR: No segment at address 0x%llX\n", (uint64_t)address);
         return false;
     }
-    
-    // Perform the write
+
+    // Always patch IDA database
     patch_bytes(address, bytes.data(), bytes.size());
-    
+
+    // Check if we should also patch the file
+    if (code_injection_manager_ && code_injection_manager_->is_in_temp_workspace(address)) {
+        // Only patch IDA database for temporary workspace
+        msg("Patched temporary workspace at 0x%llX (IDA DB only)\n", (uint64_t)address);
+    } else if (!binary_path_.empty()) {
+        // Also patch the binary file if we have a path
+        uint32_t file_offset = get_fileregion_offset(address);
+        if (file_offset != BADADDR) {
+            if (apply_to_file(file_offset, bytes)) {
+                msg("Applied dual patch at 0x%llX (IDA DB + file at offset 0x%X)\n",
+                    (uint64_t)address, file_offset);
+            } else {
+                msg("WARNING: Patched IDA DB but failed to patch file at 0x%llX\n", (uint64_t)address);
+                // Continue anyway - IDA DB patch succeeded
+            }
+        } else {
+            msg("WARNING: Could not get file offset for 0x%llX, IDA DB patched only\n", (uint64_t)address);
+        }
+    } else {
+        msg("Patched at 0x%llX (IDA DB only - no binary path)\n", (uint64_t)address);
+    }
+
     // patch_bytes doesn't return a value, so we assume success if we get here
     return true;
 }
@@ -1082,5 +1107,23 @@ void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
     }
 }
 
+// File patching utilities
+bool PatchManager::apply_to_file(uint32_t offset, const std::vector<uint8_t>& bytes) {
+    if (binary_path_.empty()) {
+        return false;
+    }
+
+    std::fstream file(binary_path_, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file.is_open()) {
+        msg("PatchManager: Failed to open binary file: %s\n", binary_path_.c_str());
+        return false;
+    }
+
+    file.seekp(offset);
+    file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    file.close();
+
+    return true;
+}
 
 } // namespace llm_re

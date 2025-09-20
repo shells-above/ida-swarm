@@ -4,17 +4,23 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
+#include <nalt.hpp>  // For get_input_file_path
 
 namespace fs = std::filesystem;
 
 namespace llm_re::orchestrator {
 
-DatabaseManager::DatabaseManager(const std::string& main_db_path, const std::string& binary_name)
-    : main_database_path_(main_db_path) {
-    
-    // Set workspace directory with binary name
-    // The base path should be passed from orchestrator config
+DatabaseManager::DatabaseManager(const std::string& main_db_path, const std::string& binary_name) : main_database_path_(main_db_path) {
     workspace_dir_ = "/tmp/ida_swarm_workspace/" + binary_name;
+
+    // Get the actual binary file path being analyzed
+    char input_path[MAXSTR];
+    if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
+        binary_file_path_ = input_path;
+        ORCH_LOG("DatabaseManager: Binary file path: %s\n", binary_file_path_.c_str());
+    } else {
+        ORCH_LOG("DatabaseManager: Warning - could not get input file path\n");
+    }
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -100,7 +106,7 @@ bool DatabaseManager::save_current_database() {
 
 std::string DatabaseManager::create_agent_database(const std::string& agent_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     ORCH_LOG("DatabaseManager: create_agent_database called for %s\n", agent_id.c_str());
 
     ORCH_LOG("DatabaseManager: Calling save_current_database()\n");
@@ -113,34 +119,57 @@ std::string DatabaseManager::create_agent_database(const std::string& agent_id) 
     // Create agent directory
     fs::path agent_dir = fs::path(workspace_dir_) / "agents" / agent_id;
     ORCH_LOG("DatabaseManager: Creating directory for agent at %s\n", agent_dir.string().c_str());
-    
+
     try {
         fs::create_directories(agent_dir);
-        
+
         // Get all database files
         auto db_files = get_database_files(main_database_path_);
-        
+
         // Copy each file
         for (const auto& file : db_files) {
             fs::path dest = agent_dir / file.filename();
             fs::copy_file(file, dest, fs::copy_options::overwrite_existing);
-            ORCH_LOG("DatabaseManager: Copied %s to %s\n", 
-                file.filename().string().c_str(), 
+            ORCH_LOG("DatabaseManager: Copied %s to %s\n",
+                file.filename().string().c_str(),
                 dest.string().c_str());
         }
-        
+
+        // Copy the binary file if available
+        if (!binary_file_path_.empty() && fs::exists(binary_file_path_)) {
+            fs::path binary_source(binary_file_path_);
+            fs::path binary_dest = agent_dir / (agent_id + "_" + binary_source.filename().string());
+
+            try {
+                fs::copy_file(binary_source, binary_dest, fs::copy_options::overwrite_existing);
+                ORCH_LOG("DatabaseManager: Copied binary %s to %s\n",
+                    binary_source.filename().string().c_str(),
+                    binary_dest.string().c_str());
+
+                // Store the binary path for this agent
+                agent_binaries_[agent_id] = binary_dest.string();
+            } catch (const fs::filesystem_error& e) {
+                ORCH_LOG("DatabaseManager: Warning - failed to copy binary: %s\n", e.what());
+                // Continue even if binary copy fails - database is more important
+                // we only copy the binary for patching
+                // if it can't copy the binary and the agent tries to inject a segment then stuff will break or if it patches
+            }
+        } else {
+            ORCH_LOG("DatabaseManager: No binary file to copy or file doesn't exist\n");
+        }
+
         // Get the main database file in the agent directory
         fs::path base_name = fs::path(main_database_path_).filename();
         fs::path agent_db = agent_dir / base_name;
-        
+
         // Track this agent's database
         agent_databases_[agent_id] = agent_db.string();
-        
-        ORCH_LOG("DatabaseManager: Created agent database for %s at %s\n", 
+
+        ORCH_LOG("DatabaseManager: Created agent database for %s at %s\n",
             agent_id.c_str(), agent_db.string().c_str());
-        
+
         return agent_db.string();
-        
+
     } catch (const fs::filesystem_error& e) {
         ORCH_LOG("DatabaseManager: Failed to create agent database: %s\n", e.what());
         return "";
@@ -167,7 +196,6 @@ std::vector<fs::path> DatabaseManager::get_database_files(const std::string& bas
     std::string stem = base.stem().string();
     
     // IDA 9.0+ only uses .i64 format - only copy the packed database
-    // IDA will automatically unpack it when opening
     fs::path i64_file = dir / (stem + ".i64");
     
     if (fs::exists(i64_file)) {
