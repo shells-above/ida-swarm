@@ -43,6 +43,7 @@ constexpr const char* CLAUDE_CODE_BETA_HEADER = "claude-code-20250219";
 constexpr const char* OAUTH_BETA_HEADER = "oauth-2025-04-20";
 
 // Stainless SDK headers
+// you can send whatever data you want but i prefer at least keeping it kind of real
 constexpr const char* USER_AGENT = "claude-cli/1.0.64 (external, cli)";
 constexpr const char* STAINLESS_PACKAGE_VERSION = "0.55.1";
 #ifdef __APPLE__
@@ -532,7 +533,25 @@ struct ApiError {
                     error.retry_after_seconds = 60; // Default fallback
                 }
             } else {
-                error.retry_after_seconds = 60; // Default fallback
+                // Try to parse retry-after from error message
+                // Look for pattern like "retry after 12010 seconds"
+                size_t retry_pos = error_msg.find("retry after ");
+                if (retry_pos != std::string::npos) {
+                    size_t num_start = retry_pos + 12; // length of "retry after "
+                    size_t num_end = error_msg.find(" seconds", num_start);
+                    if (num_end != std::string::npos) {
+                        try {
+                            int seconds = std::stoi(error_msg.substr(num_start, num_end - num_start));
+                            error.retry_after_seconds = seconds;
+                        } catch (const std::exception&) {
+                            error.retry_after_seconds = 60; // Default fallback
+                        }
+                    } else {
+                        error.retry_after_seconds = 60; // Default fallback
+                    }
+                } else {
+                    error.retry_after_seconds = 60; // Default fallback
+                }
             }
         } else if (error_msg.find("Overloaded") != std::string::npos) {
             error.type = ErrorType::ServerError;
@@ -761,10 +780,11 @@ public:
             
             // Calculate delay with exponential backoff
             int delay_ms = BASE_DELAY_MS * (1 << attempt);  // 1s, 2s, 4s, 8s, 16s
-            
-            // If we have a retry-after header, use that instead (but cap at 60 seconds)
+
+            // If we have a retry-after value from the API, use that instead
+            // For rate limits, we should respect the full duration requested by the API
             if (api_error.retry_after_seconds.has_value()) {
-                delay_ms = std::min(api_error.retry_after_seconds.value() * 1000, 60000);
+                delay_ms = api_error.retry_after_seconds.value() * 1000;
             }
             
             log(LogLevel::WARNING, std::format(
