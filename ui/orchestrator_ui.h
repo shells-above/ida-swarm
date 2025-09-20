@@ -1,9 +1,9 @@
 #pragma once
 
-#include <QScrollArea>
-
 #include "ui_common.h"
 #include <QTreeWidgetItem>
+#include <QScrollArea>
+#include <QTableWidgetItem>
 #include <set>
 
 namespace llm_re::ui {
@@ -266,6 +266,27 @@ private:
     // Helper to create styled progress bar
     QProgressBar* create_context_bar();
     void update_context_bar_style(QProgressBar* bar, double percentage);
+};
+
+// Custom QTableWidgetItem for numeric sorting
+class NumericTableWidgetItem : public QTableWidgetItem {
+public:
+    NumericTableWidgetItem(const QString& text, int sortValue)
+        : QTableWidgetItem(text), sortValue_(sortValue) {}
+
+    bool operator<(const QTableWidgetItem& other) const override {
+        // Try to cast to NumericTableWidgetItem to get sort value
+        const NumericTableWidgetItem* numericOther =
+            dynamic_cast<const NumericTableWidgetItem*>(&other);
+        if (numericOther) {
+            return sortValue_ < numericOther->sortValue_;
+        }
+        // Fall back to text comparison if not numeric item
+        return QTableWidgetItem::operator<(other);
+    }
+
+private:
+    int sortValue_;
 };
 
 // Real-time token usage tracker for all agents and orchestrator

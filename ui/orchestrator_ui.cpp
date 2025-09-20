@@ -1780,9 +1780,6 @@ void TokenTracker::refresh_display() {
     double total_cost = 0.0;
     
     for (const auto& [agent_id, agent] : agent_tokens_) {
-        // Agent/Orchestrator name
-        auto* id_item = new QTableWidgetItem(QString::fromStdString(agent_id));
-        
         // Extract numeric part for proper sorting
         int sort_value = 0;
         if (agent_id.starts_with("agent_")) {
@@ -1792,14 +1789,19 @@ void TokenTracker::refresh_display() {
                 sort_value = 999999;  // Fallback for non-numeric agents
             }
         } else if (agent_id == "orchestrator") {
-            id_item->setFont(QFont("", -1, QFont::Bold));
             sort_value = -1;  // Orchestrator always sorts first
         } else {
             sort_value = 999999;  // Other entries sort last
         }
-        
-        // Set the numeric value for sorting
-        id_item->setData(Qt::UserRole, sort_value);
+
+        // Agent/Orchestrator name - use NumericTableWidgetItem for proper sorting
+        NumericTableWidgetItem *id_item = new NumericTableWidgetItem(QString::fromStdString(agent_id), sort_value);
+
+        // Make orchestrator bold
+        if (agent_id == "orchestrator") {
+            id_item->setFont(QFont("", -1, QFont::Bold));
+        }
+
         token_table_->setItem(row, 0, id_item);
         
         // Status (active/completed)
