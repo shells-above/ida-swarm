@@ -1816,30 +1816,42 @@ void TokenTracker::refresh_display() {
         status_item->setForeground(QColor(39, 174, 96)); // Green for both
         token_table_->setItem(row, 1, status_item);
         
-        // Input tokens
-        auto* input_item = new QTableWidgetItem(QString::number(agent.current.input_tokens));
+        // Input tokens - use NumericTableWidgetItem for proper numeric sorting
+        auto* input_item = new NumericTableWidgetItem(
+            QString::number(agent.current.input_tokens),
+            static_cast<int>(agent.current.input_tokens)
+        );
         input_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         token_table_->setItem(row, 2, input_item);
-        
-        // Output tokens
-        auto* output_item = new QTableWidgetItem(QString::number(agent.current.output_tokens));
+
+        // Output tokens - use NumericTableWidgetItem for proper numeric sorting
+        auto* output_item = new NumericTableWidgetItem(
+            QString::number(agent.current.output_tokens),
+            static_cast<int>(agent.current.output_tokens)
+        );
         output_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         token_table_->setItem(row, 3, output_item);
-        
-        // Cache read tokens
-        auto* cache_read_item = new QTableWidgetItem(QString::number(agent.current.cache_read_tokens));
+
+        // Cache read tokens - use NumericTableWidgetItem for proper numeric sorting
+        auto* cache_read_item = new NumericTableWidgetItem(
+            QString::number(agent.current.cache_read_tokens),
+            static_cast<int>(agent.current.cache_read_tokens)
+        );
         cache_read_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         token_table_->setItem(row, 4, cache_read_item);
-        
-        // Cache write tokens
-        auto* cache_write_item = new QTableWidgetItem(QString::number(agent.current.cache_creation_tokens));
+
+        // Cache write tokens - use NumericTableWidgetItem for proper numeric sorting
+        auto* cache_write_item = new NumericTableWidgetItem(
+            QString::number(agent.current.cache_creation_tokens),
+            static_cast<int>(agent.current.cache_creation_tokens)
+        );
         cache_write_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         token_table_->setItem(row, 5, cache_write_item);
-        
-        // Cost (use pre-calculated cost from agent)
+
+        // Cost (use pre-calculated cost from agent) - use DoubleTableWidgetItem for proper numeric sorting
         double cost = agent.estimated_cost;
         total_cost += cost;
-        auto* cost_item = new QTableWidgetItem(format_cost(cost));
+        auto* cost_item = new DoubleTableWidgetItem(format_cost(cost), cost);
         cost_item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         token_table_->setItem(row, 6, cost_item);
         

@@ -268,7 +268,7 @@ private:
     void update_context_bar_style(QProgressBar* bar, double percentage);
 };
 
-// Custom QTableWidgetItem for numeric sorting
+// Custom QTableWidgetItem for numeric sorting (integers)
 class NumericTableWidgetItem : public QTableWidgetItem {
 public:
     NumericTableWidgetItem(const QString& text, int sortValue)
@@ -287,6 +287,27 @@ public:
 
 private:
     int sortValue_;
+};
+
+// Custom QTableWidgetItem for numeric sorting (doubles/floats)
+class DoubleTableWidgetItem : public QTableWidgetItem {
+public:
+    DoubleTableWidgetItem(const QString& text, double sortValue)
+        : QTableWidgetItem(text), sortValue_(sortValue) {}
+
+    bool operator<(const QTableWidgetItem& other) const override {
+        // Try to cast to DoubleTableWidgetItem to get sort value
+        const DoubleTableWidgetItem* doubleOther =
+            dynamic_cast<const DoubleTableWidgetItem*>(&other);
+        if (doubleOther) {
+            return sortValue_ < doubleOther->sortValue_;
+        }
+        // Fall back to text comparison if not numeric item
+        return QTableWidgetItem::operator<(other);
+    }
+
+private:
+    double sortValue_;
 };
 
 // Real-time token usage tracker for all agents and orchestrator
