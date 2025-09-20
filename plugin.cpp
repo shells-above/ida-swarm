@@ -477,10 +477,6 @@ private:
 
             // Join the conflict channel
             swarm_agent_->join_irc_channel(conflict_channel);
-
-            // Don't start task yet - wait for CONFLICT_DETAILS message to provide context
-            swarm_agent_->set_waiting_for_conflict_details(true);
-            msg("LLM RE: Waiting for conflict details before starting task\n");
         } else {
             // Resume normal task
             std::string task = agent_config_.value("saved_task", "Continue analysis");

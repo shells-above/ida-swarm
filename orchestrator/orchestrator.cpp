@@ -1236,18 +1236,17 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         return;
     }
 
-    // Handle resurrection requests with full conflict details
+    // Handle resurrection requests
     if (message.find("RESURRECT|") == 0) {
-        std::string json_str = message.substr(10);  // Skip "RESURRECT|"
+        // Format: RESURRECT|target|channel
+        std::string parts = message.substr(10);  // Skip "RESURRECT|"
+        size_t pipe = parts.find('|');
 
-        try {
-            // Try to parse as JSON first (new format)
-            json resurrect_data = json::parse(json_str);
-            std::string target_agent = resurrect_data["target"];
-            std::string conflict_channel = resurrect_data["channel"];
-            json conflict_info = resurrect_data.contains("conflict") ? resurrect_data["conflict"] : json{};
+        if (pipe != std::string::npos) {
+            std::string target_agent = parts.substr(0, pipe);
+            std::string conflict_channel = parts.substr(pipe + 1);
 
-            ORCH_LOG("Orchestrator: Resurrection request for agent %s to join %s (with conflict details)\n",
+            ORCH_LOG("Orchestrator: Resurrection request for agent %s to join %s\n",
                 target_agent.c_str(), conflict_channel.c_str());
             
             // Check if agent has completed and can be resurrected
@@ -1260,41 +1259,13 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     ORCH_LOG("Orchestrator: Error - completed agent %s not found in agents map\n", target_agent.c_str());
                     return;
                 }
-                
+
                 std::string db_path = agent_it->second.database_path;
 
-                // Store conflict info in active_conflicts if provided
-                if (!conflict_info.empty()) {
-                    std::lock_guard<std::mutex> lock(conflicts_mutex_);
-                    if (active_conflicts_.find(conflict_channel) == active_conflicts_.end()) {
-                        // Create new conflict session if it doesn't exist
-                        ConflictSession session;
-                        session.channel = conflict_channel;
-                        session.started = std::chrono::steady_clock::now();
-                        active_conflicts_[conflict_channel] = session;
-                    }
-
-                    ConflictSession& session = active_conflicts_[conflict_channel];
-                    // Populate the original_conflict with full details from the initiating agent
-                    session.original_conflict.first_call.tool_name = conflict_info.value("tool_name", "");
-                    session.original_conflict.first_call.address = conflict_info.value("address", 0);
-                    session.original_conflict.first_call.agent_id = conflict_info["initiator"].value("agent_id", "");
-                    session.original_conflict.first_call.parameters = conflict_info["initiator"].value("parameters", json{});
-                    session.original_conflict.second_call.agent_id = conflict_info["second"].value("agent_id", "");
-                    session.original_conflict.second_call.parameters = conflict_info["second"].value("parameters", json{});
-                    session.original_conflict.second_call.tool_name = conflict_info.value("tool_name", "");
-                    session.original_conflict.second_call.address = conflict_info.value("address", 0);
-                    session.original_conflict.conflict_type = conflict_info.value("conflict_type", "");
-
-                    ORCH_LOG("Orchestrator: Stored full conflict details for channel %s\n", conflict_channel.c_str());
-                }
-
-                // Create resurrection config
+                // Create resurrection config - agent will get details from channel
                 json resurrection_config = {
                     {"reason", "conflict_resolution"},
-                    {"conflict_channel", conflict_channel},
-                    {"requesting_agent", sender},
-                    {"conflict_info", conflict_info}  // Include full conflict details
+                    {"conflict_channel", conflict_channel}
                 };
 
                 // Remove from completed set since it's being resurrected
@@ -1310,22 +1281,8 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     agent_it->second.process_id = pid;
                     agent_it->second.task = "Conflict Resolution";
 
-                    // Send CONFLICT_DETAILS to the resurrected agent after a brief delay
-                    if (!conflict_info.empty()) {
-                        // Wait briefly for agent to initialize and join IRC
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-                        json conflict_details = {
-                            {"target_agent", target_agent},
-                            {"channel", conflict_channel},
-                            {"conflict_info", conflict_info},
-                            {"requesting_agent", sender}
-                        };
-
-                        std::string details_msg = std::format("CONFLICT_DETAILS|{}", conflict_details.dump());
-                        irc_client_->send_message("#agents", details_msg);
-                        ORCH_LOG("Orchestrator: Sent CONFLICT_DETAILS to resurrected agent %s\n", target_agent.c_str());
-                    }
+                    // The resurrected agent will join the conflict channel and see the
+                    // conflict details that the initiating agent posts there
                 } else {
                     ORCH_LOG("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
                     // Add back to completed since resurrection failed
@@ -1334,9 +1291,8 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             } else {
                 ORCH_LOG("Orchestrator: Agent %s is not available for resurrection (either active or doesn't exist)\n", target_agent.c_str());
             }
-        } catch (const json::exception& e) {
-            ORCH_LOG("Orchestrator: Failed to parse RESURRECT JSON: %s\n", e.what());
-            ORCH_LOG("Orchestrator: Invalid RESURRECT message format - expecting JSON with target, channel, and conflict info\n");
+        } else {
+            ORCH_LOG("Orchestrator: Invalid RESURRECT message format - expecting target|channel\n");
         }
         return;
     }

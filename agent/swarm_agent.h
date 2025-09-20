@@ -77,23 +77,29 @@ public:
         Agent::inject_user_message(message);
     }
 
-    // Set whether agent is waiting for conflict details before starting
-    void set_waiting_for_conflict_details(bool wait) {
-        waiting_for_conflict_details_ = wait;
-    }
 
-    // Helper methods for MarkConsensusReachedTool
-    bool has_active_conflict() const { return active_conflict_.has_value(); }
-    std::string get_conflict_channel() const {
-        return active_conflict_ ? active_conflict_->channel : "";
-    }
+    // Helper methods for MarkConsensusReachedTool and conflict management
+    bool has_active_conflict() const { return !active_conflicts_.empty(); }
+
+    // Get any active conflict channel (used by tools)
+    std::string get_conflict_channel() const;
+
     std::string get_agent_id() const { return agent_id_; }
-    void mark_local_consensus(const std::string& consensus) {
-        if (active_conflict_) {
-            active_conflict_->consensus_reached = true;
-            active_conflict_->final_consensus = consensus;
-        }
-    }
+
+    // Mark consensus for a specific conflict channel
+    void mark_local_consensus(const std::string& consensus);
+
+    // Get specific conflict by channel
+    SimpleConflictState* get_conflict_by_channel(const std::string& channel);
+
+    // Check if we have any conflict waiting for response
+    bool has_waiting_conflict() const;
+
+    // Get the channel of a conflict that's waiting for response
+    std::string get_waiting_conflict_channel() const;
+
+    // Remove completed/resolved conflicts from the map
+    void remove_completed_conflicts();
 
 protected:
     // Override tool processing to add conflict detection for ALL tools
@@ -114,10 +120,8 @@ private:
     std::map<std::string, AgentPeerInfo> known_peers_;
     
     // Conflict handling state
-    std::optional<SimpleConflictState> active_conflict_;  // Current active conflict (if any)
+    std::map<std::string, SimpleConflictState> active_conflicts_;  // Channel -> conflict state mapping
 
-    // Flag for delayed task start when waiting for conflict details
-    bool waiting_for_conflict_details_ = false;
 
     // Connect to IRC server
     bool connect_to_irc();
@@ -125,13 +129,9 @@ private:
     // Save swarm-specific state
     void save_swarm_state();
 
-    // Simplified conflict handling
-    void check_if_all_participating_agents_agreed();
-
     // No-go zone and patch replication handlers
     void handle_no_go_zone_message(const std::string& message);
     void handle_patch_replication_message(const std::string& message);
-    void process_grader_result(const std::string& result_json);
     std::string generate_conflict_channel(const ToolConflict& conflict) const;
     
     // Manual tool execution support
@@ -143,9 +143,6 @@ private:
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;
     std::unique_ptr<IRCAdapter> irc_adapter_;
-
-    // Flag to track when we're waiting for a conflict response
-    std::atomic<bool> conflict_waiting_for_response_{false};
 
     // No-go zones tracking
     std::vector<orchestrator::NoGoZone> collected_no_go_zones_;
