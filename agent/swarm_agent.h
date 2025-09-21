@@ -23,11 +23,12 @@ struct AgentPeerInfo {
 
 // Simple conflict state for tracking discussions
 struct SimpleConflictState {
-    std::string channel;                        // IRC channel for discussion
+    std::string channel;                          // IRC channel for discussion
 
     // Turn-based discussion tracking
-    bool my_turn = false;                       // Whether it's this agent's turn to speak
-    bool consensus_reached = false;             // Whether consensus has been reached (orchestrator confirmed)
+    bool my_turn = false;                         // Whether it's this agent's turn to speak
+    bool consensus_reached = false;               // Whether consensus has been reached (orchestrator confirmed)
+    bool waiting_for_consensus_complete = false;  // Whether we've marked consensus and are waiting for orchestrator confirmation
 };
 
 // Extended agent for swarm operation

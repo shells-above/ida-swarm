@@ -4,6 +4,7 @@
 #include "../agent/consensus_executor.h"
 #include "../sdk/auth/oauth_manager.h"
 #include <iostream>
+#include <sstream>
 #include <format>
 #include <thread>
 #include <chrono>
@@ -1224,12 +1225,13 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
     }));
     
     // Check for manual tool execution results
-    if (message.find("MANUAL_TOOL_RESULT|") == 0) {
+    if (message.find("MANUAL_TOOL_RESULT | ") == 0) {
         handle_manual_tool_result(message);
         return;
     }
 
     // Check if this is a conflict channel message
+    // Note: Don't return here - we need to check for MARKED_CONSENSUS messages below
     if (channel.find("#conflict_") == 0) {
         std::lock_guard<std::mutex> lock(conflicts_mutex_);
         ConflictSession& session = active_conflicts_[channel];
@@ -1237,9 +1239,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         // Track participants from messages in the channel
         session.participating_agents.insert(sender);
 
-        // Consensus is handled through MARKED_CONSENSUS messages in #agents channel
-        // This function just tracks participation in the conflict channel
-        return;
+        // Don't return here - MARKED_CONSENSUS messages need to be handled below
     }
 
     // Handle requests for agents to join conflict discussions
@@ -1309,27 +1309,29 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         return;
     }
     
-    // Handle MARKED_CONSENSUS messages from #agents channel
-    if (channel == "#agents" && message.find("MARKED_CONSENSUS|") == 0) {
-        // Format: MARKED_CONSENSUS|agent_id|conflict_channel|consensus
+    // Handle MARKED_CONSENSUS messages from conflict channels
+    if (channel.find("#conflict_") == 0 && message.find("MARKED_CONSENSUS|") == 0) {
+        // Format: MARKED_CONSENSUS|agent_id|consensus
         std::string content = message.substr(17);  // Skip "MARKED_CONSENSUS|"
 
         size_t first_pipe = content.find('|');
-        size_t second_pipe = content.find('|', first_pipe + 1);
 
-        if (first_pipe != std::string::npos && second_pipe != std::string::npos) {
+        if (first_pipe != std::string::npos) {
             std::string agent_id = content.substr(0, first_pipe);
-            std::string conflict_channel = content.substr(first_pipe + 1, second_pipe - first_pipe - 1);
-            std::string consensus = content.substr(second_pipe + 1);
+            std::string consensus = content.substr(first_pipe + 1);
 
             ORCH_LOG("Orchestrator: Agent %s marked consensus for %s: %s\n",
-                     agent_id.c_str(), conflict_channel.c_str(), consensus.c_str());
+                     agent_id.c_str(), channel.c_str(), consensus.c_str());
 
             // Track the consensus mark
+            json tool_call;
+            std::set<std::string> agents_copy;
+            bool should_enforce = false;
+
             {
                 std::lock_guard<std::mutex> lock(conflicts_mutex_);
-                if (active_conflicts_.find(conflict_channel) != active_conflicts_.end()) {
-                    ConflictSession& session = active_conflicts_[conflict_channel];
+                if (active_conflicts_.find(channel) != active_conflicts_.end()) {
+                    ConflictSession& session = active_conflicts_[channel];
                     session.consensus_statements[agent_id] = consensus;
                     session.participating_agents.insert(agent_id);
 
@@ -1343,32 +1345,42 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     }
 
                     if (all_marked && session.participating_agents.size() >= 2) {
-                        ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", conflict_channel.c_str());
+                        ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", channel.c_str());
 
-                        // Extract and enforce the consensus tool call with all individual consensus texts
-                        json tool_call = extract_consensus_tool_call(session);
-                        if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
-                            enforce_consensus_tool_execution(conflict_channel, tool_call, session.participating_agents);
-                        }
-
-                        // Notify all participating agents that consensus is complete
-                        std::string complete_msg = std::format("CONSENSUS_COMPLETE|{}", conflict_channel);
-                        if (irc_client_) {
-                            // Send to #agents channel so all agents see it
-                            irc_client_->send_message("#agents", complete_msg);
-                        }
-                        ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
-
-                        // Clean up after a delay
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
-                        active_conflicts_.erase(conflict_channel);
-
-                        // Leave the channel
-                        if (irc_client_) {
-                            irc_client_->leave_channel(conflict_channel);
-                        }
+                        // Extract the data we need while holding the lock
+                        tool_call = extract_consensus_tool_call(session);
+                        agents_copy = session.participating_agents;
+                        should_enforce = true;
                     }
                 }
+            } // Lock released here
+
+            // Now enforce consensus without holding the lock
+            if (should_enforce) {
+                // Spawn a thread to handle consensus enforcement so we don't block the IRC thread
+                std::thread enforcement_thread([this, channel, tool_call, agents_copy]() {
+                    if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
+                        enforce_consensus_tool_execution(channel, tool_call, agents_copy);
+                    }
+
+                    if (irc_client_) {
+                        // Send to the conflict channel so participating agents see it
+                        irc_client_->send_message(channel, "CONSENSUS_COMPLETE");
+                    }
+                    ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
+
+                    // Clean up after a delay
+                    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+                    // Re-acquire lock to clean up
+                    {
+                        std::lock_guard<std::mutex> cleanup_lock(conflicts_mutex_);
+                        active_conflicts_.erase(channel);
+                    }
+                });
+
+                // Detach the thread so it runs independently
+                enforcement_thread.detach();
             }
         }
         return;
@@ -1387,9 +1399,6 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             json tokens = metric_json["tokens"];
             json session_tokens = metric_json.value("session_tokens", json());
             int iteration = metric_json.value("iteration", 0);
-            
-            ORCH_LOG("DEBUG: Parsed agent_id=%s, tokens=%s, session=%s\n", 
-                agent_id.c_str(), tokens.dump().c_str(), session_tokens.dump().c_str());
             
             // Forward to UI via EventBus
             event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, "orchestrator", {
@@ -1490,6 +1499,7 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
 
         if (tool_call.is_null() || !tool_call.contains("tool_name")) {
             ORCH_LOG("Orchestrator: ConsensusExecutor failed to extract tool call\n");
+            // not necessarily a failure, the agents could have decided that no modification was needed in which case no tool call will be extracted
 
             return {
                 {"tool_name", "unknown"}
@@ -1512,9 +1522,23 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
 void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
                                                    const std::set<std::string>& agents) {
     ORCH_LOG("Orchestrator: Enforcing consensus tool execution for %zu agents\n", agents.size());
-    
-    std::string tool_name = tool_call["tool_name"];
-    json parameters = tool_call.value("parameters", "");
+
+    // Safely extract tool_name with error checking
+    if (!tool_call.contains("tool_name") || !tool_call["tool_name"].is_string()) {
+        ORCH_LOG("Orchestrator: ERROR - Invalid or missing tool_name in consensus\n");
+        return;
+    }
+    std::string tool_name = tool_call["tool_name"].get<std::string>();
+
+    // Safely extract parameters, ensuring it's an object
+    json parameters = json::object();
+    if (tool_call.contains("parameters")) {
+        if (tool_call["parameters"].is_object()) {
+            parameters = tool_call["parameters"];
+        } else if (!tool_call["parameters"].is_null()) {
+            ORCH_LOG("Orchestrator: WARNING - parameters is not an object, using empty object\n");
+        }
+    }
 
     if (tool_name == "unknown") return;
 
@@ -1527,10 +1551,20 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
         }
     }
     
+    // Fix address format if it's a number instead of hex string
+    if (parameters.contains("address") && parameters["address"].is_number()) {
+        // Convert decimal address to hex string
+        uint64_t addr = parameters["address"].get<uint64_t>();
+        std::stringstream hex_stream;
+        hex_stream << "0x" << std::hex << addr;
+        parameters["address"] = hex_stream.str();
+        ORCH_LOG("Orchestrator: Converted decimal address to hex: %s\n", hex_stream.str().c_str());
+    }
+
     // Send manual tool execution to each agent
     for (const std::string& agent_id: agents) {
-        std::string message = std::format("MANUAL_TOOL_EXEC|{}|{}|{}",
-                                         agent_id, tool_name, parameters.dump());
+        std::string params_str = parameters.dump();
+        std::string message = "MANUAL_TOOL_EXEC|" + agent_id + "|" + tool_name + "|" + params_str;
         
         if (irc_client_) {
             irc_client_->send_message(channel, message);
@@ -1559,7 +1593,10 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
             ORCH_LOG("Orchestrator: All agents executed consensus tool successfully\n");
             break;
         }
-        
+
+        // Sleep briefly to allow IRC thread to process responses
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
         // Check timeout
         if (std::chrono::steady_clock::now() - start_time > timeout) {
             ORCH_LOG("Orchestrator: WARNING - Timeout waiting for manual tool execution responses\n");
@@ -1569,8 +1606,8 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
             for (const auto& [agent_id, responded] : manual_tool_responses_) {
                 if (!responded) {
                     std::string fallback = std::format(
-                        "[SYSTEM] Manual tool execution failed. Please apply the agreed consensus: {} with parameters: {}",
-                        tool_name, parameters.dump(2)
+                        "[SYSTEM] FOR AGENT: {} ONLY! Manual tool execution failed. Please apply the agreed consensus: {} with parameters: {}",
+                        agent_id, tool_name, parameters.dump(2)
                     );
                     
                     // Send as a regular message that will be injected as user message
@@ -1613,12 +1650,12 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
 }
 
 void Orchestrator::handle_manual_tool_result(const std::string& message) {
-    // Parse result: MANUAL_TOOL_RESULT|<agent_id>|<success/failure>|<result_json>
-    if (message.find("MANUAL_TOOL_RESULT|") != 0) {
+    // Parse result: MANUAL_TOOL_RESULT | <agent_id>|<success/failure>|<result_json>
+    if (message.find("MANUAL_TOOL_RESULT | ") != 0) {
         return;
     }
     
-    std::string content = message.substr(19);  // Skip "MANUAL_TOOL_RESULT|"
+    std::string content = message.substr(21);  // Skip "MANUAL_TOOL_RESULT | "
     size_t first_delim = content.find('|');
     if (first_delim == std::string::npos) return;
     
@@ -1628,14 +1665,26 @@ void Orchestrator::handle_manual_tool_result(const std::string& message) {
     std::string agent_id = content.substr(0, first_delim);
     std::string status = content.substr(first_delim + 1, second_delim - first_delim - 1);
     std::string result_json = content.substr(second_delim + 1);
-    
-    ORCH_LOG("Orchestrator: Received manual tool result from %s: %s\n", agent_id.c_str(), status.c_str());
-    
+
+    ORCH_LOG("Orchestrator: Received manual tool result from '%s': %s\n", agent_id.c_str(), status.c_str());
+
     // Mark agent as responded
     {
         std::lock_guard<std::mutex> lock(manual_tool_mutex_);
         if (manual_tool_responses_.find(agent_id) != manual_tool_responses_.end()) {
             manual_tool_responses_[agent_id] = true;
+            ORCH_LOG("Orchestrator: Marked agent '%s' as responded\n", agent_id.c_str());
+        } else {
+            ORCH_LOG("Orchestrator: WARNING - Agent '%s' not found in tracking map\n", agent_id.c_str());
+        }
+    }
+
+    // Debug logging to check what agents we're tracking AFTER update
+    {
+        std::lock_guard<std::mutex> lock(manual_tool_mutex_);
+        ORCH_LOG("Orchestrator: Current response status:\n");
+        for (const auto& [id, responded] : manual_tool_responses_) {
+            ORCH_LOG("  - '%s': %s\n", id.c_str(), responded ? "responded" : "waiting");
         }
     }
     

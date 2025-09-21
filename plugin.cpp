@@ -353,7 +353,7 @@ private:
         // Get the orchestrator-generated prompt
         msg("LLM RE: Extracting prompt from config...\n");
         std::string orchestrator_prompt = agent_config_["prompt"];
-        msg("LLM RE: Got prompt: %.100s...\n", orchestrator_prompt.c_str());
+        msg("LLM RE: Got prompt: %s\n", orchestrator_prompt.c_str());
         
         msg("LLM RE: About to create SwarmAgent object for %s\n", agent_id_.c_str());
         msg("LLM RE: config_ pointer = %p\n", (void*)config_);
@@ -401,7 +401,7 @@ private:
         msg("LLM RE: SwarmAgent initialization returned successfully\n");
         
         msg("LLM RE: Starting swarm agent %s\n", agent_id_.c_str());
-        msg("LLM RE: Task: %.200s...\n", orchestrator_prompt.c_str());
+        msg("LLM RE: Task: %s\n", orchestrator_prompt.c_str());
         
         // Start working with the orchestrator's prompt
         swarm_agent_->start_task(orchestrator_prompt);

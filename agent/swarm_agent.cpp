@@ -227,8 +227,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         return;  // Don't inject as user message
     }
     
-    SWARM_LOG("SwarmAgent: IRC message in %s from %s: %.100s...\n",
-              channel.c_str(), sender.c_str(), message.c_str());
+    SWARM_LOG("SwarmAgent: IRC message in %s from %s: %s\n", channel.c_str(), sender.c_str(), message.c_str());
     
     // Emit IRC message event for UI
     event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
@@ -239,20 +238,32 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
     // Check if this is one of our active conflict channels
     SimpleConflictState* conflict = get_conflict_by_channel(channel);
     if (conflict && sender != agent_id_) {
-        // Turn-based discussion - update turn for this specific conflict
-        conflict->my_turn = true;  // Other agent spoke, now our turn
-        SWARM_LOG("SwarmAgent: Received message from %s in channel %s, now our turn\n",
-                  sender.c_str(), channel.c_str());
+        // If we're waiting for consensus complete, don't process any messages except CONSENSUS_COMPLETE
+        if (conflict->waiting_for_consensus_complete) {
+            // Just inject the message for context but don't trigger any action
+            inject_user_message(std::format("[{}] {}: {}", channel, sender, message));
+            SWARM_LOG("SwarmAgent: Received message while waiting for consensus complete, not updating turn\n");
+        }
+        // Skip turn updates for CONFLICT DETAILS messages
+        else if (message.find("CONFLICT DETAILS:") == 0) {
+            // Inject as context without triggering turn change
+            inject_user_message(std::format("[{}] {}: {}", channel, sender, message));
+            SWARM_LOG("SwarmAgent: Received CONFLICT DETAILS message, not updating turn\n");
+        } else {
+            // Turn-based discussion - update turn for this specific conflict
+            conflict->my_turn = true;  // Other agent spoke, now our turn
+            SWARM_LOG("SwarmAgent: Received message from %s in channel %s, now our turn\n", sender.c_str(), channel.c_str());
 
-        // Simple injection - just show the message and remind to respond
-        std::string response_prompt = std::format(
-            "{} said: {}\n\n"
-            "Your turn to respond. Use send_irc_message with channel='{}' to continue the discussion.\n"
-            "If you both agree, use the 'mark_consensus_reached' tool (both agents must call it).",
-            sender, message, channel
-        );
+            // Just show the message and remind to respond
+            std::string response_prompt = std::format(
+                "{} said: {}\n\n"
+                "Your turn to respond. Use send_irc_message with channel='{}' to continue the discussion.\n"
+                "If you both agree, use the 'mark_consensus_reached' tool (both agents must call it).",
+                sender, message, channel
+            );
 
-        inject_user_message(response_prompt);
+            inject_user_message(response_prompt);
+        }
     }
 
     // Handle CONFLICT_INVITE messages for running agents
@@ -293,18 +304,22 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         return;
     }
 
-    // Handle CONSENSUS_COMPLETE notifications
-    if (message.find("CONSENSUS_COMPLETE|") == 0 && channel == "#agents") {
-        std::string complete_channel = message.substr(19);  // Skip "CONSENSUS_COMPLETE|"
-        SimpleConflictState* conflict = get_conflict_by_channel(complete_channel);
+    // Handle CONSENSUS_COMPLETE notifications in conflict channels
+    if (message == "CONSENSUS_COMPLETE" && channel.find("#conflict_") == 0) {
+        SimpleConflictState* conflict = get_conflict_by_channel(channel);
         if (conflict) {
             conflict->consensus_reached = true;
-            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking consensus reached\n", complete_channel.c_str());
+            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking consensus reached\n", channel.c_str());
             inject_user_message("[SYSTEM] Consensus has been reached and applied by the system. Conflict resolution complete.");
+
+            // Leave the conflict channel
+            if (irc_client_ && irc_connected_) {
+                irc_client_->leave_channel(channel);
+                SWARM_LOG("SwarmAgent: Left conflict channel %s after consensus complete\n", channel.c_str());
+            }
+
             // Clean up completed conflicts
             remove_completed_conflicts();
-        } else {
-            // not a conflict we are participating in
         }
         return;
     }
@@ -421,8 +436,8 @@ void SwarmAgent::send_irc_message(const std::string& channel, const std::string&
         auto* conflict = get_conflict_by_channel(channel);
         if (conflict && !conflict->consensus_reached) {
             conflict->my_turn = false;  // After sending, it's no longer our turn
-            SWARM_LOG("SwarmAgent: Sent message to conflict channel %s, now waiting for response\n",
-                      channel.c_str());
+            SWARM_LOG("SwarmAgent: Sent message to conflict channel %s, now waiting for response (%s)\n",
+                      channel.c_str(), message.c_str());
         }
     } else {
         emit_log(LogLevel::WARNING, "Not connected to IRC");
@@ -582,14 +597,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             }
         }
 
-        // Record the tool call in the database
-        SWARM_LOG("SwarmAgent: Recording tool call %s at 0x%llx in database\n", tool_use->name.c_str(), address);
-        bool recorded = conflict_detector_->record_tool_call(tool_use->name, address, tool_use->input);
-        if (!recorded) {
-            SWARM_LOG("SwarmAgent: WARNING - Failed to record tool call in database\n");
-        }
-
-        // Check for conflicts if it's a write operation
+        // Check for conflicts BEFORE recording if it's a write operation
         if (orchestrator::ToolCallTracker::is_write_tool(tool_use->name) && address != 0) {
             SWARM_LOG("SwarmAgent: Checking for conflicts for write operation %s at 0x%llx\n", tool_use->name.c_str(), address);
 
@@ -604,17 +612,17 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
                     SWARM_LOG("SwarmAgent: Handling conflict with agent %s\n", conflict.first_call.agent_id.c_str());
                     handle_conflict_notification(conflict);
                 }
-                
-                // CRITICAL: Don't execute the tools if there's a conflict!
+
+                // CRITICAL: Don't record or execute the tools if there's a conflict!
                 // Return error results for each tool instead
-                SWARM_LOG("SwarmAgent: Preventing tool execution due to conflict\n");
+                SWARM_LOG("SwarmAgent: Preventing tool execution due to conflict (not recording in database)\n");
                 std::vector<claude::messages::Message> error_results;
                 for (const auto* tool_use : tool_uses) {
                     if (tool_use) {
                         error_results.push_back(claude::messages::Message::tool_result(
                             tool_use->id,
                             json{
-                                {"success", false}, 
+                                {"success", false},
                                 {"error", "Tool execution prevented due to conflict. Entering discussion phase to reach consensus."}
                             }.dump()
                         ));
@@ -622,6 +630,13 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
                 }
                 return error_results;
             }
+        }
+
+        // Only record the tool call if there's no conflict (or it's not a write operation)
+        SWARM_LOG("SwarmAgent: Recording tool call %s at 0x%llx in database\n", tool_use->name.c_str(), address);
+        bool recorded = conflict_detector_->record_tool_call(tool_use->name, address, tool_use->input);
+        if (!recorded) {
+            SWARM_LOG("SwarmAgent: WARNING - Failed to record tool call in database\n");
         }
     }
 
@@ -648,7 +663,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
         // Wait for this specific conflict to update
         int wait_iterations = 0;
         const int max_wait_iterations = 1200;  // 120 seconds timeout
-        while (conflict && !conflict->my_turn && !conflict->consensus_reached) {
+        while (conflict && (!conflict->my_turn || conflict->waiting_for_consensus_complete) && !conflict->consensus_reached) {
             // Check if conflict still exists and is valid
             conflict = get_conflict_by_channel(waiting_channel);
             if (!conflict) {
@@ -840,9 +855,9 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
 }
 
 void SwarmAgent::send_manual_tool_result(const std::string& channel, bool success, const json& result) {
-    // Format: MANUAL_TOOL_RESULT|<agent_id>|<success/failure>|<result_json>
+    // Format: MANUAL_TOOL_RESULT | <agent_id>|<success/failure>|<result_json>
     std::string status = success ? "success" : "failure";
-    std::string message = std::format("MANUAL_TOOL_RESULT|{}|{}|{}", 
+    std::string message = std::format("MANUAL_TOOL_RESULT | {}|{}|{}",
                                       agent_id_, status, result.dump());
     
     send_irc_message(channel, message);

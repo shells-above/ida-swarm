@@ -220,15 +220,6 @@ public:
             throw std::runtime_error("ChatRequest must have at least one message");
         }
 
-        // Check for proper role alternation
-        messages::Role last_role = messages::Role::System;
-        for (const messages::Message &msg: messages) {
-            if (msg.role() == last_role && last_role != messages::Role::System) {
-                throw std::runtime_error("Adjacent messages with same role detected");
-            }
-            last_role = msg.role();
-        }
-
         if (max_tokens <= 0 || max_tokens > 200000) {
             throw std::runtime_error("max_tokens must be between 1 and 200000");
         }

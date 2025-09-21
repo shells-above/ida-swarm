@@ -929,10 +929,14 @@ void IRCViewer::add_message(const std::string& channel, const std::string& sende
         item->setText(1, msg.channel);
         item->setText(2, msg.sender);
         item->setText(3, msg.message);
-        
-        if (channel.find("#conflict_") == 0) {
-            item->setBackground(1, QColor(255, 220, 220));
-        }
+
+        // Add tooltip showing full message for all columns
+        item->setToolTip(0, msg.message);
+        item->setToolTip(1, msg.message);
+        item->setToolTip(2, msg.message);
+        item->setToolTip(3, msg.message);
+
+        // No special background for conflict channels
         
         apply_filters();
     }
@@ -1034,7 +1038,6 @@ void IRCViewer::show_conflict_channel_list() {
         item->setText(2, QString("%1 messages").arg(msg_count));
 
         item->setText(3, "Double-click to view");
-        item->setBackground(1, QColor(255, 220, 220));
 
         // Make it stand out as clickable
         QFont font = item->font(1);
@@ -1099,11 +1102,14 @@ void IRCViewer::apply_filters() {
             item->setText(1, msg.channel);
             item->setText(2, msg.sender);
             item->setText(3, msg.message);
-            
-            // Highlight conflict channels
-            if (msg.channel.startsWith("#conflict_")) {
-                item->setBackground(1, QColor(255, 220, 220));
-            }
+
+            // Add tooltip showing full message for all columns
+            item->setToolTip(0, msg.message);
+            item->setToolTip(1, msg.message);
+            item->setToolTip(2, msg.message);
+            item->setToolTip(3, msg.message);
+
+            // No special highlighting for conflict channels
         }
     }
 }

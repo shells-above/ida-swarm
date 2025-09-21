@@ -99,16 +99,17 @@ public:
             std::string conflict_channel = swarm_agent_->get_conflict_channel();
             std::string agent_id = swarm_agent_->get_agent_id();
 
-            // Send MARKED_CONSENSUS message to #agents channel
-            // Format: MARKED_CONSENSUS|agent_id|channel|consensus
-            std::string message = std::format("MARKED_CONSENSUS|{}|{}|{}",
-                                            agent_id, conflict_channel, consensus);
-            swarm_agent_->send_irc_message("#agents", message);
+            // Send MARKED_CONSENSUS message to the conflict channel itself
+            // Format: MARKED_CONSENSUS|agent_id|consensus
+            std::string message = std::format("MARKED_CONSENSUS|{}|{}",
+                                            agent_id, consensus);
+            swarm_agent_->send_irc_message(conflict_channel, message);
 
-            // Set my_turn to false to wait for orchestrator response
+            // Set waiting_for_consensus_complete to prevent processing other messages
             SimpleConflictState* conflict = swarm_agent_->get_conflict_by_channel(conflict_channel);
             if (conflict) {
-                conflict->my_turn = false;
+                conflict->waiting_for_consensus_complete = true;
+                conflict->my_turn = false;  // Ensure we're not processing turns
             }
 
             json result;

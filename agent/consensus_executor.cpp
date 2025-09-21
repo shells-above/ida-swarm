@@ -110,7 +110,9 @@ std::string ConsensusExecutor::format_consensus_prompt(
 
     prompt << "Extract the agreed-upon parameters from the consensus statements above. "
            << "The agents may have slightly different wording but should agree on the core solution. "
-           << "Use your judgment to determine the actual parameters they all agreed upon.";
+           << "Use your judgment to determine the actual parameters they all agreed upon.\n\n"
+           << "CRITICAL: The address parameter MUST be a hexadecimal string starting with '0x', "
+           << "NOT a decimal number. For example: \"0x10048b40c\" not 4301516812.";
 
     return prompt.str();
 }
