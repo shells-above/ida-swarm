@@ -23,8 +23,8 @@ public:
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
-            .add_string("channel", "The IRC channel to send to (e.g., '#conflict_8dec_set_variable')")
-            .add_string("message", "The message to send. For conflicts, start with 'AGREE|' or 'DISAGREE|'")
+            .add_string("channel", "The IRC channel to send to (e.g., '#conflict_8dec_set_variable_time')")
+            .add_string("message", "The message to send")
             .build();
     }
 
@@ -99,18 +99,21 @@ public:
             std::string conflict_channel = swarm_agent_->get_conflict_channel();
             std::string agent_id = swarm_agent_->get_agent_id();
 
-            // Send MARKED_CONSENSUS message to #agents channel (not the conflict channel)
+            // Send MARKED_CONSENSUS message to #agents channel
             // Format: MARKED_CONSENSUS|agent_id|channel|consensus
             std::string message = std::format("MARKED_CONSENSUS|{}|{}|{}",
                                             agent_id, conflict_channel, consensus);
             swarm_agent_->send_irc_message("#agents", message);
 
-            // Mark consensus in our local state
-            swarm_agent_->mark_local_consensus(consensus);
+            // Set my_turn to false to wait for orchestrator response
+            SimpleConflictState* conflict = swarm_agent_->get_conflict_by_channel(conflict_channel);
+            if (conflict) {
+                conflict->my_turn = false;
+            }
 
             json result;
             result["success"] = true;
-            result["message"] = "Consensus marked and sent to orchestrator";
+            result["message"] = "Consensus marked and sent to orchestrator, waiting for confirmation";
             result["consensus"] = consensus;
 
             return claude::tools::ToolResult::success(result);

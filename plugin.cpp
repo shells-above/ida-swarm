@@ -194,10 +194,11 @@ private:
                 agent_id_ = parent.filename().string();
                 
                 // Check if this is a resurrection by looking for saved state
+                // conversation_state is only saved when an agent completes
+                // so we know if this exists for us we are being resurrected
                 fs::path conversation_state = parent / "conversation_state.json";
-                fs::path resurrection_marker = parent / ".resurrecting";
-                
-                if (fs::exists(resurrection_marker)) {
+
+                if (fs::exists(conversation_state)) {
                     mode_ = RESURRECTED_AGENT;
                     msg("LLM RE: Detected RESURRECTED AGENT mode (ID: %s)\n", agent_id_.c_str());
                 } else {
@@ -288,8 +289,7 @@ private:
         
         // Load conversation state
         fs::path conversation_state_file = workspace / "conversation_state.json";
-        fs::path swarm_state_file = workspace / "swarm_state.json";
-        
+
         if (!fs::exists(conversation_state_file)) {
             msg("LLM RE: No conversation state found for resurrection\n");
             return false;
@@ -302,24 +302,9 @@ private:
             conv_file >> conversation_state;
             conv_file.close();
             
-            // Load swarm state if it exists
-            json swarm_state;
-            if (fs::exists(swarm_state_file)) {
-                std::ifstream swarm_file(swarm_state_file);
-                swarm_file >> swarm_state;
-                swarm_file.close();
-            }
-            
             // Merge states into agent config for resurrection
-            agent_config_["resurrection_mode"] = true;
-            agent_config_["saved_conversation"] = conversation_state["conversation"];
+            agent_config_["saved_conversation"] = conversation_state["conversation"];  // restore conversation
             agent_config_["saved_task"] = conversation_state["task"];
-            agent_config_["saved_iteration"] = conversation_state["iteration"];
-            agent_config_["saved_token_stats"] = conversation_state["token_stats"];
-            
-            if (!swarm_state.empty()) {
-                agent_config_["saved_swarm_state"] = swarm_state;
-            }
             
             // Load resurrection config if present
             fs::path resurrection_config = workspace / "resurrection_config.json";
@@ -330,9 +315,8 @@ private:
                 res_file.close();
                 
                 // Merge resurrection-specific config
-                agent_config_["conflict"] = res_config["conflict"];
-                agent_config_["conflict_channel"] = res_config["conflict_channel"];
-                agent_config_["resurrection_reason"] = res_config["reason"];
+                agent_config_["conflict_channel"] = res_config.value("conflict_channel", "");
+                agent_config_["resurrection_reason"] = res_config["reason"];  // "conflict_resolution" or "retry"
             }
             
             msg("LLM RE: Successfully loaded saved state for resurrection\n");
@@ -473,11 +457,23 @@ private:
         // If this is for conflict resolution, jump directly to conflict
         if (agent_config_.contains("conflict_channel")) {
             std::string conflict_channel = agent_config_["conflict_channel"];
-            msg("LLM RE: Joining conflict channel %s\n", conflict_channel.c_str());
+            msg("LLM RE: Setting up for conflict resolution in channel %s\n", conflict_channel.c_str());
 
-            // Join the conflict channel
+            // Create conflict state BEFORE joining (so we can track turns)
+            // my_turn will be set to true when we see initiator's message via IRC replay
+            swarm_agent_->add_conflict_state(conflict_channel, false);
+            msg("LLM RE: Created conflict state for channel %s\n", conflict_channel.c_str());
+
+            // Join the conflict channel (this triggers history replay)
             swarm_agent_->join_irc_channel(conflict_channel);
+
+            // Start the conflict resolution task
+            std::string task = "Participate in conflict resolution in channel " + conflict_channel +
+                               ". The conflict details will appear in the channel history.";
+            swarm_agent_->start_task(task);
+            msg("LLM RE: Started conflict resolution task\n");
         } else {
+            // if no conflict channel we probably crashed so retry
             // Resume normal task
             std::string task = agent_config_.value("saved_task", "Continue analysis");
             swarm_agent_->start_task(task);
@@ -485,21 +481,8 @@ private:
         
         msg("LLM RE: Resurrected agent %s is now active\n", agent_id_.c_str());
         
-        // Clear the resurrection marker to signal spawner that we're ready
-        fs::path db_path(idb_path_.c_str());
-        fs::path workspace = db_path.parent_path();
-        fs::path resurrection_marker = workspace / ".resurrecting";
-        if (fs::exists(resurrection_marker)) {
-            try {
-                fs::remove(resurrection_marker);
-                msg("LLM RE: Cleared resurrection marker\n");
-            } catch (const std::exception& e) {
-                msg("LLM RE: Failed to clear resurrection marker: %s\n", e.what());
-            }
-        }
-        
         // Subscribe to state changes
-        auto& bus = get_event_bus();
+        EventBus& bus = get_event_bus();
         state_subscription_id_ = bus.subscribe([this](const AgentEvent& event) {
             if (event.type == AgentEvent::STATE && event.source == agent_id_) {
                 int status = event.payload.value("status", -1);

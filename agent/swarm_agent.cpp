@@ -179,9 +179,6 @@ void SwarmAgent::request_graceful_shutdown() {
         irc_connected_ = false;
     }
 
-    // Save swarm-specific state
-    save_swarm_state();
-
     // Call base class graceful shutdown
     Agent::request_graceful_shutdown();
 }
@@ -194,18 +191,25 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
     }
     
     // Ignore certain messages in #agents channel - they're only for orchestrator
+    // todo: make separate channels for talking -> orchestrator and receiving commands and do proper packet handling
+    // this system got more complicated than i thought it would
     if (channel == "#agents") {
         if (message.find("AGENT_TOKEN_UPDATE | ") == 0) {
             return;
         }
+
         if (message.find("MARKED_CONSENSUS|") == 0) {
             // Don't inject consensus marks into agent conversation
             // Orchestrator will handle these
             return;
         }
+
+        if (message.find("JOIN_CONFLICT|") == 0) {
+            return;
+        }
     }
     
-    // Check for manual tool execution messages
+    // Check for manual tool execution messages from orchestrator
     if (message.find("MANUAL_TOOL_EXEC|") == 0) {
         handle_manual_tool_execution(channel, message);
         return;  // Don't inject as user message
@@ -233,7 +237,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
                                   }));
 
     // Check if this is one of our active conflict channels
-    auto* conflict = get_conflict_by_channel(channel);
+    SimpleConflictState* conflict = get_conflict_by_channel(channel);
     if (conflict && sender != agent_id_) {
         // Turn-based discussion - update turn for this specific conflict
         conflict->my_turn = true;  // Other agent spoke, now our turn
@@ -251,17 +255,56 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         inject_user_message(response_prompt);
     }
 
+    // Handle CONFLICT_INVITE messages for running agents
+    // this invites an already running agent to a conflict channel
+    if (message.find("CONFLICT_INVITE|") == 0 && channel == "#agents") {
+        // Format: CONFLICT_INVITE|target|channel
+        std::string parts = message.substr(16);  // Skip "CONFLICT_INVITE|"
+        size_t pipe = parts.find('|');
+        if (pipe != std::string::npos) {
+            std::string target = parts.substr(0, pipe);
+            std::string conflict_channel = parts.substr(pipe + 1);
+
+            if (target == agent_id_) {
+                SWARM_LOG("SwarmAgent: Invited to join conflict channel %s\n", conflict_channel.c_str());
+
+                // Create basic conflict state for tracking
+                SimpleConflictState state;
+                state.channel = conflict_channel;
+                state.my_turn = false;  // Wait for our turn in discussion
+                state.consensus_reached = false;
+
+                // Add to conflicts map
+                active_conflicts_[conflict_channel] = state;
+                SWARM_LOG("SwarmAgent: Added conflict for channel %s (total active: %zu)\n",
+                          conflict_channel.c_str(), active_conflicts_.size());
+
+                // Join the conflict channel
+                join_irc_channel(conflict_channel);
+
+                // Simple notification - IRC history replay will show conflict details
+                inject_user_message(std::format(
+                    "Joining conflict discussion in channel {}.\n"
+                    "The conflict details will appear in the channel history.",
+                    conflict_channel
+                ));
+            }
+        }
+        return;
+    }
+
     // Handle CONSENSUS_COMPLETE notifications
     if (message.find("CONSENSUS_COMPLETE|") == 0 && channel == "#agents") {
-        std::string complete_channel = message.substr(18);  // Skip "CONSENSUS_COMPLETE|"
-        auto* conflict = get_conflict_by_channel(complete_channel);
+        std::string complete_channel = message.substr(19);  // Skip "CONSENSUS_COMPLETE|"
+        SimpleConflictState* conflict = get_conflict_by_channel(complete_channel);
         if (conflict) {
             conflict->consensus_reached = true;
-            conflict->resolved = true;
-            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking resolved\n", complete_channel.c_str());
-            inject_user_message("[SYSTEM] Consensus has been reached and applied. Conflict resolution complete.");
+            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking consensus reached\n", complete_channel.c_str());
+            inject_user_message("[SYSTEM] Consensus has been reached and applied by the system. Conflict resolution complete.");
             // Clean up completed conflicts
             remove_completed_conflicts();
+        } else {
+            // not a conflict we are participating in
         }
         return;
     }
@@ -284,11 +327,8 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
 
     // Create simple conflict state
     SimpleConflictState state;
-    state.initial_conflict = conflict;
     state.channel = channel;
-    state.participating_agents.insert(conflict.first_call.agent_id);
-    state.participating_agents.insert(conflict.second_call.agent_id);
-    state.resolved = false;
+    state.consensus_reached = false;
     state.my_turn = true;  // Initiator goes first
 
     // Add to conflicts map (don't overwrite existing conflicts)
@@ -298,9 +338,6 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
 
     // Join the conflict channel
     join_irc_channel(channel);
-
-    // Small delay to ensure orchestrator has time to join and set up session
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Identify the other agent and our position
     std::string other_agent = (conflict.first_call.agent_id == agent_id_) ?
@@ -315,17 +352,17 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
                           conflict.second_call.parameters :
                           conflict.first_call.parameters;
 
-    // Send simple resurrection request to orchestrator
+    // Send request for other agent to join conflict discussion
+    // if agent is dead, orchestrator will resurrect
     if (irc_client_ && irc_connected_) {
-        // Simple format: RESURRECT|target|channel
-        std::string resurrect_msg = std::format("RESURRECT|{}|{}", other_agent, channel);
-        irc_client_->send_message("#agents", resurrect_msg);
-        SWARM_LOG("SwarmAgent: Sent resurrection request for agent %s to join channel %s\n",
+        // Format: JOIN_CONFLICT|target|channel
+        std::string join_msg = std::format("JOIN_CONFLICT|{}|{}", other_agent, channel);
+        irc_client_->send_message("#agents", join_msg);
+        SWARM_LOG("SwarmAgent: Sent request for agent %s to join conflict channel %s\n",
                   other_agent.c_str(), channel.c_str());
     }
 
     // Post conflict details to the channel for the other agent to see
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // Give time for other agent to join
     if (irc_client_ && irc_connected_) {
         std::string conflict_details = std::format(
             "CONFLICT DETAILS:\n"
@@ -345,7 +382,7 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
         SWARM_LOG("SwarmAgent: Posted conflict details to channel %s\n", channel.c_str());
     }
 
-    // Simple, clear prompt
+    // Prompt for the initiating agent
     std::string conflict_prompt = std::format(
         "Conflict detected at address 0x{:x}.\n\n"
         "You're now in channel {} to discuss with {}.\n\n"
@@ -506,6 +543,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
         SWARM_LOG("SwarmAgent: Processing tool: %s\n", tool_use->name.c_str());
 
         // Check turn enforcement for send_irc_message during conflicts
+        // this should never happen
         if (tool_use->name == "send_irc_message") {
             if (tool_use->input.contains("channel")) {
                 std::string target_channel = tool_use->input["channel"];
@@ -599,7 +637,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             break;  // No conflicts waiting
         }
 
-        auto* conflict = get_conflict_by_channel(waiting_channel);
+        SimpleConflictState* conflict = get_conflict_by_channel(waiting_channel);
         if (!conflict) {
             break;  // Conflict was removed
         }
@@ -609,8 +647,8 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
 
         // Wait for this specific conflict to update
         int wait_iterations = 0;
-        const int max_wait_iterations = 600;  // 60 seconds timeout
-        while (conflict && !conflict->my_turn && !conflict->resolved && !conflict->consensus_reached) {
+        const int max_wait_iterations = 1200;  // 120 seconds timeout
+        while (conflict && !conflict->my_turn && !conflict->consensus_reached) {
             // Check if conflict still exists and is valid
             conflict = get_conflict_by_channel(waiting_channel);
             if (!conflict) {
@@ -622,7 +660,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             if (++wait_iterations > max_wait_iterations) {
                 SWARM_LOG("SwarmAgent: Timeout waiting for response in %s, abandoning conflict\n",
                           waiting_channel.c_str());
-                conflict->resolved = true;  // Mark as resolved to exit
+                conflict->consensus_reached = true;  // Mark as completed to exit
                 inject_user_message(std::format("[SYSTEM] Conflict resolution timed out for {}. Proceeding.",
                                                waiting_channel));
                 break;
@@ -683,70 +721,6 @@ bool SwarmAgent::connect_to_irc() {
     irc_adapter_->start();
 
     return true;
-}
-
-void SwarmAgent::save_swarm_state() {
-    SWARM_LOG("SwarmAgent: Saving swarm-specific state\n");
-
-    try {
-        std::filesystem::path workspace = get_agent_workspace_path();
-        std::filesystem::path swarm_state_file = workspace / "swarm_state.json";
-
-        json swarm_state = {
-            {"agent_id", agent_id_},
-            {"binary_name", binary_name_},
-            {"swarm_config", swarm_config_},
-            {"known_peers", json::array()},
-            {"conflict_count", conflict_detector_ ? conflict_detector_->get_conflict_count() : 0},
-            {"irc_server", irc_server_},
-            {"irc_port", irc_port_}
-        };
-
-        // Save known peers
-        for (const auto& [peer_id, info] : known_peers_) {
-            swarm_state["known_peers"].push_back({
-                {"agent_id", peer_id},
-                {"task", info.task}
-            });
-        }
-
-        // Save all active conflicts
-        if (!active_conflicts_.empty()) {
-            swarm_state["active_conflicts"] = json::array();
-            for (const auto& [channel, conflict_state] : active_conflicts_) {
-                json conflict_json = {
-                    {"channel", conflict_state.channel},
-                    {"conflict_type", conflict_state.initial_conflict.conflict_type},
-                    {"address", conflict_state.initial_conflict.first_call.address},
-                    {"participating_agents", json::array()},
-                    {"agreements", json::object()},
-                    {"resolved", conflict_state.resolved},
-                    {"my_turn", conflict_state.my_turn},
-                    {"consensus_reached", conflict_state.consensus_reached}
-                };
-
-                for (const auto& agent : conflict_state.participating_agents) {
-                    conflict_json["participating_agents"].push_back(agent);
-                }
-
-                for (const auto& [agent, agreement] : conflict_state.agreements) {
-                    conflict_json["agreements"][agent] = agreement;
-                }
-
-                swarm_state["active_conflicts"].push_back(conflict_json);
-            }
-            SWARM_LOG("SwarmAgent: Saved %zu active conflicts\n", active_conflicts_.size());
-        }
-
-        std::ofstream file(swarm_state_file);
-        if (file.is_open()) {
-            file << swarm_state.dump(2);
-            file.close();
-            SWARM_LOG("SwarmAgent: Swarm state saved to: %s\n", swarm_state_file.string().c_str());
-        }
-    } catch (const std::exception& e) {
-        SWARM_LOG("SwarmAgent: Failed to save swarm state: %s\n", e.what());
-    }
 }
 
 std::string SwarmAgent::generate_conflict_channel(const ToolConflict& conflict) const {
@@ -978,27 +952,15 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
 // Helper method implementations for multiple conflict support
 
 std::string SwarmAgent::get_conflict_channel() const {
-    // Return the first active (non-resolved) conflict channel
+    // Return the first active (non-completed) conflict channel
     for (const auto& [channel, state] : active_conflicts_) {
-        if (!state.resolved) {
+        if (!state.consensus_reached) {
             return channel;
         }
     }
     return "";
 }
 
-void SwarmAgent::mark_local_consensus(const std::string& consensus) {
-    // Find the conflict we're currently working on (where it's our turn or we just sent a message)
-    for (auto& [channel, state] : active_conflicts_) {
-        if (!state.resolved && (state.my_turn || !state.consensus_reached)) {
-            state.consensus_reached = true;
-            state.final_consensus = consensus;
-            SWARM_LOG("SwarmAgent: Marked consensus for conflict in channel %s\n", channel.c_str());
-            return;
-        }
-    }
-    SWARM_LOG("SwarmAgent: WARNING - No active conflict found to mark consensus\n");
-}
 
 SimpleConflictState* SwarmAgent::get_conflict_by_channel(const std::string& channel) {
     auto it = active_conflicts_.find(channel);
@@ -1007,7 +969,7 @@ SimpleConflictState* SwarmAgent::get_conflict_by_channel(const std::string& chan
 
 bool SwarmAgent::has_waiting_conflict() const {
     for (const auto& [channel, state] : active_conflicts_) {
-        if (!state.my_turn && !state.resolved && !state.consensus_reached) {
+        if (!state.my_turn && !state.consensus_reached) {
             return true;
         }
     }
@@ -1016,7 +978,7 @@ bool SwarmAgent::has_waiting_conflict() const {
 
 std::string SwarmAgent::get_waiting_conflict_channel() const {
     for (const auto& [channel, state] : active_conflicts_) {
-        if (!state.my_turn && !state.resolved && !state.consensus_reached) {
+        if (!state.my_turn && !state.consensus_reached) {
             return channel;
         }
     }
@@ -1026,8 +988,7 @@ std::string SwarmAgent::get_waiting_conflict_channel() const {
 void SwarmAgent::remove_completed_conflicts() {
     std::vector<std::string> to_remove;
     for (const auto& [channel, state] : active_conflicts_) {
-        if (state.resolved || (state.consensus_reached &&
-            std::chrono::steady_clock::now() - std::chrono::seconds(5) > std::chrono::steady_clock::now())) {
+        if (state.consensus_reached) {
             to_remove.push_back(channel);
         }
     }

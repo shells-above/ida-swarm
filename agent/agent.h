@@ -674,32 +674,6 @@ public:
         return tools_info;
     }
 
-    json get_thinking_stats() const {
-        json stats;
-        stats["thinking_enabled"] = config_.agent.enable_thinking;
-        stats["interleaved_thinking_possible"] = tool_registry_.has_tools();
-
-        // Get thinking block count from execution state
-        int total_thinking_blocks = 0;
-        int total_redacted_blocks = 0;
-
-        std::vector<claude::messages::Message> messages = execution_state_.get_messages();
-        for (const claude::messages::Message& msg: messages) {
-            if (msg.role() == claude::messages::Role::Assistant) {
-                std::vector<const claude::messages::ThinkingContent*> thinking = claude::messages::ContentExtractor::extract_thinking_blocks(msg);
-                std::vector<const claude::messages::RedactedThinkingContent*> redacted = claude::messages::ContentExtractor::extract_redacted_thinking_blocks(msg);
-                total_thinking_blocks += thinking.size();
-                total_redacted_blocks += redacted.size();
-            }
-        }
-
-        stats["total_thinking_blocks"] = total_thinking_blocks;
-        stats["total_redacted_blocks"] = total_redacted_blocks;
-        stats["max_thinking_budget"] = config_.agent.max_thinking_tokens;
-
-        return stats;
-    }
-
     // Memory management
     std::shared_ptr<BinaryMemory> get_memory() {
         return memory_;
@@ -1463,7 +1437,16 @@ private:
                             
                             // Add grader's questions as user message and continue
                             // Mark this as grader feedback with a special prefix we can filter
-                            claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response);
+                            claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response +
+                                " [NOTE FROM SYSTEM]: The grader can be very strict, "
+                                "it performs a meticulous analysis of your final message (your FINAL / LATEST MESSAGE ONLY!) "
+                                "and determines if it meets the criteria of the users task. "
+                                "If something *truly* is not possible, and you can't complete it you need to make that clear to the Grader, "
+                                "or else it will keep rejecting you. If this is the case, you can not just say that you can not do it, "
+                                "you must *teach* the Grader what you are capable of, and what the impossible request would require that you simply can not provide and *WHY*. "
+                                "If you don't teach the grader, it will keep rejecting you. "
+                                "Do NOT use this as a way to get out of analysis early, ONLY use this if you truly can not do something. Think deeply!");
+
                             execution_state_.add_message(continue_msg);
                         }
                     } else {

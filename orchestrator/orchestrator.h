@@ -194,15 +194,11 @@ private:
     
     // Handle IRC messages (for agent results)
     void handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message);
-    
-    // Conflict resolution management
-    void handle_conflict_message(const std::string& channel, const std::string& sender, const std::string& message);
 
     // Consensus value extraction and enforcement
-    json extract_consensus_tool_call(const std::string& channel, const ConflictSession& session);
-    void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
-                                         const std::set<std::string>& agents);
-    void handle_manual_tool_result(const std::string& channel, const std::string& sender, const std::string& message);
+    json extract_consensus_tool_call(const ConflictSession& session);
+    void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call, const std::set<std::string>& agents);
+    void handle_manual_tool_result(const std::string& message);
     bool verify_consensus_applied(const std::set<std::string>& agents, ea_t address);
     
     // Context consolidation for orchestrator
@@ -245,6 +241,8 @@ The agents you spawn are EXTRAORDINARILY capable. They can:
 - Perform deep binary analysis with various strategies
 - Deliberate conflicts through discussion
 - Work in ways you might not fully predict
+
+If you want to patch the binary, use the agents to do so! Do not create separate patcher scripts using write_file unless the user wants you to do so
 
 When crafting prompts for agents, remember:
 - Be specific about the goal but allow flexibility in approach

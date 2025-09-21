@@ -23,16 +23,11 @@ struct AgentPeerInfo {
 
 // Simple conflict state for tracking discussions
 struct SimpleConflictState {
-    ToolConflict initial_conflict;              // The original conflict that started this
     std::string channel;                        // IRC channel for discussion
-    std::set<std::string> participating_agents; // Dynamically updated as agents join
-    std::map<std::string, std::string> agreements; // agent_id -> what they said after "AGREE|"
-    bool resolved = false;
 
     // Turn-based discussion tracking
     bool my_turn = false;                       // Whether it's this agent's turn to speak
-    bool consensus_reached = false;              // Whether consensus has been reached
-    std::string final_consensus;                // The final agreed-upon consensus text
+    bool consensus_reached = false;             // Whether consensus has been reached (orchestrator confirmed)
 };
 
 // Extended agent for swarm operation
@@ -86,9 +81,6 @@ public:
 
     std::string get_agent_id() const { return agent_id_; }
 
-    // Mark consensus for a specific conflict channel
-    void mark_local_consensus(const std::string& consensus);
-
     // Get specific conflict by channel
     SimpleConflictState* get_conflict_by_channel(const std::string& channel);
 
@@ -100,6 +92,15 @@ public:
 
     // Remove completed/resolved conflicts from the map
     void remove_completed_conflicts();
+
+    // Add a conflict state (for resurrection)
+    void add_conflict_state(const std::string& channel, bool my_turn = false) {
+        SimpleConflictState state;
+        state.channel = channel;
+        state.my_turn = my_turn;
+        state.consensus_reached = false;
+        active_conflicts_[channel] = state;
+    }
 
 protected:
     // Override tool processing to add conflict detection for ALL tools
@@ -125,9 +126,6 @@ private:
 
     // Connect to IRC server
     bool connect_to_irc();
-
-    // Save swarm-specific state
-    void save_swarm_state();
 
     // No-go zone and patch replication handlers
     void handle_no_go_zone_message(const std::string& message);

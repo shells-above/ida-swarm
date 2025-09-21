@@ -9,6 +9,9 @@
 
 namespace llm_re {
 
+// todo: event bus is a good idea, but i should set it up so that its simpler to work around
+//  we should automatically relay events from agents -> an #events channel, then have something here which detects + re emits them as actual events so its easier to work around
+
 // Simple event that agents emit - agents know nothing about consumers
 struct AgentEvent {
     enum Type {

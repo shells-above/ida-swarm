@@ -11,16 +11,13 @@ ConsensusExecutor::ConsensusExecutor(const Config& config)
     // We'll just let it run idle - trying to stop it causes access to private members
 }
 
-json ConsensusExecutor::execute_consensus(const std::map<std::string, std::string>& agreements,
-                                         const ToolConflict& original_conflict) {
+json ConsensusExecutor::execute_consensus(const std::map<std::string, std::string>& agreements, const ToolConflict& original_conflict) {
     // Reset state
     captured_tool_call_ = json();
     tool_intercepted_ = false;
     
-    // Build conversation with full conflict context
     std::string prompt = format_consensus_prompt(agreements, original_conflict);
-    
-    // Build request using RequestBuilder with extended thinking
+
     claude::ChatRequestBuilder builder;
     claude::ChatRequest request = builder
         .with_model(claude::Model::Sonnet4)
@@ -30,14 +27,13 @@ json ConsensusExecutor::execute_consensus(const std::map<std::string, std::strin
                            "Execute the tool with the parameters that match the consensus.")
         .with_tools(tool_registry_)
         .with_max_tokens(8192)
-        .with_temperature(0.0)  // Deterministic
+        .with_temperature(1.0)
         .enable_thinking(true)
-        .with_max_thinking_tokens(4096)  // Extended thinking budget
+        .with_max_thinking_tokens(4096)
         .add_message(claude::messages::Message::user_text(prompt))
         .build();
     
     try {
-        // Get response - Claude will naturally call the appropriate tool
         claude::ChatResponse response = api_client_.send_request(request);
         
         // Process will intercept the tool call
@@ -51,20 +47,9 @@ json ConsensusExecutor::execute_consensus(const std::map<std::string, std::strin
         msg("ConsensusExecutor: Exception during consensus execution: %s\n", e.what());
     }
     
-    // If we didn't capture a tool call, create a fallback
+    // If we didn't capture a tool call
     if (captured_tool_call_.is_null() || !tool_intercepted_) {
-        msg("ConsensusExecutor: No tool captured, creating fallback\n");
-        
-        // Fallback: construct tool call from original conflict
-        // The orchestrator will have to use the LLM fallback to instruct agents
-        captured_tool_call_ = {
-            {"tool_name", original_conflict.first_call.tool_name},
-            {"parameters", {
-                {"address", std::format("0x{:x}", original_conflict.first_call.address)},
-                {"__needs_manual", true},
-                {"__fallback_reason", "consensus_executor_failed"}
-            }}
-        };
+        msg("ConsensusExecutor: No tool captured\n");
     } else {
         // Validate captured tool matches expected
         if (captured_tool_call_.contains("tool_name") && 
