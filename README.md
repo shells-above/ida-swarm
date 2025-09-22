@@ -6,8 +6,7 @@
 
 ## Important Context
 
-IDA Swarm is a research and educational tool that extends IDA Pro's capabilities through AI automation. Like IDA Pro itself, hex editors, and debuggers, this tool has legitimate uses in security research, education, and software analysis
-While IDA Pro has a cost barrier, IDA Swarm democratizes the expertise required to use these tools effectively.
+IDA Swarm is a research and educational tool that extends IDA Pro's capabilities through AI automation. Like IDA Pro itself, hex editors, and debuggers, this tool has legitimate uses in security research, education, and software analysis. While IDA Pro has a cost barrier, IDA Swarm democratizes the expertise required to use these tools effectively.
 
 ## Demo
 
@@ -90,8 +89,8 @@ While IDA Pro has a cost barrier, IDA Swarm democratizes the expertise required 
 ### Key Components
 
 - **Orchestrator**: Central coordinator with two interface modes:
-   - **Native mode** (default): Qt dialog interface directly within IDA Pro
-   - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
+    - **Native mode** (default): Qt dialog interface directly within IDA Pro
+    - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
 - **AI Agents**: Specialized IDA instances performing focused analysis tasks
 - **IRC Server**: Inter-agent communication (WIP) and conflict resolution
 - **MCP Server** (optional): Enables external tool integration (Claude, etc.)
@@ -103,20 +102,20 @@ While IDA Pro has a cost barrier, IDA Swarm democratizes the expertise required 
 ### Required Software
 
 1. **Designed around IDA Pro 9.0 Beta** (Version 9.0.240807)
-   - IDAlib is broken in this version, necessitating our process-based approach
+    - IDAlib is broken in this version, necessitating our process-based approach
 
 2. **Qt 5.15.2** (IDA's custom build)
-   - Download sources from https://hex-rays.com/blog/ida-8-4-qt-5-15-2-sources-build-scripts
-   - macOS: Extract to `/Users/Shared/Qt/5.15.2-arm64` (directory name must include -arm64 for Qt to build correctly!)
-   - Linux: Same idea
+    - Download sources from https://hex-rays.com/blog/ida-8-4-qt-5-15-2-sources-build-scripts
+    - macOS: Extract to `/Users/Shared/Qt/5.15.2-arm64` (directory name must include -arm64 for Qt to build correctly!)
+    - Linux: Same idea
 
 3. **Build Tools**
-   - CMake 3.16+
-   - C++20 compliant compiler
-   - Keystone assembler (built automatically)
+    - CMake 3.16+
+    - C++20 compliant compiler
+    - Keystone assembler (built automatically)
 
 4. **Claude API Access**
-   - Anthropic API key required
+    - Anthropic API key required
 
 ## Installation
 
@@ -228,23 +227,23 @@ We faced a fundamental design choice that affects the entire system:
 We implemented a complex (this may not be ideal, but it is what was made) middle ground:
 
 1. **For Analysis**: Agents work independently, then merge results after completion
-   - Preserves independent reasoning for reverse engineering tasks
-   - Function names, comments, types can conflict and be resolved
-   - Final merged result benefits all future agents
+    - Preserves independent reasoning for reverse engineering tasks
+    - Function names, comments, types can conflict and be resolved
+    - Final merged result benefits all future agents
 
 2. **For Patching**: Real-time replication with conflict resolution
-   - Patches are instantly shared to keep binaries in sync
-   - Prevents binary divergence that would be impossible to merge
-   - But creates the "multiple truths" problem:
-      - Agent A patches address X to disable a feature
-      - Agent B patches address X to modify the feature
-      - Unlike metadata conflicts, neither is "more correct"
-   - Resolution requires negotiation in conflict channels
+    - Patches are instantly shared to keep binaries in sync
+    - Prevents binary divergence that would be impossible to merge
+    - But creates the "multiple truths" problem:
+        - Agent A patches address X to disable a feature
+        - Agent B patches address X to modify the feature
+        - Unlike metadata conflicts, neither is "more correct"
+    - Resolution requires negotiation in conflict channels
 
 3. **For Code Injection**: Coordinated allocation with no-go zones
-   - Temporary segments and code caves are immediately claimed
-   - Prevents allocation conflicts while maintaining independence
-   - Deterministic addressing ensures consistency
+    - Temporary segments and code caves are immediately claimed
+    - Prevents allocation conflicts while maintaining independence
+    - Deterministic addressing ensures consistency
 
 ### The Unsolvable Problem
 
@@ -284,10 +283,10 @@ All while respecting intellectual property rights and complying with applicable 
 1. **MCP Server is Buggy**
 
 2. **IDA Integration**
-   - IDAlib is broken in 9.0.240807, which is why I spawn processes which is not ideal
+    - IDAlib is broken in 9.0.240807, which is why I spawn processes which is not ideal
 
 3. **MCP launchd**
-   - I was encountering weird issues with trying to launch ida64 from the terminal on my mac (used to work, but something broke), and using launchd was the only workaround that worked for me
+    - I was encountering weird issues with trying to launch ida64 from the terminal on my mac (used to work, but something broke), and using launchd was the only workaround that worked for me
 
 ### Workarounds
 
