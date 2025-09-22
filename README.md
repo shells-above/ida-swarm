@@ -122,8 +122,8 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/ida_re_agent.git
-cd ida_re_agent
+git clone https://github.com/shells-above/ida-swarm.git
+cd ida-swarm
 ```
 
 ### 2. Configure Build
