@@ -10,7 +10,7 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 
 ## Demo
 
-[![IDA Swarm Demo Video](https://img.youtube.com/vi/XXXXXXXXXXX/maxresdefault.jpg)](https://www.youtube.com/watch?v=XXXXXXXXXXX)
+[![IDA Swarm Demo Video](https://img.youtube.com/vi/UyRmksO1YpY/maxresdefault.jpg)](https://www.youtube.com/watch?v=UyRmksO1YpY)
 
 ## Why This Matters
 
@@ -183,7 +183,7 @@ Edit with your API key:
 ### Multi-Agent Collaboration
 - Orchestrator spawns agents for different analysis aspects
 - Agents work in parallel on isolated database copies
-- IRC-based communication enables real-time collaboration
+- IRC-based communication for real-time collaboration (WIP)
 - Automatic conflict resolution through consensus mechanisms
 
 ### Binary Patching System
@@ -311,7 +311,7 @@ IDA Pro 9.0.240807 beta has a broken IDAlib implementation, and since I wanted t
 
 1. **MCP → Orchestrator**: Named pipes (JSON-RPC protocol)
 2. **Orchestrator → Agents**: Process spawning with configuration
-3. **Agent ↔ Agent**: IRC protocol for real-time collaboration
+3. **Agent ↔ Agent**: IRC protocol for real-time collaboration (WIP)
 4. **Agent → IDA**: Direct API calls within process
 
 ## Legal Compliance & Legitimate Use
