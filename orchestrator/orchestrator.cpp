@@ -1837,13 +1837,37 @@ void Orchestrator::shutdown() {
         irc_server_->stop();
     }
     
+    // Save the IDA database before cleaning up
+    if (db_manager_) {
+        ORCH_LOG("Orchestrator: Saving IDA database before shutdown...\n");
+        if (db_manager_->save_current_database()) {
+            ORCH_LOG("Orchestrator: Database saved successfully\n");
+        } else {
+            ORCH_LOG("Orchestrator: Failed to save database\n");
+        }
+    }
+
     // Cleanup subsystems
     tool_tracker_.reset();
     merge_manager_.reset();
     agent_spawner_.reset();
     db_manager_.reset();
-    
+
     ORCH_LOG("Orchestrator: Shutdown complete\n");
+
+    // Request IDA to exit gracefully after all cleanup is done
+    // This must be done on the main thread via exec_request
+    struct ExitRequest : exec_request_t {
+        virtual ssize_t idaapi execute() override {
+            msg("Orchestrator: Requesting IDA exit...\n");
+            qexit(0);  // Exit with success code
+            return 0;
+        }
+    };
+
+    ORCH_LOG("Orchestrator: Requesting IDA to exit gracefully...\n");
+    ExitRequest req;
+    execute_sync(req, MFF_WRITE);
 }
 
 
