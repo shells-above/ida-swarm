@@ -1,0 +1,24 @@
+{
+  "api": {
+    "auth_method": "api_key",
+    "api_key": "YOUR_ANTHROPIC_API_KEY_HERE",
+    "base_url": "https://api.anthropic.com/v1/messages"
+  },
+  "agent": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 8192,
+    "max_thinking_tokens": 2048,
+    "temperature": 0.0,
+    "context_limit": 150000,
+    "enable_thinking": true,
+    "enable_interleaved_thinking": true,
+    "enable_deep_analysis": false,
+    "enable_python_tool": true
+  },
+  "grader": {
+    "enabled": true,
+    "model": "claude-opus-4-1-20250805",
+    "max_tokens": 32000,
+    "max_thinking_tokens": 31999
+  }
+}
