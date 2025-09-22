@@ -175,7 +175,7 @@ Edit with your API key:
 
 1. Open your target binary in IDA
 2. Wait for initial analysis to complete
-3. Run the plugin: `Edit → Plugins → LLM RE Agent`
+3. Run the plugin: `Edit → Plugins → IDA Swarm`
 4. Enter your analysis request in the dialog
 
 ## Key Features
