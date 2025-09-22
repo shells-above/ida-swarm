@@ -191,7 +191,6 @@ Edit with your API key:
 - **Dual patching**: Synchronizes changes to both IDA database and actual binary file
 - **Real-time patch replication**: All patches instantly broadcast to all agents
 - **Conflict resolution**: When agents patch the same location differently, they must debate and reach consensus
-- **Attribution tracking**: Every patch is tagged with the agent that created it
 
 ### Code Injection System
 - **Temporary workspace allocation**: Agents develop code in temporary IDA segments
@@ -351,4 +350,4 @@ The ability to technically modify software does not imply legal permission to do
 
 This software is provided as-is for research and educational purposes. The authors assume no liability for its use. Users must comply with all applicable laws and regulations. This project does not encourage or condone software piracy or license violations.
 
-**Remember**: With great power comes great responsibility. Use this tool to expand knowledge, improve security, and advance software freedom—not to harm others or violate rights.
+**Remember**: With great power comes great responsibility. Use this tool to expand knowledge, improve security, and advance software freedom.
