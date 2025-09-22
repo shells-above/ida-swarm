@@ -266,12 +266,6 @@ When agents disagree on modifications:
 
 ## Project Philosophy
 
-### Democratizing Reverse Engineering
-
-This project makes reverse engineering accessible by:
-- **Removing skill barriers**: AI performs complex analysis
-- **Eliminating tool barriers**: Works with IDA beta 9.0
-- 
 ### Consumer Rights Philosophy
 
 We believe users should be able to:
