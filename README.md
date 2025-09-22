@@ -2,11 +2,12 @@
 
 ## Revolutionary Mission
 
-**IDA Swarm** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and modify software they own, advancing software transparency and consumer understanding of digital systems
+**IDA Swarm** fundamentally transforms reverse engineering from an esoteric skill into an accessible capability through AI-powered multi-agent collaboration. This project empowers individuals to understand, analyze, and study software, advancing software transparency and consumer understanding of digital systems
 
 ## Important Context
 
 IDA Swarm is a research and educational tool that extends IDA Pro's capabilities through AI automation. Like IDA Pro itself, hex editors, and debuggers, this tool has legitimate uses in security research, education, and software analysis
+While IDA Pro has a cost barrier, IDA Swarm democratizes the expertise required to use these tools effectively.
 
 ## Demo
 
@@ -25,14 +26,14 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 - Teaches users how to analyze and understand software
 - Multi-agent collaboration makes expert-level analysis accessible
 
-## Important Notice: Experimental Passion Project
+## Important Notice: Passion Project
 
 > This is a **PASSION PROJECT**
 >
 > - **Expect bugs and instability**
 > - **MCP server has known bugs**
 > - **Designed around IDA Pro 9.0.240807 beta**
-> - **IDAlib is broken** in this version, hence the spawned process architecture
+> - **Process architecture due to IDAlib limitations in this version**
 > - **Active experimentation** - Code changes frequently as new ideas are tested
 
 ## Architecture Overview
@@ -89,8 +90,8 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 ### Key Components
 
 - **Orchestrator**: Central coordinator with two interface modes:
-    - **Native mode** (default): Qt dialog interface directly within IDA Pro
-    - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
+   - **Native mode** (default): Qt dialog interface directly within IDA Pro
+   - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
 - **AI Agents**: Specialized IDA instances performing focused analysis tasks
 - **IRC Server**: Inter-agent communication (WIP) and conflict resolution
 - **MCP Server** (optional): Enables external tool integration (Claude, etc.)
@@ -102,20 +103,20 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 ### Required Software
 
 1. **Designed around IDA Pro 9.0 Beta** (Version 9.0.240807)
-    - IDAlib is broken in this version, necessitating our process-based approach
+   - IDAlib is broken in this version, necessitating our process-based approach
 
 2. **Qt 5.15.2** (IDA's custom build)
-    - Download sources from https://hex-rays.com/blog/ida-8-4-qt-5-15-2-sources-build-scripts
-    - macOS: Extract to `/Users/Shared/Qt/5.15.2-arm64` (directory name must include -arm64 for Qt to build correctly!)
-    - Linux: Same idea
+   - Download sources from https://hex-rays.com/blog/ida-8-4-qt-5-15-2-sources-build-scripts
+   - macOS: Extract to `/Users/Shared/Qt/5.15.2-arm64` (directory name must include -arm64 for Qt to build correctly!)
+   - Linux: Same idea
 
 3. **Build Tools**
-    - CMake 3.16+
-    - C++20 compliant compiler
-    - Keystone assembler (built automatically)
+   - CMake 3.16+
+   - C++20 compliant compiler
+   - Keystone assembler (built automatically)
 
 4. **Claude API Access**
-    - Anthropic API key required
+   - Anthropic API key required
 
 ## Installation
 
@@ -227,23 +228,23 @@ We faced a fundamental design choice that affects the entire system:
 We implemented a complex (this may not be ideal, but it is what was made) middle ground:
 
 1. **For Analysis**: Agents work independently, then merge results after completion
-    - Preserves independent reasoning for reverse engineering tasks
-    - Function names, comments, types can conflict and be resolved
-    - Final merged result benefits all future agents
+   - Preserves independent reasoning for reverse engineering tasks
+   - Function names, comments, types can conflict and be resolved
+   - Final merged result benefits all future agents
 
 2. **For Patching**: Real-time replication with conflict resolution
-    - Patches are instantly shared to keep binaries in sync
-    - Prevents binary divergence that would be impossible to merge
-    - But creates the "multiple truths" problem:
-        - Agent A patches address X to disable a feature
-        - Agent B patches address X to modify the feature
-        - Unlike metadata conflicts, neither is "more correct"
-    - Resolution requires negotiation in conflict channels
+   - Patches are instantly shared to keep binaries in sync
+   - Prevents binary divergence that would be impossible to merge
+   - But creates the "multiple truths" problem:
+      - Agent A patches address X to disable a feature
+      - Agent B patches address X to modify the feature
+      - Unlike metadata conflicts, neither is "more correct"
+   - Resolution requires negotiation in conflict channels
 
 3. **For Code Injection**: Coordinated allocation with no-go zones
-    - Temporary segments and code caves are immediately claimed
-    - Prevents allocation conflicts while maintaining independence
-    - Deterministic addressing ensures consistency
+   - Temporary segments and code caves are immediately claimed
+   - Prevents allocation conflicts while maintaining independence
+   - Deterministic addressing ensures consistency
 
 ### The Unsolvable Problem
 
@@ -283,10 +284,10 @@ All while respecting intellectual property rights and complying with applicable 
 1. **MCP Server is Buggy**
 
 2. **IDA Integration**
-    - IDAlib broken in 9.0.240807, which is why I spawn processes which is not ideal
+   - IDAlib is broken in 9.0.240807, which is why I spawn processes which is not ideal
 
 3. **MCP launchd**
-    - I was encountering weird issues with trying to launch ida64 from the terminal on my mac (used to work, but something broke), and using launchd was the only workaround that worked for me
+   - I was encountering weird issues with trying to launch ida64 from the terminal on my mac (used to work, but something broke), and using launchd was the only workaround that worked for me
 
 ### Workarounds
 
@@ -298,7 +299,7 @@ All while respecting intellectual property rights and complying with applicable 
 
 ### Why Spawned Processes?
 
-IDA Pro 9.0.240807 beta has a broken IDAlib implementation, and since I wanted this project to be able to work on the IDA beta I had to design around it. This is not ideal, and idalib would be perfect for this tool
+IDA Pro 9.0.240807 beta has issues with IDAlib (Hex-Rays' official automation library). Since IDAlib would be perfect for this tool but isn't working in this beta, I implemented process spawning as a workaround. This approach works reliably and has the side benefit of visual debugging through separate IDA windows.
 
 ### Communication Architecture
 
@@ -307,47 +308,16 @@ IDA Pro 9.0.240807 beta has a broken IDAlib implementation, and since I wanted t
 3. **Agent ↔ Agent**: IRC protocol for real-time collaboration (WIP)
 4. **Agent → IDA**: Direct API calls within process
 
-## Legal Compliance & Legitimate Use
+## Legitimate Use Cases
 
-### CRITICAL LEGAL NOTICE
+IDA Swarm is a research tool designed for:
+- Security vulnerability research (DMCA § 1201(j))
+- Software interoperability analysis (DMCA § 1201(f))
+- Educational and academic research
+- Understanding software behavior and functionality
 
-This tool includes binary analysis and modification capabilities that are provided EXCLUSIVELY for legitimate purposes protected under U.S. law:
+Like IDA Pro, Ghidra, and other professional reverse engineering tools, IDA Swarm serves legitimate roles in cybersecurity research and software engineering.
 
-- **Security Research** (17 U.S.C. § 1201(j)): Identifying and documenting vulnerabilities
-- **Interoperability** (17 U.S.C. § 1201(f)): Achieving compatibility between software systems
-- **Educational Use**: Academic instruction and research in computer science
-- **Archival/Preservation**: Maintaining software compatibility for historical preservation
+## License
 
-### Prohibited Uses
-
-This tool must NOT be used for:
-- Circumventing technological protection measures in violation of DMCA
-- Violating software license agreements or terms of service
-- Commercial piracy or unauthorized distribution
-- Any activity that violates local, state, or federal laws
-
-### User Responsibility
-
-By using this tool, you acknowledge that:
-1. You will comply with all applicable laws including DMCA Section 1201
-2. You understand that the tool's capabilities do not grant legal permission for all uses
-3. You are solely responsible for ensuring your use is lawful
-4. The developers are not liable for any misuse of the tool
-
-### Modification Features - Important Notice
-
-While this tool can generate binary modifications for research purposes, users must ensure any actual application of modifications complies with:
-- Copyright law and fair use provisions
-- Software license agreements
-- DMCA anti-circumvention provisions
-- Ethical research guidelines
-
-The ability to technically modify software does not imply legal permission to do so.
-
----
-
-## Disclaimer
-
-This software is provided as-is for research and educational purposes. The authors assume no liability for its use. Users must comply with all applicable laws and regulations. This project does not encourage or condone software piracy or license violations.
-
-**Remember**: With great power comes great responsibility. Use this tool to expand knowledge, improve security, and advance software freedom.
+Open source for research and educational purposes. Users are responsible for compliance with applicable laws.
