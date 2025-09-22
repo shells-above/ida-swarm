@@ -1156,7 +1156,13 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
     conflict_count_label_ = new QLabel("Conflicts: 0", this);
     conflict_count_label_->setStyleSheet("QLabel { color: red; font-weight: bold; }");
     control_layout->addWidget(conflict_count_label_);
-    
+
+    // Add auto-scroll checkbox
+    control_layout->addSpacing(20);
+    auto_scroll_check_ = new QCheckBox("Auto-scroll", this);
+    auto_scroll_check_->setChecked(true);
+    control_layout->addWidget(auto_scroll_check_);
+
     control_layout->addStretch();
     
     // Tool call table
@@ -1180,6 +1186,9 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
     
     connect(tool_filter_, &QLineEdit::textChanged,
             this, &ToolCallTracker::on_tool_filter_changed);
+
+    connect(auto_scroll_check_, &QCheckBox::toggled,
+            this, &ToolCallTracker::on_auto_scroll_toggled);
 }
 
 void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& tool_data) {
@@ -1251,6 +1260,11 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
     total_calls_++;
     update_stats();
     apply_filters();
+
+    // Auto-scroll to show the latest entry
+    if (auto_scroll_) {
+        tool_table_->scrollToBottom();
+    }
 }
 
 void ToolCallTracker::add_conflict(const std::string& description) {
@@ -1282,6 +1296,10 @@ void ToolCallTracker::on_agent_filter_changed() {
 
 void ToolCallTracker::on_tool_filter_changed(const QString& text) {
     apply_filters();
+}
+
+void ToolCallTracker::on_auto_scroll_toggled(bool checked) {
+    auto_scroll_ = checked;
 }
 
 void ToolCallTracker::apply_filters() {

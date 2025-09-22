@@ -4,6 +4,7 @@
 #include <QTreeWidgetItem>
 #include <QScrollArea>
 #include <QTableWidgetItem>
+#include <QCheckBox>
 #include <set>
 
 namespace llm_re::ui {
@@ -199,6 +200,7 @@ protected:
 private slots:
     void on_agent_filter_changed();
     void on_tool_filter_changed(const QString& text);
+    void on_auto_scroll_toggled(bool checked);
 
 private:
     QTableWidget* tool_table_;
@@ -206,11 +208,13 @@ private:
     QLineEdit* tool_filter_;
     QLabel* call_count_label_;
     QLabel* conflict_count_label_;
-    
+    QCheckBox* auto_scroll_check_;
+
     int total_calls_ = 0;
     int conflict_count_ = 0;
     std::string current_agent_filter_;
-    
+    bool auto_scroll_ = true;
+
     void apply_filters();
     void update_stats();
 };
