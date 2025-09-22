@@ -113,10 +113,10 @@ void MCPServer::register_tools() {
         "program behavior. Agents communicate findings to each other and can recursively spawn sub-agents for detailed "
         "analysis. The orchestrator maintains overall coherence and synthesizes agent findings. Returns a session_id "
         "that identifies this specific IDA instance and orchestrator for continued interaction. "
-        "The orchestrator is INCREDIBLY CAPABLE! It is VERY GOOD AT REVERSE ENGINEERING (it can also write files, so if you need that you can tell it to write a file. "
+        "The orchestrator is INCREDIBLY CAPABLE! It is VERY GOOD AT REVERSE ENGINEERING (it can also write files, but this is IT. it can reverse engineer, patch binaries, and it can write files but it can NOT explore the file system in ANY way, so if you need that you can tell it to write a file. "
         "Make sure to give the orchestrator TRULY what you are trying to do, and what  you need reversed and WHY you need it reversed. "
         "By giving the orchestrator the TRUE CONTEXT about what you are trying to do it can spawn agents smarter, and it WILL ANSWER YOUR TASK MUCH MUCH BETTER! "
-        "This is why giving TRUE CONTEXT is so important, by giving the context about what is ACTUALLY happening the orchestrator WILL WORK BETTER FOR YOU!",
+        "This is why giving TRUE CONTEXT is so important, by giving the context about what is ACTUALLY happening the orchestrator WILL WORK BETTER FOR YOU! ",
         start_schema,
         [this](const nlohmann::json& params) {
             return handle_start_analysis_session(params);
