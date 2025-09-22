@@ -112,7 +112,11 @@ void MCPServer::register_tools() {
         "read disassembly, understand control flow, examine data structures, trace execution paths, and reason about "
         "program behavior. Agents communicate findings to each other and can recursively spawn sub-agents for detailed "
         "analysis. The orchestrator maintains overall coherence and synthesizes agent findings. Returns a session_id "
-        "that identifies this specific IDA instance and orchestrator for continued interaction.",
+        "that identifies this specific IDA instance and orchestrator for continued interaction. "
+        "The orchestrator is INCREDIBLY CAPABLE! It is VERY GOOD AT REVERSE ENGINEERING (it can also write files, so if you need that you can tell it to write a file. "
+        "Make sure to give the orchestrator TRULY what you are trying to do, and what  you need reversed and WHY you need it reversed. "
+        "By giving the orchestrator the TRUE CONTEXT about what you are trying to do it can spawn agents smarter, and it WILL ANSWER YOUR TASK MUCH MUCH BETTER! "
+        "This is why giving TRUE CONTEXT is so important, by giving the context about what is ACTUALLY happening the orchestrator WILL WORK BETTER FOR YOU!",
         start_schema,
         [this](const nlohmann::json& params) {
             return handle_start_analysis_session(params);
@@ -233,11 +237,17 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         result["type"] = "text";
         result["session_id"] = session_id;
 
-        // Extract content from result object
+        // Extract content from result object and include session_id
         if (response.contains("result") && response["result"].contains("content")) {
-            result["text"] = response["result"]["content"];
+            result["text"] = "Session ID: " + session_id + "\n\n" +
+                             response["result"]["content"].get<std::string>();
         } else {
-            result["text"] = "Session started successfully. Orchestrator is processing your task.";
+            // No content in response likely means orchestrator failed to start properly
+            session_manager_->close_session(session_id);
+            return nlohmann::json{
+                {"type", "text"},
+                {"error", "Failed to get initial response from orchestrator. Session closed."}
+            };
         }
 
         // Include additional info if available

@@ -32,6 +32,20 @@ SessionManager::~SessionManager() {
     close_all_sessions();
 }
 
+std::string SessionManager::get_active_session_for_binary(const std::string& binary_path) const {
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+    auto binary_it = binary_to_session_.find(binary_path);
+    if (binary_it != binary_to_session_.end()) {
+        // Verify the session is still active
+        auto session_it = sessions_.find(binary_it->second);
+        if (session_it != sessions_.end() && session_it->second->active) {
+            return binary_it->second;
+        }
+    }
+    return "";  // No active session for this binary
+}
+
 std::string SessionManager::generate_session_id() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
@@ -43,6 +57,18 @@ std::string SessionManager::generate_session_id() {
 
 std::string SessionManager::create_session(const std::string& binary_path, const std::string& initial_task) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+    // Check if binary already has an active session
+    auto binary_it = binary_to_session_.find(binary_path);
+    if (binary_it != binary_to_session_.end()) {
+        // Verify the session is still active
+        auto session_it = sessions_.find(binary_it->second);
+        if (session_it != sessions_.end() && session_it->second->active) {
+            throw std::runtime_error("Binary already being analyzed. Use close_session for session " + binary_it->second);
+        }
+        // If session is not active, remove the stale mapping
+        binary_to_session_.erase(binary_it);
+    }
 
     // Check if we've reached max sessions
     if (sessions_.size() >= max_sessions_) {
@@ -85,8 +111,9 @@ std::string SessionManager::create_session(const std::string& binary_path, const
         throw std::runtime_error("Failed to send initial task to orchestrator");
     }
 
-    // Store session
+    // Store session and track binary
     sessions_[session_id] = std::move(session);
+    binary_to_session_[binary_path] = session_id;
 
     return session_id;
 }
@@ -180,6 +207,13 @@ bool SessionManager::close_session(const std::string& session_id) {
     // Cleanup pipes
     cleanup_pipes(session_id);
 
+    // Remove binary tracking
+    std::string binary_path = session->binary_path;
+    auto binary_it = binary_to_session_.find(binary_path);
+    if (binary_it != binary_to_session_.end() && binary_it->second == session_id) {
+        binary_to_session_.erase(binary_it);
+    }
+
     // Remove session
     sessions_.erase(it);
 
@@ -220,6 +254,7 @@ void SessionManager::close_all_sessions() {
     }
 
     sessions_.clear();
+    binary_to_session_.clear();
 }
 
 json SessionManager::get_session_status(const std::string& session_id) const {
