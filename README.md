@@ -1,4 +1,4 @@
-# IDA Swarm - Democratizing Reverse Engineering Through AI
+# ![IDA Swarm](ida_swarm.png) IDA Swarm - Democratizing Reverse Engineering Through AI
 
 ## Revolutionary Mission
 
@@ -7,6 +7,10 @@
 ## Important Context
 
 IDA Swarm is a research and educational tool that extends IDA Pro's capabilities through AI automation. Like IDA Pro itself, hex editors, and debuggers, this tool has legitimate uses in security research, education, and software analysis
+
+## Demo
+
+[![IDA Swarm Demo Video](https://img.youtube.com/vi/XXXXXXXXXXX/maxresdefault.jpg)](https://www.youtube.com/watch?v=XXXXXXXXXXX)
 
 ## Why This Matters
 
