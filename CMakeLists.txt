@@ -304,6 +304,8 @@ set(PLUGIN_SOURCES
         ui/orchestrator_worker.cpp
         ui/ui_orchestrator_bridge.cpp
         ui/log_window.cpp
+        ui/activity_feed_panel.cpp
+        ui/patch_tracker.cpp
         # Common sources
         ${COMMON_SOURCES}
 )

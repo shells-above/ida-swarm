@@ -433,7 +433,7 @@ void SwarmAgent::send_irc_message(const std::string& channel, const std::string&
                                       }));
 
         // Update turn tracking for the specific conflict channel
-        auto* conflict = get_conflict_by_channel(channel);
+        SimpleConflictState* conflict = get_conflict_by_channel(channel);
         if (conflict && !conflict->consensus_reached) {
             conflict->my_turn = false;  // After sending, it's no longer our turn
             SWARM_LOG("SwarmAgent: Sent message to conflict channel %s, now waiting for response (%s)\n",
@@ -738,9 +738,8 @@ bool SwarmAgent::connect_to_irc() {
     return true;
 }
 
-std::string SwarmAgent::generate_conflict_channel(const ToolConflict& conflict) const {
-    // Use the configured format or a default
-    std::string format = config_.irc.conflict_channel_format;
+std::string SwarmAgent::generate_conflict_channel(const ToolConflict& conflict) {
+    std::string format = "#conflict_{address}_{type}";
 
     // Replace placeholders
     size_t pos = format.find("{address}");
@@ -756,8 +755,7 @@ std::string SwarmAgent::generate_conflict_channel(const ToolConflict& conflict) 
     return format;
 }
 
-bool SwarmAgent::parse_manual_tool_message(const std::string& message, std::string& target_agent, 
-                                          std::string& tool_name, json& parameters) {
+bool SwarmAgent::parse_manual_tool_message(const std::string& message, std::string& target_agent, std::string& tool_name, json& parameters) {
     // Format: MANUAL_TOOL_EXEC|<agent_id>|<tool_name>|<json_parameters>
     if (message.find("MANUAL_TOOL_EXEC|") != 0) {
         return false;
@@ -1010,6 +1008,130 @@ void SwarmAgent::remove_completed_conflicts() {
     for (const std::string& channel : to_remove) {
         SWARM_LOG("SwarmAgent: Removing completed conflict from channel %s\n", channel.c_str());
         active_conflicts_.erase(channel);
+    }
+}
+
+void SwarmAgent::on_iteration_start(int iteration) {
+    // Send status update on first iteration and every 10 iterations
+    status_update_counter_++;
+    if ((status_update_counter_ == 1 || status_update_counter_ % 10 == 0) && irc_connected_) {
+        generate_and_send_status_update();
+    }
+}
+
+void SwarmAgent::generate_and_send_status_update() {
+    // Get last 10 assistant messages
+    std::vector<claude::messages::Message> messages = execution_state_.get_messages();
+    std::vector<std::string> recent_assistant_content;
+
+    // Add current task
+    std::string current_task = get_current_task();
+    if (!current_task.empty()) {
+        recent_assistant_content.push_back(std::format("[CURRENT TASK]: {}", current_task));
+    }
+
+    // Add previous status if exists
+    if (!last_status_sent_.empty()) {
+        recent_assistant_content.push_back(std::format("[PREVIOUS STATUS]: {}", last_status_sent_));
+    }
+
+    int count = 0;
+    for (auto it = messages.rbegin(); it != messages.rend() && count < 10; ++it) {
+        if (it->role() == claude::messages::Role::Assistant) {
+            // Extract thinking blocks
+            auto thinking_blocks = claude::messages::ContentExtractor::extract_thinking_blocks(*it);
+            for (const auto* block : thinking_blocks) {
+                if (block && !block->thinking.empty()) {
+                    recent_assistant_content.push_back(std::format("[THINKING]: {}", block->thinking));
+                }
+            }
+
+            // Extract text content
+            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(*it);
+            if (text && !text->empty()) {
+                recent_assistant_content.push_back(std::format("[RESPONSE]: {}", *text));
+            }
+
+            count++;
+        }
+    }
+
+    if (recent_assistant_content.empty()) {
+        // No recent content to generate status from
+        return;
+    }
+
+    // Prepare prompt for Haiku
+    std::string status_prompt = R"(Based on the following recent agent activity, generate a brief status update.
+
+Recent activity from agent (newest first):
+)";
+
+    for (const auto& content : recent_assistant_content) {
+        status_prompt += content + "\n";
+    }
+
+    status_prompt += R"(
+Generate a JSON response with EXACTLY this format:
+{
+  "reasoning": "Brief reasoning about what the agent is doing",
+  "current_status": "A concise status message. max 100 chars",
+  "emoji": "A single emoji that represents the current activity"
+}
+
+The status should be informative and specific about what the agent is currently analyzing or doing.
+Choose an emoji that best represents the activity (e.g., 🔍 for searching, 🐛 for debugging, 📊 for analyzing data, 🔧 for fixing, etc.)
+
+Respond ONLY with the JSON, no other text.)";
+
+    // Create request for Haiku
+    claude::ChatRequestBuilder builder;
+    builder.with_model(claude::Model::Haiku35)
+           .with_max_tokens(500)
+           .with_temperature(0.3)
+           .enable_thinking(false);
+
+    builder.add_message(claude::messages::Message::user_text(status_prompt));
+
+    claude::ChatRequest request = builder.build();
+
+    // Send to API
+    claude::ChatResponse response = api_client_.send_request(request);
+
+    if (!response.success) {
+        SWARM_LOG("SwarmAgent: Failed to generate status update\n");
+        return;
+    }
+
+    // Extract and parse JSON response
+    std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
+    if (!text) {
+        SWARM_LOG("SwarmAgent: No text in status update response\n");
+        return;
+    }
+
+    try {
+        json status_data = json::parse(*text);
+
+        // Validate required fields
+        if (!status_data.contains("current_status") || !status_data.contains("emoji")) {
+            SWARM_LOG("SwarmAgent: Status update missing required fields\n");
+            return;
+        }
+
+        // Save the current status for next time
+        last_status_sent_ = status_data["current_status"].get<std::string>();
+
+        // Send to IRC #status channel
+        std::string status_message = status_data.dump();
+        send_irc_message("#status", status_message);
+
+        SWARM_LOG("SwarmAgent: Sent status update: %s - %s\n",
+                  status_data["emoji"].get<std::string>().c_str(),
+                  status_data["current_status"].get<std::string>().c_str());
+
+    } catch (const json::exception& e) {
+        SWARM_LOG("SwarmAgent: Failed to parse status update JSON: %s\n", e.what());
     }
 }
 

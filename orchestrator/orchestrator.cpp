@@ -131,6 +131,8 @@ bool Orchestrator::initialize() {
     // Join standard orchestrator channels
     irc_client_->join_channel("#agents");
     irc_client_->join_channel("#results");
+    irc_client_->join_channel("#status");      // For agent status updates
+    irc_client_->join_channel("#discoveries"); // For agent discoveries
     
     // Set up message callback to receive agent results
     irc_client_->set_message_callback(
@@ -756,15 +758,15 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
 std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(const claude::messages::Message& msg) {
     std::vector<claude::messages::Message> results;
     std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-    
+
     // If no tool calls, return empty results
     if (tool_calls.empty()) {
         return results;
     }
-    
+
     // Create a single User message that will contain all tool results
     claude::messages::Message combined_result(claude::messages::Role::User);
-    
+
     // First pass: Execute all tools and collect spawn_agent results
     std::map<std::string, std::string> tool_to_agent; // tool_id -> agent_id
     std::vector<std::string> spawned_agent_ids;
@@ -1374,8 +1376,11 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                         }
                     }
 
-                    if (all_marked && session.participating_agents.size() >= 2) {
+                    if (all_marked && session.participating_agents.size() >= 2 && !session.resolved) {
                         ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", channel.c_str());
+
+                        // Mark as resolved to prevent re-processing
+                        session.resolved = true;
 
                         // Extract the data we need while holding the lock
                         tool_call = extract_consensus_tool_call(session);

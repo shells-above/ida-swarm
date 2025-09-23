@@ -4,6 +4,8 @@
 #include "ui_orchestrator_bridge.h"
 #include "preferences_dialog.h"
 #include "log_window.h"
+#include "activity_feed_panel.h"
+#include "patch_tracker.h"
 #include "../core/config.h"
 
 // Now we can safely include Qt implementation headers
@@ -86,15 +88,19 @@ void OrchestratorUI::setup_ui() {
     
     metrics_panel_ = new MetricsPanel(this);
     token_tracker_ = new TokenTracker(this);  // Create token tracker
-    
-    // Bottom tabs for IRC, Tool calls, Token Usage, and Logs
+
+    // Bottom tabs for IRC, Tool calls, Token Usage, Activity Feed, Patches, and Logs
     bottom_tabs_ = new QTabWidget(this);
     irc_viewer_ = new IRCViewer(this);
     tool_tracker_ = new ToolCallTracker(this);
+    activity_feed_ = new ActivityFeedPanel(this);  // Create activity feed
+    patch_tracker_ = new PatchTracker(this);  // Create patch tracker
     log_window_ = new LogWindow(this);
-    
+
+    bottom_tabs_->addTab(activity_feed_, "Activity Feed");  // Add as first tab
     bottom_tabs_->addTab(irc_viewer_, "IRC Communication");
     bottom_tabs_->addTab(tool_tracker_, "Tool Calls");
+    bottom_tabs_->addTab(patch_tracker_, "Patches");  // Add patches tab
     bottom_tabs_->addTab(token_tracker_, "Token Usage");  // Add token tracker tab
     bottom_tabs_->addTab(log_window_, "Orchestrator Logs");
     
@@ -245,6 +251,41 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             
         case AgentEvent::TOOL_CALL:
             tool_tracker_->add_tool_call(event.source, event.payload);
+
+            // Check if this was a patch tool
+            if (event.payload.contains("tool_name")) {
+                std::string tool_name = event.payload["tool_name"];
+                if ((tool_name == "patch_bytes" || tool_name == "patch_assembly") &&
+                    event.payload.contains("result") &&
+                    event.payload["result"].contains("success") &&
+                    event.payload["result"]["success"] == true) {
+
+                    json result = event.payload["result"];
+                    bool is_assembly = (tool_name == "patch_assembly");
+
+                    // Extract patch details
+                    std::string address = result.value("address", "");
+                    std::string original = is_assembly ?
+                        result.value("original_asm", "") :
+                        result.value("original_bytes", "");
+                    std::string patched = is_assembly ?
+                        result.value("new_asm", "") :
+                        result.value("new_bytes", "");
+                    std::string description = result.value("description", "");
+                    int64_t timestamp = result.value("timestamp", 0);
+
+                    // Add to patch tracker
+                    patch_tracker_->add_patch(
+                        event.source,
+                        address,
+                        is_assembly,
+                        original,
+                        patched,
+                        description,
+                        timestamp
+                    );
+                }
+            }
             break;
             
         // Removed METRIC handler - all token updates now use AGENT_TOKEN_UPDATE
@@ -260,11 +301,49 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
         case AgentEvent::MESSAGE:
             // Could be IRC message or other
             if (event.payload.contains("channel") && event.payload.contains("message")) {
-                irc_viewer_->add_message(
-                    event.payload["channel"],
-                    event.source,
-                    event.payload["message"]
-                );
+                std::string channel = event.payload["channel"];
+                std::string message = event.payload["message"];
+
+                // Add to IRC viewer
+                irc_viewer_->add_message(channel, event.source, message);
+
+                // Check for status updates on #status channel
+                if (channel == "#status") {
+                    try {
+                        // Parse JSON status update
+                        json status_data = json::parse(message);
+                        if (status_data.contains("current_status") && status_data.contains("emoji")) {
+                            activity_feed_->update_agent_status(
+                                event.source,
+                                status_data["current_status"],
+                                status_data["emoji"]
+                            );
+                        }
+                    } catch (const json::exception& e) {
+                        // Not a valid status update, ignore
+                    }
+                }
+
+                // Check for discoveries on #discoveries channel
+                if (channel == "#discoveries") {
+                    try {
+                        // Parse JSON discovery
+                        json discovery_data = json::parse(message);
+                        if (discovery_data.contains("type") && discovery_data.contains("description") &&
+                            discovery_data.contains("emoji")) {
+                            activity_feed_->add_discovery(
+                                event.source,
+                                discovery_data["type"],
+                                discovery_data["description"],
+                                discovery_data["emoji"],
+                                discovery_data.value("location", ""),
+                                discovery_data.value("importance", 1)
+                            );
+                        }
+                    } catch (const json::exception& e) {
+                        // Not a valid discovery, ignore
+                    }
+                }
             }
             break;
             
@@ -1387,22 +1466,22 @@ MetricsPanel::MetricsPanel(QWidget* parent) : QWidget(parent) {
     token_group->setMaximumHeight(80);
     auto* token_layout = new QHBoxLayout(token_group);
     
-    // Input/Output tokens
-    auto* io_layout = new QVBoxLayout();
-    auto* input_line = new QHBoxLayout();
-    input_line->addWidget(new QLabel("In:", this));
+    // Input/Output tokens using QGridLayout for proper alignment
+    auto* io_widget = new QWidget();
+    auto* io_grid = new QGridLayout(io_widget);
+    io_grid->setSpacing(2);
+    io_grid->setContentsMargins(0, 0, 0, 0);
+
+    io_grid->addWidget(new QLabel("In:", this), 0, 0, Qt::AlignRight);
     input_tokens_label_ = new QLabel("0", this);
-    input_line->addWidget(input_tokens_label_);
-    input_line->addStretch();
-    io_layout->addLayout(input_line);
-    
-    auto* output_line = new QHBoxLayout();
-    output_line->addWidget(new QLabel("Out:", this));
+    io_grid->addWidget(input_tokens_label_, 0, 1, Qt::AlignLeft);
+
+    io_grid->addWidget(new QLabel("Out:", this), 1, 0, Qt::AlignRight);
     output_tokens_label_ = new QLabel("0", this);
-    output_line->addWidget(output_tokens_label_);
-    output_line->addStretch();
-    io_layout->addLayout(output_line);
-    token_layout->addLayout(io_layout);
+    io_grid->addWidget(output_tokens_label_, 1, 1, Qt::AlignLeft);
+
+    io_grid->setColumnStretch(2, 1);  // Add stretch to the third column
+    token_layout->addWidget(io_widget);
     
     // Cache tokens
     auto* cache_layout = new QVBoxLayout();

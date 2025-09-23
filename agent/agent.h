@@ -249,7 +249,10 @@ class Agent {
 protected:
     // Needs to be accessible to SwarmAgent for restoration
     AgentExecutionState execution_state_;  // Execution and conversation state
-    
+
+    // Protected getter for current task (for SwarmAgent status updates)
+    std::string get_current_task() const { return state_.get_task(); }
+
 private:
     // State management
     AgentState state_;
@@ -1265,6 +1268,12 @@ private:
     }
 
     // Main analysis loop
+    // Virtual hook for subclasses to add per-iteration behavior
+    virtual void on_iteration_start(int iteration) {
+        // Default: do nothing
+        // SwarmAgent can override to add status updates
+    }
+
     void run_analysis_loop() {
         int iteration = execution_state_.get_iteration();
         bool grader_approved = false;
@@ -1280,6 +1289,9 @@ private:
             api_client_.set_iteration(iteration);
 
             emit_log(LogLevel::INFO, "Iteration " + std::to_string(iteration));
+
+            // Call hook for subclass-specific behavior
+            on_iteration_start(iteration);
 
             // Apply caching for continuation
             if (iteration > 1) {

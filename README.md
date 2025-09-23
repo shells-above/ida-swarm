@@ -10,7 +10,7 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 
 ## Demo
 
-[![IDA Swarm Demo Video](https://img.youtube.com/vi/UyRmksO1YpY/maxresdefault.jpg)](https://www.youtube.com/watch?v=UyRmksO1YpY)
+[![IDA Swarm Demo Video](https://img.youtube.com/vi/6F0HhH0ZPXI/maxresdefault.jpg)](https://www.youtube.com/watch?v=6F0HhH0ZPXI)
 
 ## Why This Matters
 

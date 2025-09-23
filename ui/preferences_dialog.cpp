@@ -398,30 +398,9 @@ void PreferencesDialog::createIrcTab() {
     serverLayout->addRow("Server Address:", ircServerEdit_);
     
     
-    // Channel formats
-    auto* formatGroup = new QGroupBox("Channel Formats", widget);
-    auto* formatLayout = new QFormLayout(formatGroup);
-    
-    conflictChannelFormatEdit_ = new QLineEdit(formatGroup);
-    conflictChannelFormatEdit_->setPlaceholderText("#conflict_{address}_{type}");
-    formatLayout->addRow("Conflict Channel:", conflictChannelFormatEdit_);
-    
-    // Format help
-    ircFormatHelp_ = new QTextEdit(widget);
-    ircFormatHelp_->setReadOnly(true);
-    ircFormatHelp_->setMaximumHeight(100);
-    ircFormatHelp_->setHtml(
-        "<b>Channel Format Placeholders:</b><br>"
-        "• {address} - Memory address in hex<br>"
-        "• {type} - Conflict type (name, comment, etc.)<br>"
-        "• {agent1}, {agent2} - Agent IDs<br>"
-        "• {timestamp} - Unix timestamp"
-    );
     
     
     layout->addWidget(serverGroup);
-    layout->addWidget(formatGroup);
-    layout->addWidget(ircFormatHelp_);
     layout->addStretch();
     
     tabWidget_->addTab(widget, "IRC");
@@ -586,7 +565,6 @@ void PreferencesDialog::loadConfiguration() {
     
     // IRC settings
     ircServerEdit_->setText(QString::fromStdString(config.irc.server));
-    conflictChannelFormatEdit_->setText(QString::fromStdString(config.irc.conflict_channel_format));
     
     configModified_ = false;
 }
@@ -633,7 +611,6 @@ void PreferencesDialog::saveConfiguration() {
     
     // IRC settings
     config.irc.server = ircServerEdit_->text().toStdString();
-    config.irc.conflict_channel_format = conflictChannelFormatEdit_->text().toStdString();
     
     // Save to file
     config.save();
@@ -691,14 +668,6 @@ bool PreferencesDialog::validateConfiguration() {
         showValidationError("IRC server address cannot be empty");
         tabWidget_->setCurrentIndex(3); // IRC tab
         ircServerEdit_->setFocus();
-        return false;
-    }
-    
-    // Validate channel formats
-    if (conflictChannelFormatEdit_->text().isEmpty()) {
-        showValidationError("Conflict channel format cannot be empty");
-        tabWidget_->setCurrentIndex(3);
-        conflictChannelFormatEdit_->setFocus();
         return false;
     }
     

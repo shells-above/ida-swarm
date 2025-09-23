@@ -107,11 +107,18 @@ protected:
     // Override tool processing to add conflict detection for ALL tools
     std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) override;
 
+    // Override to add status updates
+    void on_iteration_start(int iteration) override;
+
 private:
     std::string binary_name_;
     json swarm_config_;
     std::unique_ptr<ConflictDetector> conflict_detector_;
     std::unique_ptr<irc::IRCClient> irc_client_;
+
+    // Status update tracking
+    int status_update_counter_ = 0;
+    std::string last_status_sent_;
     
     // IRC connection info
     std::string irc_server_;
@@ -131,7 +138,8 @@ private:
     // No-go zone and patch replication handlers
     void handle_no_go_zone_message(const std::string& message);
     void handle_patch_replication_message(const std::string& message);
-    std::string generate_conflict_channel(const ToolConflict& conflict) const;
+
+    static std::string generate_conflict_channel(const ToolConflict& conflict);
     
     // Manual tool execution support
     void handle_manual_tool_execution(const std::string& channel, const std::string& message);
@@ -145,6 +153,12 @@ private:
 
     // No-go zones tracking
     std::vector<orchestrator::NoGoZone> collected_no_go_zones_;
+
+    // Generate status update using Haiku
+    void generate_and_send_status_update();
+
+    // Auto-detect and log discoveries from tool results
+    void detect_and_log_discovery(const std::string& tool_name, const json& result);
 };
 
 } // namespace llm_re::agent

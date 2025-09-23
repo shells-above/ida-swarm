@@ -16,6 +16,8 @@ namespace llm_re::ui {
     class TokenTracker;
     class MetricsPanel;
     class LogWindow;
+    class ActivityFeedPanel;
+    class PatchTracker;
 
 // Main UI window that observes the EventBus
 class OrchestratorUI : public QMainWindow {
@@ -60,6 +62,8 @@ private:
     ToolCallTracker* tool_tracker_;
     MetricsPanel* metrics_panel_;
     TokenTracker* token_tracker_;  // Real-time token usage for all agents
+    ActivityFeedPanel* activity_feed_;  // Status and discovery feed
+    PatchTracker* patch_tracker_;  // Track all patches made
     LogWindow* log_window_;
     
     // Layout

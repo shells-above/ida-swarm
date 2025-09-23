@@ -139,8 +139,6 @@ private:
     
     // IRC Tab widgets
     QLineEdit* ircServerEdit_;
-    QLineEdit* conflictChannelFormatEdit_;
-    QTextEdit* ircFormatHelp_;
     
     // Additional buttons
     QPushButton* exportButton_;
