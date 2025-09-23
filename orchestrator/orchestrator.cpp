@@ -723,6 +723,7 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
     // Add the user message with thinking prompt
     std::string enhanced_input = DEEP_THINKING_PROMPT;
     enhanced_input += "\n\nUser Task: " + user_input;
+    enhanced_input += "\n\nCurrent binary being analyzed: " + main_database_path_;
     enhanced_input += "\n\nCurrent Agents: ";
     
     // Add info about active agents
