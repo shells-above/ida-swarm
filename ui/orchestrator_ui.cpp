@@ -252,8 +252,9 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
         case AgentEvent::TOOL_CALL:
             tool_tracker_->add_tool_call(event.source, event.payload);
 
-            // Check if this was a patch tool
-            if (event.payload.contains("tool_name")) {
+            // Check if this was a completed patch tool (only completed events have results)
+            if (event.payload.contains("phase") && event.payload["phase"] == "completed" &&
+                event.payload.contains("tool_name")) {
                 std::string tool_name = event.payload["tool_name"];
                 if ((tool_name == "patch_bytes" || tool_name == "patch_assembly") &&
                     event.payload.contains("result") &&

@@ -263,10 +263,6 @@ If you want to have agents run in parallel, you must use multiple spawn_agent ca
 
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 
-TEMPORARY NOTE: We are recording a demo of you, and the main focus is that you use multiple agents in parallel to analyze this binary, so i would prefer if you first consider if you can spawn multiple agents at this point to do something. but if it makes sense to only use one then only use one. i am trusting your judgement here
-obviously, do NOT mention that this was a demo ANYWHERE, especially not in the final response.
-actually, the agents have the ability to log_discovery and that will show up as a discovery in the UI. tell the agents that we are recording a demo, and that you want them to use the log_discovery tool more often than they normally would, but to still use common sense. when you put this in the agents prompt, DO NOT DO IT AT THE START, put it at the end. tell the agents that we are recording a demo video (and tell them to NOT MENTION IT IN THEIR FINAL REPORTS OR THEIR STATUS UPDATES because we want to be discrete) and to use their log_discovery feature
-
 Think deeply. Plan carefully. Orchestrate intelligently.)";  // "this program *does not do* any additional handling." is not true, it provides past agent results which i will get rid of eventually once i add back in agent collaboration and get it working better
     
     // Orchestrator consolidation prompts
