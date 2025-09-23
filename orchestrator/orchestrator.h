@@ -45,9 +45,6 @@ public:
                            const std::string& input_pipe_path,
                            const std::string& output_pipe_path);
 
-    // Start interactive session with user
-    void start_interactive_session();
-
     // Start MCP IPC listener
     void start_mcp_listener();
 

@@ -418,21 +418,6 @@ json Orchestrator::process_mcp_request(const json& request) {
     return response;
 }
 
-void Orchestrator::start_interactive_session() {
-    // Use IDA's ask_str dialog to get user input
-    qstring user_input;
-    if (ask_str(&user_input, 0, "What would you like me to investigate?")) {
-        if (!user_input.empty()) {
-            // Emit user input event
-            event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_INPUT, "orchestrator", {
-                {"input", user_input.c_str()}
-            }));
-            
-            process_user_input(user_input.c_str());
-        }
-    }
-}
-
 void Orchestrator::clear_conversation() {
     ORCH_LOG("Orchestrator: Clearing conversation and starting fresh\n");
     
