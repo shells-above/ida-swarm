@@ -426,22 +426,22 @@ set(MCP_SERVER_SOURCES
         irc/irc_client.cpp
 )
 
-add_executable(ida_re_mcp_server ${MCP_SERVER_SOURCES})
+add_executable(ida_swarm_mcp ${MCP_SERVER_SOURCES})
 
 # Include directories for MCP server
-target_include_directories(ida_re_mcp_server PRIVATE
+target_include_directories(ida_swarm_mcp PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp_server/include
 )
 
 # Include IDA SDK headers as SYSTEM for MCP server
-target_include_directories(ida_re_mcp_server SYSTEM PRIVATE
+target_include_directories(ida_swarm_mcp SYSTEM PRIVATE
         ${IDASDK_PATH}/include
         ${IDA_PLUGINS_PATH}/hexrays_sdk/include
 )
 
 # Link libraries for MCP server
-target_link_libraries(ida_re_mcp_server
+target_link_libraries(ida_swarm_mcp
         ${IDA64}
         CURL::libcurl
         nlohmann_json::nlohmann_json
@@ -458,7 +458,7 @@ install(TARGETS ida_swarm64
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )
 
-install(TARGETS ida_re_mcp_server
+install(TARGETS ida_swarm_mcp
         RUNTIME DESTINATION /usr/local/bin
 )
 
