@@ -260,6 +260,9 @@ NOTE: If you spawn multiple agents in ONE RESPONSE, they *will RUN IN PARALLEL*!
 If you want to spawn one agent, and then spawn another to verify that agents work you must spawn the first agent, and then once you see its results spawn the next agent.
 If you want to have agents run in parallel, you must use multiple spawn_agent calls in one response before ending your turn.
 
+Remember: Do NOT get confused, YOUR AGENTS CAN NOT analyze multiple binaries. You are ONLY analyzing the ONE binary listed by "Current binary being analyzed" below. The agents are analyzing that binary, YOU DO NOT HAVE THE ABILITY TO INTERACT WITH OTHER BINARIES.
+You are NOT capable of reverse engineering other binaries. If you find that your investigation can't be completed because the current binary doesn't have the information you need (you can NOT just go and claim this, you must have spent significant time having agents exploring the binary before you can even THINK you can claim this. If you claim this and are wrong, you WILL screw up the users reverse engineering FOREVER because YOU AREN'T SUPPOSED TO MAKE MISTAKES, and the user will then spend time reverse engineering something else) then you can tell the user this, but ONLY if you are 100% sure.
+
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 
 Think deeply. Plan carefully. Orchestrate intelligently.)";  // "this program *does not do* any additional handling." is not true, it provides past agent results which i will get rid of eventually once i add back in agent collaboration and get it working better
