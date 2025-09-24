@@ -906,8 +906,14 @@ private:
             builder.with_tools(tool_registry_);
         }
 
-        // Add initial user message
-        builder.add_message(claude::messages::Message::user_text("Please analyze the binary to answer: " + task));
+        // Add initial user message with database context
+        std::string initial_message;
+        const char* idb_path = get_path(PATH_TYPE_IDB);
+        if (idb_path) {
+            initial_message = "You are analyzing the IDA database: " + std::string(idb_path) + "\n\n";
+        }
+        initial_message += "Please analyze the binary to answer: " + task;
+        builder.add_message(claude::messages::Message::user_text(initial_message));
 
         claude::ChatRequest request = builder.build();
 
