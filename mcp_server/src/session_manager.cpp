@@ -371,8 +371,9 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     plist << "    <key>ProgramArguments</key>\n";
     plist << "    <array>\n";
     plist << "        <string>/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64</string>\n";
-    plist << "        <string>" << binary_path << "</string>\n";
     plist << "        <string>-A</string>\n";
+    plist << "        <string>-parm64</string>\n";
+    plist << "        <string>" << binary_path << "</string>\n";
     plist << "    </array>\n";
     plist << "    <key>RunAtLoad</key>\n";
     plist << "    <false/>\n";
@@ -448,8 +449,9 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     // Build stable argv array - need to keep strings alive during posix_spawn
     std::vector<std::string> stable_args;
     stable_args.push_back(ida_exe);           // argv[0] is the program name
-    stable_args.push_back(binary_path);       // Database/binary path FIRST
-    stable_args.push_back("-A");              // Automatic mode SECOND
+    stable_args.push_back("-A");              // Automatic mode FIRST
+    stable_args.push_back("-parm64");         // Default to ARM64 processor
+    stable_args.push_back(binary_path);       // Database/binary path LAST
 
     // Build argv array from stable strings
     std::vector<char*> argv;
