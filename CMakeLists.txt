@@ -458,10 +458,6 @@ install(TARGETS ida_swarm64
         LIBRARY DESTINATION ${IDA_PLUGINS_PATH}
 )
 
-install(TARGETS ida_swarm_mcp
-        RUNTIME DESTINATION /usr/local/bin
-)
-
 # Debug information
 message(STATUS "IDA SDK Path: ${IDASDK_PATH}")
 message(STATUS "IDA Plugins Path: ${IDA_PLUGINS_PATH}")
