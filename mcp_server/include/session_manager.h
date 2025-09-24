@@ -64,8 +64,12 @@ public:
     // Wait for initial response from orchestrator
     json wait_for_initial_response(const std::string& session_id, int timeout_ms = 600000);
 
+    // Check if a binary already has an active session
+    std::string get_active_session_for_binary(const std::string& binary_path) const;
+
 private:
     std::map<std::string, std::unique_ptr<Session>> sessions_;
+    std::map<std::string, std::string> binary_to_session_;  // Maps binary paths to session IDs
     mutable std::mutex sessions_mutex_;
     int next_session_num_ = 1;
 

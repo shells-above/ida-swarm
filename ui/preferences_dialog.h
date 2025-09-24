@@ -6,6 +6,7 @@
 #include <QTabWidget>
 
 QT_BEGIN_NAMESPACE
+class QRadioButton;
 class QLineEdit;
 class QComboBox;
 class QSpinBox;
@@ -18,6 +19,7 @@ class QFormLayout;
 class QGroupBox;
 class QTextEdit;
 class QDialogButtonBox;
+class QTimer;
 QT_END_NAMESPACE
 
 namespace llm_re::ui {
@@ -43,7 +45,7 @@ private slots:
     
     // Test buttons
     void onTestAPIConnection();
-    
+
     // Model selection handlers
     void onAgentModelChanged(int index);
     void onGraderModelChanged(int index);
@@ -83,7 +85,7 @@ private:
     QLineEdit* baseUrlEdit_;
     QPushButton* testApiButton_;
     QLabel* apiStatusLabel_;
-    
+
     // Models Tab widgets - Agent
     QGroupBox* agentModelGroup_;
     QComboBox* agentModelCombo_;
@@ -119,8 +121,6 @@ private:
     
     // IRC Tab widgets
     QLineEdit* ircServerEdit_;
-    QLineEdit* conflictChannelFormatEdit_;
-    QTextEdit* ircFormatHelp_;
     
     // Additional buttons
     QPushButton* exportButton_;

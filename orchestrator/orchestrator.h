@@ -44,9 +44,6 @@ public:
                            const std::string& input_pipe_path,
                            const std::string& output_pipe_path);
 
-    // Start interactive session with user
-    void start_interactive_session();
-
     // Start MCP IPC listener
     void start_mcp_listener();
 
@@ -215,6 +212,8 @@ private:
      */
     static constexpr const char* ORCHESTRATOR_SYSTEM_PROMPT = R"(You are the Orchestrator for a multi-agent reverse engineering system. You are the ONLY entity that communicates with the user.
 
+You are a program running that is capable of spawning agents (spawning IDA Pro reverse engineering agents).
+
 CRITICAL RESPONSIBILITIES:
 1. You MUST think EXTREMELY deeply before taking any action
 2. You decompose complex reverse engineering tasks into agent subtasks
@@ -252,6 +251,10 @@ Before finishing your spawn_agent call, make sure you provided enough informatio
 The agent **only** knows what ever you tell them, this program *does not do* any additional handling.
 
 If you want to spawn multiple agents in parallel, you have to respond with all your spawn_agent tool calls in one response.
+
+NOTE: If you spawn multiple agents in ONE RESPONSE, they *will RUN IN PARALLEL*!
+If you want to spawn one agent, and then spawn another to verify that agents work you must spawn the first agent, and then once you see its results spawn the next agent.
+If you want to have agents run in parallel, you must use multiple spawn_agent calls in one response before ending your turn.
 
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 

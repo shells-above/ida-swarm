@@ -116,6 +116,8 @@ bool Orchestrator::initialize() {
     // Join standard orchestrator channels
     irc_client_->join_channel("#agents");
     irc_client_->join_channel("#results");
+    irc_client_->join_channel("#status");      // For agent status updates
+    irc_client_->join_channel("#discoveries"); // For agent discoveries
     
     // Set up message callback to receive agent results
     irc_client_->set_message_callback(
@@ -266,7 +268,7 @@ void Orchestrator::start_mcp_listener() {
 
                             // Handle shutdown after response is sent
                             if (method == "shutdown") {
-                                ORCH_LOG("Orchestrator: Shutdown response sent, closing pipes and initiating shutdown...\n");
+                                ORCH_LOG("Orchestrator: Shutdown response sent, initiating graceful IDA close...\n");
 
                                 // Close our end of the pipes to signal MCP server we're done
                                 if (mcp_input_fd_ >= 0) {
@@ -278,10 +280,40 @@ void Orchestrator::start_mcp_listener() {
                                     mcp_output_fd_ = -1;
                                 }
 
-                                // Give MCP server time to detect closure and clean up its end
-                                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                                // Set flags to stop threads before database close
+                                // This prevents deadlock when shutdown() tries to join this thread
+                                mcp_listener_should_stop_ = true;
+                                shutting_down_ = true;
 
-                                shutdown();
+                                // Request IDA to save and close the database
+                                struct CloseRequest : exec_request_t {
+                                    virtual ssize_t idaapi execute() override {
+                                        msg("MCP: Saving database before close...\n");
+
+                                        // First save the database
+                                        if (save_database()) {
+                                            msg("MCP: Database saved successfully\n");
+                                        } else {
+                                            msg("MCP: Warning - Failed to save database\n");
+                                        }
+
+                                        // Then terminate the database
+                                        // This will trigger ui_database_closed event
+                                        msg("MCP: Calling term_database()...\n");
+                                        term_database();
+
+                                        return 0;
+                                    }
+                                };
+
+                                ORCH_LOG("Orchestrator: Requesting IDA to save and close database...\n");
+                                CloseRequest req;
+                                execute_sync(req, MFF_WRITE);
+
+                                // The UI close action will trigger ui_database_closed event,
+                                // which will call prepare_for_shutdown() -> cleanup() -> shutdown()
+                                // But shutdown() will return early because shutting_down_ is already true,
+                                // avoiding the thread join deadlock
                                 break; // Exit listener loop
                             }
 
@@ -369,21 +401,6 @@ json Orchestrator::process_mcp_request(const json& request) {
     }
 
     return response;
-}
-
-void Orchestrator::start_interactive_session() {
-    // Use IDA's ask_str dialog to get user input
-    qstring user_input;
-    if (ask_str(&user_input, 0, "What would you like me to investigate?")) {
-        if (!user_input.empty()) {
-            // Emit user input event
-            event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_INPUT, "orchestrator", {
-                {"input", user_input.c_str()}
-            }));
-            
-            process_user_input(user_input.c_str());
-        }
-    }
 }
 
 void Orchestrator::clear_conversation() {
@@ -656,6 +673,7 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
     // Add the user message with thinking prompt
     std::string enhanced_input = DEEP_THINKING_PROMPT;
     enhanced_input += "\n\nUser Task: " + user_input;
+    enhanced_input += "\n\nCurrent binary being analyzed: " + main_database_path_;
     enhanced_input += "\n\nCurrent Agents: ";
     
     // Add info about active agents
@@ -670,22 +688,22 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
     builder.add_message(claude::messages::Message::user_text(enhanced_input));
     
     auto response = api_client_->send_request(builder.build());
-
+    
     return response;
 }
 
 std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(const claude::messages::Message& msg) {
     std::vector<claude::messages::Message> results;
     std::vector<const claude::messages::ToolUseContent*> tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-    
+
     // If no tool calls, return empty results
     if (tool_calls.empty()) {
         return results;
     }
-    
+
     // Create a single User message that will contain all tool results
     claude::messages::Message combined_result(claude::messages::Role::User);
-    
+
     // First pass: Execute all tools and collect spawn_agent results
     std::map<std::string, std::string> tool_to_agent; // tool_id -> agent_id
     std::vector<std::string> spawned_agent_ids;
@@ -1136,7 +1154,6 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
     ORCH_LOG("Orchestrator: Agent wait complete\n");
 }
 
-
 void Orchestrator::handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message) {
     ORCH_LOG("DEBUG: IRC message received - Channel: %s, Sender: %s, Message: %s\n", channel.c_str(), sender.c_str(), message.c_str());
     // Emit all IRC messages to the UI for display
@@ -1265,8 +1282,11 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                         }
                     }
 
-                    if (all_marked && session.participating_agents.size() >= 2) {
+                    if (all_marked && session.participating_agents.size() >= 2 && !session.resolved) {
                         ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", channel.c_str());
+
+                        // Mark as resolved to prevent re-processing
+                        session.resolved = true;
 
                         // Extract the data we need while holding the lock
                         tool_call = extract_consensus_tool_call(session);
@@ -1763,7 +1783,7 @@ void Orchestrator::shutdown() {
     merge_manager_.reset();
     agent_spawner_.reset();
     db_manager_.reset();
-    
+
     ORCH_LOG("Orchestrator: Shutdown complete\n");
 }
 

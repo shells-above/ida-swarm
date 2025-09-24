@@ -130,10 +130,72 @@ private:
     SwarmAgent* swarm_agent_ = nullptr;
 };
 
+// Tool for logging discoveries to the UI feed
+class LogDiscoveryTool : public claude::tools::Tool {
+public:
+    explicit LogDiscoveryTool(SwarmAgent* agent) : swarm_agent_(agent) {}
+
+    std::string name() const override {
+        return "log_discovery";
+    }
+
+    std::string description() const override {
+        return "Log a discovery or finding for display in the orchestrator's UI feed. "
+               "This is purely informational - use this to report interesting findings, vulnerabilities, "
+               "patterns, or important structures you've discovered. Keep descriptions brief and clear "
+               "as they will be displayed in a UI list. This does NOT affect the binary or analysis.";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("type", "Discovery type - use any descriptive term")
+            .add_string("description", "Brief description of what was discovered (max 200 chars). Be specific and clear - this will be shown in the UI.")
+            .add_string("emoji", "Single emoji that represents this discovery (e.g., 🔓, 🐛, 🔍, 💉, 🛡️)")
+            .add_string("location", "Location in binary (e.g., '0x401234' or 'main+0x50')", false)
+            .add_integer("importance", "Importance level: 1 (low/informational), 2 (medium/interesting), 3 (high/critical)", false)
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string type = input.at("type");
+            std::string description = input.at("description");
+            int importance = input.value("importance", 1);
+
+            if (!swarm_agent_) {
+                return claude::tools::ToolResult::failure("Not in swarm agent mode");
+            }
+
+            if (importance < 1 || importance > 3) {
+                return claude::tools::ToolResult::failure("Importance must be 1 (low), 2 (medium), or 3 (high)");
+            }
+
+            swarm_agent_->send_irc_message("#discoveries", input.dump());
+
+            json result;
+            result["success"] = true;
+            result["type"] = type;
+            result["description"] = description;
+            result["logged_to_feed"] = true;
+
+            return claude::tools::ToolResult::success(result);
+
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(
+                std::format("Failed to log discovery: {}", e.what())
+            );
+        }
+    }
+
+private:
+    SwarmAgent* swarm_agent_ = nullptr;
+};
+
 // Register IRC tools for SwarmAgent
 inline void register_swarm_irc_tools(claude::tools::ToolRegistry& registry, SwarmAgent* swarm_agent) {
     registry.register_tool_type<SendIRCMessageTool>(swarm_agent);
     registry.register_tool_type<MarkConsensusReachedTool>(swarm_agent);
+    registry.register_tool_type<LogDiscoveryTool>(swarm_agent);
 }
 
 } // namespace llm_re::agent

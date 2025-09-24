@@ -4,6 +4,7 @@
 #include <QTreeWidgetItem>
 #include <QScrollArea>
 #include <QTableWidgetItem>
+#include <QCheckBox>
 #include <set>
 
 namespace llm_re::ui {
@@ -15,6 +16,8 @@ namespace llm_re::ui {
     class TokenTracker;
     class MetricsPanel;
     class LogWindow;
+    class ActivityFeedPanel;
+    class PatchTracker;
 
 // Main UI window that observes the EventBus
 class OrchestratorUI : public QMainWindow {
@@ -59,6 +62,8 @@ private:
     ToolCallTracker* tool_tracker_;
     MetricsPanel* metrics_panel_;
     TokenTracker* token_tracker_;  // Real-time token usage for all agents
+    ActivityFeedPanel* activity_feed_;  // Status and discovery feed
+    PatchTracker* patch_tracker_;  // Track all patches made
     LogWindow* log_window_;
     
     // Layout
@@ -199,6 +204,7 @@ protected:
 private slots:
     void on_agent_filter_changed();
     void on_tool_filter_changed(const QString& text);
+    void on_auto_scroll_toggled(bool checked);
 
 private:
     QTableWidget* tool_table_;
@@ -206,11 +212,13 @@ private:
     QLineEdit* tool_filter_;
     QLabel* call_count_label_;
     QLabel* conflict_count_label_;
-    
+    QCheckBox* auto_scroll_check_;
+
     int total_calls_ = 0;
     int conflict_count_ = 0;
     std::string current_agent_filter_;
-    
+    bool auto_scroll_ = true;
+
     void apply_filters();
     void update_stats();
 };

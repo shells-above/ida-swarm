@@ -10,7 +10,7 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 
 ## Demo
 
-[![IDA Swarm Demo Video](https://img.youtube.com/vi/UyRmksO1YpY/maxresdefault.jpg)](https://www.youtube.com/watch?v=UyRmksO1YpY)
+[![IDA Swarm Demo Video](https://img.youtube.com/vi/6F0HhH0ZPXI/maxresdefault.jpg)](https://www.youtube.com/watch?v=6F0HhH0ZPXI)
 
 ## Why This Matters
 
@@ -30,7 +30,6 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 > This is a **PASSION PROJECT**
 >
 > - **Expect bugs and instability**
-> - **MCP server has known bugs**
 > - **Designed around IDA Pro 9.0.240807 beta**
 > - **Process architecture due to IDAlib limitations in this version**
 > - **Active experimentation** - Code changes frequently as new ideas are tested
@@ -280,12 +279,10 @@ All while respecting intellectual property rights and complying with applicable 
 
 ### Current Beta Issues
 
-1. **MCP Server is Buggy**
-
-2. **IDA Integration**
+1**IDA Integration**
     - IDAlib is broken in 9.0.240807, which is why I spawn processes which is not ideal
 
-3. **MCP launchd**
+2**MCP launchd**
     - I was encountering weird issues with trying to launch ida64 from the terminal on my mac (used to work, but something broke), and using launchd was the only workaround that worked for me
 
 ### Workarounds
