@@ -1900,8 +1900,8 @@ std::string Orchestrator::create_orchestrator_consolidation_summary(const std::v
     claude::ChatRequestBuilder builder;
     builder.with_model(claude::Model::Sonnet4)  // Use Sonnet for consolidation
            .with_system_prompt(ORCHESTRATOR_CONSOLIDATION_PROMPT)
-           .with_max_tokens(32000)
-           .with_max_thinking_tokens(6000)
+           .with_max_tokens(64000)
+           .with_max_thinking_tokens(12000)
            .with_temperature(1.0)
            .enable_thinking(true);
     
