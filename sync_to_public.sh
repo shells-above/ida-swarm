@@ -14,7 +14,11 @@ PRIVATE_REPO="/Users/user/CLionProjects/ida_re_agent"
 PUBLIC_REPO="/Users/user/CLionProjects/ida-swarm"
 TEMP_REPO="/tmp/ida-swarm"
 WORK_DIR="/tmp/sync_work"
+CACHE_DIR="$HOME/.ida_sync_cache"  # Persistent cache for tracking processed files
 MAX_PARALLEL_JOBS=1  # Maximum number of parallel Claude instances
+
+# Create persistent cache directory if it doesn't exist
+mkdir -p "$CACHE_DIR"
 
 # Cleanup and setup
 echo "Setting up workspace..."
@@ -66,6 +70,62 @@ find . -type f \
 > "$WORK_DIR/deleted_files.txt"
 > "$WORK_DIR/modified_files.txt"
 > "$WORK_DIR/oauth_files.txt"
+> "$WORK_DIR/needs_processing.txt"
+> "$WORK_DIR/already_processed.txt"
+
+# Function to get normalized file hash (ignoring whitespace differences)
+get_file_hash() {
+    local file="$1"
+    # Normalize the file by:
+    # - Removing trailing whitespace from each line
+    # - Removing blank lines that only contain whitespace
+    # - Converting tabs to spaces for consistency
+    # - Compressing multiple spaces to single space
+    # This ensures insignificant whitespace changes don't trigger reprocessing
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed 's/[[:space:]]*$//' "$file" | \
+        grep -v '^[[:space:]]*$' | \
+        sed 's/\t/ /g' | \
+        sed 's/  */ /g' | \
+        shasum -a 256 | cut -d' ' -f1
+    else
+        sed 's/[[:space:]]*$//' "$file" | \
+        grep -v '^[[:space:]]*$' | \
+        sed 's/\t/ /g' | \
+        sed 's/  */ /g' | \
+        sha256sum | cut -d' ' -f1
+    fi
+}
+
+# Function to check if file needs OAuth processing
+needs_oauth_processing() {
+    local file="$1"
+    local private_file="$PRIVATE_REPO/$file"
+    local public_file="$PUBLIC_REPO/$file"
+    local cache_file="$CACHE_DIR/$(echo "$file" | sed 's|/|_|g').hash"
+
+    # If cache file doesn't exist, needs processing
+    if [ ! -f "$cache_file" ]; then
+        return 0  # true - needs processing
+    fi
+
+    # Get stored hash and current private file hash
+    local stored_hash=$(cat "$cache_file")
+    local current_hash=$(get_file_hash "$private_file")
+
+    # If private file changed since last processing, needs reprocessing
+    if [ "$stored_hash" != "$current_hash" ]; then
+        return 0  # true - needs processing
+    fi
+
+    # Check if public file matches what we expect (private minus OAuth)
+    # If public doesn't exist or differs, needs processing
+    if [ ! -f "$public_file" ]; then
+        return 0  # true - needs processing
+    fi
+
+    return 1  # false - already processed and unchanged
+}
 
 # Check files in private repo
 while IFS= read -r file; do
@@ -80,8 +140,16 @@ while IFS= read -r file; do
 
     if [ ! -f "$public_file" ]; then
         echo "$file" >> "$WORK_DIR/new_files.txt"
+        echo "$file" >> "$WORK_DIR/needs_processing.txt"
     elif ! diff -q "$private_file" "$public_file" > /dev/null 2>&1; then
-        echo "$file" >> "$WORK_DIR/modified_files.txt"
+        # Files differ - but check if it's just OAuth removal
+        if needs_oauth_processing "$file"; then
+            echo "$file" >> "$WORK_DIR/modified_files.txt"
+            echo "$file" >> "$WORK_DIR/needs_processing.txt"
+        else
+            # Already processed for OAuth removal and private hasn't changed
+            echo "$file" >> "$WORK_DIR/already_processed.txt"
+        fi
     fi
 done < "$WORK_DIR/private_files.txt"
 
@@ -134,6 +202,20 @@ if [ -s "$WORK_DIR/oauth_files.txt" ]; then
     while IFS= read -r file; do
         [ -n "$file" ] && echo "  ✗ $file"
     done < "$WORK_DIR/oauth_files.txt"
+else
+    echo "  (none)"
+fi
+echo ""
+
+echo "Files already processed (skipping - private unchanged):"
+if [ -s "$WORK_DIR/already_processed.txt" ]; then
+    count=$(wc -l < "$WORK_DIR/already_processed.txt")
+    echo "  ⏭ $count files skipped (OAuth already removed, private repo unchanged)"
+    if [ "$count" -le 10 ]; then
+        while IFS= read -r file; do
+            [ -n "$file" ] && echo "    - $file"
+        done < "$WORK_DIR/already_processed.txt"
+    fi
 else
     echo "  (none)"
 fi
@@ -289,37 +371,63 @@ Be surgical and precise. Leave no OAuth traces.
 Remember: You can NOT BE LAZY! It may take awhile, but it is worth it. This project is VERY IMPORTANT TO ME.
 " > "$log_file" 2>&1
 
-    if [ $? -eq 1 ]; then
+    if [ $? -eq 0 ]; then
+        # Save hash of the private file to cache after successful processing
+        local private_file="$PRIVATE_REPO/$file"
+        local cache_file="$CACHE_DIR/$(echo "$file" | sed 's|/|_|g').hash"
+        get_file_hash "$private_file" > "$cache_file"
+        echo "    ✓ Processed and cached"
+    else
         echo "    ✗ Failed (check log: $log_file)"
     fi
 }
 
 # Export function and variables so they can be used in parallel subshells
 export -f process_file
+export -f get_file_hash
 export PRIVATE_REPO
 export TEMP_REPO
 export WORK_DIR
+export CACHE_DIR
 
-# Process all new files in parallel
-echo "Processing new files..."
-if [ -s "$WORK_DIR/new_files.txt" ]; then
-    echo "  Launching parallel processing for new files (max $MAX_PARALLEL_JOBS jobs)..."
+# Only copy already-processed files without reprocessing
+echo "Copying already-processed files..."
+if [ -s "$WORK_DIR/already_processed.txt" ]; then
+    count=$(wc -l < "$WORK_DIR/already_processed.txt")
+    echo "  Copying $count files that were already OAuth-cleaned..."
     while IFS= read -r file; do
         [ -z "$file" ] && continue
-        echo "$file"
-    done < "$WORK_DIR/new_files.txt" | xargs -P "$MAX_PARALLEL_JOBS" -I {} bash -c 'process_file "$1" "new"' _ {}
-    echo "All new files processed"
+        public_file="$PUBLIC_REPO/$file"
+        temp_file="$TEMP_REPO/$file"
+        if [ -f "$public_file" ]; then
+            mkdir -p "$(dirname "$temp_file")"
+            cp "$public_file" "$temp_file"
+        fi
+    done < "$WORK_DIR/already_processed.txt"
+    echo "  Done copying already-processed files"
 fi
 
-# Process all modified files in parallel
-echo "Processing modified files..."
-if [ -s "$WORK_DIR/modified_files.txt" ]; then
-    echo "  Launching parallel processing for modified files (max $MAX_PARALLEL_JOBS jobs)..."
+# Process only files that need processing
+echo "Processing files that need OAuth removal..."
+if [ -s "$WORK_DIR/needs_processing.txt" ]; then
+    count=$(wc -l < "$WORK_DIR/needs_processing.txt")
+    echo "  Processing $count files (max $MAX_PARALLEL_JOBS parallel jobs)..."
     while IFS= read -r file; do
         [ -z "$file" ] && continue
-        echo "$file"
-    done < "$WORK_DIR/modified_files.txt" | xargs -P "$MAX_PARALLEL_JOBS" -I {} bash -c 'process_file "$1" "modified"' _ {}
-    echo "All modified files processed"
+        # Determine if it's new or modified
+        if grep -q "^$file$" "$WORK_DIR/new_files.txt"; then
+            action="new"
+        else
+            action="modified"
+        fi
+        echo "$file:$action"
+    done < "$WORK_DIR/needs_processing.txt" | xargs -P "$MAX_PARALLEL_JOBS" -I {} bash -c '
+        IFS=":" read -r file action <<< "$1"
+        process_file "$file" "$action"
+    ' _ {}
+    echo "All files processed"
+else
+    echo "  No files need processing"
 fi
 
 # Remove deleted files from temp repo
