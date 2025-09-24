@@ -205,7 +205,7 @@ READING STRATEGY:
 
 YOU MUST LOAD THE ENTIRE FILE INTO CONTEXT BEFORE EDITING!
 
-OAUTH INDICATORS TO REMOVE:
+OAUTH INDICATORS TO REMOVE - MUST BE COMPLETELY PURGED:
 - #include statements for oauth headers
 - OAuth class instantiations
 - OAuth method calls
@@ -217,6 +217,29 @@ OAUTH INDICATORS TO REMOVE:
 - Refresh token logic
 - Authorization code handling
 - Any OAuth-specific error handling
+- ANY comments mentioning OAuth (even explanatory comments)
+- ANY variable names containing "oauth" (case insensitive)
+- ANY function names containing "oauth" (case insensitive)
+- ANY enum values related to OAuth
+- ANY conditional compilation blocks for OAuth
+- ANY logging statements mentioning OAuth
+- ANY string literals containing "oauth"
+- ANY documentation strings mentioning OAuth
+
+CRITICAL PURGE REQUIREMENT:
+You MUST search for and remove ALL occurrences of these patterns:
+- "oauth" (case insensitive)
+- "OAuth"
+- "OAUTH"
+- Any variations or abbreviations
+
+ABSOLUTELY NO TRACES OF OAUTH CAN REMAIN - NOT EVEN IN COMMENTS.
+This includes removing entire comment blocks that mention OAuth.
+If a comment says "// OAuth not supported" - DELETE THE ENTIRE COMMENT.
+If a variable is named "enable_oauth" - DELETE THE ENTIRE VARIABLE.
+If there's a comment explaining OAuth removal - DELETE IT.
+
+ZERO TOLERANCE FOR ANY OAUTH REFERENCES ANYWHERE.
 
 CRITICAL RULES:
 - ONLY edit OAuth-related code
@@ -383,6 +406,12 @@ CRITICAL RULES:
    - CodeInjectionManager is NOT OAuth - keep it functional
    - NoGoZoneManager is NOT OAuth - keep it functional
 
+6. COMPLETE OAUTH PURGE REQUIREMENT:
+   - If you find ANY remaining OAuth references while fixing build errors, REMOVE THEM
+   - This includes comments, variable names, function names, string literals
+   - Search for "oauth" (case insensitive) and purge ALL occurrences
+   - NO OAUTH TRACES CAN REMAIN ANYWHERE IN THE CODEBASE
+
 WORKSPACE: $TEMP_REPO
 
 Start by exploring the errors deeply with grep and Read tools.
@@ -434,8 +463,15 @@ CHANGES TO VERIFY:
 $(cat "$WORK_DIR/final_diff.txt")
 
 VERIFICATION CHECKLIST:
-1. ALL OAuth code removed (auth_method, oauth_manager, flows, tokens)
-2. ALL other features preserved:
+1. SCAN PUBLIC CODE FOR OAUTH TRACES (CRITICAL):
+   - Use Grep tool to search workspace $TEMP_REPO for 'oauth' (case insensitive)
+   - Use Grep tool to search workspace $TEMP_REPO for 'OAuth'
+   - Use Grep tool to search workspace $TEMP_REPO for 'OAUTH'
+   - Check comments, variable names, function names, string literals
+   - If you find ANY OAuth reference anywhere, VERIFICATION MUST FAIL
+
+2. ALL OAuth code removed (auth_method, oauth_manager, flows, tokens)
+3. ALL other features preserved:
    - CodeInjectionManager fully functional
    - NoGoZoneManager fully functional
    - Consensus execution working
@@ -444,7 +480,7 @@ VERIFICATION CHECKLIST:
    - IRC communication working
    - Agent spawning functional
 
-3. Check for accidentally removed features:
+4. Check for accidentally removed features:
    - Were any non-OAuth functions deleted?
    - Were any non-OAuth classes removed?
    - Were any non-OAuth parameters stripped?

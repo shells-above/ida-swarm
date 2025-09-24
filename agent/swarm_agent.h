@@ -156,9 +156,6 @@ private:
 
     // Generate status update using Haiku
     void generate_and_send_status_update();
-
-    // Auto-detect and log discoveries from tool results
-    void detect_and_log_discovery(const std::string& tool_name, const json& result);
 };
 
 } // namespace llm_re::agent
