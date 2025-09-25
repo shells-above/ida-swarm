@@ -388,61 +388,20 @@ add_custom_command(TARGET ida_swarm64 POST_BUILD
         COMMENT "Copying unified plugin to IDA plugins directory"
 )
 
-# MCP Server executable
 set(MCP_SERVER_SOURCES
         mcp_server/src/mcp_server.cpp
         mcp_server/src/session_manager.cpp
         mcp_server/src/stdio_mcp_server.cpp
-        # Reuse orchestrator components
-        orchestrator/orchestrator.cpp
-        orchestrator/database_manager.cpp
-        orchestrator/agent_spawner.cpp
-        orchestrator/tool_call_tracker.cpp
-        orchestrator/merge_manager.cpp
-        orchestrator/nogo_zone_manager.cpp
-        orchestrator/orchestrator_logger.cpp
-        # Common sources needed
-        core/ida_utils.cpp
-        core/config.cpp
-        sdk/client/client.cpp
-        sdk/auth/oauth_manager.cpp
-        sdk/auth/oauth_flow.cpp
-        sdk/auth/oauth_authorizer.cpp
-        analysis/actions.cpp
-        analysis/deep_analysis.cpp
-        analysis/memory.cpp
-        agent/grader.cpp
-        agent/consensus_executor.cpp
-        patching/patch_manager.cpp
-        patching/code_injection_manager.cpp
-        irc/irc_server.cpp
-        irc/irc_client.cpp
 )
 
 add_executable(ida_swarm_mcp ${MCP_SERVER_SOURCES})
 
-# Include directories for MCP server
 target_include_directories(ida_swarm_mcp PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp_server/include
 )
 
-# Include IDA SDK headers as SYSTEM for MCP server
-target_include_directories(ida_swarm_mcp SYSTEM PRIVATE
-        ${IDASDK_PATH}/include
-        ${IDA_PLUGINS_PATH}/hexrays_sdk/include
-)
-
-# Link libraries for MCP server
 target_link_libraries(ida_swarm_mcp
-        ${IDA64}
-        CURL::libcurl
         nlohmann_json::nlohmann_json
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        keystone
-        SQLite::SQLite3
-        LIEF::LIEF
 )
 
 # Installation
