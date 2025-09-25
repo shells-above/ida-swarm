@@ -1,0 +1,12 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "IDA Swarm",
+    "entryPoint": "ida_swarm64",
+    "categories": ["api-scripting-and-automation", "decompilation", "collaboration-and-productivity"],
+    "logoPath": "ida_swarm.png",
+    "idaVersions": "9.0",
+    "description": "AI-powered multi-agent system that orchestrates a swarm of intelligent agents to automate complex reverse engineering tasks.",
+    "version": "1.0.0"
+  }
+}
