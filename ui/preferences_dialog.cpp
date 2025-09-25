@@ -25,13 +25,9 @@
 #include <QFileDialog>
 #include <QTimer>
 #include <QProgressDialog>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QTcpSocket>
 #include <QDir>
 #include <QPointer>
 
@@ -749,22 +745,22 @@ void PreferencesDialog::onTestAPIConnection() {
     testApiButton_->setEnabled(true);
 }
 
-void llm_re::ui::PreferencesDialog::onAgentModelChanged(int index) {
+void PreferencesDialog::onAgentModelChanged(int index) {
     Q_UNUSED(index);
     // Could adjust default token limits based on model
 }
 
-void llm_re::ui::PreferencesDialog::onGraderModelChanged(int index) {
+void PreferencesDialog::onGraderModelChanged(int index) {
     Q_UNUSED(index);
     // Could adjust default token limits based on model
 }
 
-void llm_re::ui::PreferencesDialog::onOrchestratorModelChanged(int index) {
+void PreferencesDialog::onOrchestratorModelChanged(int index) {
     Q_UNUSED(index);
     // Could adjust default token limits based on model
 }
 
-void llm_re::ui::PreferencesDialog::validateApiKey() {
+void PreferencesDialog::validateApiKey() {
     // Real-time validation
     QString apiKey = apiKeyEdit_->text();
     if (!apiKey.isEmpty() && !apiKey.startsWith("sk-ant-")) {
@@ -774,7 +770,7 @@ void llm_re::ui::PreferencesDialog::validateApiKey() {
     }
 }
 
-void llm_re::ui::PreferencesDialog::validateBaseUrl() {
+void PreferencesDialog::validateBaseUrl() {
     QString url = baseUrlEdit_->text();
     if (!url.isEmpty() && !url.startsWith("http://") && !url.startsWith("https://")) {
         baseUrlEdit_->setStyleSheet("QLineEdit { border: 2px solid red; }");
@@ -784,11 +780,11 @@ void llm_re::ui::PreferencesDialog::validateBaseUrl() {
 }
 
 
-void llm_re::ui::PreferencesDialog::showValidationError(const QString& message) {
+void PreferencesDialog::showValidationError(const QString& message) {
     QMessageBox::critical(this, "Validation Error", message);
 }
 
-QString llm_re::ui::PreferencesDialog::getConfigPath() const {
+QString PreferencesDialog::getConfigPath() const {
     // Get IDA plugins directory for config file
     const char* ida_dir = idadir(nullptr);
     if (ida_dir) {
@@ -797,7 +793,7 @@ QString llm_re::ui::PreferencesDialog::getConfigPath() const {
     return "llm_re_config.json";
 }
 
-bool llm_re::ui::PreferencesDialog::hasUnsavedChanges() {
+bool PreferencesDialog::hasUnsavedChanges() {
     // Check if any field has been modified
     // For simplicity, we'll track this with configModified_ flag
     return configModified_;

@@ -1837,20 +1837,21 @@ std::string Orchestrator::create_orchestrator_consolidation_summary(const std::v
     // Send conversation to Claude for summarization
     claude::ChatRequestBuilder builder;
     builder.with_model(claude::Model::Sonnet4)  // Use Sonnet for consolidation
-           .with_system_prompt("You are helping consolidate an orchestrator's conversation history.")
-           .with_max_tokens(8000)
-           .with_temperature(0.1)  // Low temperature for consistent summaries
-           .enable_thinking(false);
+           .with_system_prompt(ORCHESTRATOR_CONSOLIDATION_PROMPT)
+           .with_max_tokens(64000)
+           .with_max_thinking_tokens(12000)
+           .with_temperature(1.0)
+           .enable_thinking(true);
     
     // Add consolidation prompt
-    builder.add_message(claude::messages::Message::user_text(ORCHESTRATOR_CONSOLIDATION_PROMPT));
+    builder.add_message(claude::messages::Message::user_text("You are consolidating an orchestrator's conversation history."));
     
     // Add conversation history (excluding the current consolidation request)
     for (size_t i = 0; i < conversation.size(); ++i) {
         builder.add_message(conversation[i]);
     }
-    
-    auto response = api_client_->send_request(builder.build());
+
+    claude::ChatResponse response = api_client_->send_request(builder.build());
     
     if (response.success) {
         std::optional<std::string> summary_text = claude::messages::ContentExtractor::extract_text(response.message);
