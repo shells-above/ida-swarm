@@ -25,13 +25,9 @@
 #include <QFileDialog>
 #include <QTimer>
 #include <QProgressDialog>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QTcpSocket>
 #include <QDir>
 #include <QPointer>
 
