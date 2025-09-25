@@ -75,7 +75,6 @@ if(APPLE)
     find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-    find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
@@ -87,7 +86,6 @@ elseif(UNIX AND NOT APPLE)
     find_library(QT_GUI_FRAMEWORK Qt5Gui PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
     find_library(QT_WIDGETS_FRAMEWORK Qt5Widgets PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
     find_library(QT_PRINTSUPPORT_FRAMEWORK Qt5PrintSupport PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
-    find_library(QT_NETWORK_FRAMEWORK Qt5Network PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
     find_library(QT_CONCURRENT_FRAMEWORK Qt5Concurrent PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
     find_library(QT_SQL_FRAMEWORK Qt5Sql PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
     find_library(QT_XML_FRAMEWORK Qt5Xml PATHS "${QTDIR}/build/qtbase/lib" NO_DEFAULT_PATH)
@@ -98,7 +96,6 @@ else()
     find_library(QT_GUI_FRAMEWORK QtGui PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_PRINTSUPPORT_FRAMEWORK QtPrintSupport PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
-    find_library(QT_NETWORK_FRAMEWORK QtNetwork PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_CONCURRENT_FRAMEWORK QtConcurrent PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_SQL_FRAMEWORK QtSql PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
     find_library(QT_XML_FRAMEWORK QtXml PATHS "${QTDIR}/lib" NO_DEFAULT_PATH)
@@ -176,7 +173,6 @@ if(APPLE)
             "${QTDIR}/lib/QtGui.framework/Headers"
             "${QTDIR}/lib/QtWidgets.framework/Headers"
             "${QTDIR}/lib/QtPrintSupport.framework/Headers"
-            "${QTDIR}/lib/QtNetwork.framework/Headers"
             "${QTDIR}/lib/QtConcurrent.framework/Headers"
             "${QTDIR}/lib/QtSql.framework/Headers"
             "${QTDIR}/lib/QtXml.framework/Headers"
@@ -189,7 +185,6 @@ elseif(UNIX AND NOT APPLE)
             "${QTDIR}/build/qtbase/include/QtGui"
             "${QTDIR}/build/qtbase/include/QtWidgets"
             "${QTDIR}/build/qtbase/include/QtPrintSupport"
-            "${QTDIR}/build/qtbase/include/QtNetwork"
             "${QTDIR}/build/qtbase/include/QtConcurrent"
             "${QTDIR}/build/qtbase/include/QtSql"
             "${QTDIR}/build/qtbase/include/QtXml"
@@ -201,7 +196,6 @@ else()
             "${QTDIR}/lib/QtGui.framework/Headers"
             "${QTDIR}/lib/QtWidgets.framework/Headers"
             "${QTDIR}/lib/QtPrintSupport.framework/Headers"
-            "${QTDIR}/lib/QtNetwork.framework/Headers"
             "${QTDIR}/lib/QtConcurrent.framework/Headers"
             "${QTDIR}/lib/QtSql.framework/Headers"
             "${QTDIR}/lib/QtXml.framework/Headers"
@@ -384,7 +378,6 @@ target_link_libraries(ida_swarm64
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
-        ${QT_NETWORK_FRAMEWORK}
 )
 
 # Post-build: Copy unified plugin to IDA plugins directory
