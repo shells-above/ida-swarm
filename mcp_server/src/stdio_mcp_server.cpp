@@ -181,7 +181,18 @@ std::optional<json> StdioMCPServer::process_message(const json& message) {
         if (is_notif) {
             return std::nullopt;
         }
-        return create_success_response(id.value(), handle_call_tool(params));
+        auto result = handle_call_tool(params);
+        // Check if the tool returned an error
+        if (result.contains("isError") && result["isError"].get<bool>()) {
+            // Extract error message from content
+            std::string error_msg = "Tool execution failed";
+            if (result.contains("content") && result["content"].is_array() &&
+                !result["content"].empty() && result["content"][0].contains("text")) {
+                error_msg = result["content"][0]["text"].get<std::string>();
+            }
+            return create_error_response(id, -32603, error_msg);
+        }
+        return create_success_response(id.value(), result);
     } else {
         if (!is_notif) {
             return create_error_response(id, -32601, "Method not found: " + method);

@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <cstring>
 #include <spawn.h>
+#include <algorithm>
+#include <cctype>
 
 // On macOS, environ needs explicit declaration
 extern char **environ;
@@ -357,7 +359,7 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     std::string plist_path = "/tmp/" + job_label + ".plist";
     std::ofstream plist(plist_path);
     if (!plist.is_open()) {
-        std::cerr << "Failed to create plist file" << std::endl;
+        std::cerr << "spawn_orchestrator: Failed to create plist file at: " << plist_path << std::endl;
         return -1;
     }
 
@@ -371,8 +373,14 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     plist << "    <key>ProgramArguments</key>\n";
     plist << "    <array>\n";
     plist << "        <string>/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64</string>\n";
-    plist << "        <string>-A</string>\n";
-    plist << "        <string>-parm64</string>\n";
+    plist << "        <string>-A</string>\n";   // autonomous mode (no dialogs)
+
+    // Detect if we need -T flag for Fat Mach-O ARM64 slice selection
+    std::string type_flag = detect_type_flag(binary_path);
+    if (!type_flag.empty()) {
+        plist << "        <string>" << type_flag << "</string>\n";
+    }
+
     plist << "        <string>" << binary_path << "</string>\n";
     plist << "    </array>\n";
     plist << "    <key>RunAtLoad</key>\n";
@@ -411,9 +419,10 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
 
     // Find the PID of the launched IDA process
     std::string ps_cmd = "ps aux | grep ida64 | grep '" + binary_path + "' | grep -v grep | awk '{print $2}'";
+
     fp = popen(ps_cmd.c_str(), "r");
     if (!fp) {
-        std::cerr << "Failed to find IDA process" << std::endl;
+        std::cerr << "spawn_orchestrator: Failed to execute ps command" << std::endl;
         // Clean up
         system(("launchctl unload " + plist_path + " 2>/dev/null").c_str());
         std::remove(plist_path.c_str());
@@ -424,6 +433,9 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     pid_t pid = -1;
     if (fgets(pid_str, sizeof(pid_str), fp) != nullptr) {
         pid = atoi(pid_str);
+        std::cerr << "spawn_orchestrator: Found IDA process with PID: " << pid << std::endl;
+    } else {
+        std::cerr << "spawn_orchestrator: No IDA process found matching criteria" << std::endl;
     }
     pclose(fp);
 
@@ -432,11 +444,54 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     std::remove(plist_path.c_str());
 
     if (pid <= 0) {
-        std::cerr << "Could not find IDA process after launch" << std::endl;
+        std::cerr << "spawn_orchestrator: Could not find IDA process after launch, error code: " << pid << std::endl;
+
+        // Try to check if launchctl job is running
+        std::string status_cmd = "launchctl list | grep " + job_label + " 2>&1";
+        FILE* status_fp = popen(status_cmd.c_str(), "r");
+        if (status_fp) {
+            char status_output[256];
+            std::string status_result;
+            while (fgets(status_output, sizeof(status_output), status_fp) != nullptr) {
+                status_result += status_output;
+            }
+            pclose(status_fp);
+            if (!status_result.empty()) {
+                std::cerr << "spawn_orchestrator: launchctl job status: " << status_result << std::endl;
+            } else {
+                std::cerr << "spawn_orchestrator: launchctl job not found in list" << std::endl;
+            }
+        }
+
         return -1;
     }
 
     std::cerr << "Successfully spawned IDA with PID: " << pid << std::endl;
+
+    // Wait a moment for IDA window to appear
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+    // Minimize the IDA window using AppleScript
+    std::string minimize_cmd = "osascript -e 'tell application \"System Events\" to tell (first process whose unix id is "
+                              + std::to_string(pid) + ") to set value of attribute \"AXMinimized\" of window 1 to true' 2>/dev/null";
+
+    std::cerr << "Attempting to minimize IDA window with PID " << pid << std::endl;
+    int result = system(minimize_cmd.c_str());
+
+    if (result == 0) {
+        std::cerr << "Successfully minimized IDA window" << std::endl;
+    } else {
+        // Fallback: Try using window title
+        // std::cerr << "First minimize attempt failed, trying alternate method..." << std::endl;
+        // std::string alt_minimize_cmd = "osascript -e 'tell application \"IDA\" to set miniaturized of window 1 to true' 2>/dev/null";
+        // result = system(alt_minimize_cmd.c_str());
+        //
+        // if (result == 0) {
+        //     std::cerr << "Successfully minimized IDA window using alternate method" << std::endl;
+        // } else {
+        std::cerr << "Could not minimize IDA window automatically" << std::endl;
+        // }
+    }
 
 #else
     // Non-macOS platforms can use posix_spawn directly
@@ -450,7 +505,14 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     std::vector<std::string> stable_args;
     stable_args.push_back(ida_exe);           // argv[0] is the program name
     stable_args.push_back("-A");              // Automatic mode FIRST
-    stable_args.push_back("-parm64");         // Default to ARM64 processor
+
+    // Detect if we need -T flag for Fat Mach-O ARM64 slice selection
+    std::string type_flag = detect_type_flag(binary_path);
+    if (!type_flag.empty()) {
+        std::cerr << "Adding type flag: " << type_flag << std::endl;
+        stable_args.push_back(type_flag);
+    }
+
     stable_args.push_back(binary_path);       // Database/binary path LAST
 
     // Build argv array from stable strings
@@ -701,6 +763,55 @@ void SessionManager::cleanup_pipes(const std::string& session_id) {
 
     unlink(input_pipe.c_str());
     unlink(output_pipe.c_str());
+}
+
+std::string SessionManager::detect_type_flag(const std::string& binary_path) {
+    // Use file command to detect binary type
+    std::string file_cmd = "file '" + binary_path + "' 2>/dev/null";
+
+    FILE* fp = popen(file_cmd.c_str(), "r");
+    if (!fp) {
+        std::cerr << "Failed to run file command, using auto-detect" << std::endl;
+        return "";  // Empty string means no flag (auto-detect)
+    }
+
+    char output[1024];
+    std::string file_output;
+    while (fgets(output, sizeof(output), fp) != nullptr) {
+        file_output += output;
+    }
+    pclose(fp);
+
+    // Convert to lowercase for easier matching
+    std::string lower_output = file_output;
+    std::transform(lower_output.begin(), lower_output.end(), lower_output.begin(), ::tolower);
+
+    // Check for Universal/Fat Mach-O files with ARM64 slice
+    // Note: file command returns "universal binary" not "fat"
+    if ((lower_output.find("universal") != std::string::npos || lower_output.find("fat") != std::string::npos) &&
+        lower_output.find("mach-o") != std::string::npos) {
+
+        // Use lipo command to check for ARM64 slice
+        std::string lipo_cmd = "lipo -archs '" + binary_path + "' 2>/dev/null";
+        FILE* lipo_fp = popen(lipo_cmd.c_str(), "r");
+        if (lipo_fp) {
+            char lipo_output[256];
+            std::string lipo_result;
+            while (fgets(lipo_output, sizeof(lipo_output), lipo_fp) != nullptr) {
+                lipo_result += lipo_output;
+            }
+            pclose(lipo_fp);
+
+            // Convert to lowercase
+            std::transform(lipo_result.begin(), lipo_result.end(), lipo_result.begin(), ::tolower);
+
+            if (lipo_result.find("arm64") != std::string::npos) {
+                return "-TFat Mach-O file, 2. ARM64";
+            }
+        }
+    }
+
+    return "";  // Empty string means no flag (auto-detect)
 }
 
 } // namespace llm_re::mcp

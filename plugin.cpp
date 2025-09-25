@@ -257,6 +257,11 @@ private:
     }
 
     void setup_mcp_orchestrator_mode() {
+        // Wait for auto-analysis to complete first
+        msg("LLM RE: Waiting for auto-analysis to complete...\n");
+        auto_wait();
+        msg("LLM RE: Auto-analysis completed\n");
+
         // Create orchestrator without UI
         if (!orchestrator_) {
             if (mcp_session_id_.empty()) {

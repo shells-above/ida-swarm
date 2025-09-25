@@ -106,6 +106,9 @@ private:
 
     // Cleanup pipes
     void cleanup_pipes(const std::string& session_id);
+
+    // Detect if binary needs -T flag for Fat Mach-O ARM64 slice selection
+    std::string detect_type_flag(const std::string& binary_path);
 };
 
 } // namespace llm_re::mcp

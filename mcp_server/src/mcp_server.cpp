@@ -197,7 +197,8 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         if (!fs::exists(binary_path)) {
             return nlohmann::json{
                 {"type", "text"},
-                {"error", "Binary file not found: " + binary_path}
+                {"text", "Error: Binary file not found: " + binary_path},
+                {"isError", true}
             };
         }
 
@@ -214,7 +215,8 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         } catch (const std::exception& e) {
             return nlohmann::json{
                 {"type", "text"},
-                {"error", std::string("Failed to create session: ") + e.what()}
+                {"text", std::string("Error: Failed to create session: ") + e.what()},
+                {"isError", true}
             };
         }
 
@@ -223,12 +225,15 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         // Wait for initial response from orchestrator
         nlohmann::json response = session_manager_->wait_for_initial_response(session_id);
 
+        std::cerr << "Got initial response from orchestrator: " << response.dump(2) << std::endl;
+
         if (response.contains("error")) {
             // Clean up failed session
             session_manager_->close_session(session_id);
             return nlohmann::json{
                 {"type", "text"},
-                {"error", response["error"]}
+                {"text", response["error"].get<std::string>()},  // Changed from "error" to "text"
+                {"isError", true}
             };
         }
 
@@ -243,10 +248,12 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
                              response["result"]["content"].get<std::string>();
         } else {
             // No content in response likely means orchestrator failed to start properly
+            std::cerr << "Response doesn't contain result.content. Full response: " << response.dump(2) << std::endl;
             session_manager_->close_session(session_id);
             return nlohmann::json{
                 {"type", "text"},
-                {"error", "Failed to get initial response from orchestrator. Session closed."}
+                {"text", "Failed to get initial response from orchestrator. Session closed."},  // Changed from "error" to "text"
+                {"isError", true}
             };
         }
 
@@ -267,7 +274,8 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
     } catch (const std::exception& e) {
         return nlohmann::json{
             {"type", "text"},
-            {"error", std::string("Exception in start_analysis_session: ") + e.what()}
+            {"text", std::string("Error: Exception in start_analysis_session: ") + e.what()},
+            {"isError", true}
         };
     }
 }
@@ -286,7 +294,8 @@ nlohmann::json MCPServer::handle_send_message(const nlohmann::json& params) {
         if (response.contains("error")) {
             return nlohmann::json{
                 {"type", "text"},
-                {"error", response["error"]}
+                {"text", "Error: " + response["error"].get<std::string>()},
+                {"isError", true}
             };
         }
 
@@ -323,7 +332,8 @@ nlohmann::json MCPServer::handle_send_message(const nlohmann::json& params) {
     } catch (const std::exception& e) {
         return nlohmann::json{
             {"type", "text"},
-            {"error", std::string("Exception in send_message: ") + e.what()}
+            {"text", std::string("Error: Exception in send_message: ") + e.what()},
+            {"isError", true}
         };
     }
 }
@@ -341,7 +351,8 @@ nlohmann::json MCPServer::handle_close_session(const nlohmann::json& params) {
         if (!status["exists"].get<bool>()) {
             return nlohmann::json{
                 {"type", "text"},
-                {"error", "Session not found: " + session_id}
+                {"text", "Error: Session not found: " + session_id},
+                {"isError", true}
             };
         }
 
@@ -360,16 +371,16 @@ nlohmann::json MCPServer::handle_close_session(const nlohmann::json& params) {
         } else {
             return nlohmann::json{
                 {"type", "text"},
-                {"error", "Failed to close session"},
-                {"session_id", session_id},
-                {"success", false}
+                {"text", "Error: Failed to close session for " + session_id},
+                {"isError", true}
             };
         }
 
     } catch (const std::exception& e) {
         return nlohmann::json{
             {"type", "text"},
-            {"error", std::string("Exception in close_session: ") + e.what()}
+            {"text", std::string("Error: Exception in close_session: ") + e.what()},
+            {"isError", true}
         };
     }
 }
