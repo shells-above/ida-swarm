@@ -23,7 +23,7 @@ if(EXISTS ${KEYSTONE_INSTALL_DIR}/lib/libkeystone.a AND EXISTS ${KEYSTONE_INSTAL
     message(STATUS "Keystone already built, skipping build step")
     # Create a dummy target that does nothing
     add_custom_target(keystone_external
-        COMMAND ${CMAKE_COMMAND} -E echo "Using existing Keystone build"
+        COMMAND ${CMAKE_COMMAND} -E true
     )
 else()
     message(STATUS "Building Keystone from source")
