@@ -99,7 +99,7 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
 
     // Build and send the request
     claude::ChatRequest request = claude::ChatRequestBuilder()
-        .with_model(claude::Model::Sonnet4)
+        .with_model(claude::Model::Sonnet45)
         .with_system_prompt(system_prompt)
         .add_message(claude::messages::Message::user_text(user_prompt))
         .with_max_tokens(32768)

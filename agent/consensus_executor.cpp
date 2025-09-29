@@ -20,7 +20,7 @@ json ConsensusExecutor::execute_consensus(const std::map<std::string, std::strin
 
     claude::ChatRequestBuilder builder;
     claude::ChatRequest request = builder
-        .with_model(claude::Model::Sonnet4)
+        .with_model(claude::Model::Sonnet45)
         .with_system_prompt("You are a consensus executor. Your job is to interpret agreements "
                            "between agents and execute the appropriate tool call based on their consensus. "
                            "You will be given the original conflicting tool calls and the agreements reached. "

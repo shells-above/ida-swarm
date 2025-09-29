@@ -790,7 +790,7 @@ public:
                "Then explore the binary further looking for more information and provide it using the add_to_deep_analysis call. "
                "Once you have collected enough information, call request_deep_analysis. "
                "Remember! The result can *only be as good as the information provided*, so your information gathering stage with add_to_deep_analysis is of the utmost importance. "
-               "This will delegate to the Opus 4 model at SIGNIFICANT cost.";  // not necessarily opus 4, but we can let the model think that
+               "This will delegate to the grader model at SIGNIFICANT cost.";
     }
 
     json parameters_schema() const override {
@@ -832,8 +832,8 @@ public:
     std::string description() const override {
         return "Add observations, findings, or function addresses to the current deep analysis collection. "
                "Call this as you discover relevant information about the complex system you're analyzing. "
-               "It is ABSOLUTELY CRITICAL to add relevant functions using the function_address parameter. "  // LLM doesn't like adding to this param, but it references the functions inside whatever text it provides here
-               "Opus 4 will only receive function information for functions that you explicitly provide in this parameter. ";
+               "It is ABSOLUTELY CRITICAL to add relevant functions using the function_address parameter. "
+               "The grader model will only receive function information for functions that you explicitly provide in this parameter. ";
     }
 
     json parameters_schema() const override {
@@ -887,13 +887,13 @@ public:
     std::string description() const override {
         return "VERY EXPENSIVE - Send the collected information to Opus 4 for deep expert analysis. "  // not necessarily opus 4, but we can let the model think that
                "This will include all collected data, memory contents, and full decompilations. "
-               "Only use after collecting sufficient information. Each analysis is VERY expensive. "
+               "Only use after collecting sufficient information. Each analysis is expensive. "
                "The analysis will be stored and can be retrieved later with get_deep_analysis.";
     }
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
-            .add_string("task", "Specific analysis task or questions for Opus 4 to address")  // not necessarily opus 4, but we can let the model think that
+            .add_string("task", "Specific analysis task or questions for the grader model to address")
             .build();
     }
 
@@ -942,7 +942,7 @@ public:
 
     std::string description() const override {
         return "List all completed deep analyses with their keys and descriptions. "
-               "Use this to see what complex systems have been analyzed by Opus 4.";  // not necessarily opus 4, but we can let the model think that
+               "Use this to see what complex systems have been analyzed by the grader model.";
     }
 
     json parameters_schema() const override {
@@ -985,7 +985,7 @@ public:
 
     std::string description() const override {
         return "Retrieve a completed deep analysis by its key. "
-               "Returns the full expert analysis from Opus 4 for the specified complex system.";  // not necessarily opus 4, but we can let the model think that
+               "Returns the full expert analysis from the grader model for the specified complex system.";
     }
 
     json parameters_schema() const override {

@@ -52,7 +52,7 @@ public:
 
     struct AgentSettings {
         // Model settings
-        claude::Model model = claude::Model::Sonnet4;
+        claude::Model model = claude::Model::Sonnet45;
         int max_tokens = 8192;
         int max_thinking_tokens = 4096;
         double temperature = 0.0;
@@ -70,7 +70,7 @@ public:
 
     struct GraderSettings {
         bool enabled = true;  // Whether the grader is enabled
-        claude::Model model = claude::Model::Opus41;
+        claude::Model model = claude::Model::Sonnet45;
         int max_tokens = 32000;
         int max_thinking_tokens = 30000;
         int context_limit = 140000;  // Leave buffer below 150k limit
@@ -79,7 +79,7 @@ public:
     struct OrchestratorSettings {
         // Model Configuration (for orchestrator's reasoning)
         struct Model {
-            claude::Model model = claude::Model::Sonnet4;
+            claude::Model model = claude::Model::Sonnet45;
             int max_tokens = 32000;
             int max_thinking_tokens = 30000;
             double temperature = 1.0;

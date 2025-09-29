@@ -1898,7 +1898,7 @@ void Orchestrator::consolidate_conversation_context() {
 std::string Orchestrator::create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const {
     // Send conversation to Claude for summarization
     claude::ChatRequestBuilder builder;
-    builder.with_model(claude::Model::Sonnet4)  // Use Sonnet for consolidation
+    builder.with_model(claude::Model::Sonnet45)  // Use Sonnet for consolidation
            .with_system_prompt(ORCHESTRATOR_CONSOLIDATION_PROMPT)
            .with_max_tokens(64000)
            .with_max_thinking_tokens(12000)

@@ -232,7 +232,7 @@ void PreferencesDialog::createModelsTab() {
     
     agentModelCombo_ = new QComboBox(agentModelGroup_);
     agentModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
-    agentModelCombo_->addItem("Claude Sonnet 4", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet4)));
+    agentModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     agentModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
     agentLayout->addRow("Model:", agentModelCombo_);
     
@@ -282,7 +282,7 @@ void PreferencesDialog::createModelsTab() {
     
     graderModelCombo_ = new QComboBox(graderModelGroup_);
     graderModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
-    graderModelCombo_->addItem("Claude Sonnet 4", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet4)));
+    graderModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     graderModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
     graderLayout->addRow("Model:", graderModelCombo_);
     
@@ -307,7 +307,7 @@ void PreferencesDialog::createModelsTab() {
     
     orchestratorModelCombo_ = new QComboBox(orchestratorModelGroup_);
     orchestratorModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
-    orchestratorModelCombo_->addItem("Claude Sonnet 4", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet4)));
+    orchestratorModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     orchestratorModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
     orchLayout->addRow("Model:", orchestratorModelCombo_);
     
