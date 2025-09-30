@@ -568,6 +568,11 @@ void Orchestrator::process_user_input(const std::string& input) {
             if (!continuation.success) {
                 ORCH_LOG("Orchestrator: Failed to get continuation: %s\n",
                     continuation.error ? continuation.error->c_str() : "Unknown error");
+
+                // Signal task completion for MCP mode before breaking
+                if (!show_ui_) {
+                    signal_task_completion();
+                }
                 break;
             }
             
@@ -652,17 +657,19 @@ claude::ChatResponse Orchestrator::send_continuation_request() {
     }
     
     auto response = api_client_->send_request(builder.build());
-    
-    // Check for OAuth token expiry and retry if needed
-    if (!response.success && response.error && 
-        (response.error->find("401") != std::string::npos || 
-         response.error->find("unauthorized") != std::string::npos)) {
-        ORCH_LOG("Orchestrator: Got 401, attempting OAuth token refresh...\n");
+
+    // Check for OAuth token expiry/revocation and retry if needed
+    if (!response.success && response.error &&
+        (response.error->find("401") != std::string::npos ||
+         response.error->find("unauthorized") != std::string::npos ||
+         response.error->find("revoked") != std::string::npos ||
+         response.error->find("expired") != std::string::npos)) {
+        ORCH_LOG("Orchestrator: Got OAuth auth error, attempting token refresh...\n");
         if (refresh_oauth_if_needed()) {
             response = api_client_->send_request(builder.build());
         }
     }
-    
+
     return response;
 }
 
@@ -705,13 +712,17 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
     builder.add_message(claude::messages::Message::user_text(enhanced_input));
     
     auto response = api_client_->send_request(builder.build());
-    
-    // Check for OAuth token expiry and retry if needed
-    if (!response.success && response.error && 
-        response.error->find("OAuth token has expired") != std::string::npos) {
-        
-        ORCH_LOG("Orchestrator: OAuth token expired, attempting to refresh...\n");
-        
+
+    // Check for OAuth token expiry/revocation and retry if needed
+    if (!response.success && response.error &&
+        (response.error->find("OAuth token has expired") != std::string::npos ||
+         response.error->find("revoked") != std::string::npos ||
+         response.error->find("401") != std::string::npos ||
+         response.error->find("unauthorized") != std::string::npos)) {
+
+        ORCH_LOG("Orchestrator: OAuth token error (%s), attempting to refresh...\n",
+            response.error->c_str());
+
         if (refresh_oauth_if_needed()) {
             ORCH_LOG("Orchestrator: Retrying request with refreshed OAuth token...\n");
             response = api_client_->send_request(builder.build());
@@ -719,7 +730,7 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
             ORCH_LOG("Orchestrator: Failed to refresh OAuth token\n");
         }
     }
-    
+
     return response;
 }
 
@@ -1190,29 +1201,40 @@ bool Orchestrator::refresh_oauth_if_needed() {
     if (!oauth_manager_ || config_.api.auth_method != claude::AuthMethod::OAUTH) {
         return true; // Not using OAuth, no refresh needed
     }
-    
-    // Check if refresh is needed
-    if (oauth_manager_->needs_refresh()) {
-        ORCH_LOG("Orchestrator: OAuth token needs refresh, refreshing...\n");
-        
-        auto refreshed_creds = oauth_manager_->force_refresh();
-        if (!refreshed_creds) {
-            ORCH_LOG("Orchestrator: Failed to refresh OAuth token: %s\n", 
-                oauth_manager_->get_last_error().c_str());
-            return false;
+
+    // FIRST: Try to reload credentials from disk
+    // Another orchestrator or agent may have already refreshed them
+    ORCH_LOG("Orchestrator: Clearing OAuth credential cache and reloading from disk...\n");
+    oauth_manager_->clear_cache();
+
+    auto reloaded_creds = oauth_manager_->get_credentials();
+    if (reloaded_creds) {
+        // Check if the reloaded credentials are still valid
+        if (!reloaded_creds->is_expired(300)) {
+            ORCH_LOG("Orchestrator: Successfully reloaded fresh credentials from disk\n");
+            api_client_->set_oauth_credentials(reloaded_creds);
+            return true;
         }
-        
-        // Update the API client with new credentials
-        api_client_->set_oauth_credentials(refreshed_creds);
-        ORCH_LOG("Orchestrator: Successfully refreshed OAuth token\n");
-        
-        // Emit event for UI update
-        event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
-            {"token_refreshed", true},
-            {"expires_at", refreshed_creds->expires_at}
-        }));
+        ORCH_LOG("Orchestrator: Reloaded credentials are still expired, forcing refresh...\n");
+    } else {
+        ORCH_LOG("Orchestrator: Failed to reload credentials from disk: %s\n",
+            oauth_manager_->get_last_error().c_str());
     }
-    
+
+    // SECOND: If reload didn't work or credentials still expired, force refresh
+    ORCH_LOG("Orchestrator: Forcing OAuth token refresh via API...\n");
+
+    auto refreshed_creds = oauth_manager_->force_refresh();
+    if (!refreshed_creds) {
+        ORCH_LOG("Orchestrator: Failed to refresh OAuth token: %s\n",
+            oauth_manager_->get_last_error().c_str());
+        return false;
+    }
+
+    // Update the API client with new credentials
+    api_client_->set_oauth_credentials(refreshed_creds);
+    ORCH_LOG("Orchestrator: Successfully refreshed OAuth token via API\n");
+
     return true;
 }
 
