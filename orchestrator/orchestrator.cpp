@@ -1298,30 +1298,56 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
 
             // Now enforce consensus without holding the lock
             if (should_enforce) {
-                // Spawn a thread to handle consensus enforcement so we don't block the IRC thread
-                std::thread enforcement_thread([this, channel, tool_call, agents_copy]() {
-                    if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
-                        enforce_consensus_tool_execution(channel, tool_call, agents_copy);
+                // Check if any agents are still alive before enforcement
+                bool any_agents_alive = false;
+                for (const std::string& agent_id : agents_copy) {
+                    auto agent_it = agents_.find(agent_id);
+                    if (agent_it != agents_.end()) {
+                        int pid = agent_it->second.process_id;
+                        if (pid > 0 && agent_spawner_->is_agent_running(pid)) {
+                            any_agents_alive = true;
+                            break;
+                        }
                     }
+                }
 
+                if (!any_agents_alive) {
+                    ORCH_LOG("Orchestrator: All participating agents have exited, skipping manual enforcement\n");
+                    // Just send CONSENSUS_COMPLETE and clean up
                     if (irc_client_) {
-                        // Send to the conflict channel so participating agents see it
                         irc_client_->send_message(channel, "CONSENSUS_COMPLETE");
                     }
-                    ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
+                    ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification\n");
 
-                    // Clean up after a delay
-                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                    // Clean up conflict session
+                    std::lock_guard<std::mutex> cleanup_lock(conflicts_mutex_);
+                    active_conflicts_.erase(channel);
+                } else {
+                    // Spawn a thread to handle consensus enforcement so we don't block the IRC thread
+                    std::thread enforcement_thread([this, channel, tool_call, agents_copy]() {
+                        if (!tool_call.is_null() && tool_call.contains("tool_name") && tool_call.contains("parameters")) {
+                            enforce_consensus_tool_execution(channel, tool_call, agents_copy);
+                        }
 
-                    // Re-acquire lock to clean up
-                    {
-                        std::lock_guard<std::mutex> cleanup_lock(conflicts_mutex_);
-                        active_conflicts_.erase(channel);
-                    }
-                });
+                        if (irc_client_) {
+                            // Send to the conflict channel so participating agents see it
+                            irc_client_->send_message(channel, "CONSENSUS_COMPLETE");
+                        }
+                        ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
 
-                // Detach the thread so it runs independently
-                enforcement_thread.detach();
+                        // Clean up after a delay
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+                        // Re-acquire lock to clean up
+                        {
+                            std::lock_guard<std::mutex> cleanup_lock(conflicts_mutex_);
+                            active_conflicts_.erase(channel);
+                        }
+                    });
+
+                    // Detach the thread so it runs independently
+                    enforcement_thread.detach();
+                }
             }
         }
         return;
@@ -1483,11 +1509,34 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
 
     if (tool_name == "unknown") return;
 
-    // Track responses
+    // Check if any agents are still alive - if all dead, skip enforcement
+    std::set<std::string> alive_agents;
+    for (const std::string& agent_id : agents) {
+        auto agent_it = agents_.find(agent_id);
+        if (agent_it != agents_.end()) {
+            int pid = agent_it->second.process_id;
+            if (pid > 0 && agent_spawner_->is_agent_running(pid)) {
+                alive_agents.insert(agent_id);
+            } else {
+                ORCH_LOG("Orchestrator: Agent %s (PID %d) has exited, skipping enforcement for this agent\n",
+                    agent_id.c_str(), pid);
+            }
+        }
+    }
+
+    if (alive_agents.empty()) {
+        ORCH_LOG("Orchestrator: All agents have exited, skipping consensus enforcement entirely\n");
+        return;
+    }
+
+    ORCH_LOG("Orchestrator: %zu of %zu agents still alive, proceeding with enforcement\n",
+        alive_agents.size(), agents.size());
+
+    // Track responses only for alive agents
     {
         std::lock_guard<std::mutex> lock(manual_tool_mutex_);
         manual_tool_responses_.clear();
-        for (const auto& agent_id : agents) {
+        for (const auto& agent_id : alive_agents) {
             manual_tool_responses_[agent_id] = false;
         }
     }
@@ -1502,11 +1551,11 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
         ORCH_LOG("Orchestrator: Converted decimal address to hex: %s\n", hex_stream.str().c_str());
     }
 
-    // Send manual tool execution to each agent
-    for (const std::string& agent_id: agents) {
+    // Send manual tool execution only to alive agents
+    for (const std::string& agent_id: alive_agents) {
         std::string params_str = parameters.dump();
         std::string message = "MANUAL_TOOL_EXEC|" + agent_id + "|" + tool_name + "|" + params_str;
-        
+
         if (irc_client_) {
             irc_client_->send_message(channel, message);
             ORCH_LOG("Orchestrator: Sent manual tool exec to %s\n", agent_id.c_str());
@@ -1580,12 +1629,18 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
     if (address != 0) {
         // Give a moment for database writes to complete
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        bool verified = verify_consensus_applied(agents, address);
-        if (verified) {
-            ORCH_LOG("Orchestrator: Consensus enforcement verified successfully\n");
+
+        // Only verify if we have alive agents - if some agents died, skip verification
+        if (alive_agents.size() < agents.size()) {
+            ORCH_LOG("Orchestrator: Some agents died (%zu alive of %zu total), skipping verification\n",
+                alive_agents.size(), agents.size());
         } else {
-            ORCH_LOG("Orchestrator: WARNING - Consensus enforcement verification failed\n");
+            bool verified = verify_consensus_applied(alive_agents, address);
+            if (verified) {
+                ORCH_LOG("Orchestrator: Consensus enforcement verified successfully\n");
+            } else {
+                ORCH_LOG("Orchestrator: WARNING - Consensus enforcement verification failed\n");
+            }
         }
     }
 }
