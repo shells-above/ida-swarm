@@ -1,0 +1,79 @@
+---
+title: IDA Swarm - Agent Conversation Loop
+---
+graph TB
+    start(["Agent spawned<br/>with task"])
+
+    loop_start{{"🔄 CONVERSATION LOOP"}}
+
+    claude["Claude API<br/>thinking + text + tools"]
+
+    has_tools{"Tool<br/>calls?"}
+
+    subgraph tool_processing["Tool Processing"]
+        is_write{"Write<br/>op?"}
+
+        check_tracker["Check ToolCallTracker"]
+
+        conflict{"Conflict?"}
+
+        irc_debate["IRC debate<br/>→ consensus"]
+
+        execute["Execute tool"]
+
+        record["Record to<br/>ToolCallTracker"]
+    end
+
+    grader{"Grader<br/>enabled?"}
+
+    grade["Grade analysis"]
+
+    pass{"Complete?"}
+
+    feedback["Send grader questions<br/>back to agent"]
+
+    complete["✅ Complete"]
+
+    %% Main flow
+    start --> loop_start
+    loop_start --> claude
+    claude --> has_tools
+
+    %% Tool path - continues loop
+    has_tools -->|"Yes"| is_write
+    is_write -->|"No"| execute
+    is_write -->|"Yes"| check_tracker
+    check_tracker --> conflict
+    conflict -->|"Yes"| irc_debate
+    conflict -->|"No"| execute
+    irc_debate --> execute
+    execute --> record
+    record --> loop_start
+
+    %% No tools = agent is done
+    has_tools -->|"No<br/>(Agent done)"| grader
+
+    %% Grader path
+    grader -->|"Yes"| grade
+    grader -->|"No"| complete
+    grade --> pass
+    pass -->|"Yes"| complete
+    pass -->|"No"| feedback
+    feedback --> loop_start
+
+    %% Styling
+    classDef startStyle fill:#E8F4F8,stroke:#3498DB,stroke-width:3px
+    classDef loopStyle fill:#FCF3CF,stroke:#F39C12,stroke-width:3px
+    classDef claudeStyle fill:#E8DAEF,stroke:#8E44AD,stroke-width:2px
+    classDef toolStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:2px
+    classDef conflictStyle fill:#FADBD8,stroke:#E74C3C,stroke-width:3px
+    classDef decisionStyle fill:#D5E8F7,stroke:#2980B9,stroke-width:2px
+    classDef completeStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:3px
+
+    class start startStyle
+    class loop_start loopStyle
+    class claude,grade,feedback claudeStyle
+    class execute,record toolStyle
+    class check_tracker,conflict,irc_debate conflictStyle
+    class has_tools,is_write,grader,pass decisionStyle
+    class complete completeStyle

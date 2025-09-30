@@ -431,33 +431,14 @@ What's your next step to complete the reversal?)";
             }
             
             // Pass the shared_ptr so all clients share the same credentials
+            // Also pass oauth_manager_ so Client can handle token refresh automatically
             std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
-            return claude::Client(oauth_creds, config.api.base_url, log_filename);
+            return claude::Client(oauth_creds, oauth_manager_, config.api.base_url, log_filename);
         }
         
         // Default to API key with log filename configured
         std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
         return claude::Client(config.api.api_key, config.api.base_url, log_filename);
-    }
-    
-    // Refresh OAuth tokens and update API client
-    bool refresh_oauth_credentials() {
-        if (!oauth_manager_ || config_.api.auth_method != claude::AuthMethod::OAUTH) {
-            return false;
-        }
-        
-        auto refreshed_creds = oauth_manager_->force_refresh();
-        if (!refreshed_creds) {
-            emit_log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
-            return false;
-        }
-        
-        // Update the API client with the shared credentials pointer
-        // Note: The credentials are already updated in-place by force_refresh, 
-        // but we set it again to be explicit
-        api_client_.set_oauth_credentials(refreshed_creds);
-        emit_log(LogLevel::INFO, "Successfully refreshed OAuth token");
-        return true;
     }
 
 public:
@@ -1313,23 +1294,8 @@ private:
                 continue;  // Loop will create consolidation request next iteration
             }
 
-            // Send request with retry on OAuth expiry
+            // Send request - Client now handles OAuth token refresh automatically
             claude::ChatResponse response = api_client_.send_request(current_request);
-
-            // Check for OAuth token expiry (401 authentication error)
-            if (!response.success && response.error && 
-                response.error->find("OAuth token has expired") != std::string::npos) {
-                
-                emit_log(LogLevel::INFO, "OAuth token expired, attempting to refresh...");
-                
-                if (refresh_oauth_credentials()) {
-                    // Retry the request with refreshed credentials
-                    emit_log(LogLevel::INFO, "Retrying request with refreshed OAuth token...");
-                    response = api_client_.send_request(current_request);
-                } else {
-                    emit_log(LogLevel::ERROR, "Failed to refresh OAuth token");
-                }
-            }
 
             if (!response.success) {
                 handle_api_error(response);

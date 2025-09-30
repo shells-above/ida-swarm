@@ -8,6 +8,7 @@
 #include "../common.h"
 #include "../messages/types.h"
 #include "../tools/registry.h"
+#include "../auth/oauth_manager.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -564,28 +565,14 @@ struct ApiError {
     }
 };
 
-// OAuth credentials structure
-struct OAuthCredentials {
-    std::string access_token;
-    std::string refresh_token;
-    double expires_at = 0;  // Unix timestamp
-    std::string account_uuid;
-    
-    bool is_expired(int buffer_seconds = 300) const {
-        auto now = std::chrono::system_clock::now();
-        auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
-            now.time_since_epoch()).count();
-        return now_timestamp + buffer_seconds >= expires_at;
-    }
-};
-
 // Clean API client
 class Client {
     // Authentication
     AuthMethod auth_method = AuthMethod::API_KEY;
     std::string api_key;
     std::shared_ptr<OAuthCredentials> oauth_creds;
-    
+    std::shared_ptr<auth::OAuthManager> oauth_manager_;
+
     std::string api_url = "https://api.anthropic.com/v1/messages";
     std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/)
     bool first_log_write = true;  // Track if this is the first write to clear the log file
@@ -653,6 +640,36 @@ class Client {
         }
     }
 
+    // Attempt to refresh OAuth token if manager is available
+    // Returns true if refresh succeeded or wasn't needed, false if refresh failed
+    bool refresh_oauth_token_if_needed() {
+        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH) {
+            return true; // Not using OAuth or no manager, no refresh needed
+        }
+
+        // Try to reload from disk first (another process may have refreshed)
+        oauth_manager_->clear_cache();
+        auto reloaded_creds = oauth_manager_->get_credentials();
+
+        if (reloaded_creds && !reloaded_creds->is_expired(300)) {
+            // Successfully reloaded fresh credentials from disk
+            oauth_creds = reloaded_creds;
+            log(LogLevel::INFO, "Reloaded fresh OAuth credentials from disk");
+            return true;
+        }
+
+        // Need to force refresh via API
+        auto refreshed_creds = oauth_manager_->force_refresh();
+        if (!refreshed_creds) {
+            log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
+            return false;
+        }
+
+        oauth_creds = refreshed_creds;
+        log(LogLevel::INFO, "Successfully refreshed OAuth token via API");
+        return true;
+    }
+
     // Helper to sanitize logs
     json sanitize_for_logging(const json& j, int max_depth = 3) const {
         if (max_depth <= 0) return "[truncated]";
@@ -698,10 +715,13 @@ public:
         : auth_method(AuthMethod::API_KEY), api_key(key), api_url(base_url) {
         request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
     }
-    
+
     // Constructor for OAuth authentication
-    Client(std::shared_ptr<OAuthCredentials> creds, const std::string& base_url = "https://api.anthropic.com/v1/messages", const std::string& log_filename = "")
-        : auth_method(AuthMethod::OAUTH), oauth_creds(creds), api_url(base_url) {
+    Client(std::shared_ptr<OAuthCredentials> creds,
+           std::shared_ptr<auth::OAuthManager> oauth_mgr = nullptr,
+           const std::string& base_url = "https://api.anthropic.com/v1/messages",
+           const std::string& log_filename = "")
+        : auth_method(AuthMethod::OAUTH), oauth_creds(creds), oauth_manager_(oauth_mgr), api_url(base_url) {
         request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
     }
 
@@ -713,12 +733,16 @@ public:
         auth_method = AuthMethod::API_KEY;
         api_key = key;
     }
-    
+
     void set_oauth_credentials(std::shared_ptr<OAuthCredentials> creds) {
         auth_method = AuthMethod::OAUTH;
         oauth_creds = creds;
     }
-    
+
+    void set_oauth_manager(std::shared_ptr<auth::OAuthManager> oauth_mgr) {
+        oauth_manager_ = oauth_mgr;
+    }
+
     AuthMethod get_auth_method() const {
         return auth_method;
     }
@@ -747,28 +771,69 @@ public:
     ChatResponse send_request_with_retry(ChatRequest request) {
         const int MAX_RETRIES = 5;
         const int BASE_DELAY_MS = 1000;  // Start with 1 second
-        
+
+        // Before sending request, check if OAuth token is expired and refresh if needed
+        if (oauth_manager_ && auth_method == AuthMethod::OAUTH && oauth_creds) {
+            if (oauth_creds->is_expired(300)) {
+                log(LogLevel::INFO, "OAuth token is expired, refreshing before request...");
+                if (!refresh_oauth_token_if_needed()) {
+                    ChatResponse failed_response;
+                    failed_response.success = false;
+                    failed_response.error = "Failed to refresh expired OAuth token before request";
+                    return failed_response;
+                }
+            }
+        }
+
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             ChatResponse response = send_request_internal(request);
-            
-            // Success or non-recoverable error - return immediately
-            if (response.success || !is_recoverable_error(response)) {
+
+            // Success - return immediately
+            if (response.success) {
                 return response;
             }
-            
+
+            // Check if this is an OAuth authentication error
+            bool is_oauth_error = false;
+            if (response.error) {
+                const std::string& error_msg = *response.error;
+                is_oauth_error = (error_msg.find("401") != std::string::npos ||
+                                  error_msg.find("unauthorized") != std::string::npos ||
+                                  error_msg.find("revoked") != std::string::npos ||
+                                  error_msg.find("expired") != std::string::npos);
+            }
+
+            // If OAuth error, try to refresh token and retry immediately (no delay)
+            if (is_oauth_error && oauth_manager_) {
+                log(LogLevel::WARNING, "OAuth authentication error detected, attempting token refresh...");
+                if (refresh_oauth_token_if_needed()) {
+                    log(LogLevel::INFO, "Token refreshed, retrying request immediately...");
+                    // Don't increment attempt counter for OAuth errors - they should retry immediately
+                    continue;
+                } else {
+                    log(LogLevel::ERROR, "Failed to refresh OAuth token, cannot retry");
+                    return response; // Return the error
+                }
+            }
+
+            // Check if this is a different recoverable error
+            if (!is_recoverable_error(response)) {
+                return response; // Non-recoverable error
+            }
+
             // Check if we've exhausted retries
             if (attempt == MAX_RETRIES) {
                 log(LogLevel::ERROR, std::format("Max retries ({}) reached for API request", MAX_RETRIES));
                 return response;
             }
-            
-            // Recoverable error - prepare for retry
+
+            // Recoverable error (rate limit, server error, etc.) - prepare for retry with backoff
             ApiError api_error = ApiError::from_response(
                 response.error.value_or("Unknown error"),
                 0,  // status_code is already embedded in the error
                 {}
             );
-            
+
             // Calculate delay with exponential backoff
             int delay_ms = BASE_DELAY_MS * (1 << attempt);  // 1s, 2s, 4s, 8s, 16s
 
@@ -777,16 +842,16 @@ public:
             if (api_error.retry_after_seconds.has_value()) {
                 delay_ms = api_error.retry_after_seconds.value() * 1000;
             }
-            
+
             log(LogLevel::WARNING, std::format(
                 "Retrying request (attempt {}/{}) after {} ms due to: {}",
                 attempt + 1, MAX_RETRIES, delay_ms, response.error.value_or("Unknown error")
             ));
-            
+
             // Sleep before retry
             std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
-        
+
         // Should not reach here, but return a failed response just in case
         ChatResponse failed_response;
         failed_response.success = false;

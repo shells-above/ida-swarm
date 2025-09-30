@@ -1,0 +1,107 @@
+---
+title: IDA Swarm - Patch Replication System
+---
+graph TB
+    subgraph agent2["Agent 2 (Analyzing)"]
+        a2_work["Working independently<br/>analyzing functions"]
+        a2_decision["AI Decision: Need to patch<br/>address 0x4500"]
+        a2_validate["Validation:<br/>• Address valid?<br/>• Instruction boundary?<br/>• Original bytes match?"]
+        a2_asm["Keystone Assembler:<br/>Compile new assembly"]
+        a2_patch["Apply Dual Patch"]
+        a2_db[("Agent 2<br/>IDA Database")]
+        a2_bin[("Agent 2<br/>Binary File")]
+        a2_record["Record in ToolCallTracker<br/>(Shared SQLite DB)"]
+    end
+
+    subgraph tracker["ToolCallTracker"]
+        tracker_db[("SQLite DB<br/>All Tool Calls")]
+        monitor["Monitoring Thread<br/>Polls for new writes"]
+    end
+
+    subgraph orchestrator["Orchestrator"]
+        orch_detect["Detects new patch tool call"]
+        orch_check["Is it a patch tool?<br/>(patch_bytes,<br/>patch_assembly, etc)"]
+        orch_broadcast["Broadcast via IRC:<br/>PATCH|patch_assembly|agent_2|0x4500|{params}"]
+    end
+
+    subgraph irc["IRC Server"]
+        irc_dist["Distributes to<br/>all agent channels"]
+    end
+
+    subgraph agent1["Agent 1 (Receives)"]
+        a1_receive["Receives PATCH message"]
+        a1_parse["Parse:<br/>• tool: patch_assembly<br/>• address: 0x4500<br/>• params: {...}"]
+        a1_apply["Apply same patch"]
+        a1_db[("Agent 1<br/>IDA Database")]
+        a1_bin[("Agent 1<br/>Binary File")]
+    end
+
+    subgraph agentN["Agent N (Receives)"]
+        aN_receive["Receives PATCH message"]
+        aN_parse["Parse patch details"]
+        aN_apply["Apply same patch"]
+        aN_db[("Agent N<br/>IDA Database")]
+        aN_bin[("Agent N<br/>Binary File")]
+    end
+
+    subgraph result["Result"]
+        sync["✅ All agents have<br/>identical binaries<br/>and IDA databases"]
+    end
+
+    %% Agent 2 flow
+    a2_work --> a2_decision
+    a2_decision --> a2_validate
+    a2_validate -->|"Assembly patch"| a2_asm
+    a2_asm --> a2_patch
+    a2_validate -->|"Byte patch"| a2_patch
+    a2_patch --> a2_db
+    a2_patch --> a2_bin
+    a2_patch --> a2_record
+    a2_record --> tracker_db
+
+    %% Monitoring flow
+    monitor -.->|"polls"| tracker_db
+    monitor -->|"new patch found"| orch_detect
+
+    %% Orchestrator flow
+    orch_detect --> orch_check
+    orch_check -->|"YES"| orch_broadcast
+    orch_broadcast --> irc_dist
+
+    %% Distribution
+    irc_dist --> a1_receive
+    irc_dist --> aN_receive
+
+    %% Agent 1 flow
+    a1_receive --> a1_parse
+    a1_parse --> a1_apply
+    a1_apply --> a1_db
+    a1_apply --> a1_bin
+
+    %% Agent N flow
+    aN_receive --> aN_parse
+    aN_parse --> aN_apply
+    aN_apply --> aN_db
+    aN_apply --> aN_bin
+
+    %% Result
+    a1_bin --> sync
+    aN_bin --> sync
+    a2_bin --> sync
+
+    %% Styling
+    classDef agentStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:2px
+    classDef orchStyle fill:#D5E8F7,stroke:#2980B9,stroke-width:2px
+    classDef ircStyle fill:#FFF4E6,stroke:#F39C12,stroke-width:2px
+    classDef storageStyle fill:#E8DAEF,stroke:#8E44AD,stroke-width:2px
+    classDef successStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:3px
+    classDef trackerStyle fill:#FCF3CF,stroke:#F39C12,stroke-width:3px
+
+    class a2_work,a2_decision,a2_validate,a2_asm,a2_patch,a2_record agentStyle
+    class a1_receive,a1_parse,a1_apply agentStyle
+    class aN_receive,aN_parse,aN_apply agentStyle
+    class orch_detect,orch_check,orch_broadcast,orchestrator orchStyle
+    class irc_dist,irc ircStyle
+    class a1_db,a1_bin,a2_db,a2_bin,aN_db,aN_bin storageStyle
+    class sync,result successStyle
+    class tracker_db,monitor,tracker trackerStyle

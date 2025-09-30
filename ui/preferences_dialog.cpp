@@ -834,7 +834,7 @@ void PreferencesDialog::onTestAPIConnection() {
                 return;
             }
             
-            client = std::make_unique<claude::Client>(oauthCreds, baseUrl);
+            client = std::make_unique<claude::Client>(oauthCreds, nullptr, baseUrl);
         }
         
         // Create a simple test message

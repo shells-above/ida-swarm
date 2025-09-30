@@ -1,0 +1,76 @@
+---
+title: IDA Swarm - Typical Analysis Flow
+---
+sequenceDiagram
+    actor User
+    participant Orch as Orchestrator
+    participant Claude as Claude API
+    participant DB as Database Manager
+    participant IRC as IRC Server
+    participant A1 as Agent 1
+    participant A2 as Agent 2
+    participant Merge as Merge Manager
+    participant Tracker as ToolCallTracker
+    participant MainDB as Main IDA DB
+
+    User->>Orch: "Find all network functions<br/>and patch DNS resolution"
+
+    Note over Orch: Deep thinking:<br/>Decompose task
+
+    Orch->>Claude: What's the best approach?
+    Claude-->>Orch: Spawn 2 agents:<br/>1) Find network functions<br/>2) Analyze DNS code
+
+    Orch->>DB: Create database copies
+    DB-->>Orch: agent_1.i64, agent_2.i64
+
+    par Spawn Agents
+        Orch->>A1: Task: "Find all network<br/>functions (socket, connect, etc)"
+        Orch->>A2: Task: "Locate DNS resolution<br/>functions (getaddrinfo, etc)"
+    end
+
+    Note over A1,A2: Agents work INDEPENDENTLY<br/>on isolated DB copies<br/>No inter-agent communication
+
+    par Agent Analysis
+        loop Analysis Loop
+            A1->>Claude: How to find network functions?
+            Claude-->>A1: Use cross-references,<br/>string searches
+            A1->>A1: Execute tools:<br/>• search_strings<br/>• analyze_function<br/>• get_xrefs
+        end
+
+        loop Analysis Loop
+            A2->>Claude: How to locate DNS code?
+            Claude-->>A2: Search for DNS strings,<br/>analyze getaddrinfo callers
+            A2->>A2: Execute tools:<br/>• search_strings<br/>• analyze_function<br/>• decompile
+        end
+    end
+
+    Note over A2,IRC: Agent patches trigger<br/>IRC broadcast
+
+    A2->>A2: Decision: Need to patch<br/>getaddrinfo() at 0x4500
+    A2->>A2: Apply dual patch:<br/>• IDA DB<br/>• Binary file
+    A2->>IRC: BROADCAST PATCH 0x4500:<br/>jmp my_dns_resolver
+    Note over IRC: If conflict detected,<br/>creates debate channel
+    IRC-->>A1: [Patch replicated]
+    A1->>A1: Apply patch to my copy
+
+    Note over A1,A2: Agents complete independently
+
+    A1->>Orch: COMPLETE: Found 8 network<br/>functions [details]
+    A2->>Orch: COMPLETE: Patched DNS at<br/>0x4500 to use custom resolver
+
+    Note over Orch: Waits for all agents
+
+    Orch->>Merge: Merge agent findings
+    Merge->>Tracker: Get agent_1 tool calls
+    Tracker-->>Merge: List of write operations
+    Merge->>MainDB: Execute agent_1 tools
+    Merge->>Tracker: Get agent_2 tool calls
+    Tracker-->>Merge: List of write operations
+    Merge->>MainDB: Execute agent_2 tools
+    Note over MainDB: All changes merged
+
+    Note over Orch: Synthesize results
+    Orch->>Claude: Summarize agent findings
+    Claude-->>Orch: Combined report
+
+    Orch-->>User: ✅ Analysis complete!<br/><br/>Found 8 network functions:<br/>• socket() at 0x4200<br/>• connect() at 0x4250<br/>...<br/><br/>Patched DNS resolution:<br/>• getaddrinfo() at 0x4500<br/>  → jumps to custom resolver

@@ -166,9 +166,6 @@ private:
     
     // Port allocation for IRC server
     int allocate_unique_port();
-    
-    // OAuth token management
-    bool refresh_oauth_if_needed();
 
     // Real-time tool call monitoring
     void handle_tool_call_event(const AgentEvent& event);

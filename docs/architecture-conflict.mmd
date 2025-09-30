@@ -1,0 +1,94 @@
+---
+title: IDA Swarm - Conflict Detection & Resolution
+---
+graph TB
+    subgraph agent_a["Agent A"]
+        a1["AI decides:<br/>set_name('func', 0x1000)"]
+        a2["Before execution:<br/>Check ToolCallTracker"]
+        a3["Query: Any writes<br/>at 0x1000?"]
+    end
+
+    subgraph tracker["ToolCallTracker (SQLite)"]
+        db[("All Tool Calls<br/>from All Agents")]
+        query["SELECT * WHERE<br/>address=0x1000<br/>AND is_write=true"]
+    end
+
+    subgraph agent_b_past["Agent B (Earlier)"]
+        b_past["Already called:<br/>set_name('handler', 0x1000)"]
+    end
+
+    subgraph conflict_detect["Conflict Detected!"]
+        conflict["⚠️ CONFLICT<br/>Same address<br/>Same tool type<br/>Different params"]
+    end
+
+    subgraph irc_setup["IRC Channel Creation"]
+        create_chan["Agent A creates:<br/>#conflict_0x1000_set_name_{timestamp}"]
+        join_a["Agent A joins channel"]
+        notify_b["IRC notifies Agent B<br/>via orchestrator monitoring"]
+        join_b["Agent B joins channel"]
+    end
+
+    subgraph debate["Debate Phase"]
+        a_msg1["Agent A: I want 'func'<br/>because it's a callback<br/>function for event handling"]
+        b_msg1["Agent B: I analyzed xrefs,<br/>it's an error handler,<br/>should be 'handler'"]
+        a_msg2["Agent A: Looking at callers,<br/>you're right, it handles errors"]
+        b_msg2["Agent B: Agreed. Let's use<br/>'error_handler' as compromise"]
+        consensus["Both: MARKED_CONSENSUS<br/>set_name('error_handler', 0x1000)"]
+    end
+
+    subgraph orchestrator["Orchestrator"]
+        monitor["Monitors all IRC channels"]
+        extract["Extracts consensus:<br/>tool=set_name<br/>params={'name':'error_handler',<br/>'address':0x1000}"]
+        enforce["Enforces on ALL agents"]
+    end
+
+    subgraph execution["Consensus Execution"]
+        exec_a["Execute on Agent A"]
+        exec_b["Execute on Agent B"]
+        exec_n["Execute on Agent N"]
+        record["All agents record<br/>in ToolCallTracker"]
+    end
+
+    %% Flow
+    a1 --> a2
+    a2 --> a3
+    a3 -->|"query"| query
+    query --> db
+    b_past -.->|"previously recorded"| db
+    db -->|"found existing!"| conflict
+    conflict --> create_chan
+    create_chan --> join_a
+    join_a --> notify_b
+    notify_b --> join_b
+
+    join_a --> a_msg1
+    join_b --> b_msg1
+    a_msg1 --> b_msg1
+    b_msg1 --> a_msg2
+    a_msg2 --> b_msg2
+    b_msg2 --> consensus
+
+    consensus --> monitor
+    monitor --> extract
+    extract --> enforce
+    enforce --> exec_a
+    enforce --> exec_b
+    enforce --> exec_n
+    exec_a --> record
+    exec_b --> record
+    exec_n --> record
+
+    %% Styling
+    classDef agentStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:2px
+    classDef conflictStyle fill:#FADBD8,stroke:#E74C3C,stroke-width:3px
+    classDef ircStyle fill:#FFF4E6,stroke:#F39C12,stroke-width:2px
+    classDef orchStyle fill:#D5E8F7,stroke:#2980B9,stroke-width:2px
+    classDef dbStyle fill:#E8DAEF,stroke:#8E44AD,stroke-width:2px
+    classDef successStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:3px
+
+    class a1,a2,a3,b_past agentStyle
+    class conflict,conflict_detect conflictStyle
+    class create_chan,join_a,notify_b,join_b,a_msg1,b_msg1,a_msg2,b_msg2,consensus,debate ircStyle
+    class monitor,extract,enforce,orchestrator orchStyle
+    class db,query,tracker dbStyle
+    class exec_a,exec_b,exec_n,record,execution successStyle

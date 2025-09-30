@@ -157,8 +157,7 @@ Think deeply. Derive your standards. Don't apply predetermined rules.)";
     GradeResult parse_grader_response(const claude::messages::Message& response) const;
     claude::messages::Message create_grading_request(const GradingContext& context) const;
     bool classify_completion(const std::string& grader_response) const;
-    bool refresh_oauth_credentials() const;  // Refresh OAuth tokens when expired
-    
+
     // Token estimation and pruning (using shared TokenUtils)
     struct MessagePriority {
         const claude::messages::Message* message;

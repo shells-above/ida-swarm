@@ -90,8 +90,8 @@ IDA Swarm is a research and educational tool that extends IDA Pro's capabilities
 - **Orchestrator**: Central coordinator with two interface modes:
    - **Native mode** (default): Qt dialog interface directly within IDA Pro
    - **MCP mode** (optional): External control via MCP server, still spawns visible IDA instances
-- **AI Agents**: Specialized IDA instances performing focused analysis tasks
-- **IRC Server**: Inter-agent communication (WIP) and conflict resolution
+- **AI Agents**: Specialized IDA instances performing focused analysis tasks independently
+- **IRC Server**: Patch replication and conflict resolution (agents work independently, IRC only for conflicts)
 - **MCP Server** (optional): Enables external tool integration (Claude, etc.)
 - **Tool System**: Comprehensive IDA Pro operation framework
 - **Patching Engine**: Multi-architecture binary modification with Keystone
@@ -179,11 +179,11 @@ Edit with your API key:
 
 ## Key Features
 
-### Multi-Agent Collaboration
+### Multi-Agent Parallel Analysis
 - Orchestrator spawns agents for different analysis aspects
-- Agents work in parallel on isolated database copies
-- IRC-based communication for real-time collaboration (WIP)
-- Automatic conflict resolution through consensus mechanisms
+- **Agents work independently** in parallel on isolated database copies
+- No direct inter-agent communication during analysis
+- Automatic conflict resolution through IRC debate when patch conflicts occur
 
 ### Binary Patching System
 - **Assembly and byte-level patching** with multi-architecture support via Keystone
