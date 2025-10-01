@@ -276,36 +276,55 @@ bool SessionManager::close_session(const std::string& session_id) {
 }
 
 void SessionManager::close_all_sessions() {
+    std::vector<Session*> sessions_to_close;
+
+    // First pass: mark all sessions as inactive and collect pointers
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        for (auto& [session_id, session] : sessions_) {
+            session->active = false;  // Reject new operations
+            sessions_to_close.push_back(session.get());
+        }
+    } // Release sessions_mutex_
+
+    // Second pass: wait for all active operations to complete
+    for (Session* session : sessions_to_close) {
+        std::unique_lock<std::mutex> usage_lock(session->usage_mutex);
+        session->usage_cv.wait(usage_lock, [session]() {
+            return session->usage_count == 0;
+        });
+    }
+    std::cerr << "MCP Server: All active operations completed for all sessions" << std::endl;
+
+    // Third pass: acquire lock and do the actual cleanup
     std::lock_guard<std::mutex> lock(sessions_mutex_);
 
     for (auto& [session_id, session] : sessions_) {
-        if (session->active) {
-            // Send shutdown message
-            json shutdown_msg;
-            shutdown_msg["type"] = "request";
-            shutdown_msg["id"] = "shutdown_all";
-            shutdown_msg["method"] = "shutdown";
+        // Send shutdown message
+        json shutdown_msg;
+        shutdown_msg["type"] = "request";
+        shutdown_msg["id"] = "shutdown_all";
+        shutdown_msg["method"] = "shutdown";
 
-            send_json_to_orchestrator(session->input_fd, shutdown_msg);
+        send_json_to_orchestrator(session->input_fd, shutdown_msg);
 
-            // Stop reader thread
-            session->reader_should_stop = true;
-            if (session->reader_thread && session->reader_thread->joinable()) {
-                session->reader_thread->join();
-            }
-
-            // Kill process
-            if (is_orchestrator_alive(session->orchestrator_pid)) {
-                kill_orchestrator(session->orchestrator_pid);
-            }
-
-            // Close FDs
-            if (session->input_fd >= 0) close(session->input_fd);
-            if (session->output_fd >= 0) close(session->output_fd);
-
-            // Cleanup pipes
-            cleanup_pipes(session_id);
+        // Stop reader thread
+        session->reader_should_stop = true;
+        if (session->reader_thread && session->reader_thread->joinable()) {
+            session->reader_thread->join();
         }
+
+        // Kill process
+        if (is_orchestrator_alive(session->orchestrator_pid)) {
+            kill_orchestrator(session->orchestrator_pid);
+        }
+
+        // Close FDs
+        if (session->input_fd >= 0) close(session->input_fd);
+        if (session->output_fd >= 0) close(session->output_fd);
+
+        // Cleanup pipes
+        cleanup_pipes(session_id);
     }
 
     sessions_.clear();
