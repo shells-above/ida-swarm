@@ -401,8 +401,13 @@ json Orchestrator::process_mcp_request(const json& request) {
         processing_thread.join();
 
         // Prepare response with final result
+        size_t completed_count;
+        {
+            std::lock_guard<std::mutex> lock(agent_state_mutex_);
+            completed_count = completed_agents_.size();
+        }
         response["result"]["content"] = last_response_text_;
-        response["result"]["agents_active"] = agents_.size() - completed_agents_.size();
+        response["result"]["agents_active"] = agents_.size() - completed_count;
 
     } else if (method == "shutdown") {
         ORCH_LOG("Orchestrator: Received shutdown request\n");
@@ -423,11 +428,14 @@ void Orchestrator::clear_conversation() {
     
     // Clear conversation history
     conversation_history_.clear();
-    
+
     // Clear any completed agents and results
-    completed_agents_.clear();
-    agent_results_.clear();
-    
+    {
+        std::lock_guard<std::mutex> lock(agent_state_mutex_);
+        completed_agents_.clear();
+        agent_results_.clear();
+    }
+
     // Reset token stats
     token_stats_.reset();
     
@@ -469,11 +477,14 @@ void Orchestrator::process_user_input(const std::string& input) {
     } else {
         // New conversation - clear everything and start fresh
         current_user_task_ = input;
-        
+
         // Clear any completed agents and results from previous tasks
-        completed_agents_.clear();
-        agent_results_.clear();
-        
+        {
+            std::lock_guard<std::mutex> lock(agent_state_mutex_);
+            completed_agents_.clear();
+            agent_results_.clear();
+        }
+
         // Reset token stats for new task
         token_stats_.reset();
         
@@ -909,6 +920,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
 }
 
 std::string Orchestrator::get_agent_result(const std::string& agent_id) const {
+    std::lock_guard<std::mutex> lock(agent_state_mutex_);
     auto it = agent_results_.find(agent_id);
     if (it != agent_results_.end()) {
         return it->second;
@@ -970,28 +982,37 @@ YOUR TASK: )" + task + R"(
 CONTEXT: )" + context;
 
     // Get list of currently active agents with their tasks
+    // Make a copy of completed agents and results under lock to avoid data races
+    std::set<std::string> completed_copy;
+    std::map<std::string, std::string> results_copy;
+    {
+        std::lock_guard<std::mutex> lock(agent_state_mutex_);
+        completed_copy = completed_agents_;
+        results_copy = agent_results_;
+    }
+
     std::vector<std::pair<std::string, std::string>> active_agents;
     for (const auto& [id, info] : agents_) {
         // Check if agent hasn't completed yet (using IRC tracking to avoid hanging on zombies)
-        if (completed_agents_.count(id) == 0) {
+        if (completed_copy.count(id) == 0) {
             active_agents.push_back({id, info.task});
         }
     }
-    
+
     // Add completed agents with their results
     // i do not want to do this, but the orchestrator is not good at understanding that these are starting fresh, and it doesn't provide enough information.
     // if agent collaboration was working better that would solve this, but the agents just go and waste eachothers time so i had to remove it
     // in the future ill redesign all of this (currently super hodgepodge) focused around irc from the get go
-    if (!completed_agents_.empty()) {
+    if (!completed_copy.empty()) {
         prompt += R"(
 
 COMPLETED AGENTS & THEIR RESULTS:
 )";
-        for (const std::string& agent_id : completed_agents_) {
+        for (const std::string& agent_id : completed_copy) {
             auto agent_it = agents_.find(agent_id);
-            auto result_it = agent_results_.find(agent_id);
-            
-            if (agent_it != agents_.end() && result_it != agent_results_.end()) {
+            auto result_it = results_copy.find(agent_id);
+
+            if (agent_it != agents_.end() && result_it != results_copy.end()) {
                 prompt += "- " + agent_id + " (task: " + agent_it->second.task + ")\n";
                 prompt += "  Result: " + result_it->second + "\n\n";
             }
@@ -1003,7 +1024,7 @@ COMPLETED AGENTS & THEIR RESULTS:
 
 )";
     }
-    
+
     if (!active_agents.empty()) {
         prompt += R"(CURRENTLY ACTIVE AGENTS:
 )";
@@ -1015,7 +1036,7 @@ You can see what each agent is working on above. Use this information to:
 - Share relevant findings with agents working on related tasks
 - Coordinate when your tasks overlap or depend on each other
 )";
-    } else if (completed_agents_.empty()) {
+    } else if (completed_copy.empty()) {
         prompt += R"(
 
 You are currently the only active agent.
@@ -1109,8 +1130,12 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
         // Check each agent for completion
         for (const std::string& agent_id : agent_ids) {
             // Check if agent sent IRC completion message
-            bool has_irc_result = (completed_agents_.count(agent_id) > 0);
-            
+            bool has_irc_result;
+            {
+                std::lock_guard<std::mutex> lock(agent_state_mutex_);
+                has_irc_result = (completed_agents_.count(agent_id) > 0);
+            }
+
             // Check if agent process has exited
             bool process_exited = false;
             auto agent_it = agents_.find(agent_id);
@@ -1121,25 +1146,33 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
                     ORCH_LOG("Orchestrator: Agent %s process %d has exited\n", agent_id.c_str(), pid);
                 }
             }
-            
+
             // Consider agent done if EITHER condition is met
             if (has_irc_result || process_exited) {
                 agents_done.insert(agent_id);
-                
+
                 // If process exited but no IRC message, mark as completed with default message
                 if (process_exited && !has_irc_result) {
                     ORCH_LOG("Orchestrator: Agent %s exited without sending result, marking as completed\n", agent_id.c_str());
-                    completed_agents_.insert(agent_id);
-                    agent_results_[agent_id] = "Agent process terminated without sending final report";
-                    
+                    {
+                        std::lock_guard<std::mutex> lock(agent_state_mutex_);
+                        completed_agents_.insert(agent_id);
+                        agent_results_[agent_id] = "Agent process terminated without sending final report";
+                    }
+
                     // Emit task complete event for UI updates
                     event_bus_.publish(AgentEvent(AgentEvent::TASK_COMPLETE, agent_id, {}));
                 }
             }
         }
-        
-        ORCH_LOG("Orchestrator: Check #%d - %zu/%zu agents completed (IRC: %zu)\n", 
-            ++check_count, agents_done.size(), agent_ids.size(), completed_agents_.size());
+
+        size_t completed_count;
+        {
+            std::lock_guard<std::mutex> lock(agent_state_mutex_);
+            completed_count = completed_agents_.size();
+        }
+        ORCH_LOG("Orchestrator: Check #%d - %zu/%zu agents completed (IRC: %zu)\n",
+            ++check_count, agents_done.size(), agent_ids.size(), completed_count);
         
         // Check if all requested agents have completed
         if (agents_done.size() >= agent_ids.size()) {
@@ -1196,7 +1229,17 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             auto agent_it = agents_.find(target_agent);
             if (agent_it != agents_.end()) {
                 // Agent exists - check if it's running or completed
-                if (completed_agents_.count(target_agent) > 0) {
+                bool was_completed;
+                {
+                    std::lock_guard<std::mutex> lock(agent_state_mutex_);
+                    was_completed = (completed_agents_.count(target_agent) > 0);
+                    if (was_completed) {
+                        // Remove from completed set since it's being resurrected
+                        completed_agents_.erase(target_agent);
+                    }
+                }
+
+                if (was_completed) {
                     // Agent has completed - resurrect it
                     ORCH_LOG("Orchestrator: Agent %s has completed, resurrecting for conflict resolution...\n", target_agent.c_str());
 
@@ -1208,10 +1251,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     {"conflict_channel", conflict_channel}
                 };
 
-                // Remove from completed set since it's being resurrected
-                completed_agents_.erase(target_agent);
-
-                // Resurrect the agent
+                // Resurrect the agent (no lock held during expensive operation)
                 int pid = agent_spawner_->resurrect_agent(target_agent, db_path, resurrection_config);
                 if (pid > 0) {
                     ORCH_LOG("Orchestrator: Successfully resurrected agent %s (PID %d)\n",
@@ -1226,7 +1266,10 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 } else {
                     ORCH_LOG("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
                     // Add back to completed since resurrection failed
-                    completed_agents_.insert(target_agent);
+                    {
+                        std::lock_guard<std::mutex> lock(agent_state_mutex_);
+                        completed_agents_.insert(target_agent);
+                    }
                 }
                 } else {
                     // Agent is still running - send CONFLICT_INVITE
@@ -1401,15 +1444,18 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 {"agent_id", agent_id},
                 {"result", report}
             }));
-            
-            // Store the result
-            agent_results_[agent_id] = report;
-            
-            // Mark agent as completed
-            completed_agents_.insert(agent_id);
+
+            // Store the result and mark agent as completed
+            size_t completed_count;
+            {
+                std::lock_guard<std::mutex> lock(agent_state_mutex_);
+                agent_results_[agent_id] = report;
+                completed_agents_.insert(agent_id);
+                completed_count = completed_agents_.size();
+            }
             ORCH_LOG("Orchestrator: Marked %s as completed (have %zu/%zu completions)\n",
-                agent_id.c_str(), completed_agents_.size(), agents_.size());
-            
+                agent_id.c_str(), completed_count, agents_.size());
+
             // Emit task complete event for UI updates
             event_bus_.publish(AgentEvent(AgentEvent::TASK_COMPLETE, agent_id, {}));
             

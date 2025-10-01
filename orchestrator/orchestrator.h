@@ -98,6 +98,7 @@ private:
     std::map<std::string, AgentInfo> agents_;
     std::set<std::string> completed_agents_;  // Track agents that have sent results
     std::map<std::string, std::string> agent_results_;  // Store agent results
+    mutable std::mutex agent_state_mutex_;  // Protects completed_agents_ and agent_results_
     int next_agent_id_ = 1;
     
     // State
