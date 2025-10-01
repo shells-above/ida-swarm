@@ -28,7 +28,7 @@ sequenceDiagram
         Orch->>A2: Task: "Locate DNS resolution<br/>functions (getaddrinfo, etc)"
     end
 
-    Note over A1,A2: Agents work INDEPENDENTLY<br/>on isolated DB copies<br/>No inter-agent communication
+    Note over A1,A2: Agents work on isolated DB copies<br/>IRC communication for conflicts & patch sync<br/>Orchestrator monitors ToolCallTracker for patches
 
     par Agent Analysis
         loop Analysis Loop
@@ -40,15 +40,16 @@ sequenceDiagram
         loop Analysis Loop
             A2->>Claude: How to locate DNS code?
             Claude-->>A2: Search for DNS strings,<br/>analyze getaddrinfo callers
-            A2->>A2: Execute tools:<br/>• search_strings<br/>• analyze_function<br/>• decompile
+            A2->>A2: Execute tools:<br/>• search_strings<br/>• analyze_function<br/>• get_xrefs
         end
     end
 
-    Note over A2,IRC: Agent patches trigger<br/>IRC broadcast
+    Note over A2,Tracker: Agent patches are<br/>detected by orchestrator<br/>via ToolCallTracker monitoring
 
     A2->>A2: Decision: Need to patch<br/>getaddrinfo() at 0x4500
-    A2->>A2: Apply dual patch:<br/>• IDA DB<br/>• Binary file
-    A2->>IRC: BROADCAST PATCH 0x4500:<br/>jmp my_dns_resolver
+    A2->>Tracker: Record patch tool call
+    Tracker->>Orch: Monitoring thread<br/>detects new patch
+    Orch->>IRC: BROADCAST PATCH 0x4500:<br/>jmp my_dns_resolver
     Note over IRC: If conflict detected,<br/>creates debate channel
     IRC-->>A1: [Patch replicated]
     A1->>A1: Apply patch to my copy

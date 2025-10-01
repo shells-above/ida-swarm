@@ -38,10 +38,21 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="fcd5b9e7-7154-4ed3-b83f-d79c43bc0dca" name="Changes" comment="removed keystone build log">
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/llvm/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/llvm/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/llvm/include/llvm/ADT/STLExtras.h" beforeDir="false" afterPath="$PROJECT_DIR$/build/keystone-build/src/keystone_external/llvm/include/llvm/ADT/STLExtras.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/architecture-conflict.mmd" beforeDir="false" afterPath="$PROJECT_DIR$/docs/architecture-conflict.mmd" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/architecture-main.mmd" beforeDir="false" afterPath="$PROJECT_DIR$/docs/architecture-main.mmd" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/architecture-sequence.mmd" beforeDir="false" afterPath="$PROJECT_DIR$/docs/architecture-sequence.mmd" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-agent.png" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-agent.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-agent.svg" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-agent.svg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-conflict.png" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-conflict.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-conflict.svg" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-conflict.svg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-main.png" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-main.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-main.svg" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-main.svg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-sequence.png" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-sequence.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/generated/architecture-sequence.svg" beforeDir="false" afterPath="$PROJECT_DIR$/docs/generated/architecture-sequence.svg" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -68,6 +79,10 @@
     &quot;accountId&quot;: &quot;566e73d7-bf8c-4461-b55e-d02d0a4fba52&quot;
   }
 }</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="mock:///Users/user/CLionProjects/ida-swarm/orchestrator/orchestrator.cpp" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Users/user/CLionProjects/ida-swarm/orchestrator/orchestrator.cpp" root0="SKIP_HIGHLIGHTING" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 1
 }</component>
@@ -76,23 +91,27 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;RunOnceActivity.RadMigrateCodeStyle&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.west.config.association.type.startup.service&quot;: &quot;true&quot;,
-    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
-    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/user/CLionProjects/ida-swarm&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.RadMigrateCodeStyle": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
+    "RunOnceActivity.west.config.association.type.startup.service": "true",
+    "cf.first.check.clang-format": "false",
+    "cidr.known.project.marker": "true",
+    "git-widget-placeholder": "main",
+    "last_opened_file_path": "/Users/user/CLionProjects/ida-swarm",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RunManager" selected="CMake Application.ida_swarm_mcp">
     <configuration name="LIB_LIEF" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="ida_swarm" TARGET_NAME="LIB_LIEF" CONFIG_NAME="Debug">
       <method v="2">
@@ -172,6 +191,7 @@
       <updated>1759093251572</updated>
       <workItem from="1759093252642" duration="245000" />
       <workItem from="1759169053304" duration="143000" />
+      <workItem from="1759266951043" duration="7606000" />
     </task>
     <task id="LOCAL-00001" summary="removed keystone build log">
       <option name="closed" value="true" />
@@ -191,6 +211,17 @@
     <isAutomaticCheckingOnLaunch value="false" />
     <isAutomaticFoundErrors value="true" />
     <isAutomaticReloadCMake value="true" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="removed keystone build log" />

@@ -1,106 +1,73 @@
 ---
 title: IDA Swarm - System Architecture
 ---
-graph TB
+graph LR
     subgraph entry["🚪 ENTRY POINTS"]
-        plugin["IDA Plugin<br/>(Native)"]
-        mcp["MCP Server<br/>(External)"]
+        plugin["IDA Plugin"]
+        mcp["MCP Server"]
     end
 
-    subgraph orchestrator["🎯 ORCHESTRATOR"]
-        orch["Orchestrator<br/>Task decomposition<br/>Agent coordination"]
-        spawn["Agent Spawner"]
-        dbmgr["DB Manager<br/>Copy databases"]
-        merge["Merge Manager<br/>Replay tool calls"]
-        nogo["NoGo Manager<br/>Allocation zones"]
-    end
-
-    subgraph central["📊 CENTRAL STATE"]
-        tracker[("ToolCallTracker<br/>SQLite Database<br/>All agent writes")]
-        irc["IRC Server<br/>Conflicts & patches"]
-    end
-
-    subgraph agents["🤖 AGENTS (Parallel IDA Instances)"]
+    subgraph orch["🎯 ORCHESTRATOR"]
         direction TB
-        agent1["Agent 1"]
-        agent2["Agent 2"]
-        agentN["Agent N"]
+        orchestrator["Orchestrator<br/>(Task decomposition)"]
+        spawner["Agent Spawner"]
+        dbmgr["Database Manager"]
+        merger["Merge Manager"]
+    end
 
-        subgraph agent_internals["Agent Components"]
-            conflict["Conflict Detector<br/>(checks tracker)"]
-            tools["30+ Analysis Tools"]
-            patch["Patch Manager<br/>(dual patching)"]
-        end
+    subgraph state["📊 CENTRAL STATE"]
+        direction TB
+        tracker[("ToolCallTracker<br/>SQLite")]
+        irc["IRC Server"]
+    end
+
+    subgraph agent_box["🤖 AGENTS (Parallel Processes)"]
+        direction TB
+        agent["Agent 1..N"]
+        agent_note["Each has isolated<br/>DB copy"]
     end
 
     subgraph storage["💾 STORAGE"]
-        maindb[("Main DB")]
+        direction TB
+        maindb[("Main IDA DB")]
         agentdbs[("Agent DB<br/>Copies")]
-        binaries[("Binaries")]
     end
 
-    subgraph external["☁️ EXTERNAL"]
-        claude["Claude API<br/>(Anthropic)"]
-    end
+    claude["☁️ Claude API"]
 
-    %% Entry to Orchestrator
-    plugin -.->|"spawn"| orch
-    mcp -.->|"JSON-RPC"| orch
+    %% Main flow
+    plugin -->|"1. Start"| orchestrator
+    mcp -->|"1. Start"| orchestrator
 
-    %% Orchestrator components
-    orch --> spawn
-    orch --> dbmgr
-    orch --> merge
-    orch --> nogo
+    orchestrator -->|"2. Setup"| spawner
+    orchestrator -->|"2. Setup"| dbmgr
 
-    %% Database creation
-    dbmgr -->|"1. Create copies"| agentdbs
-    maindb -.->|"source"| dbmgr
+    dbmgr -->|"Copy DB"| agentdbs
+    spawner -->|"3. Spawn"| agent
+    agent --> agentdbs
 
-    %% Agent spawning
-    spawn ==>|"2. Spawn processes"| agent1
-    spawn ==>|"2. Spawn processes"| agent2
-    spawn ==>|"2. Spawn processes"| agentN
+    agent <-->|"4. Writes/<br/>Conflicts"| tracker
+    agent <-->|"4. IRC"| irc
 
-    %% Agents work on their copies
-    agent1 --> agentdbs
-    agent2 --> agentdbs
-    agentN --> agentdbs
-    agent1 --> binaries
-    agent2 --> binaries
-    agentN --> binaries
+    agent -->|"5. Complete"| orchestrator
+    orchestrator -->|"6. Merge each<br/>agent's changes"| merger
+    merger -->|"Query"| tracker
+    merger -->|"Apply"| maindb
 
-    %% Central state interactions
-    agent1 <-.->|"record writes<br/>check conflicts"| tracker
-    agent2 <-.->|"record writes<br/>check conflicts"| tracker
-    agentN <-.->|"record writes<br/>check conflicts"| tracker
-
-    orch -->|"monitors"| irc
-    agent1 <-.->|"conflicts<br/>patches"| irc
-    agent2 <-.->|"conflicts<br/>patches"| irc
-    agentN <-.->|"conflicts<br/>patches"| irc
-
-    %% Merge back
-    merge -->|"3. Query writes"| tracker
-    merge -->|"3. Replay tools"| maindb
-
-    %% Claude API
-    orch <-->|"reasoning"| claude
-    agent1 <-->|"reasoning"| claude
-    agent2 <-->|"reasoning"| claude
-    agentN <-->|"reasoning"| claude
+    orchestrator <-.-> claude
+    agent <-.-> claude
 
     %% Styling
-    classDef entryStyle fill:#E8F4F8,stroke:#2C3E50,stroke-width:3px
+    classDef entryStyle fill:#E8F4F8,stroke:#2C3E50,stroke-width:2px
     classDef orchStyle fill:#D5E8F7,stroke:#2980B9,stroke-width:2px
-    classDef centralStyle fill:#FCF3CF,stroke:#F39C12,stroke-width:3px
+    classDef stateStyle fill:#FCF3CF,stroke:#F39C12,stroke-width:2px
     classDef agentStyle fill:#D5F4E6,stroke:#27AE60,stroke-width:2px
     classDef storageStyle fill:#E8DAEF,stroke:#8E44AD,stroke-width:2px
     classDef externalStyle fill:#FADBD8,stroke:#E74C3C,stroke-width:2px
 
     class plugin,mcp entryStyle
-    class orch,spawn,dbmgr,merge,nogo orchStyle
-    class tracker,irc centralStyle
-    class agent1,agent2,agentN,conflict,tools,patch agentStyle
-    class maindb,agentdbs,binaries storageStyle
+    class orchestrator,spawner,dbmgr,merger orchStyle
+    class tracker,irc stateStyle
+    class agent,agent_note agentStyle
+    class maindb,agentdbs storageStyle
     class claude externalStyle
