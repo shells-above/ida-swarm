@@ -121,17 +121,27 @@ std::string SessionManager::create_session(const std::string& binary_path, const
 }
 
 json SessionManager::send_message(const std::string& session_id, const std::string& message) {
-    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    Session* session_ptr = nullptr;
+    int input_fd = -1;
 
-    auto it = sessions_.find(session_id);
-    if (it == sessions_.end() || !it->second->active) {
-        json error_response;
-        error_response["error"] = "Session not found or inactive";
-        return error_response;
-    }
+    // Acquire lock only to validate session and increment usage count
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
 
-    std::unique_ptr<Session>& session = it->second;
-    session->last_activity = std::chrono::steady_clock::now();
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end() || !it->second->active) {
+            json error_response;
+            error_response["error"] = "Session not found or inactive";
+            return error_response;
+        }
+
+        session_ptr = it->second.get();
+        input_fd = session_ptr->input_fd;
+        session_ptr->last_activity = std::chrono::steady_clock::now();
+
+        // Increment usage count to prevent session deletion while we're using it
+        session_ptr->usage_count++;
+    } // sessions_mutex_ is released here - other sessions can now send messages concurrently
 
     // Create message for orchestrator
     json msg;
@@ -140,28 +150,71 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
     msg["method"] = "process_input";
     msg["params"]["input"] = message;
 
-    // Send to orchestrator
-    if (!send_json_to_orchestrator(session->input_fd, msg)) {
+    // Send to orchestrator (no longer holding sessions_mutex_!)
+    if (!send_json_to_orchestrator(input_fd, msg)) {
+        // Decrement usage count before returning error
+        if (--session_ptr->usage_count == 0) {
+            session_ptr->usage_cv.notify_all();
+        }
+
         json error_response;
         error_response["error"] = "Failed to send message to orchestrator";
         return error_response;
     }
 
-    // Wait for response
-    std::unique_lock<std::mutex> queue_lock(session->queue_mutex);
-    session->response_cv.wait(queue_lock, [&session]() { return !session->response_queue.empty(); });
+    // Wait for response (no longer holding sessions_mutex_!)
+    json response;
+    {
+        std::unique_lock<std::mutex> queue_lock(session_ptr->queue_mutex);
+        session_ptr->response_cv.wait(queue_lock, [session_ptr]() {
+            return !session_ptr->response_queue.empty();
+        });
 
-    json response = session->response_queue.front();
-    session->response_queue.pop();
+        response = session_ptr->response_queue.front();
+        session_ptr->response_queue.pop();
+    }
+
+    // Decrement usage count and notify if this was the last user
+    if (--session_ptr->usage_count == 0) {
+        session_ptr->usage_cv.notify_all();
+    }
+
     return response;
 }
 
 bool SessionManager::close_session(const std::string& session_id) {
+    Session* session_raw = nullptr;
+
+    // Mark session as inactive to prevent new operations, then wait for active ones to finish
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end()) {
+            return false;
+        }
+
+        session_raw = it->second.get();
+        // Mark as inactive so new send_message calls will be rejected
+        session_raw->active = false;
+    } // Release sessions_mutex_ to avoid deadlock
+
+    // Wait for all active send_message calls to complete before closing
+    {
+        std::unique_lock<std::mutex> usage_lock(session_raw->usage_mutex);
+        session_raw->usage_cv.wait(usage_lock, [session_raw]() {
+            return session_raw->usage_count == 0;
+        });
+    }
+    std::cerr << "MCP Server: All active operations completed for session " << session_id << std::endl;
+
+    // Re-acquire sessions_mutex_ for the actual close operations
     std::lock_guard<std::mutex> lock(sessions_mutex_);
 
+    // Get session again (it should still exist since we marked it inactive)
     auto it = sessions_.find(session_id);
     if (it == sessions_.end()) {
-        return false;
+        return false;  // Session was removed by another thread (shouldn't happen)
     }
 
     std::unique_ptr<Session>& session = it->second;
@@ -292,22 +345,45 @@ json SessionManager::get_session_status(const std::string& session_id) const {
 
 json SessionManager::wait_for_initial_response(const std::string& session_id, int timeout_ms) {
     std::cerr << "MCP Server: Waiting for initial response from session " << session_id << " (no timeout)" << std::endl;
-    auto it = sessions_.find(session_id);
-    if (it == sessions_.end()) {
-        json error;
-        error["error"] = "Session not found";
-        return error;
+
+    Session* session_ptr = nullptr;
+
+    // Acquire lock to safely access sessions map and increment usage count
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end()) {
+            json error;
+            error["error"] = "Session not found";
+            return error;
+        }
+
+        session_ptr = it->second.get();
+        // Increment usage count to prevent session deletion while we're waiting
+        session_ptr->usage_count++;
+    } // sessions_mutex_ released here
+
+    // Wait for response without holding sessions_mutex_
+    json response;
+    {
+        std::unique_lock<std::mutex> lock(session_ptr->queue_mutex);
+        // Block indefinitely until response arrives - no timeout
+        session_ptr->response_cv.wait(lock, [session_ptr]() {
+            return !session_ptr->response_queue.empty();
+        });
+
+        response = session_ptr->response_queue.front();
+        session_ptr->response_queue.pop();
     }
 
-    auto& session = it->second;
-
-    std::unique_lock<std::mutex> lock(session->queue_mutex);
-    // Block indefinitely until response arrives - no timeout
-    session->response_cv.wait(lock, [&session]() { return !session->response_queue.empty(); });
-
-    json response = session->response_queue.front();
-    session->response_queue.pop();
     std::cerr << "MCP Server: Got initial response from session " << session_id << std::endl;
+
+    // Decrement usage count and notify if this was the last user
+    if (--session_ptr->usage_count == 0) {
+        session_ptr->usage_cv.notify_all();
+    }
+
     return response;
 }
 

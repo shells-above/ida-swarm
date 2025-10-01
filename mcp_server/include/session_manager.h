@@ -8,6 +8,7 @@
 #include <thread>
 #include <condition_variable>
 #include <queue>
+#include <atomic>
 #include <nlohmann/json.hpp>
 
 namespace llm_re::mcp {
@@ -40,6 +41,11 @@ public:
         // Thread for reading orchestrator output
         std::unique_ptr<std::thread> reader_thread;
         bool reader_should_stop = false;
+
+        // Usage tracking to prevent deletion while in use
+        std::atomic<int> usage_count{0};
+        std::mutex usage_mutex;
+        std::condition_variable usage_cv;
     };
 
     SessionManager();
