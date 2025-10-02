@@ -248,14 +248,51 @@ bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
     return true;
 }
 
+// Helper function to safely write complete data to a file descriptor
+// Handles partial writes and returns true on success, false on failure
+static bool safe_write(int fd, const std::string& data, const char* desc) {
+    size_t total_written = 0;
+    size_t remaining = data.length();
+    const char* ptr = data.c_str();
+
+    while (remaining > 0) {
+        ssize_t written = write(fd, ptr + total_written, remaining);
+
+        if (written < 0) {
+            if (errno == EINTR) {
+                // Interrupted by signal, retry
+                continue;
+            }
+            // Write failed
+            ORCH_LOG("Orchestrator: Failed to write %s: %s (after %zu/%zu bytes)\n",
+                desc, strerror(errno), total_written, data.length());
+            return false;
+        }
+
+        if (written == 0) {
+            // Pipe closed or no progress
+            ORCH_LOG("Orchestrator: Write returned 0 for %s (after %zu/%zu bytes)\n",
+                desc, total_written, data.length());
+            return false;
+        }
+
+        total_written += written;
+        remaining -= written;
+    }
+
+    return true;
+}
+
 void Orchestrator::start_mcp_listener() {
     if (!show_ui_ && mcp_input_fd_ >= 0 && mcp_output_fd_ >= 0) {
         ORCH_LOG("Orchestrator: Starting MCP listener thread\n");
 
         mcp_listener_thread_ = std::thread([this]() {
+            // Move buffer outside while loop to preserve leftover data between iterations
+            std::string buffer;
+
             while (!mcp_listener_should_stop_) {
                 // Read JSON request from pipe
-                std::string buffer;
                 char read_buf[4096];
 
                 ssize_t bytes = read(mcp_input_fd_, read_buf, sizeof(read_buf) - 1);
@@ -277,9 +314,17 @@ void Orchestrator::start_mcp_listener() {
                             json response = process_mcp_request(request);
                             std::string method = request.value("method", "");
 
-                            // Send response back
+                            // Send response back with proper error handling
                             std::string response_str = response.dump() + "\n";
-                            write(mcp_output_fd_, response_str.c_str(), response_str.length());
+                            ORCH_LOG("Orchestrator: Sending MCP response (%zu bytes) for method '%s'\n",
+                                response_str.length(), method.c_str());
+
+                            if (safe_write(mcp_output_fd_, response_str, "MCP response")) {
+                                ORCH_LOG("Orchestrator: Successfully sent MCP response for method '%s'\n", method.c_str());
+                            } else {
+                                ORCH_LOG("Orchestrator: ERROR - Failed to send MCP response for method '%s'\n", method.c_str());
+                                // Continue anyway - client will handle timeout
+                            }
 
                             // Handle shutdown after response is sent
                             if (method == "shutdown") {
@@ -514,8 +559,12 @@ void Orchestrator::process_user_input(const std::string& input) {
     }
     
     if (!response.success) {
-        ORCH_LOG("Orchestrator: Failed to process request: %s\n", 
+        ORCH_LOG("Orchestrator: Failed to process request: %s\n",
             response.error ? response.error->c_str() : "Unknown error");
+
+        if (!show_ui_) {
+            signal_task_completion();
+        }
         return;
     }
     
