@@ -64,7 +64,7 @@ public:
         bool enable_python_tool = false;  // Disabled by default for security
         
         // Context management
-        int context_limit = 150000;  // Token limit before consolidation
+        int context_limit = 150000;  // Token limit for tool result trimming
         int tool_result_trim_buffer = 8000;  // Safety buffer when trimming tool results (increased for conservative estimation)
     } agent;
 

@@ -9,7 +9,6 @@
 #include "core/config.h"
 #include "sdk/claude_sdk.h"
 #include "sdk/auth/oauth_manager.h"
-#include "analysis/memory.h"
 
 namespace llm_re {
 
@@ -40,7 +39,6 @@ struct DeepAnalysisResult {
 // Deep analysis manager
 class DeepAnalysisManager {
 private:
-    std::shared_ptr<BinaryMemory> memory_;
     DeepAnalysisCollection current_collection_;
     std::map<std::string, DeepAnalysisResult> completed_analyses_;
     mutable qmutex_t mutex_;
@@ -50,7 +48,7 @@ private:
 
 public:
     // Constructor with Config for OAuth support
-    DeepAnalysisManager(std::shared_ptr<BinaryMemory> memory, const Config& config) : memory_(memory) {
+    explicit DeepAnalysisManager(const Config& config) {
         // Create our own OAuth manager if using OAuth authentication
         if (config.api.auth_method == claude::AuthMethod::OAUTH) {
             oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);

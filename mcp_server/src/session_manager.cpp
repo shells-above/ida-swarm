@@ -666,11 +666,19 @@ json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
         return error;
     }
 
-    // Set non-blocking mode if timeout specified
+    // Save original flags and set non-blocking mode if timeout specified
+    int original_flags = -1;
     if (timeout_ms > 0) {
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        original_flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, original_flags | O_NONBLOCK);
     }
+
+    // Lambda to restore flags before returning
+    auto restore_flags = [fd, original_flags, timeout_ms]() {
+        if (timeout_ms > 0 && original_flags >= 0) {
+            fcntl(fd, F_SETFL, original_flags);
+        }
+    };
 
     std::string buffer;
     char read_buf[4096];
@@ -689,10 +697,13 @@ json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
                 std::string json_str = buffer.substr(0, newline_pos);
 
                 try {
-                    return json::parse(json_str);
+                    json result = json::parse(json_str);
+                    restore_flags();
+                    return result;
                 } catch (const json::exception& e) {
                     json error;
                     error["error"] = std::string("JSON parse error: ") + e.what();
+                    restore_flags();
                     return error;
                 }
             }
@@ -700,6 +711,7 @@ json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
             // EOF
             json error;
             error["error"] = "Orchestrator closed connection";
+            restore_flags();
             return error;
         } else {
             // Check timeout
@@ -709,6 +721,7 @@ json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
                 if (elapsed >= timeout_ms) {
                     json error;
                     error["error"] = "Timeout reading from orchestrator";
+                    restore_flags();
                     return error;
                 }
             }
@@ -720,14 +733,16 @@ json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
 }
 
 void SessionManager::orchestrator_reader_thread(Session* session) {
-    std::cerr << "MCP Server: Starting reader thread for session " << session->session_id << std::endl;
+    std::cerr << "MCP Server: Starting reader thread for session " << session->session_id
+              << " (reading from FD " << session->output_fd << ")" << std::endl;
     while (!session->reader_should_stop) {
         json response = read_json_from_orchestrator(session->output_fd, 1000); // Increased timeout to 1s
 
         if (response.contains("error")) {
             if (response["error"] != "Timeout reading from orchestrator") {
                 // Real error, not just timeout
-                std::cerr << "MCP Server: Reader thread error: " << response["error"] << std::endl;
+                std::cerr << "MCP Server: Reader thread error: " << response["error"]
+                          << " (FD " << session->output_fd << ")" << std::endl;
                 break;
             }
             // Timeout is normal, continue
@@ -735,7 +750,8 @@ void SessionManager::orchestrator_reader_thread(Session* session) {
         }
 
         // Add response to queue
-        std::cerr << "MCP Server: Received response from orchestrator: " << response.dump().substr(0, 200) << "..." << std::endl;
+        std::cerr << "MCP Server: Received response from orchestrator (FD " << session->output_fd << "): "
+                  << response.dump().substr(0, 200) << "..." << std::endl;
         {
             std::lock_guard<std::mutex> lock(session->queue_mutex);
             session->response_queue.push(response);
@@ -847,7 +863,10 @@ bool SessionManager::open_pipes(const std::string& session_id, int& input_fd, in
         }
     }
 
-    std::cerr << "Successfully opened pipes to IDA orchestrator" << std::endl;
+    std::cerr << "Successfully opened pipes to IDA orchestrator (input FD=" << input_fd
+              << ", output FD=" << output_fd << ")" << std::endl;
+    std::cerr << "MCP Server: Will write to " << input_pipe << " (FD " << input_fd << ")" << std::endl;
+    std::cerr << "MCP Server: Will read from " << output_pipe << " (FD " << output_fd << ")" << std::endl;
     return true;
 }
 

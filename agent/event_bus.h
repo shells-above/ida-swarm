@@ -27,10 +27,7 @@ struct AgentEvent {
         // Analysis events
         ANALYSIS_RESULT, // Final analysis result/report
         GRADER_FEEDBACK, // Grader evaluation
-        
-        // Context management
-        CONTEXT_CONSOLIDATION, // Context limit reached, consolidating
-        
+
         // User interaction
         USER_MESSAGE,    // User injected message
         

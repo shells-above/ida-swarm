@@ -25,8 +25,7 @@ MergeManager::MergeManager(ToolCallTracker* tracker)
     : tool_tracker_(tracker) {
 
     // Initialize components for main database context
-    memory_ = std::make_shared<BinaryMemory>();
-    executor_ = std::make_shared<ActionExecutor>(memory_);
+    executor_ = std::make_shared<ActionExecutor>();
     patch_manager_ = std::make_shared<PatchManager>();
 
     // Initialize the patch manager
@@ -58,7 +57,7 @@ MergeManager::MergeManager(ToolCallTracker* tracker)
     }
 
     // Register the same tools that agents use (pass Config instance for conditional tool registration)
-    tools::register_ida_tools(tool_registry_, memory_, executor_, nullptr, patch_manager_, code_injection_manager_, Config::instance());
+    tools::register_ida_tools(tool_registry_, executor_, nullptr, patch_manager_, code_injection_manager_, Config::instance());
     
     ORCH_LOG("MergeManager: Initialized with tool registry and patch manager\n");
 }

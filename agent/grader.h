@@ -4,7 +4,6 @@
 #include "core/config.h"
 #include "sdk/claude_sdk.h"
 #include "sdk/auth/oauth_manager.h"
-#include "analysis/memory.h"
 
 namespace llm_re {
 
@@ -35,7 +34,6 @@ public:
     struct GradingContext {
         std::string user_request;
         std::vector<claude::messages::Message> agent_work;
-        std::vector<AnalysisEntry> stored_analyses;
     };
 
 private:

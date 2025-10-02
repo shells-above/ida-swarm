@@ -236,8 +236,6 @@ ea_t ActionExecutor::parse_single_address_value(const json& param) {
     }
 }
 
-ActionExecutor::ActionExecutor(std::shared_ptr<BinaryMemory> mem) : memory(std::move(mem)) { }
-
 // Consolidated search actions
 json ActionExecutor::search_functions(const std::string& pattern, bool named_only, int max_results) {
     json result;
@@ -801,58 +799,6 @@ json ActionExecutor::set_local_type(const std::string& definition, bool replace_
         if (!set_result.success) {
             result["error"] = set_result.error_message;
         }
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-// Consolidated knowledge management
-json ActionExecutor::store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses) {
-    json result;
-    try {
-        memory->store_analysis(key, content, address, type, related_addresses);
-        result["success"] = true;
-        result["key"] = key;
-        result["type"] = type;
-        if (address) {
-            result["address"] = HexAddress(*address);
-        }
-    } catch (const std::exception& e) {
-        result["success"] = false;
-        result["error"] = e.what();
-    }
-    return result;
-}
-
-json ActionExecutor::get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern) {
-    json result;
-    try {
-        auto analyses = memory->get_analysis(key, address, type, pattern);
-        result["success"] = true;
-
-        json analyses_json = json::array();
-        for (const auto& analysis : analyses) {
-            json analysis_obj;
-            analysis_obj["key"] = analysis.key;
-            analysis_obj["content"] = analysis.content;
-            analysis_obj["type"] = analysis.type;
-            if (analysis.address) {
-                analysis_obj["address"] = HexAddress(*analysis.address);
-            }
-            if (!analysis.related_addresses.empty()) {
-                json related = json::array();
-                for (ea_t addr : analysis.related_addresses) {
-                    related.push_back(HexAddress(addr));
-                }
-                analysis_obj["related_addresses"] = related;
-            }
-            analyses_json.push_back(analysis_obj);
-        }
-
-        result["analyses"] = analyses_json;
-        result["count"] = analyses_json.size();
     } catch (const std::exception& e) {
         result["success"] = false;
         result["error"] = e.what();

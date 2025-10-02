@@ -158,18 +158,7 @@ claude::messages::Message AnalysisGrader::create_grading_request(const GradingCo
     total_tokens += context.user_request.length() / 4;
     
     prompt << "AGENT'S INVESTIGATION:\n\n";
-    
-    // // Always include stored analyses (these are consolidated findings)
-    if (!context.stored_analyses.empty()) {
-        prompt << "STORED ANALYSES:\n\n";
-        for (const AnalysisEntry& entry : context.stored_analyses) {
-            std::string analysis_text = "[" + entry.type + ": " + entry.key + "]\n" + entry.content + "\n\n";
-            prompt << analysis_text;
-            total_tokens += analysis_text.length() / 4;
-        }
-        prompt << "EXTREMELY IMPORTANT: These stored analyses *ARE NOT AVAILABLE TO THE USER!* The user WILL NOT SEE THESE. You can only use these as a way to see what the agent is thinking, NOT AS A PART OF THEIR FINAL REPORT!";
-    }
-    
+
     // Prioritize and potentially prune agent work messages
     auto prioritized = prioritize_messages(context.agent_work);
     

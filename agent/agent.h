@@ -11,9 +11,9 @@
 #include "agent/tool_system.h"
 #include "agent/grader.h"
 #include "agent/event_bus.h"
-#include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
+#include "analysis/memory_tool.h"
 #include "patching/patch_manager.h"
 #include "patching/code_injection_manager.h"
 #include <nalt.hpp>  // For get_input_file_path
@@ -260,21 +260,6 @@ private:
 
     // Token tracking
     claude::usage::TokenStats token_stats_;
-    std::vector<claude::usage::TokenStats> stats_sessions_;  // we add to this the previous token_stats when we hit context limit
-
-    // context management
-    struct ContextManagementState {
-        bool consolidation_in_progress = false;
-        int consolidation_count = 0;
-        std::chrono::steady_clock::time_point last_consolidation;
-    } context_state_;
-
-    // Process consolidation response and extract summary
-    struct ConsolidationResult {
-        std::string summary;
-        std::vector<std::string> stored_keys;
-        bool success = false;
-    };
 
     // Thread management
     qthread_t worker_thread_ = nullptr;
@@ -355,56 +340,6 @@ CRITICAL RULE ABOUT TOOL USAGE:
 
 Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.)";
 
-
-    // consolidation prompts
-    static constexpr const char* CONSOLIDATION_PROMPT = R"(CRITICAL: We are approaching the context window limit!.
-
-You must now consolidate ALL important findings into memory using the store_analysis tool (call this in bulk in this response, you will NOT get another chance to).
-This is essential because we will need to clear the conversation history to continue.
-
-Please store the following using store_analysis:
-1. All significant findings about functions, data structures, and behavior
-2. Current understanding of the system architecture
-3. Any patterns, hypotheses, or insights discovered (that have not previously been documented)
-4. Progress on the original task and what remains to be done
-5. Important addresses and their purposes
-6. Any relationships between components
-
-Guidelines for storing:
-- Use descriptive keys that clearly indicate what information is stored
-- Group related findings together
-- Include specific addresses when relevant
-- Be comprehensive - anything not stored will be lost
-
-After storing everything, provide a CONSOLIDATION SUMMARY that includes:
-- List of all keys you created and a one-line description of each
-- Current progress on the original task
-- Key insights discovered so far
-- Next steps needed to complete the analysis
-
-Remember: After storing all of your information using tool calls, provide a CONSOLIDATION SUMMARY as a text response! This is important.
-Remember: Only information you store or summarize will be available after consolidation!)";
-
-
-    static constexpr const char* CONSOLIDATION_CONTINUATION_PROMPT = R"(=== CONTEXT CONSOLIDATION COMPLETE ===
-
-We've consolidated the analysis to memory due to context limits. Here's the state:
-
-**Original Task:** {}
-
-**Consolidation Summary:**
-{}
-
-**Stored Analysis Keys:** {}
-
-You can retrieve any stored information using get_analysis with these keys. Continue the analysis from where we left off.
-
-Tips:
-- Use get_analysis to retrieve specific findings as needed (or get all available analyses)
-- Focus on completing the remaining work for the original task
-
-What's your next step to complete the reversal?)";
-
     // Helper function to create AnthropicClient based on config
     claude::Client create_api_client(const Config& config) {
         // Create our own OAuth manager if using OAuth authentication
@@ -446,9 +381,8 @@ public:
         : config_(config),
           agent_id_(agent_id),
           event_bus_(get_event_bus()),
-          memory_(std::make_shared<BinaryMemory>()),
-          executor_(std::make_shared<ActionExecutor>(memory_)),
-          deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(memory_, config) : nullptr),
+          executor_(std::make_shared<ActionExecutor>()),
+          deep_analysis_manager_(config.agent.enable_deep_analysis ? std::make_shared<DeepAnalysisManager>(config) : nullptr),
           api_client_(create_api_client(config)),
           grader_(config.grader.enabled ? std::make_unique<AnalysisGrader>(config) : nullptr) {
 
@@ -492,7 +426,7 @@ public:
         }
 
         // Register tools
-        tools::register_ida_tools(tool_registry_, memory_, executor_, deep_analysis_manager_, patch_manager_, code_injection_manager_, config_);
+        tools::register_ida_tools(tool_registry_, executor_, deep_analysis_manager_, patch_manager_, code_injection_manager_, config_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
@@ -611,18 +545,6 @@ public:
         j["current_task"] = state_.get_task();
         j["execution_state"] = execution_state_.to_json();
         j["tokens"] = token_stats_.to_json();
-        j["memory"] = memory_->export_memory_snapshot();
-
-        j["context_management"] = {
-            {"consolidation_count", context_state_.consolidation_count},
-            {"consolidation_in_progress", context_state_.consolidation_in_progress}
-        };
-
-        if (context_state_.consolidation_count > 0) {
-            auto elapsed = std::chrono::steady_clock::now() - context_state_.last_consolidation;
-            j["context_management"]["minutes_since_last_consolidation"] =
-                std::chrono::duration_cast<std::chrono::minutes>(elapsed).count();
-        }
         return j;
     }
     
@@ -658,33 +580,9 @@ public:
         return tools_info;
     }
 
-    // Memory management
-    std::shared_ptr<BinaryMemory> get_memory() {
-        return memory_;
-    }
-
-    void save_memory(const std::string& filename) {
-        std::ofstream file(filename);
-        if (file.is_open()) {
-            file << memory_->export_memory_snapshot().dump(2);
-            file.close();
-            emit_log(LogLevel::INFO, "Memory saved to " + filename);
-        } else {
-            emit_log(LogLevel::ERROR, "Failed to save memory to " + filename);
-        }
-    }
-
-    void load_memory(const std::string& filename) {
-        std::ifstream file(filename);
-        if (file.is_open()) {
-            json snapshot;
-            file >> snapshot;
-            memory_->import_memory_snapshot(snapshot);
-            file.close();
-            emit_log(LogLevel::INFO, "Memory loaded from " + filename);
-        } else {
-            emit_log(LogLevel::ERROR, "Failed to load memory from " + filename);
-        }
+    // Memory tool management
+    void set_memory_directory(const std::string& memory_dir) {
+        memory_handler_ = std::make_unique<MemoryToolHandler>(memory_dir);
     }
 
     // Token statistics
@@ -696,32 +594,17 @@ public:
         token_stats_.reset();
     }
 
-    // Get cumulative token usage across all sessions (including consolidations)
-    claude::TokenUsage get_cumulative_token_usage() const {
-        claude::TokenUsage cumulative;
-        
-        // Add all previous sessions
-        for (const auto& session : stats_sessions_) {
-            cumulative += session.get_total();
-        }
-        
-        // Add current session
-        cumulative += token_stats_.get_total();
-        
-        return cumulative;
-    }
-
 protected:  // Changed to protected so SwarmAgent can access
     // Configuration
     const Config& config_;
-    
+
     // Core components
-    std::shared_ptr<BinaryMemory> memory_;                           // memory that can be scripted by the LLM
     std::shared_ptr<ActionExecutor> executor_;                       // action executor, actual integration with IDA
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;   // code injection manager
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
+    std::unique_ptr<MemoryToolHandler> memory_handler_;              // memory tool handler for /memories filesystem
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
     claude::Client api_client_;                                      // agent api client
@@ -751,8 +634,17 @@ protected:  // Changed to protected so SwarmAgent can access
                 {"input", tool_use->input}
             });
 
-            // Execute tool
-            claude::messages::Message result_msg = tool_registry_.execute_tool_call(*tool_use);
+            // Execute tool (intercept memory tool calls)
+            claude::messages::Message result_msg = [&]() {
+                if (tool_use->name == "memory") {
+                    json result = memory_handler_
+                        ? memory_handler_->execute_command(tool_use->input)
+                        : json{{"success", false}, {"error", "Memory system not initialized"}};
+                    return claude::messages::Message::tool_result(tool_use->id, result.dump());
+                } else {
+                    return tool_registry_.execute_tool_call(*tool_use);
+                }
+            }();
             
             // Check and trim tool result if it's too large for context
             claude::messages::Message trimmed_result = check_and_trim_tool_result(result_msg);
@@ -880,7 +772,8 @@ private:
                .with_max_thinking_tokens(config_.agent.max_thinking_tokens)
                .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.agent.temperature)
                .enable_thinking(config_.agent.enable_thinking)
-               .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
+               .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking)
+               .enable_auto_context_clearing(100000, 5, {"memory"});
 
         // Add tools with caching enabled (cache control added automatically in with_tools())
         if (tool_registry_.has_tools()) {
@@ -897,6 +790,13 @@ private:
         builder.add_message(claude::messages::Message::user_text(initial_message));
 
         claude::ChatRequest request = builder.build();
+
+        // Add memory tool FIRST (before IDA tools) so cache control stays on last IDA tool
+        json memory_tool = {
+            {"type", "memory_20250818"},
+            {"name", "memory"}
+        };
+        request.tool_definitions.insert(request.tool_definitions.begin(), memory_tool);
 
         // Initialize execution state with the request
         execution_state_.reset_with_request(request);
@@ -965,17 +865,6 @@ private:
             oss << delimiter << *it;
         }
         return oss.str();
-    }
-
-    // Check if we need to consolidate context
-    bool should_consolidate_context() {
-        if (context_state_.consolidation_in_progress) {
-            return false;  // Already consolidating
-        }
-
-        claude::TokenUsage usage = token_stats_.get_last_usage();
-        int total_tokens = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
-        return total_tokens > config_.agent.context_limit;
     }
 
     // Estimate current conversation token count
@@ -1070,114 +959,6 @@ private:
         }
         
         return trimmed_msg;
-    }
-
-    // Trigger context consolidation
-    void trigger_context_consolidation() {
-        emit_log(LogLevel::WARNING, "Context limit reached. Initiating memory consolidation...");
-        event_bus_.publish(AgentEvent(AgentEvent::CONTEXT_CONSOLIDATION, agent_id_, {
-            {"status", "starting"}
-        }));
-
-        context_state_.consolidation_in_progress = true;
-        context_state_.consolidation_count++;
-        context_state_.last_consolidation = std::chrono::steady_clock::now();
-
-        // Add consolidation message
-        claude::messages::Message consolidation_msg = claude::messages::Message::user_text(CONSOLIDATION_PROMPT);
-        execution_state_.add_message(consolidation_msg);
-
-        // Mark that we're in consolidation mode
-        execution_state_.set_valid(true);
-    }
-
-    ConsolidationResult process_consolidation_response(const claude::messages::Message& response_msg, const std::vector<claude::messages::Message>& tool_results) {
-        ConsolidationResult result;
-
-        // Extract stored keys from tool calls
-        std::vector<const claude::messages::ToolUseContent*> tool_uses = claude::messages::ContentExtractor::extract_tool_uses(response_msg);
-        for (const claude::messages::ToolUseContent *tool_use: tool_uses) {
-            if (tool_use->name == "store_analysis" && tool_use->input.contains("key")) {
-                result.stored_keys.push_back(tool_use->input["key"]);
-            }
-        }
-
-        // Extract summary text
-        std::optional<std::string> text_content = claude::messages::ContentExtractor::extract_text(response_msg);
-        if (text_content) {
-            result.summary = *text_content;
-            result.success = true;
-        } else {
-            emit_log(LogLevel::WARNING, "After attempting consolidation, the LLM did not provide a summary");
-
-            // Fallback summary in case LLM didn't make one (which would be bad)
-            result.summary = std::format("Consolidated {} findings to memory. Keys: {}",
-                result.stored_keys.size(),
-                join(result.stored_keys, ", "));
-            result.success = true;
-        }
-
-        return result;
-    }
-
-    // Rebuild conversation after consolidation
-    void rebuild_after_consolidation(const ConsolidationResult& consolidation) {
-        emit_log(LogLevel::INFO, "Rebuilding conversation with consolidated memory...");
-
-        // Save current task and token stats
-        std::string original_task = state_.get_task();
-        claude::TokenUsage total_usage_before = token_stats_.get_total();
-
-        // store old tracker session
-        stats_sessions_.emplace_back(std::move(token_stats_));
-
-        // Clear execution state for rebuild
-        execution_state_.clear();
-
-        // Reset token tracker
-        reset_token_usage();
-
-        // Build new request with consolidated context
-        claude::ChatRequestBuilder builder;
-        builder.with_model(config_.agent.model)
-               .with_system_prompt(SYSTEM_PROMPT)
-               .with_max_tokens(config_.agent.max_tokens)
-               .with_max_thinking_tokens(config_.agent.max_thinking_tokens)
-               .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.agent.temperature)
-               .enable_thinking(config_.agent.enable_thinking)
-               .enable_interleaved_thinking(config_.agent.enable_interleaved_thinking);
-
-        // Add tools
-        if (tool_registry_.has_tools()) {
-            builder.with_tools(tool_registry_);
-        }
-
-        // Create continuation message
-        std::string continuation_prompt = std::format(
-            CONSOLIDATION_CONTINUATION_PROMPT,
-            original_task,
-            consolidation.summary,
-            consolidation.stored_keys.empty() ? "(none)" : join(consolidation.stored_keys, ", ")
-        );
-
-        builder.add_message(claude::messages::Message::user_text(continuation_prompt));
-
-        // Reset execution state with new request
-        execution_state_.reset_with_request(builder.build());
-
-        // Log consolidation stats
-        emit_log(LogLevel::INFO, std::format(
-            "Context consolidated. Stored {} keys. Token usage before: {} in, {} out, {} cache read, {} cache write. Cost so far: ${:.4f}",
-            consolidation.stored_keys.size(),
-            total_usage_before.input_tokens,
-            total_usage_before.output_tokens,
-            total_usage_before.cache_read_tokens,
-            total_usage_before.cache_creation_tokens,
-            total_usage_before.estimated_cost()
-        ));
-
-        // Mark consolidation complete
-        context_state_.consolidation_in_progress = false;
     }
 
     void apply_incremental_caching() {
@@ -1288,12 +1069,6 @@ private:
             // Create request for this iteration
             claude::ChatRequest current_request = execution_state_.get_request();
 
-            // Check if we need to consolidate context BEFORE sending
-            if (should_consolidate_context() && !context_state_.consolidation_in_progress) {
-                trigger_context_consolidation();
-                continue;  // Loop will create consolidation request next iteration
-            }
-
             // Send request - Client now handles OAuth token refresh automatically
             claude::ChatResponse response = api_client_.send_request(current_request);
 
@@ -1319,22 +1094,21 @@ private:
             token_stats_.add_usage(response.usage);
             log_token_usage(response.usage, iteration);
 
+            // Log context clearing if it occurred
+            if (response.context_management) {
+                for (const auto& edit : response.context_management->applied_edits) {
+                    emit_log(LogLevel::INFO, std::format(
+                        "Context cleared: {} tool uses ({} tokens)",
+                        edit.cleared_tool_uses, edit.cleared_input_tokens));
+                }
+            }
+
             // Add response to execution state
             // IMPORTANT: We must preserve the entire message including thinking blocks
             execution_state_.add_message(response.message);
 
             // Process tool calls
             std::vector<claude::messages::Message> tool_results = process_tool_calls(response.message, iteration);
-
-            // Check if this was a consolidation response
-            if (context_state_.consolidation_in_progress) {
-                ConsolidationResult consolidation = process_consolidation_response(response.message, tool_results);
-                if (consolidation.success) {
-                    rebuild_after_consolidation(consolidation);
-                    iteration = 0;  // incremented on loop start
-                    continue;
-                }
-            }
 
             // When adding tool results, combine them
             if (!tool_results.empty()) {
@@ -1393,7 +1167,7 @@ private:
 
             // Handle natural completion - agent stops when satisfied
             if (response.stop_reason == claude::StopReason::EndTurn && !response.has_tool_calls()) {
-                if (iteration > 1 && !context_state_.consolidation_in_progress) {
+                if (iteration > 1) {
                     // Agent has naturally stopped - they're satisfied with their understanding
                     emit_log(LogLevel::INFO, "Agent stopped investigation");
 
@@ -1562,28 +1336,17 @@ protected:
         }
         context.user_request = all_user_requests.str();
         context.agent_work = execution_state_.get_messages();
-        context.stored_analyses = memory_->get_analysis();
 
         // Grade the analysis and return result
         return grader_->evaluate_analysis(context);
     }
     
     void log_token_usage(const claude::TokenUsage& usage, int iteration) {
-        std::string summary;
-        
-        // If we have previous sessions (from consolidations), use cumulative totals
-        if (!stats_sessions_.empty()) {
-            claude::TokenUsage cumulative = get_cumulative_token_usage();
-            summary = token_stats_.get_iteration_summary_with_cumulative(usage, iteration, cumulative);
-        } else {
-            // No consolidations yet, use regular summary
-            summary = token_stats_.get_iteration_summary(usage, iteration);
-        }
-        
+        std::string summary = token_stats_.get_iteration_summary(usage, iteration);
         emit_log(LogLevel::INFO, summary);
-        
+
         // Emit token update event with cumulative totals and per-iteration values
-        claude::TokenUsage cumulative_total = get_cumulative_token_usage();
+        claude::TokenUsage cumulative_total = token_stats_.get_total();
         // Use the 'usage' parameter which contains per-iteration values for context calculation
         event_bus_.publish(AgentEvent(AgentEvent::AGENT_TOKEN_UPDATE, agent_id_, {
             {"agent_id", agent_id_},
@@ -1769,8 +1532,7 @@ protected:
             {"total_output_tokens", total.output_tokens},
             {"total_cache_read_tokens", total.cache_read_tokens},
             {"total_cache_creation_tokens", total.cache_creation_tokens},
-            {"total_estimated_cost", total.estimated_cost()},
-            {"sessions", stats_sessions_.size() + 1}
+            {"total_estimated_cost", total.estimated_cost()}
         };
     }
     

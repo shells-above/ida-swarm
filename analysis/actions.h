@@ -6,7 +6,6 @@
 #define ACTIONS_H
 
 #include "core/common.h"
-#include "analysis/memory.h"
 
 namespace llm_re {
 
@@ -15,7 +14,7 @@ public:
     using ActionFunction = std::function<json(const json&)>;
     using ActionMap = std::unordered_map<std::string, ActionFunction>;
 
-    explicit ActionExecutor(std::shared_ptr<BinaryMemory> mem);
+    ActionExecutor() = default;
 
     // Helpers to convert any LLM address format to ea_t
     static std::vector<ea_t> parse_list_address_param(const json &params, const std::string &key);
@@ -53,13 +52,6 @@ public:
     json search_local_types(const std::string& pattern, const std::string& type_kind, int max_results);
     json get_local_type(const std::string& type_name);
     json set_local_type(const std::string& definition, bool replace_existing);
-
-    // Consolidated knowledge management
-    json store_analysis(const std::string& key, const std::string& content, std::optional<ea_t> address, const std::string& type, const std::vector<ea_t>& related_addresses);
-    json get_analysis(const std::string& key, std::optional<ea_t> address, const std::string& type, const std::string& pattern);
-
-private:
-    std::shared_ptr<BinaryMemory> memory;
 };
 
 } // namespace llm_re

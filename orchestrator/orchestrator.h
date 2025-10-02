@@ -6,6 +6,7 @@
 #include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"
 #include "../agent/event_bus.h"
+#include "../analysis/memory_tool.h"
 #include "database_manager.h"
 #include "agent_spawner.h"
 #include "tool_call_tracker.h"
@@ -93,6 +94,7 @@ private:
     std::unique_ptr<claude::Client> api_client_;
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
     claude::tools::ToolRegistry tool_registry_;
+    std::unique_ptr<MemoryToolHandler> memory_handler_;  // Orchestrator's persistent memory
     
     // Agent management
     std::map<std::string, AgentInfo> agents_;
@@ -113,11 +115,6 @@ private:
     // Context management for orchestrator
     std::vector<claude::messages::Message> conversation_history_;
     bool conversation_active_ = false;  // Track if we're in an ongoing conversation
-    struct ConsolidationState {
-        bool consolidation_in_progress = false;
-        int consolidation_count = 0;
-        std::chrono::steady_clock::time_point last_consolidation;
-    } consolidation_state_;
     
     // Event bus for UI communication
     EventBus& event_bus_ = get_event_bus();
@@ -180,7 +177,8 @@ private:
     // Send request to Claude API
     claude::ChatResponse send_orchestrator_request(const std::string& user_input);
     claude::ChatResponse send_continuation_request();
-    
+    claude::ChatResponse send_request_with_memory(claude::ChatRequestBuilder& builder);
+
     // Execute orchestrator tool calls
     std::vector<claude::messages::Message> process_orchestrator_tools(const claude::messages::Message& msg);
 
@@ -195,11 +193,6 @@ private:
     void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call, const std::set<std::string>& agents);
     void handle_manual_tool_result(const std::string& message);
     bool verify_consensus_applied(const std::set<std::string>& agents, ea_t address);
-    
-    // Context consolidation for orchestrator
-    bool should_consolidate_context() const;
-    void consolidate_conversation_context();
-    std::string create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const;
 
     // System prompts
     /*
@@ -264,23 +257,6 @@ You are NOT capable of reverse engineering other binaries. If you find that your
 IMPORTANT: You cannot directly interact with the binary. All binary analysis must be done through agents.
 
 Think deeply. Plan carefully. Orchestrate intelligently.)";  // "this program *does not do* any additional handling." is not true, it provides past agent results which i will get rid of eventually once i add back in agent collaboration and get it working better
-    
-    // Orchestrator consolidation prompts
-    static constexpr const char* ORCHESTRATOR_CONSOLIDATION_PROMPT = R"(CONTEXT CONSOLIDATION REQUIRED:
-
-Our orchestration conversation has grown too long and we need to consolidate it to continue effectively.
-
-Please provide a comprehensive summary of our coordination session that includes:
-
-1. **Original User Task**: What the user asked us to investigate
-2. **Agents Spawned**: List all agents created and their specific tasks
-3. **Key Agent Findings**: Important discoveries from agent reports
-4. **Coordination Decisions**: Major orchestration choices made
-5. **Current Progress**: What has been completed vs what remains
-6. **Active Context**: Any ongoing agent work or pending results
-
-Make this summary comprehensive but concise - it will replace our entire conversation history.
-Focus on preserving the essential context needed to continue coordinating agents effectively.)";
 
     /*
      *

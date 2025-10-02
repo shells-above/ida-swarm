@@ -59,12 +59,21 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     irc_server_ = swarm_config.value("irc_server", config_.irc.server);
     irc_port_ = swarm_config.value("irc_port", 0);  // Default to 0 - orchestrator must provide port
     SWARM_LOG("SwarmAgent: IRC config - server: %s, port: %d\n", irc_server_.c_str(), irc_port_);
-    
+
+    // Initialize agent memory handler
+    if (swarm_config.contains("memory_directory")) {
+        std::string memory_dir = swarm_config["memory_directory"].get<std::string>();
+        set_memory_directory(memory_dir);
+        SWARM_LOG("SwarmAgent: Memory handler initialized at %s\n", memory_dir.c_str());
+    } else {
+        SWARM_LOG("SwarmAgent: WARNING - No memory_directory in config, memory tool will not work\n");
+    }
+
     // Log task if present
     if (swarm_config.contains("task")) {
         SWARM_LOG("SwarmAgent: Task: %s\n", swarm_config["task"].get<std::string>().c_str());
     }
-    
+
     // Initialize conflict detector
     SWARM_LOG("SwarmAgent: Initializing conflict detector\n");
     if (!conflict_detector_->initialize()) {

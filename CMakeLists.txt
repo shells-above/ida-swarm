@@ -268,7 +268,7 @@ set(COMMON_SOURCES
         sdk/auth/oauth_authorizer.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
-        analysis/memory.cpp
+        analysis/memory_tool.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
         patching/code_injection_manager.cpp
@@ -324,7 +324,7 @@ set(HEADERS
         sdk/usage/stats.h
         analysis/actions.h
         analysis/deep_analysis.h
-        analysis/memory.h
+        analysis/memory_tool.h
         patching/patch_manager.h
         patching/code_injection_manager.h
         agent/agent.h

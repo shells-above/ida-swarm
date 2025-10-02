@@ -250,7 +250,7 @@ void PreferencesDialog::createModelsTab() {
     contextLimitSpin_ = new QSpinBox(agentModelGroup_);
     contextLimitSpin_->setRange(1000, 200000);
     contextLimitSpin_->setSuffix(" tokens");
-    contextLimitSpin_->setToolTip("Token limit before context consolidation");
+    contextLimitSpin_->setToolTip("Token limit for tool result size management");
     agentLayout->addRow("Context Limit:", contextLimitSpin_);
     
     auto* tempLayout = new QHBoxLayout();

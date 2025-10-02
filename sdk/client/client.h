@@ -42,6 +42,7 @@ constexpr const char* OAUTH_SUCCESS_URL = "https://console.anthropic.com/oauth/c
 constexpr const char* CLAUDE_CODE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
 constexpr const char* CLAUDE_CODE_BETA_HEADER = "claude-code-20250219";
 constexpr const char* OAUTH_BETA_HEADER = "oauth-2025-04-20";
+constexpr const char* MEMORY_BETA_HEADER = "context-management-2025-06-27";
 
 // Stainless SDK headers
 // you can send whatever data you want but i prefer at least keeping it kind of real
@@ -197,6 +198,60 @@ struct SystemPrompt {
     }
 };
 
+// Context management for automatic tool result clearing
+struct ContextEdit {
+    std::string type = "clear_tool_uses_20250919";
+    json trigger = {{"type", "input_tokens"}, {"value", 100000}};
+    json keep = {{"type", "tool_uses"}, {"value", 5}};
+    json clear_at_least;  // optional
+    std::vector<std::string> exclude_tools;
+    bool clear_tool_inputs = false;
+
+    json to_json() const {
+        json j = {
+            {"type", type},
+            {"trigger", trigger},
+            {"keep", keep}
+        };
+
+        if (!clear_at_least.is_null()) {
+            j["clear_at_least"] = clear_at_least;
+        }
+
+        if (!exclude_tools.empty()) {
+            j["exclude_tools"] = exclude_tools;
+        }
+
+        if (clear_tool_inputs) {
+            j["clear_tool_inputs"] = true;
+        }
+
+        return j;
+    }
+};
+
+struct ContextManagement {
+    std::vector<ContextEdit> edits;
+
+    json to_json() const {
+        json edits_array = json::array();
+        for (const auto& edit : edits) {
+            edits_array.push_back(edit.to_json());
+        }
+        return {{"edits", edits_array}};
+    }
+};
+
+struct AppliedEdit {
+    std::string type;
+    int cleared_tool_uses = 0;
+    int cleared_input_tokens = 0;
+};
+
+struct ContextManagementResult {
+    std::vector<AppliedEdit> applied_edits;
+};
+
 // Structured chat request
 class ChatRequest {
 public:
@@ -211,6 +266,7 @@ public:
     bool enable_thinking = true;
     bool enable_interleaved_thinking = false;
     std::vector<std::string> stop_sequences;
+    std::optional<ContextManagement> context_management;
 
 
     /**
@@ -304,6 +360,10 @@ public:
             };
         }
 
+        if (context_management) {
+            j["context_management"] = context_management->to_json();
+        }
+
         return j;
     }
 };
@@ -317,6 +377,7 @@ struct ChatResponse {
     TokenUsage usage;
     std::string model_used;
     std::string response_id;
+    std::optional<ContextManagementResult> context_management;
 
     // Helper methods
     bool has_tool_calls() const {
@@ -417,6 +478,21 @@ struct ChatResponse {
             }
         }
 
+        // Parse context_management if present
+        if (response_json.contains("context_management")) {
+            ContextManagementResult cm_result;
+            if (response_json["context_management"].contains("applied_edits")) {
+                for (const auto& edit_json : response_json["context_management"]["applied_edits"]) {
+                    AppliedEdit edit;
+                    edit.type = edit_json.value("type", "");
+                    edit.cleared_tool_uses = edit_json.value("cleared_tool_uses", 0);
+                    edit.cleared_input_tokens = edit_json.value("cleared_input_tokens", 0);
+                    cm_result.applied_edits.push_back(edit);
+                }
+            }
+            response.context_management = cm_result;
+        }
+
         return response;
     }
 };
@@ -475,6 +551,28 @@ public:
 
     ChatRequestBuilder& enable_interleaved_thinking(bool enable = true) {
         request.enable_interleaved_thinking = enable;
+        return *this;
+    }
+
+    ChatRequestBuilder& with_context_management(const ContextManagement& cm) {
+        request.context_management = cm;
+        return *this;
+    }
+
+    ChatRequestBuilder& enable_auto_context_clearing(
+        int trigger_tokens = 100000,
+        int keep_tool_uses = 5,
+        const std::vector<std::string>& exclude_tools = {"memory"}
+    ) {
+        ContextEdit edit;
+        edit.trigger = {{"type", "input_tokens"}, {"value", trigger_tokens}};
+        edit.keep = {{"type", "tool_uses"}, {"value", keep_tool_uses}};
+        edit.clear_at_least = {{"type", "input_tokens"}, {"value", 5000}};
+        edit.exclude_tools = exclude_tools;
+
+        ContextManagement cm;
+        cm.edits.push_back(edit);
+        request.context_management = cm;
         return *this;
     }
 
@@ -974,13 +1072,17 @@ public:
             // OAuth requires these beta headers
             beta_header = std::string(CLAUDE_CODE_BETA_HEADER) + "," + OAUTH_BETA_HEADER;
         }
-        
+
+        // Always include memory beta header (harmless if not using memory tool)
+        if (!beta_header.empty()) beta_header += ",";
+        beta_header += MEMORY_BETA_HEADER;
+
         // Add interleaved thinking beta header if enabled and tools are being used
         if (request.enable_interleaved_thinking && request.enable_thinking && !request.tool_definitions.empty()) {
             if (!beta_header.empty()) beta_header += ",";
             beta_header += "interleaved-thinking-2025-05-14";
         }
-        
+
         if (!beta_header.empty()) {
             headers = curl_slist_append(headers, ("anthropic-beta: " + beta_header).c_str());
         }

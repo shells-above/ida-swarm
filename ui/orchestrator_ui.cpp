@@ -1246,9 +1246,9 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
     control_layout->addStretch();
     
     // Tool call table
-    tool_table_ = new QTableWidget(0, 5, this);
+    tool_table_ = new QTableWidget(0, 6, this);
     tool_table_->setHorizontalHeaderLabels(
-        QStringList() << "Time" << "Agent" << "Tool" << "Parameters" << "Result"
+        QStringList() << "Time" << "Agent" << "Tool" << "Address" << "Parameters" << "Result"
     );
     tool_table_->horizontalHeader()->setStretchLastSection(true);
     tool_table_->setAlternatingRowColors(true);
@@ -1274,14 +1274,28 @@ ToolCallTracker::ToolCallTracker(QWidget* parent) : QWidget(parent) {
 void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& tool_data) {
     int row = tool_table_->rowCount();
     tool_table_->insertRow(row);
-    
+
     tool_table_->setItem(row, 0, new QTableWidgetItem(QDateTime::currentDateTime().toString("hh:mm:ss")));
     tool_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(agent_id)));
-    
+
     // Extract tool name and parameters
     std::string tool_name = tool_data.contains("tool_name") ? tool_data["tool_name"] : "unknown";
     tool_table_->setItem(row, 2, new QTableWidgetItem(QString::fromStdString(tool_name)));
-    
+
+    // Extract and format address
+    if (tool_data.contains("address")) {
+        uint64_t address = tool_data["address"];
+        // Check for BADADDR (0 or invalid address) - orchestrator tools use 0
+        if (address == 0) {
+            tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
+        } else {
+            QString addr_str = QString("0x%1").arg(address, 0, 16, QChar('0')).toUpper();
+            tool_table_->setItem(row, 3, new QTableWidgetItem(addr_str));
+        }
+    } else {
+        tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
+    }
+
     // Format parameters (from ToolCallTracker: "parameters")
     if (tool_data.contains("parameters")) {
         std::string params_full = tool_data["parameters"].dump();
@@ -1289,9 +1303,9 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
         auto* params_item = new QTableWidgetItem(QString::fromStdString(params_display));
         params_item->setToolTip(QString::fromStdString(params_full));  // Show full params on hover
         params_item->setData(Qt::UserRole, QString::fromStdString(params_full));  // Store full params for copying
-        tool_table_->setItem(row, 3, params_item);
+        tool_table_->setItem(row, 4, params_item);
     } else {
-        tool_table_->setItem(row, 3, new QTableWidgetItem("-"));
+        tool_table_->setItem(row, 4, new QTableWidgetItem("-"));
     }
     
     // Result status - ToolCallTracker events don't have results, just whether it's a write operation
@@ -1306,7 +1320,7 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
         } else {
             result_item->setForeground(QColor(100, 100, 100));  // Gray text for reads
         }
-        tool_table_->setItem(row, 4, result_item);
+        tool_table_->setItem(row, 5, result_item);
     } else if (tool_data.contains("result")) {
         // Legacy format from agents
         if (tool_data["result"].contains("success") && tool_data["result"]["success"] == false) {
@@ -1315,14 +1329,14 @@ void ToolCallTracker::add_tool_call(const std::string& agent_id, const json& too
             QFont font = result_item->font();
             font.setBold(true);
             result_item->setFont(font);
-            tool_table_->setItem(row, 4, result_item);
+            tool_table_->setItem(row, 5, result_item);
         } else {
             auto* result_item = new QTableWidgetItem("Success");
             result_item->setForeground(QColor(0, 150, 0));  // Green text for success
-            tool_table_->setItem(row, 4, result_item);
+            tool_table_->setItem(row, 5, result_item);
         }
     } else {
-        tool_table_->setItem(row, 4, new QTableWidgetItem("-"));
+        tool_table_->setItem(row, 5, new QTableWidgetItem("-"));
     }
     
     // Update agent filter if needed
@@ -1432,8 +1446,8 @@ bool ToolCallTracker::eventFilter(QObject* obj, QEvent* event) {
                         copyText += "\t";
                     }
                     
-                    // For Parameters column (column 3), use the full data
-                    if (item->column() == 3) {
+                    // For Parameters column (column 4), use the full data
+                    if (item->column() == 4) {
                         QVariant fullData = item->data(Qt::UserRole);
                         if (fullData.isValid()) {
                             copyText += fullData.toString();

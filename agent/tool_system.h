@@ -5,7 +5,6 @@
 #ifndef TOOL_SYSTEM_H
 #define TOOL_SYSTEM_H
 
-#include "analysis/memory.h"
 #include "analysis/actions.h"
 #include "analysis/deep_analysis.h"
 #include "patching/patch_manager.h"
@@ -36,12 +35,11 @@ inline std::string HexAddress(ea_t addr) {
 // IDA-specific base tool that extends the api Tool interface
 class IDAToolBase : public claude::tools::Tool {
 protected:
-    std::shared_ptr<BinaryMemory> memory;
     std::shared_ptr<ActionExecutor> executor;
 
 public:
-    IDAToolBase(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec)
-        : memory(mem), executor(exec) {}
+    explicit IDAToolBase(std::shared_ptr<ActionExecutor> exec)
+        : executor(exec) {}
 
     virtual ~IDAToolBase() = default;
 };
@@ -285,97 +283,6 @@ public:
             int max_xrefs = input.value("max_xrefs", 20);
 
             return claude::tools::ToolResult::success(executor->analyze_function(address, include_disasm, include_decomp, max_xrefs));
-        } catch (const std::exception& e) {
-            return claude::tools::ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Store analysis tool (unified knowledge storage)
-class StoreAnalysisTool : public IDAToolBase {
-public:
-    using IDAToolBase::IDAToolBase;
-
-    std::string name() const override {
-        return "store_analysis";
-    }
-
-    std::string description() const override {
-        return "Your PRIVATE (will not be shown to ANYONE) detective's notebook for the investigation. Store hypotheses, patterns, questions, "  // analyses will be provided to grader also
-               "observations that might make sense later, TODOs, and connections you're still exploring. "
-               "This is your thinking space - for permanent findings, use IDA's annotation tools "
-               "(set_name for functions/data, set_comment for logic/discoveries, set_local_type for structures).";
-    }
-
-    json parameters_schema() const override {
-        return claude::tools::ParameterBuilder()
-            .add_string("key", "Unique key for this analysis")
-            .add_string("content", "The analysis content")
-            .add_string("type", "Type of analysis: note, finding, hypothesis, question, analysis (analysis is for analyzing a specific function)")
-            .add_integer("address", "Associated address (optional)", false)
-            .add_array("related_addresses", "integer", "Additional related addresses", false)
-            .build();
-    }
-
-    claude::tools::ToolResult execute(const json& input) override {
-        try {
-            std::string key = input.at("key");
-            std::string content = input.at("content");
-            std::string type = input.at("type");
-
-            std::optional<ea_t> address;
-            if (input.contains("address")) {
-                address = ActionExecutor::parse_single_address_value(input.at("address"));
-            }
-
-            std::vector<ea_t> related_addresses;
-            if (input.contains("related_addresses")) {
-                related_addresses = ActionExecutor::parse_list_address_param(input, "related_addresses");
-            }
-
-            return claude::tools::ToolResult::success(executor->store_analysis(key, content, address, type, related_addresses));
-        } catch (const std::exception& e) {
-            return claude::tools::ToolResult::failure(e.what());
-        }
-    }
-};
-
-// Get analysis tool
-class GetAnalysisTool : public IDAToolBase {
-public:
-    using IDAToolBase::IDAToolBase;
-
-    std::string name() const override {
-        return "get_analysis";
-    }
-
-    std::string description() const override {
-        return "Retrieve your investigation notes - hypotheses, patterns, questions, and connections "
-               "you've stored while building understanding. These notes complement the permanent "
-               "annotations you've made in IDA's database. Use this to revisit earlier thoughts "
-               "that might make more sense with new context.";
-    }
-
-    json parameters_schema() const override {
-        return claude::tools::ParameterBuilder()
-            .add_string("key", "Specific key to retrieve", false)
-            .add_integer("address", "Find analysis related to this address", false)
-            .add_string("type", "Filter by type (note, finding, hypothesis, question, analysis)", false)
-            .add_string("pattern", "Search pattern in content", false)
-            .build();
-    }
-
-    claude::tools::ToolResult execute(const json& input) override {
-        try {
-            std::string key = input.value("key", "");
-            std::optional<ea_t> address;
-            if (input.contains("address")) {
-                address = ActionExecutor::parse_single_address_value(input.at("address"));
-            }
-            std::string type = input.value("type", "");
-            std::string pattern = input.value("pattern", "");
-
-            return claude::tools::ToolResult::success(executor->get_analysis(key, address, type, pattern));
         } catch (const std::exception& e) {
             return claude::tools::ToolResult::failure(e.what());
         }
@@ -777,7 +684,7 @@ class StartDeepAnalysisCollectionTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    StartDeepAnalysisCollectionTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
+    StartDeepAnalysisCollectionTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "start_deep_analysis_collection";
@@ -823,7 +730,7 @@ class AddToDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    AddToDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
+    AddToDeepAnalysisTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "add_to_deep_analysis";
@@ -878,7 +785,7 @@ class RequestDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    RequestDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
+    RequestDeepAnalysisTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "request_deep_analysis";
@@ -934,7 +841,7 @@ class ListDeepAnalysesTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    ListDeepAnalysesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
+    ListDeepAnalysesTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "list_deep_analyses";
@@ -977,7 +884,7 @@ class GetDeepAnalysisTool : public IDAToolBase {
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager;
 
 public:
-    GetDeepAnalysisTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(mem, exec), deep_analysis_manager(dam) {}
+    GetDeepAnalysisTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<DeepAnalysisManager> dam) : IDAToolBase(exec), deep_analysis_manager(dam) {}
 
     std::string name() const override {
         return "get_deep_analysis";
@@ -1271,7 +1178,7 @@ class PatchBytesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
 
 public:
-    PatchBytesTool(std::shared_ptr<BinaryMemory> mem, std::shared_ptr<ActionExecutor> exec, std::shared_ptr<PatchManager> pm) : IDAToolBase(mem, exec), patch_manager_(pm) {}
+    PatchBytesTool(std::shared_ptr<ActionExecutor> exec, std::shared_ptr<PatchManager> pm) : IDAToolBase(exec), patch_manager_(pm) {}
 
     std::string name() const override {
         return "patch_bytes";
@@ -1339,10 +1246,9 @@ class PatchAssemblyTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
 
 public:
-    PatchAssemblyTool(std::shared_ptr<BinaryMemory> mem,
-                      std::shared_ptr<ActionExecutor> exec,
+    PatchAssemblyTool(std::shared_ptr<ActionExecutor> exec,
                       std::shared_ptr<PatchManager> pm)
-        : IDAToolBase(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(exec), patch_manager_(pm) {}
 
     std::string name() const override {
         return "patch_assembly";
@@ -1415,10 +1321,9 @@ class RevertPatchTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
 
 public:
-    RevertPatchTool(std::shared_ptr<BinaryMemory> mem,
-                    std::shared_ptr<ActionExecutor> exec,
+    RevertPatchTool(std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
-        : IDAToolBase(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(exec), patch_manager_(pm) {}
 
     std::string name() const override {
         return "revert_patch";
@@ -1481,10 +1386,9 @@ class ListPatchesTool : public IDAToolBase {
     std::shared_ptr<PatchManager> patch_manager_;
 
 public:
-    ListPatchesTool(std::shared_ptr<BinaryMemory> mem,
-                    std::shared_ptr<ActionExecutor> exec,
+    ListPatchesTool(std::shared_ptr<ActionExecutor> exec,
                     std::shared_ptr<PatchManager> pm)
-        : IDAToolBase(mem, exec), patch_manager_(pm) {}
+        : IDAToolBase(exec), patch_manager_(pm) {}
 
     std::string name() const override {
         return "list_patches";
@@ -1576,10 +1480,9 @@ class AllocateCodeWorkspaceTool : public IDAToolBase {
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;
 
 public:
-    AllocateCodeWorkspaceTool(std::shared_ptr<BinaryMemory> mem,
-                              std::shared_ptr<ActionExecutor> exec,
+    AllocateCodeWorkspaceTool(std::shared_ptr<ActionExecutor> exec,
                               std::shared_ptr<CodeInjectionManager> cim)
-        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+        : IDAToolBase(exec), code_injection_manager_(cim) {}
 
     std::string name() const override {
         return "allocate_code_workspace";
@@ -1639,10 +1542,9 @@ class PreviewCodeInjectionTool : public IDAToolBase {
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;
 
 public:
-    PreviewCodeInjectionTool(std::shared_ptr<BinaryMemory> mem,
-                            std::shared_ptr<ActionExecutor> exec,
+    PreviewCodeInjectionTool(std::shared_ptr<ActionExecutor> exec,
                             std::shared_ptr<CodeInjectionManager> cim)
-        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+        : IDAToolBase(exec), code_injection_manager_(cim) {}
 
     std::string name() const override {
         return "preview_code_injection";
@@ -1708,10 +1610,9 @@ class FinalizeCodeInjectionTool : public IDAToolBase {
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;
 
 public:
-    FinalizeCodeInjectionTool(std::shared_ptr<BinaryMemory> mem,
-                              std::shared_ptr<ActionExecutor> exec,
+    FinalizeCodeInjectionTool(std::shared_ptr<ActionExecutor> exec,
                               std::shared_ptr<CodeInjectionManager> cim)
-        : IDAToolBase(mem, exec), code_injection_manager_(cim) {}
+        : IDAToolBase(exec), code_injection_manager_(cim) {}
 
     std::string name() const override {
         return "finalize_code_injection";
@@ -1782,74 +1683,69 @@ public:
 };
 
 inline void register_ida_tools(claude::tools::ToolRegistry& registry,
-                               std::shared_ptr<BinaryMemory> memory,
                                std::shared_ptr<ActionExecutor> executor,
                                std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,
                                std::shared_ptr<PatchManager> patch_manager,
                                std::shared_ptr<CodeInjectionManager> code_injection_manager,
                                const Config& config) {
     // Core navigation and info tools
-    registry.register_tool_type<GetXrefsTool>(memory, executor);
-    registry.register_tool_type<GetFunctionInfoTool>(memory, executor);
-    registry.register_tool_type<GetDataInfoTool>(memory, executor);
-    registry.register_tool_type<DumpDataTool>(memory, executor);
-    registry.register_tool_type<AnalyzeFunctionTool>(memory, executor);
+    registry.register_tool_type<GetXrefsTool>(executor);
+    registry.register_tool_type<GetFunctionInfoTool>(executor);
+    registry.register_tool_type<GetDataInfoTool>(executor);
+    registry.register_tool_type<DumpDataTool>(executor);
+    registry.register_tool_type<AnalyzeFunctionTool>(executor);
 
     // Search tools
-    registry.register_tool_type<SearchFunctionsTool>(memory, executor);
-    registry.register_tool_type<SearchGlobalsTool>(memory, executor);
-    registry.register_tool_type<SearchStringsTool>(memory, executor);
+    registry.register_tool_type<SearchFunctionsTool>(executor);
+    registry.register_tool_type<SearchGlobalsTool>(executor);
+    registry.register_tool_type<SearchStringsTool>(executor);
 
     // Modification tools
-    registry.register_tool_type<SetNameTool>(memory, executor);
-    registry.register_tool_type<SetCommentTool>(memory, executor);
-
-    // Analysis tools
-    registry.register_tool_type<StoreAnalysisTool>(memory, executor);
-    registry.register_tool_type<GetAnalysisTool>(memory, executor);
+    registry.register_tool_type<SetNameTool>(executor);
+    registry.register_tool_type<SetCommentTool>(executor);
 
     // Binary info tools
-    registry.register_tool_type<GetImportsTool>(memory, executor);
-    registry.register_tool_type<GetEntryPointsTool>(memory, executor);
+    registry.register_tool_type<GetImportsTool>(executor);
+    registry.register_tool_type<GetEntryPointsTool>(executor);
 
     // Updating decompilation tools
-    registry.register_tool_type<GetFunctionPrototypeTool>(memory, executor);
-    registry.register_tool_type<SetFunctionPrototypeTool>(memory, executor);
-    registry.register_tool_type<GetVariablesTool>(memory, executor);
-    registry.register_tool_type<SetVariableTool>(memory, executor);
+    registry.register_tool_type<GetFunctionPrototypeTool>(executor);
+    registry.register_tool_type<SetFunctionPrototypeTool>(executor);
+    registry.register_tool_type<GetVariablesTool>(executor);
+    registry.register_tool_type<SetVariableTool>(executor);
 
     // Local type tools
-    registry.register_tool_type<SearchLocalTypesTool>(memory, executor);
-    registry.register_tool_type<GetLocalTypeTool>(memory, executor);
-    registry.register_tool_type<SetLocalTypeTool>(memory, executor);
+    registry.register_tool_type<SearchLocalTypesTool>(executor);
+    registry.register_tool_type<GetLocalTypeTool>(executor);
+    registry.register_tool_type<SetLocalTypeTool>(executor);
 
     // Patch tools
     if (patch_manager) {
-        registry.register_tool_type<PatchBytesTool>(memory, executor, patch_manager);
-        registry.register_tool_type<PatchAssemblyTool>(memory, executor, patch_manager);
-        registry.register_tool_type<RevertPatchTool>(memory, executor, patch_manager);
-        registry.register_tool_type<ListPatchesTool>(memory, executor, patch_manager);
+        registry.register_tool_type<PatchBytesTool>(executor, patch_manager);
+        registry.register_tool_type<PatchAssemblyTool>(executor, patch_manager);
+        registry.register_tool_type<RevertPatchTool>(executor, patch_manager);
+        registry.register_tool_type<ListPatchesTool>(executor, patch_manager);
     }
 
     // Code injection tools
     if (code_injection_manager) {
-        registry.register_tool_type<AllocateCodeWorkspaceTool>(memory, executor, code_injection_manager);
-        registry.register_tool_type<PreviewCodeInjectionTool>(memory, executor, code_injection_manager);
-        registry.register_tool_type<FinalizeCodeInjectionTool>(memory, executor, code_injection_manager);
+        registry.register_tool_type<AllocateCodeWorkspaceTool>(executor, code_injection_manager);
+        registry.register_tool_type<PreviewCodeInjectionTool>(executor, code_injection_manager);
+        registry.register_tool_type<FinalizeCodeInjectionTool>(executor, code_injection_manager);
     }
 
     // Python execution tool (only if enabled in config)
     if (config.agent.enable_python_tool) {
-        registry.register_tool_type<RunPythonTool>(memory, executor);
+        registry.register_tool_type<RunPythonTool>(executor);
     }
 
     // Deep analysis
     if (deep_analysis_manager) {
-        registry.register_tool_type<StartDeepAnalysisCollectionTool>(memory, executor, deep_analysis_manager);
-        registry.register_tool_type<AddToDeepAnalysisTool>(memory, executor, deep_analysis_manager);
-        registry.register_tool_type<RequestDeepAnalysisTool>(memory, executor, deep_analysis_manager);
-        registry.register_tool_type<ListDeepAnalysesTool>(memory, executor, deep_analysis_manager);
-        registry.register_tool_type<GetDeepAnalysisTool>(memory, executor, deep_analysis_manager);
+        registry.register_tool_type<StartDeepAnalysisCollectionTool>(executor, deep_analysis_manager);
+        registry.register_tool_type<AddToDeepAnalysisTool>(executor, deep_analysis_manager);
+        registry.register_tool_type<RequestDeepAnalysisTool>(executor, deep_analysis_manager);
+        registry.register_tool_type<ListDeepAnalysesTool>(executor, deep_analysis_manager);
+        registry.register_tool_type<GetDeepAnalysisTool>(executor, deep_analysis_manager);
     }
 }
 

@@ -93,9 +93,242 @@ bool Orchestrator::initialize() {
         ORCH_LOG("Orchestrator: Failed to initialize tool tracker\n");
         return false;
     }
-    
+
     // Start monitoring for new tool calls
     tool_tracker_->start_monitoring();
+
+    // Initialize orchestrator memory handler
+    std::filesystem::path orch_memory_dir = workspace_dir / "memories";
+    std::filesystem::create_directories(orch_memory_dir);
+    memory_handler_ = std::make_unique<MemoryToolHandler>(orch_memory_dir.string());
+    ORCH_LOG("Orchestrator: Memory handler initialized at %s\n", orch_memory_dir.string().c_str());
+
+    // Copy extract_results.sh script to workspace
+    {
+        std::filesystem::path script_path = workspace_dir / "extract_results.sh";
+        static const char* EXTRACT_RESULTS_SCRIPT = R"SCRIPTEND(#!/bin/bash
+
+# Extract all agent results from IDA Swarm workspace
+# This script should be run from /tmp/ida_swarm_workspace/<binary_name>/
+# or can be run from anywhere by passing the workspace path as argument
+
+set -e
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Determine workspace directory
+if [ -n "$1" ]; then
+    WORKSPACE_DIR="$1"
+else
+    WORKSPACE_DIR="$(pwd)"
+fi
+
+# Validate workspace directory
+if [ ! -d "$WORKSPACE_DIR/agents" ]; then
+    echo -e "${RED}Error: Not a valid IDA Swarm workspace directory${NC}"
+    echo "Expected to find 'agents/' subdirectory in: $WORKSPACE_DIR"
+    echo ""
+    echo "Usage: $0 [workspace_path]"
+    echo "  workspace_path: Path to /tmp/ida_swarm_workspace/<binary_name>/ (default: current directory)"
+    exit 1
+fi
+
+OUTPUT_FILE="$WORKSPACE_DIR/all_agent_results.txt"
+AGENTS_DIR="$WORKSPACE_DIR/agents"
+CONFIGS_DIR="$WORKSPACE_DIR/configs"
+
+echo -e "${GREEN}IDA Swarm Results Extraction${NC}"
+echo -e "${BLUE}Workspace: $WORKSPACE_DIR${NC}"
+echo ""
+
+# Check if jq is available for JSON parsing
+if command -v jq &> /dev/null; then
+    HAS_JQ=true
+    echo -e "${GREEN}✓ jq available for JSON parsing${NC}"
+else
+    HAS_JQ=false
+    echo -e "${YELLOW}⚠ jq not found, using fallback parsing (may be less reliable)${NC}"
+fi
+
+echo ""
+
+# Initialize output file
+cat > "$OUTPUT_FILE" << 'EOFMARKER'
+================================================================================
+                     IDA SWARM AGENT RESULTS SUMMARY
+================================================================================
+
+This file contains the consolidated results from all reverse engineering agents
+that worked on this binary analysis task.
+
+EOFMARKER
+
+echo "Generated at: $(date)" >> "$OUTPUT_FILE"
+echo "" >> "$OUTPUT_FILE"
+
+# Count agents
+agent_count=$(find "$AGENTS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)
+echo -e "${BLUE}Found $agent_count agent(s) to process${NC}"
+echo ""
+
+# Process each agent directory
+for agent_dir in "$AGENTS_DIR"/*; do
+    if [ ! -d "$agent_dir" ]; then
+        continue
+    fi
+
+    agent_id=$(basename "$agent_dir")
+    echo -e "${YELLOW}Processing: $agent_id${NC}"
+
+    # Start agent section in output
+    cat >> "$OUTPUT_FILE" << EOFMARKER
+
+================================================================================
+Agent: $agent_id
+================================================================================
+
+EOFMARKER
+
+    # Extract task from config
+    config_file="$CONFIGS_DIR/${agent_id}_config.json"
+    if [ -f "$config_file" ]; then
+        echo "  - Reading task from config..."
+
+        if [ "$HAS_JQ" = true ]; then
+            task=$(jq -r '.task // "Task not found"' "$config_file")
+        else
+            # Fallback: grep for "task" field
+            task=$(grep -o '"task"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" | sed 's/"task"[[:space:]]*:[[:space:]]*"\(.*\)"/\1/' | head -1)
+            if [ -z "$task" ]; then
+                task="Task not found (parsing error)"
+            fi
+        fi
+
+        echo "Task:" >> "$OUTPUT_FILE"
+        echo "------" >> "$OUTPUT_FILE"
+        echo "$task" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    else
+        echo "  - Config file not found"
+        echo "Task: [Config file not found]" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+
+    # Extract all memories
+    memories_dir="$agent_dir/memories"
+    if [ -d "$memories_dir" ] && [ "$(ls -A "$memories_dir" 2>/dev/null)" ]; then
+        echo "  - Extracting memories..."
+
+        echo "Memories:" >> "$OUTPUT_FILE"
+        echo "---------" >> "$OUTPUT_FILE"
+
+        # Find all files in memories directory (recursively)
+        find "$memories_dir" -type f | sort | while read -r memory_file; do
+            # Get relative path from memories directory
+            rel_path=$(echo "$memory_file" | sed "s|^$memories_dir/||")
+
+            echo "" >> "$OUTPUT_FILE"
+            echo "  File: $rel_path" >> "$OUTPUT_FILE"
+            echo "  $(printf '=%.0s' {1..70})" >> "$OUTPUT_FILE"
+            cat "$memory_file" >> "$OUTPUT_FILE"
+            echo "" >> "$OUTPUT_FILE"
+        done
+
+        echo "" >> "$OUTPUT_FILE"
+    else
+        echo "  - No memories found"
+        echo "Memories: [None]" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+
+    # Extract final report from conversation_state.json
+    conv_state="$agent_dir/conversation_state.json"
+    if [ -f "$conv_state" ]; then
+        echo "  - Extracting final report..."
+
+        if [ "$HAS_JQ" = true ]; then
+            # Use jq to extract the last assistant message's text content
+            report=$(jq -r '
+                .conversation // []
+                | map(select(.role == "assistant"))
+                | last
+                | .content // []
+                | map(select(.type == "text"))
+                | map(.text)
+                | join("\n")
+            ' "$conv_state")
+
+            if [ -z "$report" ] || [ "$report" = "null" ]; then
+                report="[No final report found in conversation]"
+            fi
+        else
+            # Fallback: try to extract last assistant message (very basic)
+            # This is fragile but better than nothing
+            report=$(grep -A 50 '"role"[[:space:]]*:[[:space:]]*"assistant"' "$conv_state" | tail -50 | grep -o '"text"[[:space:]]*:[[:space:]]*"[^"]*"' | tail -1 | sed 's/"text"[[:space:]]*:[[:space:]]*"\(.*\)"/\1/')
+
+            if [ -z "$report" ]; then
+                report="[Unable to parse final report - jq not available]"
+            fi
+        fi
+
+        echo "Output Report:" >> "$OUTPUT_FILE"
+        echo "--------------" >> "$OUTPUT_FILE"
+        echo "$report" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    else
+        echo "  - Conversation state not found"
+        echo "Output Report: [Conversation state file not found]" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+
+    echo -e "${GREEN}  ✓ Complete${NC}"
+done
+
+# Add footer
+cat >> "$OUTPUT_FILE" << EOFMARKER
+
+================================================================================
+                              END OF RESULTS
+================================================================================
+EOFMARKER
+
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}✓ Extraction complete!${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+echo -e "Results saved to: ${BLUE}$OUTPUT_FILE${NC}"
+echo ""
+echo "Summary:"
+echo "  - Agents processed: $agent_count"
+echo "  - Output file size: $(du -h "$OUTPUT_FILE" | cut -f1)"
+echo ""
+)SCRIPTEND";
+
+        try {
+            std::ofstream script_file(script_path);
+            if (script_file.is_open()) {
+                script_file << EXTRACT_RESULTS_SCRIPT;
+                script_file.close();
+
+                // Make script executable
+                #ifndef __NT__
+                chmod(script_path.string().c_str(), 0755);
+                #endif
+
+                ORCH_LOG("Orchestrator: Created extract_results.sh script at %s\n", script_path.string().c_str());
+            } else {
+                ORCH_LOG("Orchestrator: WARNING - Failed to create extract_results.sh script\n");
+            }
+        } catch (const std::exception& e) {
+            ORCH_LOG("Orchestrator: WARNING - Error creating extract_results.sh: %s\n", e.what());
+        }
+    }
 
     // Subscribe to tool call events for real-time processing
     event_bus_subscription_id_ = event_bus_.subscribe(
@@ -235,6 +468,7 @@ bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
         ORCH_LOG("Orchestrator: Failed to open input pipe: %s\n", strerror(errno));
         return false;
     }
+    ORCH_LOG("Orchestrator: Opened input pipe with FD %d\n", mcp_input_fd_);
 
     // Open output pipe (we write to this)
     mcp_output_fd_ = open(output_pipe_path.c_str(), O_WRONLY);
@@ -243,8 +477,10 @@ bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
         close(mcp_input_fd_);
         return false;
     }
+    ORCH_LOG("Orchestrator: Opened output pipe with FD %d\n", mcp_output_fd_);
 
-    ORCH_LOG("Orchestrator: MCP mode initialized for session %s\n", session_id.c_str());
+    ORCH_LOG("Orchestrator: MCP mode initialized for session %s (input FD=%d, output FD=%d)\n",
+        session_id.c_str(), mcp_input_fd_, mcp_output_fd_);
     return true;
 }
 
@@ -321,6 +557,13 @@ void Orchestrator::start_mcp_listener() {
 
                             if (safe_write(mcp_output_fd_, response_str, "MCP response")) {
                                 ORCH_LOG("Orchestrator: Successfully sent MCP response for method '%s'\n", method.c_str());
+
+                                // Ensure data is flushed to the pipe
+                                if (fsync(mcp_output_fd_) == 0) {
+                                    ORCH_LOG("Orchestrator: Successfully fsynced MCP response to FD %d\n", mcp_output_fd_);
+                                } else {
+                                    ORCH_LOG("Orchestrator: WARNING - fsync failed: %s (FD %d)\n", strerror(errno), mcp_output_fd_);
+                                }
                             } else {
                                 ORCH_LOG("Orchestrator: ERROR - Failed to send MCP response for method '%s'\n", method.c_str());
                                 // Continue anyway - client will handle timeout
@@ -489,11 +732,7 @@ void Orchestrator::clear_conversation() {
     
     // Clear current task
     current_user_task_.clear();
-    
-    // Reset consolidation state
-    consolidation_state_.consolidation_in_progress = false;
-    consolidation_state_.consolidation_count = 0;
-    
+
     ORCH_LOG("Orchestrator: Conversation cleared, ready for new task\n");
 }
 
@@ -574,6 +813,14 @@ void Orchestrator::process_user_input(const std::string& input) {
         response.usage.cache_read_tokens, response.usage.cache_creation_tokens);
     token_stats_.add_usage(response.usage);
     log_token_usage(response.usage, token_stats_.get_total());
+
+    // Log context clearing if it occurred
+    if (response.context_management) {
+        for (const auto& edit : response.context_management->applied_edits) {
+            ORCH_LOG("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
+                edit.cleared_tool_uses, edit.cleared_input_tokens);
+        }
+    }
     
     // Display orchestrator's response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
@@ -617,12 +864,6 @@ void Orchestrator::process_user_input(const std::string& input) {
         
         // Continue processing until no more tool calls
         while (true) {
-            // Check if we need to consolidate context
-            if (should_consolidate_context()) {
-                ORCH_LOG("Orchestrator: Context limit reached, consolidating conversation...\n");
-                consolidate_conversation_context();
-            }
-            
             // Send tool results back
             claude::ChatResponse continuation = send_continuation_request();
             if (!continuation.success) {
@@ -641,6 +882,14 @@ void Orchestrator::process_user_input(const std::string& input) {
                 continuation.usage.input_tokens, continuation.usage.output_tokens,
                 continuation.usage.cache_read_tokens, continuation.usage.cache_creation_tokens);
             token_stats_.add_usage(continuation.usage);
+
+            // Log context clearing if it occurred
+            if (continuation.context_management) {
+                for (const auto& edit : continuation.context_management->applied_edits) {
+                    ORCH_LOG("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
+                        edit.cleared_tool_uses, edit.cleared_input_tokens);
+                }
+            }
             
             // Display text if present
             auto cont_text = claude::messages::ContentExtractor::extract_text(continuation.message);
@@ -711,8 +960,28 @@ claude::ChatResponse Orchestrator::send_continuation_request() {
         builder.add_message(msg);
     }
 
-    // Client now handles OAuth token refresh automatically
-    return api_client_->send_request(builder.build());
+    ORCH_LOG("Orchestrator: Sending continuation request with %zu messages\n", conversation_history_.size());
+    return send_request_with_memory(builder);
+}
+
+claude::ChatResponse Orchestrator::send_request_with_memory(claude::ChatRequestBuilder& builder) {
+    // Enable automatic context clearing
+    builder.enable_auto_context_clearing(
+        100000,  // trigger at 100k tokens
+        5,       // keep 5 most recent tool uses
+        {"memory"}  // never clear memory tool results
+    );
+
+    auto request = builder.build();
+
+    // Add memory tool (before IDA tools so cache control stays on last IDA tool)
+    json memory_tool = {
+        {"type", "memory_20250818"},
+        {"name", "memory"}
+    };
+    request.tool_definitions.insert(request.tool_definitions.begin(), memory_tool);
+
+    return api_client_->send_request(request);
 }
 
 claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& user_input) {
@@ -748,8 +1017,7 @@ claude::ChatResponse Orchestrator::send_orchestrator_request(const std::string& 
 
     builder.add_message(claude::messages::Message::user_text(enhanced_input));
 
-    // Client now handles OAuth token refresh automatically
-    return api_client_->send_request(builder.build());
+    return send_request_with_memory(builder);
 }
 
 std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(const claude::messages::Message& msg) {
@@ -772,10 +1040,13 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
     for (const claude::messages::ToolUseContent* tool_use : tool_calls) {
         if (tool_use->name == "spawn_agent") {
             ORCH_LOG("Orchestrator: Executing spawn_agent tool via registry (id: %s)\n", tool_use->id.c_str());
-            
+
             // Execute via tool registry (which calls spawn_agent_async)
             claude::messages::Message result = tool_registry_.execute_tool_call(*tool_use);
-            
+
+            // Record orchestrator tool call
+            tool_tracker_->record_tool_call("orchestrator", tool_use->name, BADADDR, tool_use->input);
+
             // Extract agent_id from the tool result
             claude::messages::ContentExtractor extractor;
             for (const auto& content : result.contents()) {
@@ -801,10 +1072,29 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                 }
             }
             // Don't add to results yet - we'll enrich it after waiting
+        } else if (tool_use->name == "memory") {
+            // Intercept memory tool calls and handle locally
+            ORCH_LOG("Orchestrator: Executing memory tool (id: %s)\n", tool_use->id.c_str());
+
+            json result = memory_handler_
+                ? memory_handler_->execute_command(tool_use->input)
+                : json{{"success", false}, {"error", "Memory system not initialized"}};
+
+            // Record orchestrator tool call
+            tool_tracker_->record_tool_call("orchestrator", tool_use->name, BADADDR, tool_use->input);
+
+            claude::messages::Message memory_result = claude::messages::Message::tool_result(
+                tool_use->id, result.dump()
+            );
+
+            non_spawn_results.push_back({tool_use->id, memory_result});
         } else {
             // Execute other tools normally and store for later
             ORCH_LOG("Orchestrator: Executing non-spawn_agent tool: %s\n", tool_use->name.c_str());
             non_spawn_results.push_back({tool_use->id, tool_registry_.execute_tool_call(*tool_use)});
+
+            // Record orchestrator tool call
+            tool_tracker_->record_tool_call("orchestrator", tool_use->name, BADADDR, tool_use->input);
         }
     }
     
@@ -913,7 +1203,13 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     
     // Agents will discover each other dynamically via IRC
     std::string agent_prompt = generate_agent_prompt(task, context);
-    
+
+    // Create agent memory directory
+    std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
+    std::filesystem::path agent_memory_dir = workspace_dir / "agents" / agent_id / "memories";
+    std::filesystem::create_directories(agent_memory_dir);
+    ORCH_LOG("Orchestrator: Created agent memory directory at %s\n", agent_memory_dir.string().c_str());
+
     // Prepare agent configuration with swarm settings
     json agent_config = {
         {"agent_id", agent_id},
@@ -922,7 +1218,8 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
         {"prompt", agent_prompt},       // Full prompt with task and collaboration instructions
         {"database", agent_db_path},
         {"irc_server", config_.irc.server},
-        {"irc_port", allocated_irc_port_}  // Use the dynamically allocated port
+        {"irc_port", allocated_irc_port_},  // Use the dynamically allocated port
+        {"memory_directory", agent_memory_dir.string()}  // Fresh memory directory for this agent
     };
     
     // Spawn the agent process
@@ -1052,46 +1349,46 @@ CONTEXT: )" + context;
     // i do not want to do this, but the orchestrator is not good at understanding that these are starting fresh, and it doesn't provide enough information.
     // if agent collaboration was working better that would solve this, but the agents just go and waste eachothers time so i had to remove it
     // in the future ill redesign all of this (currently super hodgepodge) focused around irc from the get go
-    if (!completed_copy.empty()) {
-        prompt += R"(
-
-COMPLETED AGENTS & THEIR RESULTS:
-)";
-        for (const std::string& agent_id : completed_copy) {
-            auto agent_it = agents_.find(agent_id);
-            auto result_it = results_copy.find(agent_id);
-
-            if (agent_it != agents_.end() && result_it != results_copy.end()) {
-                prompt += "- " + agent_id + " (task: " + agent_it->second.task + ")\n";
-                prompt += "  Result: " + result_it->second + "\n\n";
-            }
-        }
-        prompt += R"(Use these completed results to:
-- Build upon previous findings rather than duplicating work
-- Reference specific discoveries from other agents
-- Avoid re-analyzing what has already been solved
-
-)";
-    }
-
-    if (!active_agents.empty()) {
-        prompt += R"(CURRENTLY ACTIVE AGENTS:
-)";
-        for (const auto& [agent_id, agent_task] : active_agents) {
-            prompt += "- " + agent_id + " (working on: " + agent_task + ")\n";
-        }
-        prompt += R"(
-You can see what each agent is working on above. Use this information to:
-- Share relevant findings with agents working on related tasks
-- Coordinate when your tasks overlap or depend on each other
-)";
-    } else if (completed_copy.empty()) {
-        prompt += R"(
-
-You are currently the only active agent.
-- Other agents may join later and will be announced via IRC
-)";
-    }
+//     if (!completed_copy.empty()) {
+//         prompt += R"(
+//
+// COMPLETED AGENTS & THEIR RESULTS:
+// )";
+//         for (const std::string& agent_id : completed_copy) {
+//             auto agent_it = agents_.find(agent_id);
+//             auto result_it = results_copy.find(agent_id);
+//
+//             if (agent_it != agents_.end() && result_it != results_copy.end()) {
+//                 prompt += "- " + agent_id + " (task: " + agent_it->second.task + ")\n";
+//                 prompt += "  Result: " + result_it->second + "\n\n";
+//             }
+//         }
+//         prompt += R"(Use these completed results to:
+// - Build upon previous findings rather than duplicating work
+// - Reference specific discoveries from other agents
+// - Avoid re-analyzing what has already been solved
+//
+// )";
+//     }
+//
+//     if (!active_agents.empty()) {
+//         prompt += R"(CURRENTLY ACTIVE AGENTS:
+// )";
+//         for (const auto& [agent_id, agent_task] : active_agents) {
+//             prompt += "- " + agent_id + " (working on: " + agent_task + ")\n";
+//         }
+//         prompt += R"(
+// You can see what each agent is working on above. Use this information to:
+// - Share relevant findings with agents working on related tasks
+// - Coordinate when your tasks overlap or depend on each other
+// )";
+//     } else if (completed_copy.empty()) {
+//         prompt += R"(
+//
+// You are currently the only active agent.
+// - Other agents may join later and will be announced via IRC
+// )";
+//     }
 
     /*
     Remember: You're part of a team. Collaborate effectively, but know when your work is complete.
@@ -1120,7 +1417,7 @@ IMPORTANT NOTES:
 
 TASK COMPLETION PROTOCOL:
 When you have thoroughly analyzed your assigned task and gathered sufficient evidence:
-1. Store ALL your key findings using the store_analysis tool
+1. Store ALL your key findings using the memory tool
 2. Send a comprehensive final report as a regular message with NO tool calls
 
 CRITICAL COMPLETION RULES:
@@ -1937,91 +2234,6 @@ void Orchestrator::shutdown() {
     ORCH_LOG("Orchestrator: Shutdown complete\n");
 }
 
-
-bool Orchestrator::should_consolidate_context() const {
-    if (consolidation_state_.consolidation_in_progress) {
-        return false;  // Already consolidating
-    }
-    
-    // Estimate total tokens in conversation history
-    size_t total_tokens = 0;
-    for (const auto& msg : conversation_history_) {
-        std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
-        if (text) {
-            total_tokens += text->length() / 4;  // Simple token estimation
-        }
-        
-        // Add tokens for tool calls and results
-        auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-        for (const auto* tool : tool_calls) {
-            total_tokens += tool->name.length() / 4;
-            total_tokens += tool->input.dump().length() / 4;
-        }
-    }
-    
-    return total_tokens > config_.agent.context_limit;
-}
-
-void Orchestrator::consolidate_conversation_context() {
-    ORCH_LOG("Orchestrator: Starting context consolidation...\n");
-    
-    consolidation_state_.consolidation_in_progress = true;
-    consolidation_state_.consolidation_count++;
-    consolidation_state_.last_consolidation = std::chrono::steady_clock::now();
-    
-    // Create consolidation summary
-    std::string summary = create_orchestrator_consolidation_summary(conversation_history_);
-    
-    // Replace conversation history with just the summary
-    conversation_history_.clear();
-    conversation_history_.push_back(claude::messages::Message::user_text(current_user_task_));
-    conversation_history_.push_back(claude::messages::Message::assistant_text(summary));
-    
-    consolidation_state_.consolidation_in_progress = false;
-    
-    ORCH_LOG("Orchestrator: Context consolidation complete (consolidation #%d)\n", 
-        consolidation_state_.consolidation_count);
-}
-
-std::string Orchestrator::create_orchestrator_consolidation_summary(const std::vector<claude::messages::Message>& conversation) const {
-    // Send conversation to Claude for summarization
-    claude::ChatRequestBuilder builder;
-    builder.with_model(claude::Model::Sonnet45)  // Use Sonnet for consolidation
-           .with_system_prompt(ORCHESTRATOR_CONSOLIDATION_PROMPT)
-           .with_max_tokens(64000)
-           .with_max_thinking_tokens(12000)
-           .with_temperature(1.0)
-           .enable_thinking(true);
-    
-    // Add consolidation prompt
-    builder.add_message(claude::messages::Message::user_text("You are consolidating an orchestrator's conversation history."));
-    
-    // Add conversation history (excluding the current consolidation request)
-    for (size_t i = 0; i < conversation.size(); ++i) {
-        builder.add_message(conversation[i]);
-    }
-
-    claude::ChatResponse response = api_client_->send_request(builder.build());
-    
-    if (response.success) {
-        std::optional<std::string> summary_text = claude::messages::ContentExtractor::extract_text(response.message);
-        if (summary_text) {
-            return "=== ORCHESTRATOR CONTEXT CONSOLIDATION ===\n\n" + *summary_text;
-        }
-    }
-    
-    // Fallback summary if Claude request fails
-    return std::format(
-        "=== ORCHESTRATOR CONTEXT CONSOLIDATION ===\n\n"
-        "User Task: {}\n"
-        "Agents Spawned: {}\n"
-        "Consolidation Count: {}\n"
-        "Note: Full consolidation failed, using fallback summary.",
-        current_user_task_,
-        agents_.size(),
-        consolidation_state_.consolidation_count
-    );
-}
 
 void Orchestrator::handle_tool_call_event(const AgentEvent& event) {
     // Extract tool call data from event

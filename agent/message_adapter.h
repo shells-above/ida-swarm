@@ -177,7 +177,6 @@ private:
             case AgentEvent::ERROR: return "ERROR";
             case AgentEvent::ANALYSIS_RESULT: return "ANALYSIS_RESULT";
             case AgentEvent::GRADER_FEEDBACK: return "GRADER_FEEDBACK";
-            case AgentEvent::CONTEXT_CONSOLIDATION: return "CONTEXT_CONSOLIDATION";
             case AgentEvent::USER_MESSAGE: return "USER_MESSAGE";
             default: return "UNKNOWN";
         }

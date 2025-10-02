@@ -141,34 +141,8 @@ Be extremely thorough and technical. This is a deep dive analysis where detail a
 }
 
 void DeepAnalysisManager::store_analysis_result(const DeepAnalysisResult& result) {
-    // Store in our map
+    // Store in our map (Memory tool handles persistence automatically)
     completed_analyses_[result.key] = result;
-
-    // Store using the new unified analysis system
-    json metadata;
-    metadata["topic"] = result.topic;
-    metadata["task"] = result.task_description;
-    metadata["completed_at"] = std::chrono::system_clock::to_time_t(result.completed_at);
-    metadata["token_usage"] = result.token_usage.to_json();
-    // Cost calculated from token_usage when needed
-
-    // Store the main analysis
-    memory_->store_analysis(
-        "deep_analysis_" + result.key,
-        result.analysis,
-        std::nullopt,
-        "deep_analysis",
-        {}
-    );
-
-    // Store the metadata
-    memory_->store_analysis(
-        "deep_analysis_meta_" + result.key,
-        metadata.dump(),
-        std::nullopt,
-        "deep_analysis_metadata",
-        {}
-    );
 }
 
 std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analyses() const {
@@ -176,31 +150,9 @@ std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analy
 
     std::vector<std::pair<std::string, std::string>> results;
 
-    // Get from cache first
+    // Return from in-memory cache (Memory tool handles persistence)
     for (const auto& [key, analysis] : completed_analyses_) {
         results.push_back({key, analysis.topic + " - " + analysis.task_description});
-    }
-
-    // Also check BinaryMemory for any stored analyses we don't have loaded
-    auto stored_analyses = memory_->get_analysis("", std::nullopt, "deep_analysis_metadata", "");
-
-    for (const auto& entry : stored_analyses) {
-        // Extract key from "deep_analysis_meta_" prefix
-        if (entry.key.find("deep_analysis_meta_") == 0) {
-            std::string key = entry.key.substr(19); // Remove prefix
-
-            // Check if we already have this in cache
-            if (completed_analyses_.find(key) == completed_analyses_.end()) {
-                try {
-                    json metadata = json::parse(entry.content);
-                    std::string description = metadata["topic"].get<std::string>() + " - " +
-                                            metadata["task"].get<std::string>();
-                    results.push_back({key, description});
-                } catch (...) {
-                    results.push_back({key, "Unknown analysis"});
-                }
-            }
-        }
     }
 
     return results;
@@ -209,33 +161,10 @@ std::vector<std::pair<std::string, std::string>> DeepAnalysisManager::list_analy
 std::optional<DeepAnalysisResult> DeepAnalysisManager::get_analysis(const std::string& key) const {
     qmutex_locker_t lock(mutex_);
 
-    // Check loaded analyses first
+    // Check in-memory cache (Memory tool handles persistence)
     auto it = completed_analyses_.find(key);
     if (it != completed_analyses_.end()) {
         return it->second;
-    }
-
-    // Try to load from BinaryMemory using the new API
-    auto analysis_entries = memory_->get_analysis("deep_analysis_" + key);
-    auto meta_entries = memory_->get_analysis("deep_analysis_meta_" + key);
-
-    if (!analysis_entries.empty() && !meta_entries.empty()) {
-        try {
-            json metadata = json::parse(meta_entries[0].content);
-
-            DeepAnalysisResult result;
-            result.key = key;
-            result.topic = metadata["topic"];
-            result.task_description = metadata["task"];
-            result.analysis = analysis_entries[0].content;
-            result.completed_at = std::chrono::system_clock::from_time_t(metadata["completed_at"]);
-            result.token_usage = claude::TokenUsage::from_json(metadata["token_usage"]);
-            // Cost calculated from token_usage when needed
-
-            return result;
-        } catch (...) {
-            return std::nullopt;
-        }
     }
 
     return std::nullopt;
@@ -260,32 +189,7 @@ std::string DeepAnalysisManager::build_context(
         }
     }
 
-    // Add all relevant memory context using the new unified system
-    context << "=== BINARY ANALYSIS MEMORY ===\n";
-
-    // Get all non-deep-analysis entries
-    auto all_analyses = memory_->get_analysis("", std::nullopt, "", "");
-
-    // Group by type for better organization
-    std::map<std::string, std::vector<AnalysisEntry>> by_type;
-    for (const AnalysisEntry& entry: all_analyses) {
-        // Skip deep analysis results to avoid recursion
-        if (entry.type != "deep_analysis" && entry.type != "deep_analysis_metadata") {
-            by_type[entry.type].push_back(entry);
-        }
-    }
-
-    // Output grouped analyses
-    for (const auto& [type, entries] : by_type) {
-        context << "\n--- " << type << " entries ---\n";
-        for (const AnalysisEntry& entry: entries) {
-            context << "[" << entry.key << "]";
-            if (entry.address) {
-                context << " (address: 0x" << std::hex << *entry.address << ")";
-            }
-            context << ":\n" << entry.content << "\n\n";
-        }
-    }
+    // Memory tool now handles context automatically via memory file system
 
     // Add full analysis for all related functions
     if (!collection.related_functions.empty()) {

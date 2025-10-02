@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../core/common.h"
-#include "../analysis/memory.h"
 #include "../analysis/actions.h"
 #include "../patching/patch_manager.h"
 #include "../patching/code_injection_manager.h"
@@ -34,7 +33,6 @@ public:
     
 private:
     // Core components for tool execution on main database
-    std::shared_ptr<BinaryMemory> memory_;
     std::shared_ptr<ActionExecutor> executor_;
     std::shared_ptr<PatchManager> patch_manager_;
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;
