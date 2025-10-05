@@ -1191,7 +1191,7 @@ public:
                "WARNING: If new_bytes length > original_bytes length, YOU WILL OVERWRITE adjacent data/code! "
                "DANGER: Overwriting beyond intended boundaries can corrupt instructions, data structures, or critical code. "
                "ALWAYS: 1) Check instruction boundaries, 2) Verify patch size, 3) Understand what follows the patch location. "
-               "This tool modifies the binary permanently - mistakes can break the entire program!";
+               "This tool modifies the binary permanently (this INSTANTLY performs the patch) - mistakes can break the entire program!";
     }
 
     json parameters_schema() const override {
@@ -1263,7 +1263,7 @@ public:
                "DANGER: Overwriting adjacent instructions can break control flow, corrupt function logic, or crash the program. "
                "ALWAYS: 1) Analyze surrounding instructions, 2) Check assembled size vs original, 3) Understand code flow impact. "
                "NOTE: Tool adds NOPs only if new instruction is SMALLER - it will NOT prevent overwriting if larger! "
-               "This tool modifies the binary permanently - incorrect patches can destroy program functionality!";
+               "This tool modifies the binary permanently (this INSTANTLY performs the patch) - incorrect patches can destroy program functionality!";
     }
 
     json parameters_schema() const override {
