@@ -29,16 +29,24 @@ public:
         bool active;
         int orchestrator_pid;
 
-        // IPC communication channels
-        int input_fd;   // Write to orchestrator
-        int output_fd;  // Read from orchestrator
+        // File-based communication
+        std::string session_dir;           // /tmp/ida_swarm_sessions/{session_id}/
+        std::string state_file;            // state.json
+        std::string request_file;          // request.json
+        std::string response_file;         // response.json
+        std::string request_seq_file;      // request_seq
+        std::string response_seq_file;     // response_seq
+
+        // Sequence tracking for communication
+        uint64_t request_seq = 0;
+        uint64_t response_seq = 0;
 
         // Response queue for async processing
         std::queue<json> response_queue;
         std::mutex queue_mutex;
         std::condition_variable response_cv;
 
-        // Thread for reading orchestrator output
+        // Thread for polling orchestrator output
         std::unique_ptr<std::thread> reader_thread;
         bool reader_should_stop = false;
 
@@ -77,25 +85,28 @@ private:
     std::map<std::string, std::unique_ptr<Session>> sessions_;
     std::map<std::string, std::string> binary_to_session_;  // Maps binary paths to session IDs
     mutable std::mutex sessions_mutex_;
-    int next_session_num_ = 1;
 
     // Configuration
     int max_sessions_ = 5;
+    std::string sessions_root_dir_ = "/tmp/ida_swarm_sessions";
 
-    // Helper to generate unique session ID
-    std::string generate_session_id();
+    // Helper to generate unique session ID from binary path hash
+    std::string generate_session_id(const std::string& binary_path);
+
+    // Hash binary path to create deterministic session ID
+    std::string hash_binary_path(const std::string& binary_path);
 
     // Spawn orchestrator process
     int spawn_orchestrator(const std::string& binary_path, const std::string& session_id,
-                          int& input_fd, int& output_fd);
+                          Session* session);
 
-    // Send JSON message to orchestrator
-    bool send_json_to_orchestrator(int fd, const json& msg);
+    // Send JSON message to orchestrator via file
+    bool send_json_to_orchestrator(Session* session, const json& msg);
 
-    // Read JSON response from orchestrator
-    json read_json_from_orchestrator(int fd, int timeout_ms = -1);
+    // Read JSON response from orchestrator via file
+    json read_json_from_orchestrator(Session* session, int timeout_ms = -1);
 
-    // Background thread to read orchestrator output
+    // Background thread to poll orchestrator output
     void orchestrator_reader_thread(Session* session);
 
     // Check if orchestrator process is still running
@@ -104,14 +115,20 @@ private:
     // Kill orchestrator process
     void kill_orchestrator(int pid);
 
-    // Create named pipes for IPC (just FIFOs, not opened)
-    bool create_pipes(const std::string& session_id);
+    // Create session directory and files
+    bool create_session_directory(Session* session);
 
-    // Open named pipes for IPC
-    bool open_pipes(const std::string& session_id, int& input_fd, int& output_fd);
+    // Cleanup session directory
+    void cleanup_session_directory(const std::string& session_id);
 
-    // Cleanup pipes
-    void cleanup_pipes(const std::string& session_id);
+    // Update session state file
+    bool update_state_file(Session* session);
+
+    // Read sequence number from file
+    uint64_t read_seq_file(const std::string& filepath);
+
+    // Write sequence number to file
+    bool write_seq_file(const std::string& filepath, uint64_t seq);
 
     // Detect if binary needs -T flag for Fat Mach-O ARM64 slice selection
     std::string detect_type_flag(const std::string& binary_path);

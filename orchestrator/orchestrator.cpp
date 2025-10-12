@@ -289,6 +289,39 @@ EOFMARKER
     echo -e "${GREEN}  ✓ Complete${NC}"
 done
 
+# Extract orchestrator memories at the end
+ORCHESTRATOR_MEMORIES="$WORKSPACE_DIR/memories"
+if [ -d "$ORCHESTRATOR_MEMORIES" ] && [ "$(ls -A "$ORCHESTRATOR_MEMORIES" 2>/dev/null)" ]; then
+    echo ""
+    echo -e "${YELLOW}Processing: Orchestrator Memories${NC}"
+
+    cat >> "$OUTPUT_FILE" << EOFMARKER
+
+================================================================================
+Orchestrator Memories
+================================================================================
+
+EOFMARKER
+
+    # Find all files in orchestrator memories directory (recursively)
+    find "$ORCHESTRATOR_MEMORIES" -type f | sort | while read -r memory_file; do
+        # Get relative path from memories directory
+        rel_path=$(echo "$memory_file" | sed "s|^$ORCHESTRATOR_MEMORIES/||")
+
+        echo "" >> "$OUTPUT_FILE"
+        echo "  File: $rel_path" >> "$OUTPUT_FILE"
+        echo "  $(printf '=%.0s' {1..70})" >> "$OUTPUT_FILE"
+        cat "$memory_file" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    done
+
+    echo "" >> "$OUTPUT_FILE"
+    echo -e "${GREEN}  ✓ Complete${NC}"
+else
+    echo ""
+    echo -e "${YELLOW}⚠ No orchestrator memories found${NC}"
+fi
+
 # Add footer
 cat >> "$OUTPUT_FILE" << EOFMARKER
 
@@ -448,9 +481,16 @@ echo ""
 }
 
 bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
-                                      const std::string& input_pipe_path,
-                                      const std::string& output_pipe_path) {
+                                      const std::string& session_dir) {
     mcp_session_id_ = session_id;
+    mcp_session_dir_ = session_dir;
+
+    // Setup file paths
+    fs::path dir_path(session_dir);
+    mcp_request_file_ = (dir_path / "request.json").string();
+    mcp_response_file_ = (dir_path / "response.json").string();
+    mcp_request_seq_file_ = (dir_path / "request_seq").string();
+    mcp_response_seq_file_ = (dir_path / "response_seq").string();
 
     // Initialize ALL orchestrator components (IRC, tool tracker, agent spawner, etc.)
     // MCP mode needs the full orchestrator functionality
@@ -458,178 +498,152 @@ bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
         return false;
     }
 
-    ORCH_LOG("Orchestrator: Opening MCP pipes for session %s\n", session_id.c_str());
-    ORCH_LOG("Orchestrator: Input pipe: %s\n", input_pipe_path.c_str());
-    ORCH_LOG("Orchestrator: Output pipe: %s\n", output_pipe_path.c_str());
+    ORCH_LOG("Orchestrator: MCP mode initialized for session %s\n", session_id.c_str());
+    ORCH_LOG("Orchestrator: Session directory: %s\n", session_dir.c_str());
+    ORCH_LOG("Orchestrator: Request file: %s\n", mcp_request_file_.c_str());
+    ORCH_LOG("Orchestrator: Response file: %s\n", mcp_response_file_.c_str());
 
-    // Open input pipe (we read from this)
-    mcp_input_fd_ = open(input_pipe_path.c_str(), O_RDONLY);
-    if (mcp_input_fd_ < 0) {
-        ORCH_LOG("Orchestrator: Failed to open input pipe: %s\n", strerror(errno));
-        return false;
-    }
-    ORCH_LOG("Orchestrator: Opened input pipe with FD %d\n", mcp_input_fd_);
-
-    // Open output pipe (we write to this)
-    mcp_output_fd_ = open(output_pipe_path.c_str(), O_WRONLY);
-    if (mcp_output_fd_ < 0) {
-        ORCH_LOG("Orchestrator: Failed to open output pipe: %s\n", strerror(errno));
-        close(mcp_input_fd_);
-        return false;
-    }
-    ORCH_LOG("Orchestrator: Opened output pipe with FD %d\n", mcp_output_fd_);
-
-    ORCH_LOG("Orchestrator: MCP mode initialized for session %s (input FD=%d, output FD=%d)\n",
-        session_id.c_str(), mcp_input_fd_, mcp_output_fd_);
     return true;
 }
 
-// Helper function to safely write complete data to a file descriptor
-// Handles partial writes and returns true on success, false on failure
-static bool safe_write(int fd, const std::string& data, const char* desc) {
-    size_t total_written = 0;
-    size_t remaining = data.length();
-    const char* ptr = data.c_str();
-
-    while (remaining > 0) {
-        ssize_t written = write(fd, ptr + total_written, remaining);
-
-        if (written < 0) {
-            if (errno == EINTR) {
-                // Interrupted by signal, retry
-                continue;
-            }
-            // Write failed
-            ORCH_LOG("Orchestrator: Failed to write %s: %s (after %zu/%zu bytes)\n",
-                desc, strerror(errno), total_written, data.length());
-            return false;
+// Helper function to read sequence number from file
+static uint64_t read_seq_file(const std::string& filepath) {
+    try {
+        if (!fs::exists(filepath)) {
+            return 0;
         }
 
-        if (written == 0) {
-            // Pipe closed or no progress
-            ORCH_LOG("Orchestrator: Write returned 0 for %s (after %zu/%zu bytes)\n",
-                desc, total_written, data.length());
-            return false;
+        std::ifstream in(filepath);
+        if (!in.is_open()) {
+            return 0;
         }
 
-        total_written += written;
-        remaining -= written;
+        uint64_t seq = 0;
+        in >> seq;
+        return seq;
+    } catch (...) {
+        return 0;
     }
+}
 
-    return true;
+// Helper function to write sequence number to file
+static bool write_seq_file(const std::string& filepath, uint64_t seq) {
+    try {
+        std::ofstream out(filepath);
+        if (!out.is_open()) {
+            return false;
+        }
+
+        out << seq;
+        out.close();
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 void Orchestrator::start_mcp_listener() {
-    if (!show_ui_ && mcp_input_fd_ >= 0 && mcp_output_fd_ >= 0) {
+    if (!show_ui_ && !mcp_session_dir_.empty()) {
         ORCH_LOG("Orchestrator: Starting MCP listener thread\n");
 
         mcp_listener_thread_ = std::thread([this]() {
-            // Move buffer outside while loop to preserve leftover data between iterations
-            std::string buffer;
+            ORCH_LOG("Orchestrator: MCP listener polling %s\n", mcp_request_file_.c_str());
 
             while (!mcp_listener_should_stop_) {
-                // Read JSON request from pipe
-                char read_buf[4096];
+                // Poll for new requests by checking sequence file
+                uint64_t current_seq = read_seq_file(mcp_request_seq_file_);
 
-                ssize_t bytes = read(mcp_input_fd_, read_buf, sizeof(read_buf) - 1);
-                if (bytes > 0) {
-                    read_buf[bytes] = '\0';
-                    buffer += read_buf;
-
-                    // Look for complete JSON (newline-delimited)
-                    size_t newline_pos = buffer.find('\n');
-                    if (newline_pos != std::string::npos) {
-                        std::string json_str = buffer.substr(0, newline_pos);
-                        buffer = buffer.substr(newline_pos + 1);
-
-                        try {
-                            json request = json::parse(json_str);
-                            ORCH_LOG("Orchestrator: Received MCP request: %s\n", request["method"].get<std::string>().c_str());
-
-                            // Process request
-                            json response = process_mcp_request(request);
-                            std::string method = request.value("method", "");
-
-                            // Send response back with proper error handling
-                            std::string response_str = response.dump() + "\n";
-                            ORCH_LOG("Orchestrator: Sending MCP response (%zu bytes) for method '%s'\n",
-                                response_str.length(), method.c_str());
-
-                            if (safe_write(mcp_output_fd_, response_str, "MCP response")) {
-                                ORCH_LOG("Orchestrator: Successfully sent MCP response for method '%s'\n", method.c_str());
-
-                                // Ensure data is flushed to the pipe
-                                if (fsync(mcp_output_fd_) == 0) {
-                                    ORCH_LOG("Orchestrator: Successfully fsynced MCP response to FD %d\n", mcp_output_fd_);
-                                } else {
-                                    ORCH_LOG("Orchestrator: WARNING - fsync failed: %s (FD %d)\n", strerror(errno), mcp_output_fd_);
-                                }
-                            } else {
-                                ORCH_LOG("Orchestrator: ERROR - Failed to send MCP response for method '%s'\n", method.c_str());
-                                // Continue anyway - client will handle timeout
-                            }
-
-                            // Handle shutdown after response is sent
-                            if (method == "shutdown") {
-                                ORCH_LOG("Orchestrator: Shutdown response sent, initiating graceful IDA close...\n");
-
-                                // Close our end of the pipes to signal MCP server we're done
-                                if (mcp_input_fd_ >= 0) {
-                                    close(mcp_input_fd_);
-                                    mcp_input_fd_ = -1;
-                                }
-                                if (mcp_output_fd_ >= 0) {
-                                    close(mcp_output_fd_);
-                                    mcp_output_fd_ = -1;
-                                }
-
-                                // Set flags to stop threads before database close
-                                // This prevents deadlock when shutdown() tries to join this thread
-                                mcp_listener_should_stop_ = true;
-                                shutting_down_ = true;
-
-                                // Request IDA to save and close the database
-                                struct CloseRequest : exec_request_t {
-                                    virtual ssize_t idaapi execute() override {
-                                        msg("MCP: Saving database before close...\n");
-
-                                        // First save the database
-                                        if (save_database()) {
-                                            msg("MCP: Database saved successfully\n");
-                                        } else {
-                                            msg("MCP: Warning - Failed to save database\n");
-                                        }
-
-                                        // Then terminate the database
-                                        // This will trigger ui_database_closed event
-                                        msg("MCP: Calling term_database()...\n");
-                                        term_database();
-
-                                        return 0;
-                                    }
-                                };
-
-                                ORCH_LOG("Orchestrator: Requesting IDA to save and close database...\n");
-                                CloseRequest req;
-                                execute_sync(req, MFF_WRITE);
-
-                                // The UI close action will trigger ui_database_closed event,
-                                // which will call prepare_for_shutdown() -> cleanup() -> shutdown()
-                                // But shutdown() will return early because shutting_down_ is already true,
-                                // avoiding the thread join deadlock
-                                break; // Exit listener loop
-                            }
-
-                        } catch (const json::exception& e) {
-                            ORCH_LOG("Orchestrator: Failed to parse MCP request: %s\n", e.what());
+                if (current_seq > mcp_request_seq_) {
+                    // New request available
+                    try {
+                        std::ifstream in(mcp_request_file_);
+                        if (!in.is_open()) {
+                            ORCH_LOG("Orchestrator: Failed to open request file\n");
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            continue;
                         }
+
+                        std::string content((std::istreambuf_iterator<char>(in)),
+                                           std::istreambuf_iterator<char>());
+                        in.close();
+
+                        json request = json::parse(content);
+                        mcp_request_seq_ = current_seq;
+
+                        ORCH_LOG("Orchestrator: Received MCP request (seq %llu): %s\n",
+                            current_seq, request["method"].get<std::string>().c_str());
+
+                        // Process request
+                        json response = process_mcp_request(request);
+                        std::string method = request.value("method", "");
+
+                        // Write response to file
+                        std::string temp_file = mcp_response_file_ + ".tmp";
+                        std::ofstream out(temp_file);
+                        if (out.is_open()) {
+                            out << response.dump();
+                            out.close();
+
+                            // Atomically rename to response file
+                            fs::rename(temp_file, mcp_response_file_);
+
+                            // Increment response sequence to signal MCP server
+                            mcp_response_seq_++;
+                            write_seq_file(mcp_response_seq_file_, mcp_response_seq_);
+
+                            ORCH_LOG("Orchestrator: Sent MCP response (seq %llu) for method '%s'\n",
+                                mcp_response_seq_, method.c_str());
+                        } else {
+                            ORCH_LOG("Orchestrator: ERROR - Failed to write response file\n");
+                        }
+
+                        // Handle shutdown after response is sent
+                        if (method == "shutdown") {
+                            ORCH_LOG("Orchestrator: Shutdown response sent, initiating graceful IDA close...\n");
+
+                            // Set flags to stop threads before database close
+                            mcp_listener_should_stop_ = true;
+                            shutting_down_ = true;
+
+                            // Request IDA to save and close the database
+                            struct CloseRequest : exec_request_t {
+                                virtual ssize_t idaapi execute() override {
+                                    msg("MCP: Saving database before close...\n");
+
+                                    // First save the database
+                                    if (save_database()) {
+                                        msg("MCP: Database saved successfully\n");
+                                    } else {
+                                        msg("MCP: Warning - Failed to save database\n");
+                                    }
+
+                                    // Then terminate the database
+                                    msg("MCP: Calling term_database()...\n");
+                                    term_database();
+
+                                    return 0;
+                                }
+                            };
+
+                            ORCH_LOG("Orchestrator: Requesting IDA to save and close database...\n");
+                            CloseRequest req;
+                            execute_sync(req, MFF_WRITE);
+
+                            break; // Exit listener loop
+                        }
+
+                    } catch (const json::exception& e) {
+                        ORCH_LOG("Orchestrator: Failed to parse MCP request: %s\n", e.what());
+                    } catch (const std::exception& e) {
+                        ORCH_LOG("Orchestrator: Error reading request: %s\n", e.what());
                     }
-                } else if (bytes == 0) {
-                    // Pipe closed
-                    ORCH_LOG("Orchestrator: MCP input pipe closed\n");
-                    break;
                 }
+
+                // Sleep briefly to avoid busy waiting
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+
+            ORCH_LOG("Orchestrator: MCP listener thread exiting\n");
         });
     }
 }
@@ -2197,16 +2211,6 @@ void Orchestrator::shutdown() {
         mcp_listener_should_stop_ = true;
         if (mcp_listener_thread_.joinable()) {
             mcp_listener_thread_.join();
-        }
-
-        // Close pipes (only if not already closed)
-        if (mcp_input_fd_ >= 0) {
-            close(mcp_input_fd_);
-            mcp_input_fd_ = -1;
-        }
-        if (mcp_output_fd_ >= 0) {
-            close(mcp_output_fd_);
-            mcp_output_fd_ = -1;
         }
     }
 

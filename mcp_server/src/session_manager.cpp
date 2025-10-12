@@ -14,6 +14,7 @@
 #include <spawn.h>
 #include <algorithm>
 #include <cctype>
+#include <openssl/sha.h>
 
 // On macOS, environ needs explicit declaration
 extern char **environ;
@@ -23,10 +24,10 @@ namespace fs = std::filesystem;
 namespace llm_re::mcp {
 
 SessionManager::SessionManager() {
-    // Create directory for named pipes if it doesn't exist
-    fs::path pipe_dir = "/tmp/ida_mcp_pipes";
-    if (!fs::exists(pipe_dir)) {
-        fs::create_directories(pipe_dir);
+    // Create root directory for session files if it doesn't exist
+    fs::path sessions_dir = sessions_root_dir_;
+    if (!fs::exists(sessions_dir)) {
+        fs::create_directories(sessions_dir);
     }
 }
 
@@ -48,19 +49,110 @@ std::string SessionManager::get_active_session_for_binary(const std::string& bin
     return "";  // No active session for this binary
 }
 
-std::string SessionManager::generate_session_id() {
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
+std::string SessionManager::hash_binary_path(const std::string& binary_path) {
+    // Compute SHA256 hash of the absolute path
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(binary_path.c_str()),
+           binary_path.length(), hash);
 
+    // Convert to hex string, use first 16 chars (64 bits)
     std::stringstream ss;
-    ss << "session_" << time_t << "_" << std::setfill('0') << std::setw(3) << next_session_num_++;
+    for (int i = 0; i < 8; ++i) {  // 8 bytes = 16 hex chars
+        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
+    }
+
     return ss.str();
+}
+
+std::string SessionManager::generate_session_id(const std::string& binary_path) {
+    // Hash the absolute binary path to create deterministic session ID
+    std::string hash = hash_binary_path(binary_path);
+    std::string session_id = "session_" + hash;
+
+    // Check for hash collision (ultra rare)
+    fs::path session_dir = fs::path(sessions_root_dir_) / session_id;
+    if (fs::exists(session_dir)) {
+        // Read state.json to verify binary path
+        fs::path state_file = session_dir / "state.json";
+        if (fs::exists(state_file)) {
+            try {
+                std::ifstream in(state_file);
+                json state;
+                in >> state;
+                in.close();
+
+                std::string stored_path = state.value("binary_path", "");
+                if (stored_path != binary_path) {
+                    // Hash collision detected! Append suffix
+                    std::cerr << "WARNING: Hash collision detected for " << binary_path << std::endl;
+                    std::cerr << "  Collides with: " << stored_path << std::endl;
+
+                    // Find unique suffix
+                    int suffix = 2;
+                    while (fs::exists(fs::path(sessions_root_dir_) / (session_id + "_" + std::to_string(suffix)))) {
+                        suffix++;
+                    }
+                    session_id = session_id + "_" + std::to_string(suffix);
+                    std::cerr << "  Using session ID: " << session_id << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: Could not read state file for collision check: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    return session_id;
 }
 
 std::string SessionManager::create_session(const std::string& binary_path, const std::string& initial_task) {
     std::lock_guard<std::mutex> lock(sessions_mutex_);
 
-    // Check if binary already has an active session
+    // Generate session ID from binary path (deterministic)
+    std::string session_id = generate_session_id(binary_path);
+    fs::path session_dir = fs::path(sessions_root_dir_) / session_id;
+
+    // Check if session directory already exists (crash recovery scenario)
+    if (fs::exists(session_dir)) {
+        fs::path state_file = session_dir / "state.json";
+        if (fs::exists(state_file)) {
+            try {
+                std::ifstream in(state_file);
+                json state;
+                in >> state;
+                in.close();
+
+                int pid = state.value("orchestrator_pid", -1);
+                std::string stored_path = state.value("binary_path", "");
+
+                // Verify this is the same binary (not a collision)
+                if (stored_path == binary_path) {
+                    // Check if orchestrator is still alive
+                    if (is_orchestrator_alive(pid)) {
+                        // Session is alive! Check if already in our map
+                        auto it = sessions_.find(session_id);
+                        if (it != sessions_.end()) {
+                            throw std::runtime_error("Binary already being analyzed in session " + session_id);
+                        }
+                        // Not in map but process alive - this is a recovery scenario
+                        // For now, we'll error - in future could support reconnect
+                        throw std::runtime_error("Existing session found for this binary (PID " +
+                                                std::to_string(pid) + "). Please close it first.");
+                    } else {
+                        // Process is dead, cleanup stale session
+                        std::cerr << "Found stale session " << session_id << " (PID " << pid
+                                  << " is dead), cleaning up..." << std::endl;
+                        cleanup_session_directory(session_id);
+                    }
+                }
+                // If different path, this was handled in generate_session_id with suffix
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: Error reading existing session state: " << e.what() << std::endl;
+                // Continue with creating new session
+            }
+        }
+    }
+
+    // Check if binary already has an active session in memory
     auto binary_it = binary_to_session_.find(binary_path);
     if (binary_it != binary_to_session_.end()) {
         // Verify the session is still active
@@ -77,9 +169,6 @@ std::string SessionManager::create_session(const std::string& binary_path, const
         throw std::runtime_error("Maximum number of sessions reached");
     }
 
-    // Generate new session ID
-    std::string session_id = generate_session_id();
-
     // Create new session
     std::unique_ptr<Session> session = std::make_unique<Session>();
     session->session_id = session_id;
@@ -88,12 +177,34 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     session->last_activity = session->created_at;
     session->active = true;
 
+    // Setup session directory and files
+    session->session_dir = (fs::path(sessions_root_dir_) / session_id).string();
+    session->state_file = (fs::path(session->session_dir) / "state.json").string();
+    session->request_file = (fs::path(session->session_dir) / "request.json").string();
+    session->response_file = (fs::path(session->session_dir) / "response.json").string();
+    session->request_seq_file = (fs::path(session->session_dir) / "request_seq").string();
+    session->response_seq_file = (fs::path(session->session_dir) / "response_seq").string();
+    session->request_seq = 0;
+    session->response_seq = 0;
+
+    // Create session directory structure
+    if (!create_session_directory(session.get())) {
+        throw std::runtime_error("Failed to create session directory");
+    }
+
     // Spawn orchestrator process
-    session->orchestrator_pid = spawn_orchestrator(binary_path, session_id,
-                                                  session->input_fd, session->output_fd);
+    session->orchestrator_pid = spawn_orchestrator(binary_path, session_id, session.get());
 
     if (session->orchestrator_pid <= 0) {
+        cleanup_session_directory(session_id);
         throw std::runtime_error("Failed to spawn orchestrator process");
+    }
+
+    // Update state file with PID
+    if (!update_state_file(session.get())) {
+        kill_orchestrator(session->orchestrator_pid);
+        cleanup_session_directory(session_id);
+        throw std::runtime_error("Failed to write state file");
     }
 
     // Start reader thread for this session
@@ -108,8 +219,9 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     init_msg["method"] = "start_task";
     init_msg["params"]["task"] = initial_task;
 
-    if (!send_json_to_orchestrator(session->input_fd, init_msg)) {
+    if (!send_json_to_orchestrator(session.get(), init_msg)) {
         kill_orchestrator(session->orchestrator_pid);
+        cleanup_session_directory(session_id);
         throw std::runtime_error("Failed to send initial task to orchestrator");
     }
 
@@ -122,7 +234,6 @@ std::string SessionManager::create_session(const std::string& binary_path, const
 
 json SessionManager::send_message(const std::string& session_id, const std::string& message) {
     Session* session_ptr = nullptr;
-    int input_fd = -1;
 
     // Acquire lock only to validate session and increment usage count
     {
@@ -136,7 +247,6 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
         }
 
         session_ptr = it->second.get();
-        input_fd = session_ptr->input_fd;
         session_ptr->last_activity = std::chrono::steady_clock::now();
 
         // Increment usage count to prevent session deletion while we're using it
@@ -151,7 +261,7 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
     msg["params"]["input"] = message;
 
     // Send to orchestrator (no longer holding sessions_mutex_!)
-    if (!send_json_to_orchestrator(input_fd, msg)) {
+    if (!send_json_to_orchestrator(session_ptr, msg)) {
         // Decrement usage count before returning error
         if (--session_ptr->usage_count == 0) {
             session_ptr->usage_cv.notify_all();
@@ -226,7 +336,7 @@ bool SessionManager::close_session(const std::string& session_id) {
     shutdown_msg["method"] = "shutdown";
 
     std::cerr << "MCP Server: Sending shutdown message to orchestrator..." << std::endl;
-    send_json_to_orchestrator(session->input_fd, shutdown_msg);
+    send_json_to_orchestrator(session.get(), shutdown_msg);
 
     // Give IDA time to gracefully save database and exit (60 seconds)
     std::cerr << "MCP Server: Waiting for graceful IDA exit (60s timeout)..." << std::endl;
@@ -255,12 +365,8 @@ bool SessionManager::close_session(const std::string& session_id) {
         std::cerr << "MCP Server: Process exited gracefully" << std::endl;
     }
 
-    // Close file descriptors
-    if (session->input_fd >= 0) close(session->input_fd);
-    if (session->output_fd >= 0) close(session->output_fd);
-
-    // Cleanup pipes
-    cleanup_pipes(session_id);
+    // Cleanup session directory
+    cleanup_session_directory(session_id);
 
     // Remove binary tracking
     std::string binary_path = session->binary_path;
@@ -306,7 +412,7 @@ void SessionManager::close_all_sessions() {
         shutdown_msg["id"] = "shutdown_all";
         shutdown_msg["method"] = "shutdown";
 
-        send_json_to_orchestrator(session->input_fd, shutdown_msg);
+        send_json_to_orchestrator(session.get(), shutdown_msg);
 
         // Stop reader thread
         session->reader_should_stop = true;
@@ -319,12 +425,8 @@ void SessionManager::close_all_sessions() {
             kill_orchestrator(session->orchestrator_pid);
         }
 
-        // Close FDs
-        if (session->input_fd >= 0) close(session->input_fd);
-        if (session->output_fd >= 0) close(session->output_fd);
-
-        // Cleanup pipes
-        cleanup_pipes(session_id);
+        // Cleanup session directory
+        cleanup_session_directory(session_id);
     }
 
     sessions_.clear();
@@ -407,21 +509,15 @@ json SessionManager::wait_for_initial_response(const std::string& session_id, in
 }
 
 int SessionManager::spawn_orchestrator(const std::string& binary_path, const std::string& session_id,
-                                      int& input_fd, int& output_fd) {
-    // Create named pipes (FIFOs only, don't open them yet)
-    if (!create_pipes(session_id)) {
-        return -1;
-    }
-
+                                      Session* session) {
     // Create MCP config file in the same directory as the binary
     fs::path binary_dir = fs::path(binary_path).parent_path();
     fs::path config_path = binary_dir / "mcp_orchestrator_config.json";
 
-    // Create the config JSON
+    // Create the config JSON with session directory
     json mcp_config;
     mcp_config["session_id"] = session_id;
-    mcp_config["input_pipe"] = "/tmp/ida_mcp_pipes/" + session_id + "_in";
-    mcp_config["output_pipe"] = "/tmp/ida_mcp_pipes/" + session_id + "_out";
+    mcp_config["session_dir"] = session->session_dir;
 
     // Write config file
     try {
@@ -631,126 +727,140 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     }
 #endif
 
-    // Parent process - now open the pipes after IDA has been spawned
-    std::cerr << "Parent: Spawned IDA with PID " << pid << ", opening pipes..." << std::endl;
-
-    // Block until pipes are opened - this will wait until IDA is fully initialized
-    if (!open_pipes(session_id, input_fd, output_fd)) {
-        std::cerr << "Failed to open pipes to orchestrator" << std::endl;
-        // This should never happen now since open_pipes blocks indefinitely
-        cleanup_pipes(session_id);
-        return -1;
-    }
-
+    std::cerr << "Successfully spawned IDA with PID: " << pid << std::endl;
     return pid;
 }
 
-bool SessionManager::send_json_to_orchestrator(int fd, const json& msg) {
-    if (fd < 0) return false;
+bool SessionManager::send_json_to_orchestrator(Session* session, const json& msg) {
+    if (!session) return false;
 
-    std::string serialized = msg.dump() + "\n";
-    ssize_t written = write(fd, serialized.c_str(), serialized.length());
+    try {
+        // Write to temporary file first
+        std::string temp_file = session->request_file + ".tmp";
+        std::ofstream out(temp_file);
+        if (!out.is_open()) {
+            std::cerr << "Failed to open request file for writing: " << temp_file << std::endl;
+            return false;
+        }
 
-    if (written != static_cast<ssize_t>(serialized.length())) {
-        std::cerr << "Failed to write complete message to orchestrator" << std::endl;
+        out << msg.dump();
+        out.close();
+
+        // Atomically rename to actual request file
+        fs::rename(temp_file, session->request_file);
+
+        // Increment request sequence to signal orchestrator
+        session->request_seq++;
+        if (!write_seq_file(session->request_seq_file, session->request_seq)) {
+            std::cerr << "Failed to update request sequence file" << std::endl;
+            return false;
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in send_json_to_orchestrator: " << e.what() << std::endl;
         return false;
     }
-
-    return true;
 }
 
-json SessionManager::read_json_from_orchestrator(int fd, int timeout_ms) {
-    if (fd < 0) {
+json SessionManager::read_json_from_orchestrator(Session* session, int timeout_ms) {
+    if (!session) {
         json error;
-        error["error"] = "Invalid file descriptor";
+        error["error"] = "Invalid session";
         return error;
     }
 
-    // Save original flags and set non-blocking mode if timeout specified
-    int original_flags = -1;
-    if (timeout_ms > 0) {
-        original_flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, original_flags | O_NONBLOCK);
-    }
-
-    // Lambda to restore flags before returning
-    auto restore_flags = [fd, original_flags, timeout_ms]() {
-        if (timeout_ms > 0 && original_flags >= 0) {
-            fcntl(fd, F_SETFL, original_flags);
-        }
-    };
-
-    std::string buffer;
-    char read_buf[4096];
     auto start = std::chrono::steady_clock::now();
+    uint64_t last_seq = session->response_seq;
 
     while (true) {
-        ssize_t bytes = read(fd, read_buf, sizeof(read_buf) - 1);
+        // Poll the response sequence file
+        uint64_t current_seq = read_seq_file(session->response_seq_file);
 
-        if (bytes > 0) {
-            read_buf[bytes] = '\0';
-            buffer += read_buf;
-
-            // Check for complete JSON message (newline-delimited)
-            size_t newline_pos = buffer.find('\n');
-            if (newline_pos != std::string::npos) {
-                std::string json_str = buffer.substr(0, newline_pos);
-
-                try {
-                    json result = json::parse(json_str);
-                    restore_flags();
-                    return result;
-                } catch (const json::exception& e) {
+        if (current_seq > last_seq) {
+            // New response available
+            try {
+                std::ifstream in(session->response_file);
+                if (!in.is_open()) {
                     json error;
-                    error["error"] = std::string("JSON parse error: ") + e.what();
-                    restore_flags();
+                    error["error"] = "Failed to open response file";
                     return error;
                 }
-            }
-        } else if (bytes == 0) {
-            // EOF
-            json error;
-            error["error"] = "Orchestrator closed connection";
-            restore_flags();
-            return error;
-        } else {
-            // Check timeout
-            if (timeout_ms > 0) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start).count();
-                if (elapsed >= timeout_ms) {
-                    json error;
-                    error["error"] = "Timeout reading from orchestrator";
-                    restore_flags();
-                    return error;
-                }
-            }
 
-            // Small sleep to avoid busy waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::string content((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+                in.close();
+
+                json result = json::parse(content);
+                session->response_seq = current_seq;
+                return result;
+            } catch (const json::exception& e) {
+                json error;
+                error["error"] = std::string("JSON parse error: ") + e.what();
+                return error;
+            } catch (const std::exception& e) {
+                json error;
+                error["error"] = std::string("Error reading response: ") + e.what();
+                return error;
+            }
         }
+
+        // Check timeout
+        if (timeout_ms > 0) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            if (elapsed >= timeout_ms) {
+                json error;
+                error["error"] = "Timeout reading from orchestrator";
+                return error;
+            }
+        }
+
+        // Sleep briefly to avoid busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
 void SessionManager::orchestrator_reader_thread(Session* session) {
     std::cerr << "MCP Server: Starting reader thread for session " << session->session_id
-              << " (reading from FD " << session->output_fd << ")" << std::endl;
+              << " (polling " << session->response_file << ")" << std::endl;
+
+    int consecutive_errors = 0;
+    const int max_consecutive_errors = 5;
+
     while (!session->reader_should_stop) {
-        json response = read_json_from_orchestrator(session->output_fd, 1000); // Increased timeout to 1s
+        json response = read_json_from_orchestrator(session, 1000); // 1s timeout
 
         if (response.contains("error")) {
-            if (response["error"] != "Timeout reading from orchestrator") {
-                // Real error, not just timeout
-                std::cerr << "MCP Server: Reader thread error: " << response["error"]
-                          << " (FD " << session->output_fd << ")" << std::endl;
+            std::string error_msg = response["error"].get<std::string>();
+
+            if (error_msg == "Timeout reading from orchestrator") {
+                // Timeout is normal, reset error counter and continue
+                consecutive_errors = 0;
+                continue;
+            }
+
+            // Real error occurred
+            consecutive_errors++;
+            std::cerr << "MCP Server: Reader thread error (" << consecutive_errors << "/" << max_consecutive_errors << "): "
+                      << error_msg << std::endl;
+
+            // Only exit if we get too many consecutive errors (indicates permanent failure)
+            if (consecutive_errors >= max_consecutive_errors) {
+                std::cerr << "MCP Server: Too many consecutive errors, reader thread exiting" << std::endl;
                 break;
             }
-            // Timeout is normal, continue
+
+            // For transient errors, wait a bit and retry
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
+        // Successfully read a response - reset error counter
+        consecutive_errors = 0;
+
         // Add response to queue
-        std::cerr << "MCP Server: Received response from orchestrator (FD " << session->output_fd << "): "
+        std::cerr << "MCP Server: Received response from orchestrator: "
                   << response.dump().substr(0, 200) << "..." << std::endl;
         {
             std::lock_guard<std::mutex> lock(session->queue_mutex);
@@ -788,95 +898,108 @@ void SessionManager::kill_orchestrator(int pid) {
     waitpid(pid, &status, 0);
 }
 
-bool SessionManager::create_pipes(const std::string& session_id) {
-    std::string pipe_dir = "/tmp/ida_mcp_pipes";
-    std::string input_pipe = pipe_dir + "/" + session_id + "_in";
-    std::string output_pipe = pipe_dir + "/" + session_id + "_out";
+bool SessionManager::create_session_directory(Session* session) {
+    if (!session) return false;
 
-    // Create named pipes (but don't open them yet)
-    if (mkfifo(input_pipe.c_str(), 0666) != 0 && errno != EEXIST) {
-        std::cerr << "Failed to create input pipe: " << strerror(errno) << std::endl;
-        return false;
-    }
+    try {
+        // Create session directory
+        fs::create_directories(session->session_dir);
 
-    if (mkfifo(output_pipe.c_str(), 0666) != 0 && errno != EEXIST) {
-        std::cerr << "Failed to create output pipe: " << strerror(errno) << std::endl;
-        unlink(input_pipe.c_str());
-        return false;
-    }
+        // Create empty request and response files
+        std::ofstream(session->request_file).close();
+        std::ofstream(session->response_file).close();
 
-    std::cerr << "Created FIFOs for session " << session_id << std::endl;
-    return true;
-}
-
-bool SessionManager::open_pipes(const std::string& session_id, int& input_fd, int& output_fd) {
-    std::string pipe_dir = "/tmp/ida_mcp_pipes";
-    std::string input_pipe = pipe_dir + "/" + session_id + "_in";
-    std::string output_pipe = pipe_dir + "/" + session_id + "_out";
-
-    std::cerr << "Opening pipes for session " << session_id << "..." << std::endl;
-
-    // Open pipes - now IDA should be starting and will open the other ends
-    // We write to input_pipe (IDA reads from it)
-    // We read from output_pipe (IDA writes to it)
-
-    // For the input pipe (we write, IDA reads), try non-blocking first
-    input_fd = open(input_pipe.c_str(), O_WRONLY | O_NONBLOCK);
-    if (input_fd < 0) {
-        if (errno == ENXIO) {
-            // No reader yet, try blocking mode with a timeout approach
-            std::cerr << "Waiting for IDA to open read end of input pipe..." << std::endl;
-
-            // No timeout - IDA can take a long time to load large databases
-            std::cerr << "Opening input pipe (this may take a while for large databases)..." << std::endl;
-            input_fd = open(input_pipe.c_str(), O_WRONLY);
-
-            if (input_fd < 0) {
-                std::cerr << "Failed to open input pipe: " << strerror(errno) << std::endl;
-                return false;
-            }
-        } else {
-            std::cerr << "Failed to open input pipe: " << strerror(errno) << std::endl;
+        // Initialize sequence files to 0
+        if (!write_seq_file(session->request_seq_file, 0)) {
+            std::cerr << "Failed to create request_seq file" << std::endl;
             return false;
         }
-    }
-
-    // For the output pipe (we read, IDA writes), similar approach
-    output_fd = open(output_pipe.c_str(), O_RDONLY | O_NONBLOCK);
-    if (output_fd < 0) {
-        if (errno == ENXIO) {
-            std::cerr << "Waiting for IDA to open write end of output pipe..." << std::endl;
-
-            // No timeout - IDA can take a long time to load large databases
-            std::cerr << "Opening output pipe (this may take a while for large databases)..." << std::endl;
-            output_fd = open(output_pipe.c_str(), O_RDONLY);
-
-            if (output_fd < 0) {
-                std::cerr << "Failed to open output pipe: " << strerror(errno) << std::endl;
-                close(input_fd);
-                return false;
-            }
-        } else {
-            std::cerr << "Failed to open output pipe: " << strerror(errno) << std::endl;
-            close(input_fd);
+        if (!write_seq_file(session->response_seq_file, 0)) {
+            std::cerr << "Failed to create response_seq file" << std::endl;
             return false;
         }
-    }
 
-    std::cerr << "Successfully opened pipes to IDA orchestrator (input FD=" << input_fd
-              << ", output FD=" << output_fd << ")" << std::endl;
-    std::cerr << "MCP Server: Will write to " << input_pipe << " (FD " << input_fd << ")" << std::endl;
-    std::cerr << "MCP Server: Will read from " << output_pipe << " (FD " << output_fd << ")" << std::endl;
-    return true;
+        std::cerr << "Created session directory: " << session->session_dir << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to create session directory: " << e.what() << std::endl;
+        return false;
+    }
 }
 
-void SessionManager::cleanup_pipes(const std::string& session_id) {
-    std::string pipe_dir = "/tmp/ida_mcp_pipes";
-    std::string input_pipe = pipe_dir + "/" + session_id + "_in";
-    std::string output_pipe = pipe_dir + "/" + session_id + "_out";
+void SessionManager::cleanup_session_directory(const std::string& session_id) {
+    fs::path session_dir = fs::path(sessions_root_dir_) / session_id;
+    try {
+        if (fs::exists(session_dir)) {
+            fs::remove_all(session_dir);
+            std::cerr << "Cleaned up session directory: " << session_dir << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error cleaning up session directory: " << e.what() << std::endl;
+    }
+}
 
-    unlink(input_pipe.c_str());
-    unlink(output_pipe.c_str());
+bool SessionManager::update_state_file(Session* session) {
+    if (!session) return false;
+
+    try {
+        json state;
+        state["session_id"] = session->session_id;
+        state["binary_path"] = session->binary_path;
+        state["orchestrator_pid"] = session->orchestrator_pid;
+        state["active"] = session->active;
+        state["created_at"] = std::chrono::duration_cast<std::chrono::seconds>(
+            session->created_at.time_since_epoch()).count();
+        state["last_activity"] = std::chrono::duration_cast<std::chrono::seconds>(
+            session->last_activity.time_since_epoch()).count();
+
+        std::ofstream out(session->state_file);
+        if (!out.is_open()) {
+            std::cerr << "Failed to open state file for writing" << std::endl;
+            return false;
+        }
+
+        out << state.dump(2);
+        out.close();
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error updating state file: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+uint64_t SessionManager::read_seq_file(const std::string& filepath) {
+    try {
+        if (!fs::exists(filepath)) {
+            return 0;
+        }
+
+        std::ifstream in(filepath);
+        if (!in.is_open()) {
+            return 0;
+        }
+
+        uint64_t seq = 0;
+        in >> seq;
+        return seq;
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool SessionManager::write_seq_file(const std::string& filepath, uint64_t seq) {
+    try {
+        std::ofstream out(filepath);
+        if (!out.is_open()) {
+            return false;
+        }
+
+        out << seq;
+        out.close();
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::string SessionManager::detect_type_flag(const std::string& binary_path) {

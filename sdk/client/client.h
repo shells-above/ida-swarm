@@ -372,6 +372,7 @@ public:
 struct ChatResponse {
     bool success = false;
     std::optional<std::string> error;
+    std::optional<int> retry_after_seconds;  // For rate limit errors
     StopReason stop_reason = StopReason::Unknown;
     messages::Message message{messages::Role::Assistant};
     TokenUsage usage;
@@ -925,20 +926,13 @@ public:
                 return response;
             }
 
-            // Recoverable error (rate limit, server error, etc.) - prepare for retry with backoff
-            ApiError api_error = ApiError::from_response(
-                response.error.value_or("Unknown error"),
-                0,  // status_code is already embedded in the error
-                {}
-            );
-
             // Calculate delay with exponential backoff
             int delay_ms = BASE_DELAY_MS * (1 << attempt);  // 1s, 2s, 4s, 8s, 16s
 
             // If we have a retry-after value from the API, use that instead
             // For rate limits, we should respect the full duration requested by the API
-            if (api_error.retry_after_seconds.has_value()) {
-                delay_ms = api_error.retry_after_seconds.value() * 1000;
+            if (response.retry_after_seconds.has_value()) {
+                delay_ms = response.retry_after_seconds.value() * 1000;
             }
 
             log(LogLevel::WARNING, std::format(
@@ -1220,6 +1214,11 @@ public:
                     static_cast<int>(http_code),
                     response_headers
                 );
+
+                // Store retry_after_seconds in response for use by retry logic
+                if (api_error.retry_after_seconds.has_value()) {
+                    response.retry_after_seconds = api_error.retry_after_seconds;
+                }
 
                 if (api_error.is_recoverable()) {
                     std::string log_message = "Recoverable API error: " + api_error.message;

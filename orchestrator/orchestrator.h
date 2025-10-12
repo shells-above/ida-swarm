@@ -43,8 +43,7 @@ public:
 
     // Initialize for MCP mode (no UI)
     bool initialize_mcp_mode(const std::string& session_id,
-                           const std::string& input_pipe_path,
-                           const std::string& output_pipe_path);
+                           const std::string& session_dir);
 
     // Start MCP IPC listener
     void start_mcp_listener();
@@ -145,8 +144,13 @@ private:
     bool show_ui_ = true;
     std::string mcp_session_id_;
     std::string last_response_text_;
-    int mcp_input_fd_ = -1;   // Read requests from MCP server
-    int mcp_output_fd_ = -1;  // Send responses to MCP server
+    std::string mcp_session_dir_;        // Session directory path
+    std::string mcp_request_file_;       // request.json
+    std::string mcp_response_file_;      // response.json
+    std::string mcp_request_seq_file_;   // request_seq
+    std::string mcp_response_seq_file_;  // response_seq
+    uint64_t mcp_request_seq_ = 0;       // Last processed request sequence
+    uint64_t mcp_response_seq_ = 0;      // Last sent response sequence
     std::thread mcp_listener_thread_;
     std::atomic<bool> mcp_listener_should_stop_{false};
 

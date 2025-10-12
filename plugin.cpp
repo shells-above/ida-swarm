@@ -49,8 +49,7 @@ private:
 
     // MCP mode data
     std::string mcp_session_id_;
-    std::string mcp_input_pipe_;
-    std::string mcp_output_pipe_;
+    std::string mcp_session_dir_;
 
     // Common
     Config* config_ = nullptr;
@@ -154,11 +153,8 @@ private:
                     if (mcp_config.contains("session_id")) {
                         mcp_session_id_ = mcp_config["session_id"].get<std::string>();
                     }
-                    if (mcp_config.contains("input_pipe")) {
-                        mcp_input_pipe_ = mcp_config["input_pipe"].get<std::string>();
-                    }
-                    if (mcp_config.contains("output_pipe")) {
-                        mcp_output_pipe_ = mcp_config["output_pipe"].get<std::string>();
+                    if (mcp_config.contains("session_dir")) {
+                        mcp_session_dir_ = mcp_config["session_dir"].get<std::string>();
                     }
 
                     // Delete the config file immediately after reading
@@ -270,11 +266,10 @@ private:
             }
 
             msg("LLM RE: Starting MCP orchestrator for session %s\n", mcp_session_id_.c_str());
-            msg("LLM RE: Input pipe: %s\n", mcp_input_pipe_.c_str());
-            msg("LLM RE: Output pipe: %s\n", mcp_output_pipe_.c_str());
+            msg("LLM RE: Session directory: %s\n", mcp_session_dir_.c_str());
 
             orchestrator_ = new orchestrator::Orchestrator(*config_, idb_path_.c_str(), false /* no UI */);
-            if (!orchestrator_->initialize_mcp_mode(mcp_session_id_, mcp_input_pipe_, mcp_output_pipe_)) {
+            if (!orchestrator_->initialize_mcp_mode(mcp_session_id_, mcp_session_dir_)) {
                 msg("LLM RE: Failed to initialize MCP orchestrator\n");
                 delete orchestrator_;
                 orchestrator_ = nullptr;

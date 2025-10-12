@@ -402,6 +402,7 @@ target_include_directories(ida_swarm_mcp PRIVATE
 
 target_link_libraries(ida_swarm_mcp
         nlohmann_json::nlohmann_json
+        OpenSSL::Crypto
 )
 
 # Installation
