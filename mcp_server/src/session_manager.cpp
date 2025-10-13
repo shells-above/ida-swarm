@@ -232,7 +232,7 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     return session_id;
 }
 
-json SessionManager::send_message(const std::string& session_id, const std::string& message) {
+json SessionManager::send_message(const std::string& session_id, const std::string& message, bool wait_for_response) {
     Session* session_ptr = nullptr;
 
     // Acquire lock only to validate session and increment usage count
@@ -249,6 +249,18 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
         session_ptr = it->second.get();
         session_ptr->last_activity = std::chrono::steady_clock::now();
 
+        // Check for pending message - enforce single message at a time
+        if (session_ptr->has_pending_message) {
+            json error_response;
+            error_response["error"] = "Cannot send message: session is still processing previous message: \"" +
+                                     session_ptr->pending_message_text + "\"";
+            return error_response;
+        }
+
+        // Mark message as pending
+        session_ptr->has_pending_message = true;
+        session_ptr->pending_message_text = message;
+
         // Increment usage count to prevent session deletion while we're using it
         session_ptr->usage_count++;
     } // sessions_mutex_ is released here - other sessions can now send messages concurrently
@@ -263,6 +275,13 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
     // Send to orchestrator (no longer holding sessions_mutex_!)
     if (!send_json_to_orchestrator(session_ptr, msg)) {
         // Decrement usage count before returning error
+        // Also clear pending flag since send failed
+        {
+            std::lock_guard<std::mutex> lock(session_ptr->queue_mutex);
+            session_ptr->has_pending_message = false;
+            session_ptr->pending_message_text.clear();
+        }
+
         if (--session_ptr->usage_count == 0) {
             session_ptr->usage_cv.notify_all();
         }
@@ -270,6 +289,19 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
         json error_response;
         error_response["error"] = "Failed to send message to orchestrator";
         return error_response;
+    }
+
+    // If background mode (no wait), return success immediately
+    if (!wait_for_response) {
+        // Decrement usage count
+        if (--session_ptr->usage_count == 0) {
+            session_ptr->usage_cv.notify_all();
+        }
+
+        json success_response;
+        success_response["success"] = true;
+        success_response["message"] = "Message sent, response pending";
+        return success_response;
     }
 
     // Wait for response (no longer holding sessions_mutex_!)
@@ -383,6 +415,8 @@ bool SessionManager::close_session(const std::string& session_id) {
 
 void SessionManager::close_all_sessions() {
     std::vector<Session*> sessions_to_close;
+    std::vector<int> pids_to_wait;
+    std::vector<std::string> session_ids;
 
     // First pass: mark all sessions as inactive and collect pointers
     {
@@ -390,6 +424,8 @@ void SessionManager::close_all_sessions() {
         for (auto& [session_id, session] : sessions_) {
             session->active = false;  // Reject new operations
             sessions_to_close.push_back(session.get());
+            pids_to_wait.push_back(session->orchestrator_pid);
+            session_ids.push_back(session_id);
         }
     } // Release sessions_mutex_
 
@@ -402,27 +438,114 @@ void SessionManager::close_all_sessions() {
     }
     std::cerr << "MCP Server: All active operations completed for all sessions" << std::endl;
 
-    // Third pass: acquire lock and do the actual cleanup
-    std::lock_guard<std::mutex> lock(sessions_mutex_);
+    // Third pass: send shutdown messages to ALL sessions in parallel
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
 
-    for (auto& [session_id, session] : sessions_) {
-        // Send shutdown message
-        json shutdown_msg;
-        shutdown_msg["type"] = "request";
-        shutdown_msg["id"] = "shutdown_all";
-        shutdown_msg["method"] = "shutdown";
+        std::cerr << "MCP Server: Sending shutdown messages to " << sessions_.size() << " session(s)..." << std::endl;
 
-        send_json_to_orchestrator(session.get(), shutdown_msg);
+        for (auto& [session_id, session] : sessions_) {
+            // Send shutdown message
+            json shutdown_msg;
+            shutdown_msg["type"] = "request";
+            shutdown_msg["id"] = "shutdown_all";
+            shutdown_msg["method"] = "shutdown";
 
-        // Stop reader thread
-        session->reader_should_stop = true;
-        if (session->reader_thread && session->reader_thread->joinable()) {
-            session->reader_thread->join();
+            send_json_to_orchestrator(session.get(), shutdown_msg);
+
+            // Stop reader thread
+            session->reader_should_stop = true;
+        }
+    }
+
+    // Fourth pass: wait for ALL processes to exit (in parallel, up to 60 seconds total)
+    std::cerr << "MCP Server: Waiting for all IDA processes to exit gracefully (60s timeout)..." << std::endl;
+    auto start_time = std::chrono::steady_clock::now();
+    const int max_wait_seconds = 60;
+
+    while (true) {
+        // Check if all processes have exited
+        bool all_exited = true;
+        for (int pid : pids_to_wait) {
+            if (is_orchestrator_alive(pid)) {
+                all_exited = false;
+                break;
+            }
         }
 
-        // Kill process
+        if (all_exited) {
+            std::cerr << "MCP Server: All processes exited gracefully" << std::endl;
+            break;
+        }
+
+        // Check timeout
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+
+        if (elapsed >= max_wait_seconds) {
+            std::cerr << "MCP Server: Graceful exit timeout, using hard kill for remaining processes..." << std::endl;
+            break;
+        }
+
+        // Progress update every 10 seconds
+        if (elapsed > 0 && elapsed % 10 == 0) {
+            int still_alive = 0;
+            for (int pid : pids_to_wait) {
+                if (is_orchestrator_alive(pid)) still_alive++;
+            }
+            std::cerr << "MCP Server: Still waiting for " << still_alive << " process(es) to exit ("
+                      << elapsed << "s elapsed)..." << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    // Fifth pass: final cleanup - join reader threads and kill any remaining processes
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+        for (auto& [session_id, session] : sessions_) {
+            // Join reader thread
+            if (session->reader_thread && session->reader_thread->joinable()) {
+                session->reader_thread->join();
+            }
+
+            // Kill any remaining processes
+            if (is_orchestrator_alive(session->orchestrator_pid)) {
+                std::cerr << "MCP Server: Force-killing session " << session_id
+                          << " (PID " << session->orchestrator_pid << ")" << std::endl;
+                kill_orchestrator(session->orchestrator_pid);
+            }
+
+            // Cleanup session directory
+            cleanup_session_directory(session_id);
+        }
+
+        sessions_.clear();
+        binary_to_session_.clear();
+    }
+
+    std::cerr << "MCP Server: All sessions closed" << std::endl;
+}
+
+void SessionManager::force_kill_all_sessions() {
+    std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+    std::cerr << "MCP Server: Force-killing all " << sessions_.size() << " session(s) immediately..." << std::endl;
+
+    for (auto& [session_id, session] : sessions_) {
+        session->active = false;
+        session->reader_should_stop = true;
+
         if (is_orchestrator_alive(session->orchestrator_pid)) {
-            kill_orchestrator(session->orchestrator_pid);
+            std::cerr << "MCP Server: Force-killing session " << session_id
+                      << " (PID " << session->orchestrator_pid << ")" << std::endl;
+            kill(session->orchestrator_pid, SIGKILL);
+        }
+
+        // Detach reader thread instead of joining (we're in a hurry)
+        if (session->reader_thread && session->reader_thread->joinable()) {
+            session->reader_thread->detach();
         }
 
         // Cleanup session directory
@@ -431,6 +554,8 @@ void SessionManager::close_all_sessions() {
 
     sessions_.clear();
     binary_to_session_.clear();
+
+    std::cerr << "MCP Server: All sessions force-killed" << std::endl;
 }
 
 json SessionManager::get_session_status(const std::string& session_id) const {
@@ -506,6 +631,149 @@ json SessionManager::wait_for_initial_response(const std::string& session_id, in
     }
 
     return response;
+}
+
+json SessionManager::get_session_messages(const std::string& session_id, int max_messages) {
+    Session* session_ptr = nullptr;
+
+    // Acquire lock to validate session and increment usage count
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end() || !it->second->active) {
+            json error;
+            error["error"] = "Session not found or inactive";
+            return error;
+        }
+
+        session_ptr = it->second.get();
+        session_ptr->usage_count++;
+    } // sessions_mutex_ released here
+
+    // Get accumulated messages without blocking
+    json result;
+    {
+        std::lock_guard<std::mutex> lock(session_ptr->queue_mutex);
+
+        if (session_ptr->accumulated_responses.empty()) {
+            // No messages available yet
+            result["messages"] = json::array();
+            result["has_pending"] = session_ptr->has_pending_message;
+            if (session_ptr->has_pending_message) {
+                result["pending_message"] = session_ptr->pending_message_text;
+            }
+        } else {
+            // Return accumulated messages
+            int count = max_messages > 0 ? std::min(max_messages, (int)session_ptr->accumulated_responses.size())
+                                         : session_ptr->accumulated_responses.size();
+
+            json messages = json::array();
+            for (int i = 0; i < count; i++) {
+                messages.push_back(session_ptr->accumulated_responses[i]);
+            }
+
+            // Remove returned messages
+            session_ptr->accumulated_responses.erase(
+                session_ptr->accumulated_responses.begin(),
+                session_ptr->accumulated_responses.begin() + count
+            );
+
+            // If we've consumed all messages, clear pending flag
+            if (session_ptr->accumulated_responses.empty()) {
+                session_ptr->has_pending_message = false;
+                session_ptr->pending_message_text.clear();
+            }
+
+            result["messages"] = messages;
+            result["has_pending"] = session_ptr->has_pending_message;
+        }
+    }
+
+    // Decrement usage count
+    if (--session_ptr->usage_count == 0) {
+        session_ptr->usage_cv.notify_all();
+    }
+
+    return result;
+}
+
+json SessionManager::wait_for_response(const std::string& session_id, int timeout_ms) {
+    Session* session_ptr = nullptr;
+
+    // Acquire lock to validate session and increment usage count
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+
+        auto it = sessions_.find(session_id);
+        if (it == sessions_.end() || !it->second->active) {
+            json error;
+            error["error"] = "Session not found or inactive";
+            return error;
+        }
+
+        session_ptr = it->second.get();
+        session_ptr->usage_count++;
+    } // sessions_mutex_ released here
+
+    // Wait for response
+    json result;
+    {
+        std::unique_lock<std::mutex> lock(session_ptr->queue_mutex);
+
+        // Check if response already available
+        if (!session_ptr->accumulated_responses.empty()) {
+            // Return first message
+            result = session_ptr->accumulated_responses[0];
+            session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
+
+            // Clear pending flag if no more messages
+            if (session_ptr->accumulated_responses.empty()) {
+                session_ptr->has_pending_message = false;
+                session_ptr->pending_message_text.clear();
+            }
+        } else {
+            // Wait for response
+            if (timeout_ms > 0) {
+                bool received = session_ptr->response_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                    [session_ptr]() {
+                        return !session_ptr->accumulated_responses.empty();
+                    });
+
+                if (!received) {
+                    result["error"] = "Timeout waiting for response";
+                } else {
+                    result = session_ptr->accumulated_responses[0];
+                    session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
+
+                    if (session_ptr->accumulated_responses.empty()) {
+                        session_ptr->has_pending_message = false;
+                        session_ptr->pending_message_text.clear();
+                    }
+                }
+            } else {
+                // Wait indefinitely
+                session_ptr->response_cv.wait(lock, [session_ptr]() {
+                    return !session_ptr->accumulated_responses.empty();
+                });
+
+                result = session_ptr->accumulated_responses[0];
+                session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
+
+                if (session_ptr->accumulated_responses.empty()) {
+                    session_ptr->has_pending_message = false;
+                    session_ptr->pending_message_text.clear();
+                }
+            }
+        }
+    }
+
+    // Decrement usage count
+    if (--session_ptr->usage_count == 0) {
+        session_ptr->usage_cv.notify_all();
+    }
+
+    return result;
 }
 
 int SessionManager::spawn_orchestrator(const std::string& binary_path, const std::string& session_id,
@@ -859,12 +1127,13 @@ void SessionManager::orchestrator_reader_thread(Session* session) {
         // Successfully read a response - reset error counter
         consecutive_errors = 0;
 
-        // Add response to queue
+        // Add response to both queue (for blocking wait) and accumulated (for background retrieval)
         std::cerr << "MCP Server: Received response from orchestrator: "
                   << response.dump().substr(0, 200) << "..." << std::endl;
         {
             std::lock_guard<std::mutex> lock(session->queue_mutex);
             session->response_queue.push(response);
+            session->accumulated_responses.push_back(response);  // Also accumulate for get_session_messages
         }
         session->response_cv.notify_one();
     }

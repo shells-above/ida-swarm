@@ -15,9 +15,16 @@ static MCPServer* g_server_instance = nullptr;
 // Signal handler for graceful shutdown
 static void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
-        std::cerr << "\nReceived shutdown signal, cleaning up..." << std::endl;
+        std::cerr << "\nReceived shutdown signal (" << (sig == SIGINT ? "SIGINT" : "SIGTERM") << "), cleaning up..." << std::endl;
         if (g_server_instance) {
-            g_server_instance->shutdown();
+            // SIGTERM typically means external process manager wants us to exit NOW
+            // Use fast shutdown to comply with ~2 second timeout expectation
+            if (sig == SIGTERM) {
+                g_server_instance->fast_shutdown();
+            } else {
+                // SIGINT (Ctrl+C) can take longer
+                g_server_instance->shutdown();
+            }
         }
         exit(0);
     }
@@ -67,15 +74,29 @@ void MCPServer::shutdown() {
         return; // Already shutting down
     }
 
-    std::cerr << "Shutting down MCP server..." << std::endl;
+    std::cerr << "Shutting down MCP server (graceful mode)..." << std::endl;
 
-
-    // Close all sessions
+    // Close all sessions gracefully (waits up to 60s for IDA to save)
     if (session_manager_) {
         session_manager_->close_all_sessions();
     }
 
     std::cerr << "MCP server shutdown complete" << std::endl;
+}
+
+void MCPServer::fast_shutdown() {
+    if (should_shutdown_.exchange(true)) {
+        return; // Already shutting down
+    }
+
+    std::cerr << "Fast shutdown mode: force-killing all IDA processes..." << std::endl;
+
+    // Force kill all sessions immediately (no graceful wait)
+    if (session_manager_) {
+        session_manager_->force_kill_all_sessions();
+    }
+
+    std::cerr << "Fast shutdown complete" << std::endl;
 }
 
 void MCPServer::register_tools() {
@@ -99,6 +120,25 @@ void MCPServer::register_tools() {
                                 "function calls, data structures, and can perform both static and semantic analysis. "
                                 "The orchestrator determines what types of agents to spawn and how to coordinate them "
                                 "based on understanding your request."}
+            }},
+            {"run_in_background", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", "Whether to return immediately without waiting for initial analysis results.\n\n"
+                                "DEFAULT (false): BLOCKS until orchestrator completes initial analysis and returns results. "
+                                "Use this for normal single-binary analysis workflows.\n\n"
+                                "WHEN TO USE run_in_background=true:\n"
+                                "- Analyzing MULTIPLE binaries in parallel (e.g., comparing 5 malware variants)\n"
+                                "- You have OTHER INDEPENDENT work to do while waiting (documentation, other tasks)\n"
+                                "- Starting long analysis and will check results later\n\n"
+                                "WHEN NOT TO USE (keep default false):\n"
+                                "- Analyzing a single binary and need results to continue\n"
+                                "- Sequential workflow where next step depends on results\n"
+                                "- User asked to analyze one binary and report findings\n\n"
+                                "CRITICAL WARNING: Reverse engineering can take 10+ MINUTES or even HOURS for complex binaries. "
+                                "Background mode exists for parallel workflows, not to make slow operations fast.\n\n"
+                                "If run_in_background=true: Returns only session_id immediately. Use wait_for_response() "
+                                "or get_session_messages() to retrieve results later."}
             }}
         }},
         {"required", nlohmann::json::array({"binary_path", "task"})}
@@ -140,6 +180,24 @@ void MCPServer::register_tools() {
                                 "determine what needs to be done, and coordinate its agents accordingly. Agents can "
                                 "perform new analysis, refine previous findings, generate code, or provide explanations "
                                 "based on their understanding of the binary."}
+            }},
+            {"run_in_background", {
+                {"type", "boolean"},
+                {"default", false},
+                {"description", "Whether to return immediately without waiting for orchestrator response.\n\n"
+                                "DEFAULT (false): BLOCKS until orchestrator processes message and returns response.\n\n"
+                                "CRITICAL CONSTRAINT: Only ONE pending message per session at a time. "
+                                "If you send with run_in_background=true, you CANNOT send another message to that "
+                                "session until the response is retrieved (via wait_for_response or get_session_messages).\n\n"
+                                "Attempting to send while message pending will ERROR with message:\n"
+                                "'Cannot send message: session is still processing previous message: <pending_message_text>'\n\n"
+                                "WHEN TO USE run_in_background=true:\n"
+                                "- Sending questions to MULTIPLE sessions simultaneously\n"
+                                "- Starting complex analysis and doing other work while waiting\n\n"
+                                "WHEN NOT TO USE (keep default false):\n"
+                                "- Interactive conversation with orchestrator (ask -> answer -> ask -> answer)\n"
+                                "- Single-session workflows\n"
+                                "- When you need the answer before proceeding"}
             }}
         }},
         {"required", nlohmann::json::array({"session_id", "message"})}
@@ -184,7 +242,89 @@ void MCPServer::register_tools() {
         }
     );
 
-    std::cerr << "Registered 3 MCP tools: start_analysis_session, send_message, close_session" << std::endl;
+    // Tool 4: Get Session Messages
+    nlohmann::json get_messages_schema = {
+        {"type", "object"},
+        {"properties", {
+            {"session_id", {
+                {"type", "string"},
+                {"description", "The session identifier to retrieve messages from."}
+            }},
+            {"max_messages", {
+                {"type", "integer"},
+                {"description", "Optional: Maximum number of messages to retrieve. If not specified, returns all pending messages."}
+            }}
+        }},
+        {"required", nlohmann::json::array({"session_id"})}
+    };
+
+    mcp_server_->register_tool(
+        "get_session_messages",
+        "NON-BLOCKING check for accumulated orchestrator responses from background operations.\n\n"
+        "BEHAVIOR:\n"
+        "- Returns immediately (does NOT wait)\n"
+        "- If responses available: Returns them and clears queue, session ready for next message\n"
+        "- If no responses yet: Returns empty array, session still processing\n\n"
+        "This is a 'poll and check' operation. Use wait_for_response() if you want to block.\n\n"
+        "USAGE PATTERN:\n"
+        "1. start_analysis_session(..., run_in_background=true) → session_id\n"
+        "2. Do other work\n"
+        "3. get_session_messages(session_id) → check if ready (may be empty)\n"
+        "4. If empty: continue other work, check again later\n"
+        "5. If has messages: process results, can now send_message again\n\n"
+        "IMPORTANT: Each call retrieves and CLEARS messages. Don't call repeatedly in a loop "
+        "or you'll just get empty results after the first call.",
+        get_messages_schema,
+        [this](const nlohmann::json& params) {
+            return handle_get_session_messages(params);
+        }
+    );
+
+    // Tool 5: Wait for Response
+    nlohmann::json wait_response_schema = {
+        {"type", "object"},
+        {"properties", {
+            {"session_id", {
+                {"type", "string"},
+                {"description", "The session identifier to wait for."}
+            }},
+            {"timeout_ms", {
+                {"type", "integer"},
+                {"description", "Optional timeout in milliseconds. If not specified, waits indefinitely. Note: Reverse engineering can take hours, so no timeout may be appropriate."}
+            }}
+        }},
+        {"required", nlohmann::json::array({"session_id"})}
+    };
+
+    mcp_server_->register_tool(
+        "wait_for_response",
+        "BLOCKS until orchestrator response is available for the session.\n\n"
+        "BEHAVIOR:\n"
+        "- BLOCKS (may wait minutes/hours for complex analysis)\n"
+        "- Returns response when available\n"
+        "- Marks session ready for next message\n"
+        "- If response already available: returns immediately\n\n"
+        "CRITICAL USE CASE: Parallel analysis coordination\n\n"
+        "EXAMPLE - Analyzing multiple binaries in parallel:\n"
+        "  // Start 3 analyses running simultaneously\n"
+        "  s1 = start_analysis_session(bin1, task, run_in_background=true)\n"
+        "  s2 = start_analysis_session(bin2, task, run_in_background=true)\n"
+        "  s3 = start_analysis_session(bin3, task, run_in_background=true)\n\n"
+        "  // All 3 are now analyzing in parallel. Wait for all to complete:\n"
+        "  r1 = wait_for_response(s1)  // Blocks until s1 finishes\n"
+        "  r2 = wait_for_response(s2)  // Blocks until s2 finishes\n"
+        "  r3 = wait_for_response(s3)  // Blocks until s3 finishes\n\n"
+        "  // Now have all results, synthesize findings\n\n"
+        "This is like Promise.all() or asyncio.gather() - enables true parallel execution.\n\n"
+        "vs get_session_messages(): That tool returns immediately (non-blocking check). "
+        "This tool waits until result ready (blocking wait).",
+        wait_response_schema,
+        [this](const nlohmann::json& params) {
+            return handle_wait_for_response(params);
+        }
+    );
+
+    std::cerr << "Registered 5 MCP tools: start_analysis_session, send_message, close_session, get_session_messages, wait_for_response" << std::endl;
 }
 
 nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& params) {
@@ -192,6 +332,7 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         // Extract parameters
         std::string binary_path = params.at("binary_path");
         std::string task = params.at("task");
+        bool run_in_background = params.value("run_in_background", false);
 
         // Validate binary path
         if (!fs::exists(binary_path)) {
@@ -207,6 +348,7 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
 
         std::cerr << "Starting new analysis session for: " << binary_path << std::endl;
         std::cerr << "Task: " << task << std::endl;
+        std::cerr << "Background mode: " << (run_in_background ? "true" : "false") << std::endl;
 
         // Create session
         std::string session_id;
@@ -221,6 +363,25 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         }
 
         std::cerr << "Created session: " << session_id << std::endl;
+
+        // If background mode, return immediately with just session_id
+        if (run_in_background) {
+            nlohmann::json result;
+            result["type"] = "text";
+            result["text"] = "Session started in background mode. Session ID: " + session_id + "\n\n"
+                             "The orchestrator is now analyzing the binary. Use wait_for_response(\"" + session_id + "\") "
+                             "to block until results are ready, or use get_session_messages(\"" + session_id + "\") "
+                             "to poll for results without blocking.";
+            result["session_id"] = session_id;
+            result["background_mode"] = true;
+            result["session_info"] = {
+                {"session_id", session_id},
+                {"binary_path", binary_path},
+                {"status", "active"},
+                {"background", true}
+            };
+            return result;
+        }
 
         // Wait for initial response from orchestrator
         nlohmann::json response = session_manager_->wait_for_initial_response(session_id);
@@ -285,11 +446,13 @@ nlohmann::json MCPServer::handle_send_message(const nlohmann::json& params) {
         // Extract parameters
         std::string session_id = params.at("session_id");
         std::string message = params.at("message");
+        bool run_in_background = params.value("run_in_background", false);
 
         std::cerr << "Sending message to session " << session_id << ": " << message << std::endl;
+        std::cerr << "Background mode: " << (run_in_background ? "true" : "false") << std::endl;
 
-        // Send message to session
-        nlohmann::json response = session_manager_->send_message(session_id, message);
+        // Send message to session (pass wait_for_response parameter)
+        nlohmann::json response = session_manager_->send_message(session_id, message, !run_in_background);
 
         if (response.contains("error")) {
             return nlohmann::json{
@@ -299,6 +462,22 @@ nlohmann::json MCPServer::handle_send_message(const nlohmann::json& params) {
             };
         }
 
+        // If background mode, return immediately after sending
+        if (run_in_background && response.contains("success")) {
+            nlohmann::json result;
+            result["type"] = "text";
+            result["text"] = "Message sent to orchestrator in background mode. Session ID: " + session_id + "\n\n"
+                             "The orchestrator is processing your message. Use wait_for_response(\"" + session_id + "\") "
+                             "to block until response is ready, or use get_session_messages(\"" + session_id + "\") "
+                             "to poll for response without blocking.\n\n"
+                             "Remember: You cannot send another message to this session until the response is retrieved.";
+            result["session_id"] = session_id;
+            result["background_mode"] = true;
+            result["message_sent"] = message;
+            return result;
+        }
+
+        // In blocking mode, response already contains the orchestrator's reply
         // Format successful response
         nlohmann::json result;
         result["type"] = "text";
@@ -380,6 +559,133 @@ nlohmann::json MCPServer::handle_close_session(const nlohmann::json& params) {
         return nlohmann::json{
             {"type", "text"},
             {"text", std::string("Error: Exception in close_session: ") + e.what()},
+            {"isError", true}
+        };
+    }
+}
+
+
+nlohmann::json MCPServer::handle_get_session_messages(const nlohmann::json& params) {
+    try {
+        // Extract parameters
+        std::string session_id = params.at("session_id");
+        int max_messages = params.value("max_messages", -1);
+
+        std::cerr << "Getting messages for session " << session_id << std::endl;
+
+        // Get messages from session (non-blocking)
+        nlohmann::json response = session_manager_->get_session_messages(session_id, max_messages);
+
+        if (response.contains("error")) {
+            return nlohmann::json{
+                {"type", "text"},
+                {"text", "Error: " + response["error"].get<std::string>()},
+                {"isError", true}
+            };
+        }
+
+        // Format response
+        nlohmann::json result;
+        result["type"] = "text";
+
+        auto messages = response["messages"];
+        bool has_pending = response.value("has_pending", false);
+
+        if (messages.empty()) {
+            result["text"] = "No messages available yet for session " + session_id + ".";
+            if (has_pending) {
+                result["text"] = result["text"].get<std::string>() +
+                                "\n\nSession is still processing message: \"" +
+                                response["pending_message"].get<std::string>() + "\"";
+            }
+        } else {
+            // Format all retrieved messages
+            std::string text = "Retrieved " + std::to_string(messages.size()) + " message(s) from session " + session_id + ":\n\n";
+            for (size_t i = 0; i < messages.size(); i++) {
+                text += "=== Message " + std::to_string(i + 1) + " ===\n";
+
+                // Extract content from message
+                if (messages[i].contains("result") && messages[i]["result"].contains("content")) {
+                    text += messages[i]["result"]["content"].get<std::string>();
+                } else if (messages[i].contains("content")) {
+                    text += messages[i]["content"].get<std::string>();
+                } else {
+                    text += messages[i].dump();
+                }
+                text += "\n\n";
+            }
+
+            result["text"] = text;
+        }
+
+        result["message_count"] = messages.size();
+        result["has_pending"] = has_pending;
+        result["session_id"] = session_id;
+
+        return result;
+
+    } catch (const std::exception& e) {
+        return nlohmann::json{
+            {"type", "text"},
+            {"text", std::string("Error: Exception in get_session_messages: ") + e.what()},
+            {"isError", true}
+        };
+    }
+}
+
+nlohmann::json MCPServer::handle_wait_for_response(const nlohmann::json& params) {
+    try {
+        // Extract parameters
+        std::string session_id = params.at("session_id");
+        int timeout_ms = params.value("timeout_ms", -1);
+
+        std::cerr << "Waiting for response from session " << session_id;
+        if (timeout_ms > 0) {
+            std::cerr << " (timeout: " << timeout_ms << "ms)";
+        }
+        std::cerr << std::endl;
+
+        // Wait for response (blocking)
+        nlohmann::json response = session_manager_->wait_for_response(session_id, timeout_ms);
+
+        if (response.contains("error")) {
+            return nlohmann::json{
+                {"type", "text"},
+                {"text", "Error: " + response["error"].get<std::string>()},
+                {"isError", true}
+            };
+        }
+
+        // Format response
+        nlohmann::json result;
+        result["type"] = "text";
+
+        // Extract content from response
+        if (response.contains("result") && response["result"].contains("content")) {
+            result["text"] = response["result"]["content"];
+        } else if (response.contains("content")) {
+            result["text"] = response["content"];
+        } else {
+            result["text"] = response.dump();
+        }
+
+        result["session_id"] = session_id;
+
+        // Include session status
+        nlohmann::json status = session_manager_->get_session_status(session_id);
+        if (status["exists"].get<bool>()) {
+            result["session_status"] = {
+                {"active", status["active"]},
+                {"last_activity_seconds_ago", status["last_activity_seconds_ago"]}
+            };
+        }
+
+        return result;
+
+    } catch (const std::exception& e) {
+        return nlohmann::json{
+            {"type", "text"},
+            {"text", std::string("Error: Exception in wait_for_response: ") + e.what()},
             {"isError", true}
         };
     }

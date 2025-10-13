@@ -20,8 +20,11 @@ public:
     // Start the MCP server (blocking)
     void start();
 
-    // Shutdown the server
+    // Shutdown the server (graceful, waits for IDA to exit)
     void shutdown();
+
+    // Fast shutdown (force kills all sessions, for external termination)
+    void fast_shutdown();
 
 private:
     std::unique_ptr<SessionManager> session_manager_;
@@ -35,6 +38,8 @@ private:
     nlohmann::json handle_start_analysis_session(const nlohmann::json& params);
     nlohmann::json handle_send_message(const nlohmann::json& params);
     nlohmann::json handle_close_session(const nlohmann::json& params);
+    nlohmann::json handle_get_session_messages(const nlohmann::json& params);
+    nlohmann::json handle_wait_for_response(const nlohmann::json& params);
 
 
     // Configuration

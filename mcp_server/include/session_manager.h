@@ -54,6 +54,11 @@ public:
         std::atomic<int> usage_count{0};
         std::mutex usage_mutex;
         std::condition_variable usage_cv;
+
+        // Background execution support
+        bool has_pending_message = false;
+        std::string pending_message_text;
+        std::vector<json> accumulated_responses;  // All responses (for background mode)
     };
 
     SessionManager();
@@ -63,13 +68,17 @@ public:
     std::string create_session(const std::string& binary_path, const std::string& initial_task);
 
     // Send message to existing session
-    json send_message(const std::string& session_id, const std::string& message);
+    // If wait_for_response is false, returns immediately after sending (for background mode)
+    json send_message(const std::string& session_id, const std::string& message, bool wait_for_response = true);
 
     // Close and cleanup session
     bool close_session(const std::string& session_id);
 
     // Close all sessions (for cleanup)
     void close_all_sessions();
+
+    // Force kill all sessions immediately (used when externally terminated)
+    void force_kill_all_sessions();
 
     // Get session status
     json get_session_status(const std::string& session_id) const;
@@ -80,6 +89,13 @@ public:
 
     // Check if a binary already has an active session
     std::string get_active_session_for_binary(const std::string& binary_path) const;
+
+    // Background execution support
+    // Get accumulated messages (non-blocking, returns immediately)
+    json get_session_messages(const std::string& session_id, int max_messages = -1);
+
+    // Wait for response (blocking until response available)
+    json wait_for_response(const std::string& session_id, int timeout_ms = -1);
 
 private:
     std::map<std::string, std::unique_ptr<Session>> sessions_;
