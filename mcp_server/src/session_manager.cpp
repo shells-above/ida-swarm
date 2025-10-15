@@ -1103,7 +1103,29 @@ void SessionManager::orchestrator_reader_thread(Session* session) {
             std::string error_msg = response["error"].get<std::string>();
 
             if (error_msg == "Timeout reading from orchestrator") {
-                // Timeout is normal, reset error counter and continue
+                // Check if process is still alive during timeout
+                if (!is_orchestrator_alive(session->orchestrator_pid)) {
+                    std::cerr << "MCP Server: Orchestrator process died unexpectedly (PID "
+                              << session->orchestrator_pid << ")" << std::endl;
+
+                    // Push error response to wake up any waiters
+                    json crash_response;
+                    crash_response["error"] = "Orchestrator process crashed (PID " +
+                                              std::to_string(session->orchestrator_pid) + ")";
+                    {
+                        std::lock_guard<std::mutex> lock(session->queue_mutex);
+                        session->response_queue.push(crash_response);
+                        session->accumulated_responses.push_back(crash_response);
+                        session->has_pending_message = false;
+                    }
+                    session->response_cv.notify_all();
+
+                    // Mark session as inactive
+                    session->active = false;
+                    break;  // Exit reader thread
+                }
+
+                // Process is alive, timeout is normal - reset error counter and continue
                 consecutive_errors = 0;
                 continue;
             }
