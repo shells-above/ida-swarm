@@ -91,6 +91,10 @@ public:
         // Swarm-specific settings
     } swarm;
 
+    struct ProfilingSettings {
+        bool enabled = true;  // Enable/disable profiling
+    } profiling;
+
     // Load/save configuration
     bool save_to_file(const std::string& path) const;
     bool load_from_file(const std::string& path);

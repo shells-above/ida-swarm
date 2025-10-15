@@ -37,7 +37,10 @@ AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
             config.api.base_url
         );
     }
-    
+
+    // Set component ID for profiling
+    api_client_->set_component_id("grader", profiling::Component::GRADER);
+
     mutex_ = qmutex_create();
 }
 
@@ -272,7 +275,7 @@ Respond with JSON only:
     
     // Create request for Haiku
     claude::ChatRequestBuilder builder;
-    builder.with_model(claude::Model::Haiku35)
+    builder.with_model(claude::Model::Haiku45)
            .with_max_tokens(200)
            .with_temperature(0.0)  // Deterministic
            .enable_thinking(false);

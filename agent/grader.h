@@ -2,6 +2,7 @@
 #define GRADER_H
 
 #include "core/config.h"
+#include "core/profiler.h"
 #include "sdk/claude_sdk.h"
 #include "sdk/auth/oauth_manager.h"
 

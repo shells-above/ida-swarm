@@ -42,6 +42,9 @@ bool Config::save_to_file(const std::string& path) const {
         j["orchestrator"]["model"]["temperature"] = orchestrator.model.temperature;
         j["orchestrator"]["model"]["enable_thinking"] = orchestrator.model.enable_thinking;
 
+        // Profiling settings
+        j["profiling"]["enabled"] = profiling.enabled;
+
         // Write to file
         std::ofstream file(path);
         if (!file) return false;
@@ -109,7 +112,7 @@ bool Config::load_from_file(const std::string& path) {
 
         // Orchestrator settings
         if (j.contains("orchestrator")) {
-            
+
             if (j["orchestrator"].contains("model")) {
                 if (j["orchestrator"]["model"].contains("model")) {
                     orchestrator.model.model = claude::model_from_string(j["orchestrator"]["model"]["model"]);
@@ -119,6 +122,11 @@ bool Config::load_from_file(const std::string& path) {
                 orchestrator.model.temperature = j["orchestrator"]["model"].value("temperature", orchestrator.model.temperature);
                 orchestrator.model.enable_thinking = j["orchestrator"]["model"].value("enable_thinking", orchestrator.model.enable_thinking);
             }
+        }
+
+        // Profiling settings
+        if (j.contains("profiling")) {
+            profiling.enabled = j["profiling"].value("enabled", profiling.enabled);
         }
 
         return true;

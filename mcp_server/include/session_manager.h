@@ -64,6 +64,12 @@ public:
     SessionManager();
     ~SessionManager();
 
+    // Configuration
+    void set_max_sessions(int max_sessions) { max_sessions_ = max_sessions; }
+    int get_max_sessions() const { return max_sessions_; }
+    void set_ida_path(const std::string& ida_path) { ida_path_ = ida_path; }
+    std::string get_ida_path() const { return ida_path_; }
+
     // Create new session with orchestrator
     std::string create_session(const std::string& binary_path, const std::string& initial_task);
 
@@ -103,7 +109,8 @@ private:
     mutable std::mutex sessions_mutex_;
 
     // Configuration
-    int max_sessions_ = 5;
+    int max_sessions_ = 25;
+    std::string ida_path_ = "/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64";
     std::string sessions_root_dir_ = "/tmp/ida_swarm_sessions";
 
     // Helper to generate unique session ID from binary path hash

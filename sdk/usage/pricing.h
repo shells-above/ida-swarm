@@ -28,8 +28,8 @@ public:
                 return {15.0, 75.0, 18.75, 1.5};
             case Model::Sonnet45:
                 return {3.0, 15.0, 3.75, 0.30};
-            case Model::Haiku35:
-                return {0.8, 4.0, 1.0, 0.08};
+            case Model::Haiku45:
+                return {1.0, 1.25, 2.0, 0.1};
         }
         return {0.0, 0.0, 0.0, 0.0};
     }

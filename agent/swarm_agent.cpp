@@ -1095,7 +1095,7 @@ Respond ONLY with the JSON, no other text.)";
 
     // Create request for Haiku
     claude::ChatRequestBuilder builder;
-    builder.with_model(claude::Model::Haiku35)
+    builder.with_model(claude::Model::Haiku45)
            .with_max_tokens(500)
            .with_temperature(0.3)
            .enable_thinking(false);

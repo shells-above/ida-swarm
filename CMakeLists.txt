@@ -160,12 +160,6 @@ include_directories(
         ${CMAKE_CURRENT_BINARY_DIR}  # For MOC generated files
 )
 
-# Include IDA SDK headers as SYSTEM to suppress warnings
-include_directories(SYSTEM
-        ${IDASDK_PATH}/include
-        ${IDA_PLUGINS_PATH}/hexrays_sdk/include
-)
-
 # Qt include directories (as SYSTEM to suppress warnings) - platform specific
 if(APPLE)
     include_directories(SYSTEM
@@ -258,14 +252,18 @@ FetchContent_MakeAvailable(LIEF)
 # Include Keystone build configuration
 include(cmake/BuildKeystone.cmake)
 
-# Common source files (shared between plugins)
-set(COMMON_SOURCES
-        core/ida_utils.cpp
-        core/config.cpp
+# SDK source files (built WITHOUT IDA headers)
+set(SDK_SOURCES
         sdk/client/client.cpp
         sdk/auth/oauth_manager.cpp
         sdk/auth/oauth_flow.cpp
         sdk/auth/oauth_authorizer.cpp
+)
+
+# Common source files (shared between plugins, built WITH IDA headers)
+set(COMMON_SOURCES
+        core/ida_utils.cpp
+        core/config.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory_tool.cpp
@@ -302,6 +300,22 @@ set(PLUGIN_SOURCES
         ui/patch_tracker.cpp
         # Common sources
         ${COMMON_SOURCES}
+)
+
+# Build SDK as a separate static library WITHOUT IDA headers
+add_library(claude_sdk STATIC ${SDK_SOURCES})
+
+# SDK only needs these includes (NO IDA headers)
+target_include_directories(claude_sdk PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# SDK dependencies
+target_link_libraries(claude_sdk
+        CURL::libcurl
+        nlohmann_json::nlohmann_json
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 # Header files
@@ -360,6 +374,12 @@ set_target_properties(ida_swarm64 PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+# Add IDA SDK headers ONLY to the plugin target
+target_include_directories(ida_swarm64 SYSTEM PRIVATE
+        ${IDASDK_PATH}/include
+        ${IDA_PLUGINS_PATH}/hexrays_sdk/include
+)
+
 # Common libraries
 set(COMMON_LIBS
         ${IDA64}
@@ -374,6 +394,7 @@ set(COMMON_LIBS
 
 # Link libraries for unified plugin
 target_link_libraries(ida_swarm64
+        claude_sdk  # Link the SDK library (built without IDA headers)
         ${COMMON_LIBS}
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}

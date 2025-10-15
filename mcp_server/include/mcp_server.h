@@ -47,10 +47,8 @@ private:
 
     // Server configuration
     struct Config {
-        int max_sessions = 5;
+        int max_sessions = 25;
         std::string ida_path = "/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64";
-        std::string log_file = "";
-        std::string log_level = "info";
     } config_;
 };
 

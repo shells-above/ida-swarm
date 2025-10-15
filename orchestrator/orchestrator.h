@@ -2,6 +2,8 @@
 
 #include "../core/common.h"
 #include "../core/config.h"
+#include "../core/profiler.h"
+#include "../core/profiling_manager.h"
 #include "../sdk/claude_sdk.h"
 #include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"

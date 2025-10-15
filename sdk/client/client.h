@@ -9,6 +9,7 @@
 #include "../messages/types.h"
 #include "../tools/registry.h"
 #include "../auth/oauth_manager.h"
+#include "../core/profiler.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -24,6 +25,12 @@
 #include <format>
 #include <thread>
 #include <curl/curl.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir _mkdir
+#endif
 
 namespace claude {
 
@@ -68,14 +75,14 @@ constexpr const char* STAINLESS_ARCH = "unknown";
 enum class Model {
     Opus41,
     Sonnet45,
-    Haiku35
+    Haiku45
 };
 
 inline std::string model_to_string(Model model) {
     switch (model) {
         case Model::Opus41: return "claude-opus-4-1-20250805";
         case Model::Sonnet45: return "claude-sonnet-4-5";
-        case Model::Haiku35: return "claude-3-5-haiku-latest";
+        case Model::Haiku45: return "claude-haiku-4-5";
     }
     return "";
 }
@@ -83,7 +90,7 @@ inline std::string model_to_string(Model model) {
 inline Model model_from_string(const std::string& s) {
     if (s.starts_with("claude-opus-4-1-")) return Model::Opus41;
     if (s.starts_with("claude-sonnet-4-5") || s.starts_with("claude-sonnet-4-")) return Model::Sonnet45;
-    if (s.starts_with("claude-3-5-haiku-")) return Model::Haiku35;
+    if (s.starts_with("claude-haiku-4")) return Model::Haiku45;
     throw std::runtime_error("Unknown model: " + s);
 }
 
@@ -292,10 +299,6 @@ public:
             if (max_thinking_tokens > max_tokens) {
                 throw std::runtime_error("max_thinking_tokens cannot exceed max_tokens");
             }
-            // Check model compatibility
-            if (model == Model::Haiku35) {
-                throw std::runtime_error("Extended thinking is not supported on Haiku 3.5 model");
-            }
             // Temperature restrictions with thinking
             if (temperature != 1.0) {
                 throw std::runtime_error("temperature must be 1.0 when thinking is enabled (temperature and top_k are not compatible with thinking)");
@@ -305,9 +308,6 @@ public:
         if (enable_interleaved_thinking) {
             if (!enable_thinking) {
                 throw std::runtime_error("enable_interleaved_thinking requires enable_thinking to be true");
-            }
-            if (model == Model::Haiku35) {
-                throw std::runtime_error("Interleaved thinking is only supported on Claude 4 models (Opus 4.1, Sonnet 4.5)");
             }
         }
     }
@@ -673,13 +673,35 @@ class Client {
     std::shared_ptr<auth::OAuthManager> oauth_manager_;
 
     std::string api_url = "https://api.anthropic.com/v1/messages";
-    std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/)
+    std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/anthropic_requests/)
     bool first_log_write = true;  // Track if this is the first write to clear the log file
+
+    // Get full log path and ensure directory exists
+    std::string get_log_path() const {
+        std::string log_dir = "/tmp/anthropic_requests";
+
+        // Create directory if it doesn't exist (do this on first access)
+        static bool dir_created = false;
+        if (!dir_created) {
+            #ifdef _WIN32
+            _mkdir(log_dir.c_str());
+            #else
+            mkdir(log_dir.c_str(), 0755);
+            #endif
+            dir_created = true;
+        }
+
+        return log_dir + "/" + request_log_filename;
+    }
 
     // Logging
     std::function<void(const std::string&, const json&, int)> message_logger;
     std::function<void(LogLevel, const std::string&)> general_logger;
     int current_iteration = 0;
+
+    // Profiling
+    std::string component_id_ = "unknown";
+    llm_re::profiling::Component component_type_ = llm_re::profiling::Component::UNKNOWN;
 
     // Request tracking
     struct RequestStats {
@@ -846,7 +868,7 @@ public:
         return auth_method;
     }
     
-    // Set the request log filename (will be in /tmp/)
+    // Set the request log filename (will be in /tmp/anthropic_requests/)
     void set_request_log_filename(const std::string& filename) {
         request_log_filename = filename;
     }
@@ -865,6 +887,12 @@ public:
 
     RequestStats get_stats() const {
         return stats;
+    }
+
+    // Set component ID and type for profiling
+    void set_component_id(const std::string& id, llm_re::profiling::Component type = llm_re::profiling::Component::UNKNOWN) {
+        component_id_ = id;
+        component_type_ = type;
     }
 
     ChatResponse send_request_with_retry(ChatRequest request) {
@@ -1015,7 +1043,7 @@ public:
         {
             // Use trunc on first write to clear old sessions, then append
             std::ios_base::openmode mode = first_log_write ? std::ios::trunc : std::ios::app;
-            std::ofstream log_file("/tmp/" + request_log_filename, mode);
+            std::ofstream log_file(get_log_path(), mode);
             if (first_log_write && log_file.is_open()) {
                 first_log_write = false;
             }
@@ -1103,7 +1131,13 @@ public:
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         // curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);  // 5 minute timeout
 
+        // Start timing the API request
+        llm_re::profiling::Timer api_timer;
+
         CURLcode res = curl_easy_perform(curl);
+
+        // Record the API request duration
+        int64_t api_duration_ms = api_timer.elapsed_ms();
 
         if (res == CURLE_OK) {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -1135,7 +1169,7 @@ public:
             if (response_body.empty() || (response_body[0] != '{' && response_body[0] != '[')) {
                 // Log non-JSON response to debug file
                 {
-                    std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
+                    std::ofstream log_file(get_log_path(), std::ios::app);
                     if (log_file.is_open()) {
                         log_file << "=== NON-JSON RESPONSE for iteration " << current_iteration << "\n";
                         log_file << "HTTP Code: " << http_code << "\n";
@@ -1183,7 +1217,7 @@ public:
 
             // Temporary file logging for debugging - log response too
             {
-                std::ofstream log_file("/tmp/" + request_log_filename, std::ios::app);
+                std::ofstream log_file(get_log_path(), std::ios::app);
                 if (log_file.is_open()) {
                     log_file << "=== RESPONSE for iteration " << current_iteration << "\n";
                     log_file << "HTTP Code: " << http_code << "\n";
@@ -1205,6 +1239,33 @@ public:
             if (response.success) {
                 stats.successful_requests++;
                 stats.total_usage += response.usage;
+
+                // Record profiling metric for successful API requests
+                if (llm_re::profiling::Profiler::instance().is_enabled()) {
+                    llm_re::profiling::ApiRequestMetric metric;
+                    metric.component_id = component_id_;
+                    metric.component = component_type_;
+                    metric.duration_ms = api_duration_ms;
+                    metric.input_tokens = response.usage.input_tokens;
+                    metric.output_tokens = response.usage.output_tokens;
+                    metric.cache_read_tokens = response.usage.cache_read_tokens;
+                    metric.cache_creation_tokens = response.usage.cache_creation_tokens;
+                    metric.model = response.model_used;
+                    metric.timestamp = std::chrono::system_clock::now();
+                    metric.iteration = current_iteration;
+
+                    llm_re::profiling::Profiler::instance().record_api_request(metric);
+
+                    // Log profiling info
+                    log(LogLevel::INFO, std::format(
+                        "API Request: {}ms, in={} out={} cache_r={} cache_c={} tokens",
+                        api_duration_ms,
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                        response.usage.cache_read_tokens,
+                        response.usage.cache_creation_tokens
+                    ));
+                }
             } else {
                 stats.failed_requests++;
 

@@ -831,7 +831,7 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     plist << "    <string>" << job_label << "</string>\n";
     plist << "    <key>ProgramArguments</key>\n";
     plist << "    <array>\n";
-    plist << "        <string>/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64</string>\n";
+    plist << "        <string>" << ida_path_ << "</string>\n";
     plist << "        <string>-A</string>\n";   // autonomous mode (no dialogs)
 
     // Detect if we need -T flag for Fat Mach-O ARM64 slice selection
@@ -847,9 +847,9 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     plist << "    <key>KeepAlive</key>\n";
     plist << "    <false/>\n";
     plist << "    <key>StandardOutPath</key>\n";
-    plist << "    <string>/tmp/" << job_label << ".out</string>\n";
+    plist << "    <string>" << session->session_dir << "/ida.out</string>\n";
     plist << "    <key>StandardErrorPath</key>\n";
-    plist << "    <string>/tmp/" << job_label << ".err</string>\n";
+    plist << "    <string>" << session->session_dir << "/ida.err</string>\n";
     plist << "    <key>EnvironmentVariables</key>\n";
     plist << "    <dict>\n";
     plist << "        <key>__CFBundleIdentifier</key>\n";
@@ -954,7 +954,7 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
 
 #else
     // Non-macOS platforms can use posix_spawn directly
-    std::string ida_exe = "/Applications/IDA Professional 9.0.app/Contents/MacOS/ida64";
+    std::string ida_exe = ida_path_;
     if (!fs::exists(ida_exe)) {
         std::cerr << "IDA executable not found at: " << ida_exe << std::endl;
         return -1;
@@ -1216,11 +1216,6 @@ bool SessionManager::update_state_file(Session* session) {
         state["session_id"] = session->session_id;
         state["binary_path"] = session->binary_path;
         state["orchestrator_pid"] = session->orchestrator_pid;
-        state["active"] = session->active;
-        state["created_at"] = std::chrono::duration_cast<std::chrono::seconds>(
-            session->created_at.time_since_epoch()).count();
-        state["last_activity"] = std::chrono::duration_cast<std::chrono::seconds>(
-            session->last_activity.time_since_epoch()).count();
 
         std::ofstream out(session->state_file);
         if (!out.is_open()) {

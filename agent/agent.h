@@ -7,6 +7,8 @@
 
 #include "core/common.h"
 #include "core/config.h"
+#include "core/profiler.h"
+#include "core/profiling_manager.h"
 #include "sdk/claude_sdk.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
@@ -390,6 +392,14 @@ public:
         task_semaphore_ = qsem_create(nullptr, 0);
         pending_messages_mutex_ = qmutex_create();
 
+        // Enable profiling for this agent process if configured
+        if (config.profiling.enabled) {
+            profiling::ProfilingManager::instance().enable();
+        }
+
+        // Set component ID for profiling
+        api_client_.set_component_id(agent_id_, profiling::Component::AGENT);
+
         // Register all tools
         // Initialize patch manager
         patch_manager_ = std::make_shared<PatchManager>();
@@ -634,17 +644,43 @@ protected:  // Changed to protected so SwarmAgent can access
                 {"input", tool_use->input}
             });
 
+            // Start timing tool execution
+            profiling::Timer tool_timer;
+            bool tool_success = true;
+
             // Execute tool (intercept memory tool calls)
             claude::messages::Message result_msg = [&]() {
                 if (tool_use->name == "memory") {
                     json result = memory_handler_
                         ? memory_handler_->execute_command(tool_use->input)
                         : json{{"success", false}, {"error", "Memory system not initialized"}};
+                    tool_success = result.value("success", false);
                     return claude::messages::Message::tool_result(tool_use->id, result.dump());
                 } else {
-                    return tool_registry_.execute_tool_call(*tool_use);
+                    auto msg = tool_registry_.execute_tool_call(*tool_use);
+                    // Check if tool execution was successful by looking at result
+                    // Tool results are usually in JSON format with a "success" field
+                    // If we can't determine, assume success
+                    tool_success = true;  // Default to success unless we can parse the result
+                    return msg;
                 }
             }();
+
+            // Record tool execution time
+            int64_t tool_duration_ms = tool_timer.elapsed_ms();
+            if (profiling::Profiler::instance().is_enabled()) {
+                profiling::ToolExecutionMetric metric;
+                metric.component_id = agent_id_;
+                metric.tool_name = tool_use->name;
+                metric.duration_ms = tool_duration_ms;
+                metric.success = tool_success;
+                metric.timestamp = std::chrono::system_clock::now();
+                metric.iteration = iteration;
+
+                profiling::Profiler::instance().record_tool_execution(metric);
+
+                emit_log(LogLevel::DEBUG, std::format("Tool {} executed in {}ms", tool_use->name, tool_duration_ms));
+            }
             
             // Check and trim tool result if it's too large for context
             claude::messages::Message trimmed_result = check_and_trim_tool_result(result_msg);
@@ -1385,12 +1421,34 @@ protected:
         
         // Save conversation state
         save_conversation_state();
-        
+
+        // Save profiling report for this agent
+        if (profiling::ProfilingManager::instance().is_enabled()) {
+            emit_log(LogLevel::INFO, "Saving agent profiling report...");
+            std::filesystem::path workspace = get_agent_workspace_path();
+            std::filesystem::path profiling_dir = workspace / "profiling";
+
+            try {
+                std::filesystem::create_directories(profiling_dir);
+
+                // Save with agent-specific naming
+                std::string report_path = (profiling_dir / "profile_report.txt").string();
+                std::string json_path = (profiling_dir / "profile_data.json").string();
+
+                profiling::Profiler::instance().save_report(report_path);
+                profiling::Profiler::instance().save_json(json_path);
+
+                emit_log(LogLevel::INFO, "Agent profiling report saved to " + profiling_dir.string());
+            } catch (const std::exception& e) {
+                emit_log(LogLevel::WARNING, std::string("Failed to save agent profiling report: ") + e.what());
+            }
+        }
+
         // Mark as completed if not already
         if (state_.get_status() != AgentState::Status::Completed) {
             change_state(AgentState::Status::Completed);
         }
-        
+
         // Request IDA to exit gracefully
         request_ida_exit();
     }

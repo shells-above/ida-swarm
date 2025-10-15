@@ -77,7 +77,8 @@ void PreferencesDialog::setupUi() {
     createModelsTab();
     createAgentTab();
     createIrcTab();
-    
+    createProfilingTab();
+
     layout->addWidget(tabWidget_);
     
     // Create button box
@@ -233,7 +234,7 @@ void PreferencesDialog::createModelsTab() {
     agentModelCombo_ = new QComboBox(agentModelGroup_);
     agentModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
     agentModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
-    agentModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
+    agentModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     agentLayout->addRow("Model:", agentModelCombo_);
     
     agentMaxTokensSpin_ = new QSpinBox(agentModelGroup_);
@@ -283,7 +284,7 @@ void PreferencesDialog::createModelsTab() {
     graderModelCombo_ = new QComboBox(graderModelGroup_);
     graderModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
     graderModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
-    graderModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
+    graderModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     graderLayout->addRow("Model:", graderModelCombo_);
     
     graderMaxTokensSpin_ = new QSpinBox(graderModelGroup_);
@@ -308,7 +309,7 @@ void PreferencesDialog::createModelsTab() {
     orchestratorModelCombo_ = new QComboBox(orchestratorModelGroup_);
     orchestratorModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
     orchestratorModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
-    orchestratorModelCombo_->addItem("Claude Haiku 3.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku35)));
+    orchestratorModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     orchLayout->addRow("Model:", orchestratorModelCombo_);
     
     orchestratorMaxTokensSpin_ = new QSpinBox(orchestratorModelGroup_);
@@ -384,22 +385,40 @@ void PreferencesDialog::createAgentTab() {
 void PreferencesDialog::createIrcTab() {
     auto* widget = new QWidget();
     auto* layout = new QVBoxLayout(widget);
-    
+
     // Server settings
     auto* serverGroup = new QGroupBox("IRC Server", widget);
     auto* serverLayout = new QFormLayout(serverGroup);
-    
+
     ircServerEdit_ = new QLineEdit(serverGroup);
     ircServerEdit_->setPlaceholderText("127.0.0.1");
     serverLayout->addRow("Server Address:", ircServerEdit_);
-    
-    
-    
-    
+
+
+
+
     layout->addWidget(serverGroup);
     layout->addStretch();
-    
+
     tabWidget_->addTab(widget, "IRC");
+}
+
+void PreferencesDialog::createProfilingTab() {
+    auto* widget = new QWidget();
+    auto* layout = new QVBoxLayout(widget);
+
+    // Profiling settings
+    auto* profilingGroup = new QGroupBox("Profiling", widget);
+    auto* profilingLayout = new QFormLayout(profilingGroup);
+
+    profilingEnabledCheck_ = new QCheckBox("Enable performance profiling", profilingGroup);
+    profilingEnabledCheck_->setToolTip("Track API requests, tool execution timing, and token usage");
+    profilingLayout->addRow("", profilingEnabledCheck_);
+
+    layout->addWidget(profilingGroup);
+    layout->addStretch();
+
+    tabWidget_->addTab(widget, "Profiling");
 }
 
 void PreferencesDialog::connectSignals() {
@@ -561,7 +580,10 @@ void PreferencesDialog::loadConfiguration() {
     
     // IRC settings
     ircServerEdit_->setText(QString::fromStdString(config.irc.server));
-    
+
+    // Profiling settings
+    profilingEnabledCheck_->setChecked(config.profiling.enabled);
+
     configModified_ = false;
 }
 
@@ -607,7 +629,10 @@ void PreferencesDialog::saveConfiguration() {
     
     // IRC settings
     config.irc.server = ircServerEdit_->text().toStdString();
-    
+
+    // Profiling settings
+    config.profiling.enabled = profilingEnabledCheck_->isChecked();
+
     // Save to file
     config.save();
     
@@ -839,9 +864,9 @@ void PreferencesDialog::onTestAPIConnection() {
         
         // Create a simple test message
         claude::ChatRequest request;
-        request.model = claude::Model::Haiku35;
+        request.model = claude::Model::Haiku45;
         request.max_tokens = 10;
-        request.enable_thinking = false;  // Haiku doesn't support thinking
+        request.enable_thinking = false;
         
         // Add a simple test message
         request.messages.push_back(claude::messages::Message::user_text("Test"));

@@ -53,10 +53,13 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     if (!api_client_) {
         api_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
     }
-    
+
     // Set log filename for orchestrator to include binary name
     std::string log_filename = std::format("anthropic_requests_{}_orchestrator.log", binary_name_);
     api_client_->set_request_log_filename(log_filename);
+
+    // Set component ID for profiling
+    api_client_->set_component_id("orchestrator", profiling::Component::ORCHESTRATOR);
     
     // Register orchestrator tools
     register_orchestrator_tools(tool_registry_, this);
@@ -102,6 +105,14 @@ bool Orchestrator::initialize() {
     std::filesystem::create_directories(orch_memory_dir);
     memory_handler_ = std::make_unique<MemoryToolHandler>(orch_memory_dir.string());
     ORCH_LOG("Orchestrator: Memory handler initialized at %s\n", orch_memory_dir.string().c_str());
+
+    // Enable profiling if configured
+    if (config_.profiling.enabled) {
+        profiling::ProfilingManager::instance().enable();
+        ORCH_LOG("Orchestrator: Profiling enabled\n");
+    } else {
+        ORCH_LOG("Orchestrator: Profiling disabled (config)\n");
+    }
 
     // Copy extract_results.sh script to workspace
     {
@@ -2228,7 +2239,19 @@ void Orchestrator::shutdown() {
     if (irc_server_) {
         irc_server_->stop();
     }
-    
+
+    // Save profiling report
+    if (profiling::ProfilingManager::instance().is_enabled()) {
+        ORCH_LOG("Orchestrator: Saving profiling report...\n");
+        bool saved = profiling::ProfilingManager::instance().save_report(binary_name_);
+        if (saved) {
+            std::string report_dir = profiling::ProfilingManager::instance().get_report_directory(binary_name_);
+            ORCH_LOG("Orchestrator: Profiling report saved to %s\n", report_dir.c_str());
+        } else {
+            ORCH_LOG("Orchestrator: WARNING - Failed to save profiling report\n");
+        }
+    }
+
     // Cleanup subsystems
     tool_tracker_.reset();
     merge_manager_.reset();

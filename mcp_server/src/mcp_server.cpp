@@ -46,6 +46,10 @@ bool MCPServer::initialize() {
     // Create session manager
     session_manager_ = std::make_unique<SessionManager>();
 
+    // Apply configuration to session manager
+    session_manager_->set_max_sessions(config_.max_sessions);
+    session_manager_->set_ida_path(config_.ida_path);
+
     // Create MCP stdio server
     mcp_server_ = std::make_unique<StdioMCPServer>("IDA Swarm MCP Server", "1.0.0");
 
@@ -153,7 +157,7 @@ void MCPServer::register_tools() {
         "program behavior. Agents communicate findings to each other and can recursively spawn sub-agents for detailed "
         "analysis. The orchestrator maintains overall coherence and synthesizes agent findings. Returns a session_id "
         "that identifies this specific IDA instance and orchestrator for continued interaction. "
-        "The orchestrator is INCREDIBLY CAPABLE! It is VERY GOOD AT REVERSE ENGINEERING (it can also write files, but this is IT. it can reverse engineer, patch binaries, and it can write files but it can NOT explore the file system in ANY way, so if you need that you can tell it to write a file. The orchestrator will ALWAYS write the file NEXT to the binary that you started it on.  "
+        "The orchestrator is INCREDIBLY CAPABLE! It is VERY GOOD AT REVERSE ENGINEERING (it can also write files, but this is IT. it can reverse engineer, patch binaries, and it can write files but it can NOT explore the file system in ANY way, so if you need that you can tell it to write a file. The orchestrator will by default write the file next to the binary that you started it on.  "
         "Make sure to give the orchestrator TRULY what you are trying to do, and what  you need reversed and WHY you need it reversed. "
         "By giving the orchestrator the TRUE CONTEXT about what you are trying to do it can spawn agents smarter, and it WILL ANSWER YOUR TASK MUCH MUCH BETTER! "
         "This is why giving TRUE CONTEXT is so important, by giving the context about what is ACTUALLY happening the orchestrator WILL WORK BETTER FOR YOU! ",
@@ -694,7 +698,7 @@ nlohmann::json MCPServer::handle_wait_for_response(const nlohmann::json& params)
 
 void MCPServer::load_configuration() {
     // Try to load config from file
-    fs::path config_dir = fs::path(getenv("HOME")) / ".ida_re_mcp";
+    fs::path config_dir = fs::path(getenv("HOME")) / ".ida_swarm_mcp";
     fs::path config_file = config_dir / "server_config.json";
 
     if (fs::exists(config_file)) {
@@ -708,12 +712,6 @@ void MCPServer::load_configuration() {
             }
             if (j.contains("ida_path")) {
                 config_.ida_path = j["ida_path"];
-            }
-            if (j.contains("log_file")) {
-                config_.log_file = j["log_file"];
-            }
-            if (j.contains("log_level")) {
-                config_.log_level = j["log_level"];
             }
 
             std::cerr << "Loaded configuration from: " << config_file << std::endl;
@@ -729,9 +727,7 @@ void MCPServer::load_configuration() {
 
         nlohmann::json default_config = {
             {"max_sessions", config_.max_sessions},
-            {"ida_path", config_.ida_path},
-            {"log_file", config_.log_file},
-            {"log_level", config_.log_level}
+            {"ida_path", config_.ida_path}
         };
 
         try {

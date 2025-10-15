@@ -70,6 +70,7 @@ private:
     void createModelsTab();
     void createAgentTab();
     void createIrcTab();
+    void createProfilingTab();
     void connectSignals();
     
     // Configuration methods
@@ -139,7 +140,10 @@ private:
     
     // IRC Tab widgets
     QLineEdit* ircServerEdit_;
-    
+
+    // Profiling Tab widgets
+    QCheckBox* profilingEnabledCheck_;
+
     // Additional buttons
     QPushButton* exportButton_;
     QPushButton* importButton_;

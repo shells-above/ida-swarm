@@ -22,5 +22,8 @@
     "model": "claude-sonnet-4-5",
     "max_tokens": 32000,
     "max_thinking_tokens": 31999
+  },
+  "profiling": {
+    "enabled": true
   }
 }
