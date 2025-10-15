@@ -4,7 +4,12 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
-#include <nalt.hpp>  // For get_input_file_path
+#include <fcntl.h>      // For open()
+#include <sys/file.h>   // For flock()
+#include <cerrno>       // For errno
+#include <cstring>      // For strerror()
+#include <unistd.h>     // For close()
+#include <nalt.hpp>     // For get_input_file_path
 
 namespace fs = std::filesystem;
 
@@ -84,8 +89,31 @@ bool DatabaseManager::create_workspace() {
 }
 
 bool DatabaseManager::save_current_database() {
+    ORCH_LOG("DatabaseManager: Acquiring lock for save_database()...\n");
+
+    // there's a weird bug in IDA (not totally sure where)
+    // but if you are using the MCP server + spawn multiple sessions at the same time for some reason all the orchestrators
+    // besides the most recently spawned one will crash right after calling save_database, even though they are all operating on different files
+
+    // Create/open lock file for inter-process synchronization
+    std::string lock_file = "/tmp/ida_swarm_save_db.lock";
+    int fd = open(lock_file.c_str(), O_CREAT | O_RDWR, 0666);
+    if (fd == -1) {
+        ORCH_LOG("DatabaseManager: WARNING - Failed to open lock file: %s\n", strerror(errno));
+        ORCH_LOG("DatabaseManager: Continuing without lock (unsafe but better than failing)\n");
+        // Continue anyway - better to try than fail completely
+    } else {
+        // Acquire exclusive lock (blocks until available)
+        ORCH_LOG("DatabaseManager: Waiting for lock...\n");
+        if (flock(fd, LOCK_EX) != 0) {
+            ORCH_LOG("DatabaseManager: WARNING - Failed to acquire lock: %s\n", strerror(errno));
+        } else {
+            ORCH_LOG("DatabaseManager: Lock acquired successfully\n");
+        }
+    }
+
     ORCH_LOG("DatabaseManager: About to call save_database()\n");
-    
+
     // Create request to execute save_database on main thread
     struct SaveDatabaseRequest : exec_request_t {
         bool result = false;
@@ -94,13 +122,21 @@ bool DatabaseManager::save_current_database() {
             return 0;
         }
     };
-    
+
     SaveDatabaseRequest req;
     execute_sync(req, MFF_WRITE);  // MFF_WRITE for database modification
-    
+
     ORCH_LOG("DatabaseManager: save_database() returned %d\n", req.result ? 1 : 0);
+
+    // Release lock
+    if (fd != -1) {
+        flock(fd, LOCK_UN);
+        close(fd);
+        ORCH_LOG("DatabaseManager: Lock released\n");
+    }
+
     ORCH_LOG("DatabaseManager: Saved main database\n");
-    
+
     return req.result;
 }
 
