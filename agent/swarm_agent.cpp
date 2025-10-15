@@ -1120,7 +1120,33 @@ Respond ONLY with the JSON, no other text.)";
     }
 
     try {
-        json status_data = json::parse(*text);
+        std::string json_text = *text;
+
+        // Strip markdown code fences if present (Haiku 4.5 sometimes wraps JSON in ```json...```)
+        // Only process if we detect fences
+        if (json_text.find("```") != std::string::npos) {
+            // Remove leading markdown fence (```json or ```)
+            if (json_text.find("```json") == 0) {
+                json_text = json_text.substr(7);  // Skip "```json"
+            } else if (json_text.find("```") == 0) {
+                json_text = json_text.substr(3);  // Skip "```"
+            }
+
+            // Remove trailing markdown fence (```)
+            size_t trailing_fence = json_text.rfind("```");
+            if (trailing_fence != std::string::npos) {
+                json_text = json_text.substr(0, trailing_fence);
+            }
+
+            // Trim whitespace after stripping fences
+            size_t start = json_text.find_first_not_of(" \t\n\r");
+            size_t end = json_text.find_last_not_of(" \t\n\r");
+            if (start != std::string::npos && end != std::string::npos) {
+                json_text = json_text.substr(start, end - start + 1);
+            }
+        }
+
+        json status_data = json::parse(json_text);
 
         // Validate required fields
         if (!status_data.contains("current_status") || !status_data.contains("emoji")) {
