@@ -886,13 +886,51 @@ void Orchestrator::process_user_input(const std::string& input) {
     
     // Continue conversation if needed
     if (!tool_results.empty()) {
-        
+
         // Continue processing until no more tool calls
         while (true) {
-            // Send tool results back
-            claude::ChatResponse continuation = send_continuation_request();
-            if (!continuation.success) {
-                ORCH_LOG("Orchestrator: Failed to get continuation: %s\n",
+            // Send tool results back with retry logic for server errors
+            const int MAX_CONTINUATION_RETRIES = 3;
+            const int BASE_RETRY_DELAY_MS = 2000;  // Start with 2 seconds
+
+            claude::ChatResponse continuation;
+            bool request_succeeded = false;
+
+            for (int retry = 0; retry <= MAX_CONTINUATION_RETRIES; retry++) {
+                continuation = send_continuation_request();
+
+                if (continuation.success) {
+                    request_succeeded = true;
+                    break;
+                }
+
+                // Check if this is a recoverable error (500s, timeouts, etc.)
+                if (!claude::Client::is_recoverable_error(continuation)) {
+                    ORCH_LOG("Orchestrator: Non-recoverable continuation error: %s\n",
+                        continuation.error ? continuation.error->c_str() : "Unknown error");
+                    break;
+                }
+
+                // Don't retry if we've exhausted attempts
+                if (retry == MAX_CONTINUATION_RETRIES) {
+                    ORCH_LOG("Orchestrator: Max continuation retries (%d) exhausted: %s\n",
+                        MAX_CONTINUATION_RETRIES,
+                        continuation.error ? continuation.error->c_str() : "Unknown error");
+                    break;
+                }
+
+                // Calculate exponential backoff delay
+                int delay_ms = BASE_RETRY_DELAY_MS * (1 << retry);  // 2s, 4s, 8s
+
+                ORCH_LOG("Orchestrator: Continuation request failed (recoverable), retrying in %d ms (attempt %d/%d): %s\n",
+                    delay_ms, retry + 1, MAX_CONTINUATION_RETRIES,
+                    continuation.error ? continuation.error->c_str() : "Unknown error");
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            }
+
+            if (!request_succeeded) {
+                ORCH_LOG("Orchestrator: Failed to get continuation after retries: %s\n",
                     continuation.error ? continuation.error->c_str() : "Unknown error");
 
                 // Signal task completion for MCP mode before breaking
