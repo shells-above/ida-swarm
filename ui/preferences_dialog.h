@@ -20,6 +20,8 @@ class QGroupBox;
 class QTextEdit;
 class QDialogButtonBox;
 class QTimer;
+class QTableWidget;
+class QTableWidgetItem;
 QT_END_NAMESPACE
 
 namespace llm_re::ui {
@@ -46,9 +48,13 @@ private slots:
     // Test buttons
     void onTestAPIConnection();
     
-    // OAuth management
-    void onRefreshOAuthToken();
-    void updateTokenStatus();
+    // OAuth account management
+    void onAddAccount();
+    void onRemoveAccount();
+    void onMoveAccountUp();
+    void onMoveAccountDown();
+    void refreshAccountsList();
+    void onAccountSelectionChanged();
     
     // Radio button handlers
     void onAuthMethodChanged();
@@ -100,10 +106,14 @@ private:
     QPushButton* testApiButton_;
     QLabel* apiStatusLabel_;
     
-    // OAuth token status widgets
-    QLabel* tokenExpirationLabel_;
-    QPushButton* refreshTokenButton_;
-    QTimer* tokenStatusTimer_;
+    // OAuth multi-account management widgets
+    QTableWidget* accountsTable_;
+    QPushButton* addAccountButton_;
+    QPushButton* removeAccountButton_;
+    QPushButton* moveUpButton_;
+    QPushButton* moveDownButton_;
+    QPushButton* refreshAccountsButton_;
+    QTimer* accountUpdateTimer_;
     
     // Models Tab widgets - Agent
     QGroupBox* agentModelGroup_;
