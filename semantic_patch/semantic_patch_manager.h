@@ -149,7 +149,6 @@ struct FinalizeResult {
     bool success;                           ///< true if patch applied successfully
     ea_t original_function;                 ///< Original function address
     ea_t new_function_address;              ///< Injected code address
-    std::string patch_instruction;          ///< JMP instruction applied (e.g., "jmp 0x50000")
     std::string error_message;              ///< Detailed error if failed
 };
 
@@ -303,7 +302,6 @@ private:
 
     // Patching helpers
     bool patch_function_with_jump(ea_t original_func, ea_t new_func);
-    std::string generate_jump_instruction(ea_t from, ea_t to);
     std::string generate_far_jump_for_architecture(ea_t from, ea_t to);
 
     // Machine code extraction from object file

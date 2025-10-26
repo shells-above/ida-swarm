@@ -12,8 +12,9 @@
 
 namespace llm_re::semantic {
 
-// Forward declaration
+// Forward declarations
 static std::string find_llvm_objcopy();
+static void cleanup_object_file(SemanticPatchSession* session);
 
 SemanticPatchManager::SemanticPatchManager(
     PatchManager* patch_manager,
@@ -96,6 +97,10 @@ CompileResult SemanticPatchManager::compile_replacement(const std::string& sessi
         result.error_message = "Invalid session ID: " + session_id;
         return result;
     }
+
+    // Clean up any previous compilation's object file before creating a new one
+    // This prevents object file leaks when compile_replacement is called multiple times
+    cleanup_object_file(session);
 
     // Get architecture from analyzer (already cached)
     std::string arch = convention_analyzer_->get_architecture();
@@ -399,15 +404,9 @@ FinalizeResult SemanticPatchManager::finalize_semantic_patch(const std::string& 
         cleanup_object_file(session);
 
         // Build result
-        std::string patch_instruction = generate_jump_instruction(
-            session->original_function,
-            permanent_address
-        );
-
         result.success = true;
         result.original_function = session->original_function;
         result.new_function_address = permanent_address;
-        result.patch_instruction = patch_instruction;
 
         LOG("SemanticPatchManager: Successfully patched function at 0x%llX to jump to 0x%llX\n",
             (uint64_t)session->original_function, (uint64_t)permanent_address);
@@ -632,29 +631,6 @@ bool SemanticPatchManager::patch_function_with_jump(ea_t original_func, ea_t new
     LOG("Successfully redirected function at 0x%llX to 0x%llX (%zu bytes patched)\n",
         (uint64_t)original_func, (uint64_t)new_func, REDIRECT_SIZE);
     return true;
-}
-
-std::string SemanticPatchManager::generate_jump_instruction(ea_t from, ea_t to) {
-    if (inf_is_64bit()) {
-        // x86-64: JMP rel32
-        int64_t offset = (int64_t)to - ((int64_t)from + 5);
-
-        if (offset >= INT32_MIN && offset <= INT32_MAX) {
-            // Can use 5-byte relative JMP
-            std::stringstream ss;
-            ss << "jmp 0x" << std::hex << to;
-            return ss.str();
-        } else {
-            // Need indirect JMP through register
-            // This is more complex - would need multiple instructions
-            return ""; // Not supported yet
-        }
-    } else {
-        // x86-32: JMP rel32
-        std::stringstream ss;
-        ss << "jmp 0x" << std::hex << to;
-        return ss.str();
-    }
 }
 
 SemanticPatchManager::AssembleResult SemanticPatchManager::extract_machine_code_from_object(const std::string& object_path) {

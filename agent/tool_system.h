@@ -2083,7 +2083,6 @@ After this succeeds, VERIFY your changes! Check the old/new functions decompilat
             data["success"] = true;
             data["original_function"] = HexAddress(result.original_function);
             data["new_function_address"] = HexAddress(result.new_function_address);
-            data["patch_instruction"] = result.patch_instruction;
             data["message"] = "Semantic patch applied successfully! The original function now redirects to your compiled code.";
 
             return claude::tools::ToolResult::success(data);
