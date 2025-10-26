@@ -15,6 +15,8 @@
 #include <random>
 #include <chrono>
 #include <sstream>
+
+#include "semantic_patch/semantic_patch_manager.h"
 #ifdef __NT__
 #include <windows.h>
 #else
@@ -1682,11 +1684,422 @@ public:
     }
 };
 
+// Start Semantic Patch Session Tool
+class StartSemanticPatchTool : public IDAToolBase {
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;
+
+public:
+    StartSemanticPatchTool(std::shared_ptr<ActionExecutor> exec,
+                          std::shared_ptr<semantic::SemanticPatchManager> spm)
+        : IDAToolBase(exec), semantic_patch_manager_(spm) {}
+
+    std::string name() const override {
+        return "start_semantic_patch";
+    }
+
+    std::string description() const override {
+        return R"(Begin a semantic-level function replacement session. This tool exists because of a fundamental tension in binary modification:
+
+THE PROBLEM SPACE:
+When you decompile a function, you see C code. But this is a RECONSTRUCTION - Hex-Rays is making its best guess about types, variable purposes, control flow. Sometimes it's accurate. Sometimes it's completely wrong. Yet working at the assembly level for complex changes is tedious and error-prone.
+
+So you face a decision: Do you trust the decompilation enough to work at the semantic (C code) level?
+
+THE TRADE-OFF:
+Assembly Level:
+- TRUTH: You see exactly what the CPU executes
+- PRECISION: Your changes are exactly what you specify
+- TEDIUM: Changing complex logic requires many instructions
+- FRAGILITY: Easy to break in subtle ways
+
+Semantic Level:
+- CLARITY: You work with algorithms and logic
+- EFFICIENCY: Complex changes are simple in C
+- RISK: Based on potentially incorrect decompilation
+- LEVERAGE: Compiler handles register allocation, calling conventions
+
+THE VERIFICATION APPROACH:
+This tool starts a session that forces you to verify your assumptions at each step. Not as bureaucracy - as risk mitigation. Each verification step asks: "Is your understanding of this function actually correct?"
+
+WHEN TO USE THIS:
+Ask yourself:
+- Is this a COMPLEX logic change that would be painful in assembly?
+- Do I trust the decompilation? (Have types been reversed? Do variable names make sense? Have we *FULLY REVERSE ENGINEERED EVERYTHING (AT AN API LEVEL) THIS FUNCTION INTERACTS WITH?* If not, don't use this until you TRUST THE DECOMPILATION FULLY)
+- Am I replacing the ENTIRE function or just a few instructions?
+
+For small changes (single if-condition, NOP a check), use traditional assembly patching.
+For complete algorithm replacements or heavy instrumentation, this is your tool.
+
+THE PHILOSOPHY:
+You're not following a process. You're building confidence that semantic-level modification is safe for THIS specific function.)";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_integer("function_address", "The function you want to semantically replace")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            ea_t address = ActionExecutor::parse_single_address_value(input.at("function_address"));
+
+            semantic::StartPatchResult result = semantic_patch_manager_->start_semantic_patch(address);
+
+            if (!result.success) {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+            json data;
+            data["success"] = true;
+            data["session_id"] = result.session_id;
+            data["function_address"] = HexAddress(result.function_address);
+            data["decompiled_code"] = result.decompiled_code;
+            data["detected_convention"] = result.detected_convention.to_string();
+            data["next_step"] = "Review the decompiled code. Modify it as needed, then call compile_replacement.";
+
+            return claude::tools::ToolResult::success(data);
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Compile Replacement Tool
+class CompileReplacementTool : public IDAToolBase {
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;
+
+public:
+    CompileReplacementTool(std::shared_ptr<ActionExecutor> exec,
+                          std::shared_ptr<semantic::SemanticPatchManager> spm)
+        : IDAToolBase(exec), semantic_patch_manager_(spm) {}
+
+    std::string name() const override {
+        return "compile_replacement";
+    }
+
+    std::string description() const override {
+        return R"(Compile modified C code into assembly via ITERATIVE RESOLUTION LOOP. This solves the undefined reference problem elegantly.
+
+THE PROBLEM:
+Your C code references things that exist in the binary but the compiler doesn't know about:
+- Functions: check_password(), malloc(), log_event()
+- Types: struct credentials, union packet, enum status
+- Globals: g_config, debug_enabled
+
+Compiler fails: "unknown type 'credentials'", "undeclared identifier 'check_password'"
+
+THE ELEGANT SOLUTION:
+Let the COMPILER tell us what's missing instead of trying to parse C ourselves:
+
+Loop (up to max_iterations):
+  1. Compile the C code
+  2. If SUCCESS: done, return assembly!
+  3. Parse compiler errors for undefined symbols/types
+  4. Query IDA database to resolve them:
+     - Functions → get address, inject: #define check_password ((int(*)(char*))0x401234)
+     - Types → get full definition, inject: struct credentials { char user[32]; ... };
+     - Globals → get address+type, inject: extern int g_config; // at 0x404000
+  5. Inject ALL resolutions into the code
+  6. Loop back to step 1
+
+Each iteration resolves one "layer" of dependencies. Example:
+- Iteration 1: Compiler says "unknown type 'struct request'" → fetch it
+- Iteration 2: struct request definition uses "struct header" → fetch it
+- Iteration 3: struct header uses "enum msg_type" → fetch it
+- Iteration 4: SUCCESS
+
+The compiler naturally figures out dependency ordering - we just feed it what it asks for.
+
+max_iterations PARAMETER:
+Default 10 handles most code. Increase if you have:
+- Deep type nesting (struct→struct→struct→struct...)
+- Complex cross-references between types
+- Error: "Maximum resolution iterations reached"
+
+When to increase: If compilation fails with "Maximum iterations reached" and you see it made progress (resolved 5 symbols, 8 types), try max_iterations=20.
+
+WHAT YOU GET BACK (all INFORMATIONAL - stored in session automatically):
+- compiled_assembly: INFORMATIONAL ONLY - Generated assembly for inspection/debugging
+- resolved_symbols: What was auto-resolved (funcs as "name", types as "type:name")
+- final_c_code: C code with injections (for debugging what was injected)
+
+CRITICAL - SESSION MANAGEMENT:
+The compiled assembly is AUTOMATICALLY STORED in the session. You do NOT pass it to preview or finalize - they just need session_id. The assembly is returned PURELY so you can inspect/debug what was generated from your C code. It flows like this:
+
+  compile_replacement(session_id, c_code)
+    → returns assembly for inspection
+    → ALSO stores it in session
+
+  preview_semantic_patch(session_id)
+    → reads assembly FROM SESSION
+    → you don't pass it in!
+
+  finalize_semantic_patch(session_id)
+    → reads assembly FROM SESSION
+    → you don't pass it in!
+
+SAFE EXPLORATION:
+Nothing is modified yet. Compile→review assembly→modify C→recompile until confident.
+
+TRUE CONTEXT - WHY THIS MATTERS:
+We need to satisfy the compiler with addresses so we can generate assembly with correct virtual addresses baked in. When C calls check_password(), compiler emits "call 0x401234", not an unresolved symbol. The iterative loop feeds the compiler addresses until it emits complete, injectable assembly.)";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("session_id", "Session ID from start_semantic_patch")
+            .add_string("c_code", "Your modified C code for the function replacement")
+            .add_integer("max_iterations", "Maximum compile-resolve-inject cycles (default 10). Increase if deeply nested types or hit iteration limit. Each iteration resolves one dependency layer.", false)
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string session_id = input.at("session_id");
+            std::string c_code = input.at("c_code");
+            int max_iterations = input.value("max_iterations", 10);
+
+            semantic::CompileResult result = semantic_patch_manager_->compile_replacement(
+                session_id, c_code, max_iterations);
+
+            if (!result.success) {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+            json data;
+            data["success"] = true;
+            data["compiled_assembly"] = result.compiled_assembly;
+            data["resolved_symbols"] = json::array();
+            for (const auto& sym : result.resolved_symbols) {
+                data["resolved_symbols"].push_back(sym);
+            }
+            data["final_c_code"] = result.final_c_code;
+            data["next_step"] = "MANDATORY: Call preview_semantic_patch to verify ABI compatibility before finalizing.";
+
+            return claude::tools::ToolResult::success(data);
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Preview Semantic Patch Tool
+class PreviewSemanticPatchTool : public IDAToolBase {
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;
+
+public:
+    PreviewSemanticPatchTool(std::shared_ptr<ActionExecutor> exec,
+                            std::shared_ptr<semantic::SemanticPatchManager> spm)
+        : IDAToolBase(exec), semantic_patch_manager_(spm) {}
+
+    std::string name() const override {
+        return "preview_semantic_patch";
+    }
+
+    std::string description() const override {
+        return R"(MANDATORY verification before finalizing. Preview shows you what will actually happen to the binary.
+
+THE CRITICAL VERIFICATION:
+This isn't a courtesy preview. It's checking for a fundamental compatibility requirement: CALLING CONVENTION COMPATIBILITY.
+
+THE ABI CONTRACT:
+When function A calls function B, they have an implicit contract:
+- Arguments: "I'll put arg1 in RDI, arg2 in RSI" (System V x64)
+- Return: "You'll put the return value in RAX"
+- Preservation: "You'll restore RBP, RBX, R12-R15 before returning"
+
+This is the Application Binary Interface (ABI). If you break this contract, chaos:
+- Caller puts arguments in wrong registers → your function reads garbage
+- Your function returns in wrong register → caller gets garbage
+- You don't preserve callee-saved registers → caller's variables get corrupted
+
+THE VERIFICATION:
+1. We analyzed the ORIGINAL function's calling convention when you started the session
+2. We compiled your code with that SAME convention
+3. Now we VERIFY they actually match by analyzing the generated assembly
+
+We check:
+- Prologue: Does your function set up stack frame correctly?
+- Epilogue: Does it clean up properly?
+- Register usage: Does it follow callee-saved register rules?
+- Calling convention: Does it match what we told the compiler to use?
+
+WHAT YOU SEE (all INFORMATIONAL - nothing to pass back):
+- original_assembly: Original function disassembly (for comparison)
+- new_assembly: Your compiled assembly (same as from compile_replacement, stored in session)
+- original_convention/new_convention: Detected calling conventions
+- abi_compatible: CRITICAL boolean - safe to finalize or not?
+- warnings: If incompatible, explains what's wrong
+
+The assembly shown is FROM THE SESSION - you don't need to do anything with it except review it.
+
+THE DECISION POINT:
+If ABI is INCOMPATIBLE, DO NOT PROCEED. The replacement will break. You must either:
+- Fix the C code (maybe you're using wrong types?)
+- Accept that semantic patching won't work for this function
+- Use assembly-level patching instead
+
+If ABI is COMPATIBLE, you have reasonable confidence the replacement will work. But "reasonable" isn't "certain" - you're still trusting the decompilation was accurate.
+
+THE PERMANENCE REMINDER:
+After you finalize, the original function gets replaced with:
+    jmp <your_new_code>
+
+The original code is gone. If you were wrong about the function's behavior, the program breaks. This preview is your **last chance** to reconsider.)";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("session_id", "Session ID")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string session_id = input.at("session_id");
+
+            semantic::PreviewResult result = semantic_patch_manager_->preview_semantic_patch(session_id);
+
+            if (!result.success) {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+            json data;
+            data["success"] = true;
+            data["original_assembly"] = result.original_assembly;
+            data["new_assembly"] = result.new_assembly;
+            data["original_convention"] = result.original_convention.to_string();
+            data["new_convention"] = result.new_convention.to_string();
+            data["abi_compatible"] = result.abi_compatible;
+            data["analysis"] = result.analysis;
+
+            if (!result.warnings.empty()) {
+                data["warnings"] = json::array();
+                for (const auto& warning : result.warnings) {
+                    data["warnings"].push_back(warning);
+                }
+            }
+
+            if (result.abi_compatible) {
+                data["next_step"] = "ABI is compatible. If you're confident in your changes, call finalize_semantic_patch.";
+            } else {
+                data["next_step"] = "ABI is INCOMPATIBLE. DO NOT finalize. Fix the code or use assembly patching.";
+            }
+
+            return claude::tools::ToolResult::success(data);
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+// Finalize Semantic Patch Tool
+class FinalizeSemanticPatchTool : public IDAToolBase {
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;
+
+public:
+    FinalizeSemanticPatchTool(std::shared_ptr<ActionExecutor> exec,
+                             std::shared_ptr<semantic::SemanticPatchManager> spm)
+        : IDAToolBase(exec), semantic_patch_manager_(spm) {}
+
+    std::string name() const override {
+        return "finalize_semantic_patch";
+    }
+
+    std::string description() const override {
+        return R"(PERMANENT OPERATION: Replace the original function with your compiled code.
+
+THE FINALIZATION PROCESS:
+1. Code Injection Manager finds space (code cave or new segment)
+2. Your compiled code is injected at that location
+3. Original function is patched: first instruction becomes JMP <new_code>
+4. All future calls to the original function now execute your code
+
+WHAT ACTUALLY HAPPENS:
+Original (0x401000):
+    push rbp
+    mov rbp, rsp
+    <original code>
+    leave
+    ret
+
+After patching (0x401000):
+    jmp 0x50000        ← Only change to original function
+    <dead code>        ← Never executed
+
+New code (0x50000):
+    push rbp           ← Your compiled code
+    mov rbp, rsp
+    <your modified logic>
+    leave
+    ret
+
+THE CALLER'S PERSPECTIVE:
+Caller doesn't know anything changed:
+- Calls 0x401000 (same as before)
+- That address now jumps to 0x50000
+- Your code executes with same calling convention
+- Returns to caller normally
+
+WHY THIS WORKS:
+- Caller contract is preserved (calling convention verified)
+- Return address on stack still points to caller
+- Stack frame is still set up correctly
+- Callee-saved registers still preserved
+
+THE RISKS YOU'VE ACCEPTED:
+By calling finalize, you're asserting:
+✓ The decompilation was accurate enough
+✓ Your C code implements the behavior you intend
+✓ Symbol resolutions were correct
+✓ Calling convention is compatible
+✓ You've tested your logic
+
+THE IRREVERSIBILITY:
+The original code is now unreachable. You can revert the patch (which removes the JMP), but you can't undo any mistakes in your logic. The binary file is also modified - both the IDA database AND the actual binary on disk.
+
+POST-FINALIZATION:
+After this succeeds, VERIFY your changes! Check the old/new functions decompilation AND disassembly. Does it still work? Do the modified code paths execute correctly? Semantic patching gave you power to modify complex logic, but with power comes responsibility to verify the results.)";
+    }
+
+    json parameters_schema() const override {
+        return claude::tools::ParameterBuilder()
+            .add_string("session_id", "Session to finalize")
+            .build();
+    }
+
+    claude::tools::ToolResult execute(const json& input) override {
+        try {
+            std::string session_id = input.at("session_id");
+
+            semantic::FinalizeResult result = semantic_patch_manager_->finalize_semantic_patch(session_id);
+
+            if (!result.success) {
+                return claude::tools::ToolResult::failure(result.error_message);
+            }
+
+            json data;
+            data["success"] = true;
+            data["original_function"] = HexAddress(result.original_function);
+            data["new_function_address"] = HexAddress(result.new_function_address);
+            data["patch_instruction"] = result.patch_instruction;
+            data["message"] = "Semantic patch applied successfully! The original function now redirects to your compiled code.";
+
+            return claude::tools::ToolResult::success(data);
+        } catch (const std::exception& e) {
+            return claude::tools::ToolResult::failure(std::string("Exception: ") + e.what());
+        }
+    }
+};
+
+
 inline void register_ida_tools(claude::tools::ToolRegistry& registry,
                                std::shared_ptr<ActionExecutor> executor,
                                std::shared_ptr<DeepAnalysisManager> deep_analysis_manager,
                                std::shared_ptr<PatchManager> patch_manager,
                                std::shared_ptr<CodeInjectionManager> code_injection_manager,
+                               std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager,
                                const Config& config) {
     // Core navigation and info tools
     registry.register_tool_type<GetXrefsTool>(executor);
@@ -1746,6 +2159,14 @@ inline void register_ida_tools(claude::tools::ToolRegistry& registry,
         registry.register_tool_type<RequestDeepAnalysisTool>(executor, deep_analysis_manager);
         registry.register_tool_type<ListDeepAnalysesTool>(executor, deep_analysis_manager);
         registry.register_tool_type<GetDeepAnalysisTool>(executor, deep_analysis_manager);
+    }
+
+    // Semantic patching tools
+    if (semantic_patch_manager) {
+        registry.register_tool_type<StartSemanticPatchTool>(executor, semantic_patch_manager);
+        registry.register_tool_type<CompileReplacementTool>(executor, semantic_patch_manager);
+        registry.register_tool_type<PreviewSemanticPatchTool>(executor, semantic_patch_manager);
+        registry.register_tool_type<FinalizeSemanticPatchTool>(executor, semantic_patch_manager);
     }
 }
 
