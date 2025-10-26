@@ -101,6 +101,22 @@ private:
         uint32_t file_offset;
     };
 
+    // Architecture-aware padding byte detector
+    class PaddingDetector {
+    public:
+        PaddingDetector();
+        bool is_padding_byte(uint8_t byte) const;
+        uint8_t get_primary_padding() const { return primary_padding_; }
+        const std::vector<uint8_t>& get_all_padding_bytes() const { return padding_bytes_; }
+
+    private:
+        ushort arch_;  // Processor ID (PH.id)
+        bool is_64bit_;
+        filetype_t file_type_;
+        std::vector<uint8_t> padding_bytes_;
+        uint8_t primary_padding_;
+    };
+
     // Private members
     PatchManager* patch_manager_;  // Reference to the patch manager
     std::unordered_map<ea_t, WorkspaceInfo> active_workspaces_;  // Track temp segments
@@ -108,6 +124,7 @@ private:
     uint32_t next_workspace_id_ = 1;  // For unique segment naming
     std::string agent_binary_path_;  // Path to the agent's copy of the binary
     std::vector<orchestrator::NoGoZone> no_go_zones_;  // No-go zones from other agents
+    mutable std::unique_ptr<PaddingDetector> padding_detector_;  // Cached padding detector
 
     // Segment management
     ea_t find_safe_address_after_segments() const;
@@ -119,25 +136,15 @@ private:
     size_t count_cave_bytes(ea_t address, size_t max_size) const;
     bool is_in_no_go_zone(ea_t address, size_t size) const;
 
-    // Binary file patching
-    bool apply_to_binary_file(uint32_t file_offset, const std::vector<uint8_t>& bytes);
-
-    // New segment creation with LIEF (if no code cave found)
-    struct NewSegment {
-        ea_t address;
-        size_t size;
-        std::string name;  // Platform-appropriate segment name
-    };
-    NewSegment create_permanent_segment(size_t needed_size);
-    bool add_segment_with_lief(const NewSegment& segment, const std::vector<uint8_t>& bytes);
+    // Padding detection helper
+    const PaddingDetector& get_padding_detector() const;
 
     // Utility functions
     std::string get_disassembly(ea_t start, ea_t end) const;
     std::vector<uint8_t> get_bytes_from_range(ea_t start, ea_t end) const;
-
-    // Utility functions
     size_t align_up(size_t size, size_t alignment) const;
     std::string format_address(ea_t address) const;
+    std::string generate_segment_name_for_address(ea_t address) const;
 };
 
 } // namespace llm_re

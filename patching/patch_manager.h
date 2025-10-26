@@ -24,6 +24,14 @@ struct AssemblyPatchResult {
     size_t nops_added = 0;
 };
 
+struct SegmentInjectionResult {
+    bool success = false;
+    ea_t segment_address = BADADDR;
+    std::string segment_name;
+    size_t allocated_size = 0;
+    std::string error_message;
+};
+
 // Simplified patch info for listing
 struct PatchInfo {
     ea_t address;
@@ -47,8 +55,15 @@ struct PatchStatistics {
 // Forward declarations
 class CodeInjectionManager;
 
+namespace semantic {
+    class SemanticPatchManager;  // Forward declaration for friend access
+}
+
 // Simplified PatchManager with embedded patchers
 class PatchManager {
+    // Grant SemanticPatchManager access to private assembly/write methods
+    friend class semantic::SemanticPatchManager;
+
 public:
     PatchManager();
     ~PatchManager();
@@ -74,11 +89,18 @@ public:
                                     const std::string& new_hex,
                                     const std::string& description);
 
-    // 2. Apply assembly patch with mandatory original assembly verification  
+    // 2. Apply assembly patch with mandatory original assembly verification
     AssemblyPatchResult apply_assembly_patch(ea_t address,
                                            const std::string& original_asm,
                                            const std::string& new_asm,
                                            const std::string& description);
+
+    // 2b. Apply segment injection (creates new segment in IDA + binary)
+    SegmentInjectionResult apply_segment_injection(ea_t address,
+                                                   size_t size,
+                                                   const std::vector<uint8_t>& code,
+                                                   const std::string& segment_name,
+                                                   const std::string& description);
 
     // 3. Revert a patch at address
     bool revert_patch(ea_t address);
@@ -91,6 +113,10 @@ public:
     // Statistics
     PatchStatistics get_statistics() const;
 
+    // Utility methods (public for use by CodeInjectionManager)
+    static std::string bytes_to_hex_string(const std::vector<uint8_t>& bytes);
+    static std::vector<uint8_t> hex_string_to_bytes(const std::string& hex);
+
 private:
     // Internal patch entry
     struct PatchEntry {
@@ -102,6 +128,11 @@ private:
         bool is_assembly_patch;
         std::string original_asm;
         std::string patched_asm;
+
+        // Segment injection fields
+        bool is_segment_injection = false;  // If true, this is a segment injection
+        std::string segment_name;            // For segment deletion
+        size_t segment_size = 0;             // Original allocated size
     };
 
     // Keystone assembler
@@ -125,9 +156,14 @@ private:
     
     // Hex string utilities
     static bool is_valid_hex_string(const std::string& hex);
-    static std::vector<uint8_t> hex_string_to_bytes(const std::string& hex);
-    static std::string bytes_to_hex_string(const std::vector<uint8_t>& bytes);
-    
+
+    // Segment injection helpers
+    bool create_segment_in_ida(ea_t address, size_t size, const std::string& name);
+    bool add_segment_to_binary_with_lief(ea_t address, size_t size,
+                                        const std::string& name,
+                                        const std::vector<uint8_t>& code);
+    bool remove_segment_from_binary(ea_t address, const std::string& segment_name);
+
     // Assembly utilities
     bool init_keystone();
     void cleanup_keystone();
