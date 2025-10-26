@@ -778,29 +778,28 @@ json SessionManager::wait_for_response(const std::string& session_id, int timeou
 
 int SessionManager::spawn_orchestrator(const std::string& binary_path, const std::string& session_id,
                                       Session* session) {
-    // Create MCP config file in the same directory as the binary
-    fs::path binary_dir = fs::path(binary_path).parent_path();
-    fs::path config_path = binary_dir / "mcp_orchestrator_config.json";
+    // Build custom environment with session info (avoids file-based race conditions)
+    std::vector<std::string> env_storage;  // Keep strings alive
+    std::vector<char*> custom_env;
 
-    // Create the config JSON with session directory
-    json mcp_config;
-    mcp_config["session_id"] = session_id;
-    mcp_config["session_dir"] = session->session_dir;
-
-    // Write config file
-    try {
-        std::ofstream config_file(config_path);
-        if (!config_file.is_open()) {
-            std::cerr << "Failed to create MCP config file at: " << config_path << std::endl;
-            return -1;
-        }
-        config_file << mcp_config.dump(2);
-        config_file.close();
-        std::cerr << "Created MCP config file at: " << config_path << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Error writing MCP config file: " << e.what() << std::endl;
-        return -1;
+    // Copy existing environment
+    for (char** env = environ; *env != nullptr; env++) {
+        env_storage.emplace_back(*env);
     }
+
+    // Add MCP session variables
+    env_storage.push_back("IDA_SWARM_MCP_SESSION_ID=" + session_id);
+    env_storage.push_back("IDA_SWARM_MCP_SESSION_DIR=" + session->session_dir);
+
+    // Build char* array for posix_spawn
+    for (auto& env_str : env_storage) {
+        custom_env.push_back(const_cast<char*>(env_str.c_str()));
+    }
+    custom_env.push_back(nullptr);
+
+    std::cerr << "Set environment variables:" << std::endl;
+    std::cerr << "  IDA_SWARM_MCP_SESSION_ID=" << session_id << std::endl;
+    std::cerr << "  IDA_SWARM_MCP_SESSION_DIR=" << session->session_dir << std::endl;
 
     // Use posix_spawn to launch IDA directly
     std::string ida_exe = ida_path_;
@@ -836,7 +835,7 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
     std::cerr << "  Session: " << session_id << std::endl;
 
     pid_t pid;
-    int result = posix_spawn(&pid, ida_exe.c_str(), nullptr, nullptr, argv.data(), environ);
+    int result = posix_spawn(&pid, ida_exe.c_str(), nullptr, nullptr, argv.data(), custom_env.data());
 
     if (result != 0) {
         std::cerr << "posix_spawn failed: " << strerror(result) << std::endl;

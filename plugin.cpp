@@ -135,42 +135,18 @@ private:
     }
     
     void detect_mode() {
-        // Check for MCP config file first
-        if (!idb_path_.empty()) {
-            fs::path idb_dir = fs::path(idb_path_.c_str()).parent_path();
-            fs::path mcp_config_path = idb_dir / "mcp_orchestrator_config.json";
+        // Check for MCP mode via environment variables
+        const char* env_session_id = getenv("IDA_SWARM_MCP_SESSION_ID");
+        const char* env_session_dir = getenv("IDA_SWARM_MCP_SESSION_DIR");
 
-            if (fs::exists(mcp_config_path)) {
-                LOG("LLM RE: Found MCP config file at %s\n", mcp_config_path.string().c_str());
-
-                try {
-                    // Read the config file
-                    std::ifstream config_file(mcp_config_path);
-                    json mcp_config;
-                    config_file >> mcp_config;
-                    config_file.close();
-
-                    // Extract data from config
-                    if (mcp_config.contains("session_id")) {
-                        mcp_session_id_ = mcp_config["session_id"].get<std::string>();
-                    }
-                    if (mcp_config.contains("session_dir")) {
-                        mcp_session_dir_ = mcp_config["session_dir"].get<std::string>();
-                    }
-
-                    // Delete the config file immediately after reading
-                    fs::remove(mcp_config_path);
-                    LOG("LLM RE: Deleted MCP config file after reading\n");
-
-                    mode_ = MCP_ORCHESTRATOR;
-                    LOG("LLM RE: Detected MCP orchestrator mode for session %s\n", mcp_session_id_.c_str());
-                    return;
-
-                } catch (const std::exception& e) {
-                    LOG("LLM RE: Failed to read MCP config: %s\n", e.what());
-                    // Fall through to other detection methods
-                }
-            }
+        if (env_session_id && env_session_dir) {
+            mcp_session_id_ = env_session_id;
+            mcp_session_dir_ = env_session_dir;
+            mode_ = MCP_ORCHESTRATOR;
+            LOG("LLM RE: Detected MCP orchestrator mode via environment\n");
+            LOG("LLM RE: Session ID: %s\n", mcp_session_id_.c_str());
+            LOG("LLM RE: Session Dir: %s\n", mcp_session_dir_.c_str());
+            return;
         }
 
         if (idb_path_.empty()) {
