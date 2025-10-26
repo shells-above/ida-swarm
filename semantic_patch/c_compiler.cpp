@@ -777,7 +777,7 @@ std::vector<CCompiler::ParsedError> CCompiler::parse_compiler_errors(const std::
 // Utilities
 
 std::string CCompiler::create_temp_file(const std::string& content, const std::string& extension) {
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "ida_swarm_compile";
+    std::filesystem::path temp_dir = "/tmp/ida_swarm_compile";
     std::filesystem::create_directories(temp_dir);
 
     // Generate unique filename
