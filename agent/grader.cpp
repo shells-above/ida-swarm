@@ -1,5 +1,6 @@
 #include "agent/grader.h"
 #include "agent/agent.h"
+#include "../core/logger.h"
 #include <sstream>
 #include <algorithm>
 
@@ -13,7 +14,8 @@ AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     
     // Create API client based on auth method
     if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-        std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->get_credentials();
+        std::shared_ptr<claude::OAuthCredentials> oauth_creds =
+            oauth_manager_->get_credentials();
 
         if (oauth_creds) {
             // Initialize API client with OAuth - pass shared_ptr so it shares credentials
@@ -39,7 +41,7 @@ AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
     }
 
     // Set component ID for profiling
-    api_client_->set_component_id("grader", profiling::Component::GRADER);
+    api_client_->set_component_id("grader", claude::MetricsComponent::GRADER);
 
     mutex_ = qmutex_create();
 }
@@ -76,7 +78,7 @@ AnalysisGrader::GradeResult AnalysisGrader::evaluate_analysis(const GradingConte
     if (!response.success) {
         // Log the actual error
         std::string error_msg = response.error.value_or("Unknown error");
-        msg("ERROR: Grader API request failed: %s\n", error_msg.c_str());
+        LOG("ERROR: Grader API request failed: %s\n", error_msg.c_str());
         
         // On grader failure (API failure, not grader marking as a failure), send back for more analysis
         GradeResult result;
@@ -252,9 +254,9 @@ AnalysisGrader::GradeResult AnalysisGrader::parse_grader_response(const claude::
     result.response = response_text;
     
     if (is_complete) {
-        msg("Grader evaluation classified as COMPLETE\n");
+        LOG("Grader evaluation classified as COMPLETE\n");
     } else {
-        msg("Grader evaluation classified as INCOMPLETE\n");
+        LOG("Grader evaluation classified as INCOMPLETE\n");
     }
     
     return result;
@@ -290,14 +292,14 @@ Respond with JSON only:
     if (!response.success) {
         // On classification failure, default to incomplete (safer)
         std::string error_msg = response.error.value_or("Unknown error");
-        msg("WARNING: Classification failed (%s), defaulting to incomplete\n", error_msg.c_str());
+        LOG("WARNING: Classification failed (%s), defaulting to incomplete\n", error_msg.c_str());
         return false;
     }
     
     // Parse JSON response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
     if (!text) {
-        msg("WARNING: No text in classification response, defaulting to incomplete");
+        LOG("WARNING: No text in classification response, defaulting to incomplete");
         return false;
     }
 
@@ -331,7 +333,7 @@ Respond with JSON only:
         json result = json::parse(json_text);
         return result.value("is_complete", false);
     } catch (const json::exception& e) {
-        msg("%s", std::format("WARNING: Failed to parse classification JSON: {}", e.what()).c_str());
+        LOG("%s", std::format("WARNING: Failed to parse classification JSON: {}", e.what()).c_str());
         return false;
     }
 }

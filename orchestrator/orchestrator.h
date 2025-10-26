@@ -4,6 +4,7 @@
 #include "../core/config.h"
 #include "../core/profiler.h"
 #include "../core/profiling_manager.h"
+#include "../core/profiler_adapter.h"
 #include "../sdk/claude_sdk.h"
 #include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"
@@ -93,6 +94,7 @@ private:
     
     // Claude API for orchestrator
     std::unique_ptr<claude::Client> api_client_;
+    ProfilerAdapter profiler_adapter_;                            // Metrics adapter for profiling
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
     claude::tools::ToolRegistry tool_registry_;
     std::unique_ptr<MemoryToolHandler> memory_handler_;  // Orchestrator's persistent memory

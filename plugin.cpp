@@ -7,6 +7,7 @@
  */
 
 #include "core/common_base.h"
+#include "core/logger.h"
 #include "orchestrator/orchestrator.h"
 #include "agent/swarm_agent.h"
 #include "agent/event_bus.h"
@@ -65,7 +66,7 @@ public:
         // Load configuration from file
         config_->load();
         
-        msg("LLM RE: Plugin loaded, detecting mode...\n");
+        LOG("LLM RE: Plugin loaded, detecting mode...\n");
     }
     
     virtual ~llm_re_plugin_t() {
@@ -97,7 +98,7 @@ public:
     virtual ssize_t idaapi on_event(ssize_t code, va_list va) override {
         switch (code) {
             case ui_database_closed:
-                msg("LLM RE: Database closing, shutting down\n");
+                LOG("LLM RE: Database closing, shutting down\n");
                 prepare_for_shutdown();
                 break;
 
@@ -140,7 +141,7 @@ private:
             fs::path mcp_config_path = idb_dir / "mcp_orchestrator_config.json";
 
             if (fs::exists(mcp_config_path)) {
-                msg("LLM RE: Found MCP config file at %s\n", mcp_config_path.string().c_str());
+                LOG("LLM RE: Found MCP config file at %s\n", mcp_config_path.string().c_str());
 
                 try {
                     // Read the config file
@@ -159,14 +160,14 @@ private:
 
                     // Delete the config file immediately after reading
                     fs::remove(mcp_config_path);
-                    msg("LLM RE: Deleted MCP config file after reading\n");
+                    LOG("LLM RE: Deleted MCP config file after reading\n");
 
                     mode_ = MCP_ORCHESTRATOR;
-                    msg("LLM RE: Detected MCP orchestrator mode for session %s\n", mcp_session_id_.c_str());
+                    LOG("LLM RE: Detected MCP orchestrator mode for session %s\n", mcp_session_id_.c_str());
                     return;
 
                 } catch (const std::exception& e) {
-                    msg("LLM RE: Failed to read MCP config: %s\n", e.what());
+                    LOG("LLM RE: Failed to read MCP config: %s\n", e.what());
                     // Fall through to other detection methods
                 }
             }
@@ -196,17 +197,17 @@ private:
 
                 if (fs::exists(conversation_state)) {
                     mode_ = RESURRECTED_AGENT;
-                    msg("LLM RE: Detected RESURRECTED AGENT mode (ID: %s)\n", agent_id_.c_str());
+                    LOG("LLM RE: Detected RESURRECTED AGENT mode (ID: %s)\n", agent_id_.c_str());
                 } else {
                     mode_ = SWARM_AGENT;
-                    msg("LLM RE: Detected SWARM AGENT mode (ID: %s)\n", agent_id_.c_str());
+                    LOG("LLM RE: Detected SWARM AGENT mode (ID: %s)\n", agent_id_.c_str());
                 }
                 return;
             }
         }
         
         mode_ = ORCHESTRATOR;
-        msg("LLM RE: Running in ORCHESTRATOR mode\n");
+        LOG("LLM RE: Running in ORCHESTRATOR mode\n");
     }
     
     void setup_orchestrator_mode() {
@@ -214,7 +215,7 @@ private:
         if (!orchestrator_) {
             orchestrator_ = new orchestrator::Orchestrator(*config_, idb_path_.c_str());
             if (!orchestrator_->initialize()) {
-                msg("LLM RE: Failed to initialize orchestrator\n");
+                LOG("LLM RE: Failed to initialize orchestrator\n");
                 delete orchestrator_;
                 orchestrator_ = nullptr;
                 return;
@@ -223,54 +224,54 @@ private:
             // Set orchestrator in the bridge so UI can communicate with it
             ui::UIOrchestratorBridge::instance().set_orchestrator(orchestrator_);
         }
-        msg("LLM RE: Orchestrator ready\n");
+        LOG("LLM RE: Orchestrator ready\n");
     }
     
     void setup_swarm_agent_mode() {
         // Load agent configuration
         if (load_agent_config()) {
-            msg("LLM RE: Loaded config for agent %s\n", agent_id_.c_str());
+            LOG("LLM RE: Loaded config for agent %s\n", agent_id_.c_str());
             // Start the agent
             run(0);
         } else {
-            msg("LLM RE: Failed to load agent config\n");
+            LOG("LLM RE: Failed to load agent config\n");
             mode_ = ORCHESTRATOR;  // Fall back to orchestrator mode
         }
     }
     
     void setup_resurrected_agent_mode() {
-        msg("LLM RE: Setting up resurrected agent %s\n", agent_id_.c_str());
+        LOG("LLM RE: Setting up resurrected agent %s\n", agent_id_.c_str());
 
         // Load both the original config and the saved state
         if (load_agent_config() && load_saved_state()) {
-            msg("LLM RE: Loaded config and state for resurrected agent %s\n", agent_id_.c_str());
+            LOG("LLM RE: Loaded config and state for resurrected agent %s\n", agent_id_.c_str());
             // Start the resurrected agent
             run(0);
         } else {
-            msg("LLM RE: Failed to resurrect agent %s\n", agent_id_.c_str());
+            LOG("LLM RE: Failed to resurrect agent %s\n", agent_id_.c_str());
             mode_ = ORCHESTRATOR;  // Fall back to orchestrator mode
         }
     }
 
     void setup_mcp_orchestrator_mode() {
         // Wait for auto-analysis to complete first
-        msg("LLM RE: Waiting for auto-analysis to complete...\n");
+        LOG("LLM RE: Waiting for auto-analysis to complete...\n");
         auto_wait();
-        msg("LLM RE: Auto-analysis completed\n");
+        LOG("LLM RE: Auto-analysis completed\n");
 
         // Create orchestrator without UI
         if (!orchestrator_) {
             if (mcp_session_id_.empty()) {
-                msg("LLM RE: ERROR - MCP session ID not available\n");
+                LOG("LLM RE: ERROR - MCP session ID not available\n");
                 return;
             }
 
-            msg("LLM RE: Starting MCP orchestrator for session %s\n", mcp_session_id_.c_str());
-            msg("LLM RE: Session directory: %s\n", mcp_session_dir_.c_str());
+            LOG("LLM RE: Starting MCP orchestrator for session %s\n", mcp_session_id_.c_str());
+            LOG("LLM RE: Session directory: %s\n", mcp_session_dir_.c_str());
 
             orchestrator_ = new orchestrator::Orchestrator(*config_, idb_path_.c_str(), false /* no UI */);
             if (!orchestrator_->initialize_mcp_mode(mcp_session_id_, mcp_session_dir_)) {
-                msg("LLM RE: Failed to initialize MCP orchestrator\n");
+                LOG("LLM RE: Failed to initialize MCP orchestrator\n");
                 delete orchestrator_;
                 orchestrator_ = nullptr;
                 return;
@@ -279,7 +280,7 @@ private:
             // Start the MCP listener thread
             orchestrator_->start_mcp_listener();
 
-            msg("LLM RE: MCP orchestrator ready for session %s\n", mcp_session_id_.c_str());
+            LOG("LLM RE: MCP orchestrator ready for session %s\n", mcp_session_id_.c_str());
         }
     }
     
@@ -291,7 +292,7 @@ private:
         fs::path conversation_state_file = workspace / "conversation_state.json";
 
         if (!fs::exists(conversation_state_file)) {
-            msg("LLM RE: No conversation state found for resurrection\n");
+            LOG("LLM RE: No conversation state found for resurrection\n");
             return false;
         }
         
@@ -319,89 +320,89 @@ private:
                 agent_config_["resurrection_reason"] = res_config["reason"];  // "conflict_resolution" or "retry"
             }
             
-            msg("LLM RE: Successfully loaded saved state for resurrection\n");
+            LOG("LLM RE: Successfully loaded saved state for resurrection\n");
             return true;
             
         } catch (const std::exception& e) {
-            msg("LLM RE: Failed to load saved state: %s\n", e.what());
+            LOG("LLM RE: Failed to load saved state: %s\n", e.what());
             return false;
         }
     }
     
     void start_orchestrator() {
         if (!orchestrator_) {
-            msg("LLM RE: Orchestrator not initialized\n");
+            LOG("LLM RE: Orchestrator not initialized\n");
             return;
         }
         
         // Create UI window if it doesn't exist
         if (!ui_window_) {
             ui_window_ = new ui::OrchestratorUI(nullptr);
-            msg("LLM RE: Created orchestrator UI\n");
+            LOG("LLM RE: Created orchestrator UI\n");
         }
         
         // Show the UI window
         ui_window_->show_ui();
-        msg("LLM RE: Showing orchestrator UI\n");
+        LOG("LLM RE: Showing orchestrator UI\n");
     }
     
     void start_swarm_agent() {
         if (swarm_agent_) return;
         
-        msg("LLM RE: start_swarm_agent() called\n");
+        LOG("LLM RE: start_swarm_agent() called\n");
         
         // Get the orchestrator-generated prompt
-        msg("LLM RE: Extracting prompt from config...\n");
+        LOG("LLM RE: Extracting prompt from config...\n");
         std::string orchestrator_prompt = agent_config_["prompt"];
-        msg("LLM RE: Got prompt: %s\n", orchestrator_prompt.c_str());
+        LOG("LLM RE: Got prompt: %s\n", orchestrator_prompt.c_str());
         
-        msg("LLM RE: About to create SwarmAgent object for %s\n", agent_id_.c_str());
-        msg("LLM RE: config_ pointer = %p\n", (void*)config_);
+        LOG("LLM RE: About to create SwarmAgent object for %s\n", agent_id_.c_str());
+        LOG("LLM RE: config_ pointer = %p\n", (void*)config_);
         
         // Safety check
         if (!config_) {
-            msg("LLM RE: ERROR - config_ is NULL!\n");
+            LOG("LLM RE: ERROR - config_ is NULL!\n");
             return;
         }
         
         // CRITICAL: This is where it might crash
-        msg("LLM RE: Creating SwarmAgent with config at %p and agent_id %s\n", (void*)config_, agent_id_.c_str());
+        LOG("LLM RE: Creating SwarmAgent with config at %p and agent_id %s\n", (void*)config_, agent_id_.c_str());
         
         // Validate config pointer
         if (!config_) {
-            msg("LLM RE: ERROR - config_ is NULL!\n");
+            LOG("LLM RE: ERROR - config_ is NULL!\n");
             return;
         }
         
         // Try to access config to verify it's valid
-        msg("LLM RE: Config auth_method=%d, api_key_len=%zu\n", 
+        LOG("LLM RE: Config auth_method=%d, api_key_len=%zu\n", 
             (int)config_->api.auth_method, config_->api.api_key.length());
         
-        msg("LLM RE: About to call new SwarmAgent\n");
+        LOG("LLM RE: About to call new SwarmAgent\n");
         try {
             swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
         } catch (const std::exception& e) {
-            msg("LLM RE: Exception creating SwarmAgent: %s\n", e.what());
+            LOG("LLM RE: Exception creating SwarmAgent: %s\n", e.what());
             return;
         } catch (...) {
-            msg("LLM RE: Unknown exception creating SwarmAgent\n");
+            LOG("LLM RE: Unknown exception creating SwarmAgent\n");
             return;
         }
         
-        msg("LLM RE: SwarmAgent object created successfully\n");
+        LOG("LLM RE: SwarmAgent object created successfully\n");
         
         // Initialize with configuration
-        msg("LLM RE: About to call swarm_agent_->initialize()\n");
+        LOG("LLM RE: About to call swarm_agent_->initialize()\n");
         if (!swarm_agent_->initialize(agent_config_)) {
-            msg("LLM RE: Failed to initialize swarm agent\n");
+            LOG("LLM RE: Failed to initialize swarm agent\n");
             delete swarm_agent_;
             swarm_agent_ = nullptr;
             return;
         }
-        msg("LLM RE: SwarmAgent initialization returned successfully\n");
+        LOG("LLM RE: SwarmAgent initialization returned successfully\n");
         
-        msg("LLM RE: Starting swarm agent %s\n", agent_id_.c_str());
-        msg("LLM RE: Task: %s\n", orchestrator_prompt.c_str());
+        LOG("LLM RE: Starting swarm agent %s\n", agent_id_.c_str());
+        LOG("LLM RE: Task: %s\n", orchestrator_prompt.c_str());
         
         // Start working with the orchestrator's prompt
         swarm_agent_->start_task(orchestrator_prompt);
@@ -412,7 +413,7 @@ private:
             if (event.type == AgentEvent::STATE && event.source == agent_id_) {
                 int status = event.payload.value("status", -1);
                 if (status == (int)AgentState::Status::Completed) {
-                    msg("LLM RE: Task completed for swarm agent, graceful shutdown initiated\n");
+                    LOG("LLM RE: Task completed for swarm agent, graceful shutdown initiated\n");
                     if (!shutting_down_) {
                         shutting_down_ = true;
                         // Request graceful shutdown to save database and exit IDA
@@ -428,21 +429,21 @@ private:
     void start_resurrected_agent() {
         if (swarm_agent_) return;
         
-        msg("LLM RE: start_resurrected_agent() called for %s\n", agent_id_.c_str());
+        LOG("LLM RE: start_resurrected_agent() called for %s\n", agent_id_.c_str());
         
         // Create the SwarmAgent with resurrection config
         try {
             swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
         } catch (const std::exception& e) {
-            msg("LLM RE: Exception creating resurrected SwarmAgent: %s\n", e.what());
+            LOG("LLM RE: Exception creating resurrected SwarmAgent: %s\n", e.what());
             return;
         }
         
-        msg("LLM RE: Resurrected SwarmAgent object created\n");
+        LOG("LLM RE: Resurrected SwarmAgent object created\n");
         
         // Initialize with resurrection config
         if (!swarm_agent_->initialize(agent_config_)) {
-            msg("LLM RE: Failed to initialize resurrected agent\n");
+            LOG("LLM RE: Failed to initialize resurrected agent\n");
             delete swarm_agent_;
             swarm_agent_ = nullptr;
             return;
@@ -450,19 +451,19 @@ private:
         
         // Restore conversation history if available
         if (agent_config_.contains("saved_conversation")) {
-            msg("LLM RE: Restoring conversation history...\n");
+            LOG("LLM RE: Restoring conversation history...\n");
             swarm_agent_->restore_conversation_history(agent_config_["saved_conversation"]);
         }
         
         // If this is for conflict resolution, jump directly to conflict
         if (agent_config_.contains("conflict_channel")) {
             std::string conflict_channel = agent_config_["conflict_channel"];
-            msg("LLM RE: Setting up for conflict resolution in channel %s\n", conflict_channel.c_str());
+            LOG("LLM RE: Setting up for conflict resolution in channel %s\n", conflict_channel.c_str());
 
             // Create conflict state BEFORE joining (so we can track turns)
             // my_turn will be set to true when we see initiator's message via IRC replay
             swarm_agent_->add_conflict_state(conflict_channel, false);
-            msg("LLM RE: Created conflict state for channel %s\n", conflict_channel.c_str());
+            LOG("LLM RE: Created conflict state for channel %s\n", conflict_channel.c_str());
 
             // Join the conflict channel (this triggers history replay)
             swarm_agent_->join_irc_channel(conflict_channel);
@@ -471,7 +472,7 @@ private:
             std::string task = "Participate in conflict resolution in channel " + conflict_channel +
                                ". The conflict details will appear in the channel history.";
             swarm_agent_->start_task(task);
-            msg("LLM RE: Started conflict resolution task\n");
+            LOG("LLM RE: Started conflict resolution task\n");
         } else {
             // if no conflict channel we probably crashed so retry
             // Resume normal task
@@ -479,7 +480,7 @@ private:
             swarm_agent_->start_task(task);
         }
         
-        msg("LLM RE: Resurrected agent %s is now active\n", agent_id_.c_str());
+        LOG("LLM RE: Resurrected agent %s is now active\n", agent_id_.c_str());
         
         // Subscribe to state changes
         EventBus& bus = get_event_bus();
@@ -487,7 +488,7 @@ private:
             if (event.type == AgentEvent::STATE && event.source == agent_id_) {
                 int status = event.payload.value("status", -1);
                 if (status == (int)AgentState::Status::Completed) {
-                    msg("LLM RE: Resurrected agent completed, graceful shutdown\n");
+                    LOG("LLM RE: Resurrected agent completed, graceful shutdown\n");
                     if (!shutting_down_) {
                         shutting_down_ = true;
                         // Request graceful shutdown to save database and exit IDA
@@ -511,7 +512,7 @@ private:
         fs::path config_path = fs::path("/tmp/ida_swarm_workspace") / binary_name / "configs" / (agent_id_ + "_config.json");
         
         if (!fs::exists(config_path)) {
-            msg("LLM RE: Config not found at %s\n", config_path.string().c_str());
+            LOG("LLM RE: Config not found at %s\n", config_path.string().c_str());
             return false;
         }
         
@@ -521,7 +522,7 @@ private:
             file.close();
             return true;
         } catch (const std::exception& e) {
-            msg("LLM RE: Failed to parse config: %s\n", e.what());
+            LOG("LLM RE: Failed to parse config: %s\n", e.what());
             return false;
         }
     }

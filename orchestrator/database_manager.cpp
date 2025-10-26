@@ -1,5 +1,5 @@
 #include "database_manager.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include <filesystem>
 #include <chrono>
 #include <thread>
@@ -22,9 +22,9 @@ DatabaseManager::DatabaseManager(const std::string& main_db_path, const std::str
     char input_path[MAXSTR];
     if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
         binary_file_path_ = input_path;
-        ORCH_LOG("DatabaseManager: Binary file path: %s\n", binary_file_path_.c_str());
+        LOG_INFO("DatabaseManager: Binary file path: %s\n", binary_file_path_.c_str());
     } else {
-        ORCH_LOG("DatabaseManager: Warning - could not get input file path\n");
+        LOG_INFO("DatabaseManager: Warning - could not get input file path\n");
     }
 }
 
@@ -37,14 +37,14 @@ bool DatabaseManager::initialize() {
 
     // Create workspace directory
     if (!create_workspace()) {
-        ORCH_LOG("DatabaseManager: Failed to create workspace\n");
+        LOG_INFO("DatabaseManager: Failed to create workspace\n");
         return false;
     }
 
     // Check if main database exists, save it if not
     if (!fs::exists(main_database_path_)) {
-        ORCH_LOG("DatabaseManager: Main database does not exist: %s\n", main_database_path_.c_str());
-        ORCH_LOG("DatabaseManager: Attempting to save database for first time...\n");
+        LOG_INFO("DatabaseManager: Main database does not exist: %s\n", main_database_path_.c_str());
+        LOG_INFO("DatabaseManager: Attempting to save database for first time...\n");
 
         // Need to unlock mutex before calling save_current_database to avoid deadlock
         mutex_.unlock();
@@ -52,21 +52,21 @@ bool DatabaseManager::initialize() {
         mutex_.lock();
 
         if (!save_result) {
-            ORCH_LOG("DatabaseManager: Failed to save database\n");
+            LOG_INFO("DatabaseManager: Failed to save database\n");
             return false;
         }
 
         // Verify the database file was created
         if (!fs::exists(main_database_path_)) {
-            ORCH_LOG("DatabaseManager: Database file still doesn't exist after save: %s\n",
+            LOG_INFO("DatabaseManager: Database file still doesn't exist after save: %s\n",
                      main_database_path_.c_str());
             return false;
         }
 
-        ORCH_LOG("DatabaseManager: Successfully saved database: %s\n", main_database_path_.c_str());
+        LOG_INFO("DatabaseManager: Successfully saved database: %s\n", main_database_path_.c_str());
     }
 
-    ORCH_LOG("DatabaseManager: Initialized with workspace: %s\n", workspace_dir_.c_str());
+    LOG_INFO("DatabaseManager: Initialized with workspace: %s\n", workspace_dir_.c_str());
     return true;
 }
 
@@ -83,13 +83,13 @@ bool DatabaseManager::create_workspace() {
         
         return true;
     } catch (const fs::filesystem_error& e) {
-        ORCH_LOG("DatabaseManager: Filesystem error: %s\n", e.what());
+        LOG_INFO("DatabaseManager: Filesystem error: %s\n", e.what());
         return false;
     }
 }
 
 bool DatabaseManager::save_current_database() {
-    ORCH_LOG("DatabaseManager: Acquiring lock for save_database()...\n");
+    LOG_INFO("DatabaseManager: Acquiring lock for save_database()...\n");
 
     // there's a weird bug in IDA (not totally sure where)
     // but if you are using the MCP server + spawn multiple sessions at the same time for some reason all the orchestrators
@@ -99,20 +99,20 @@ bool DatabaseManager::save_current_database() {
     std::string lock_file = "/tmp/ida_swarm_save_db.lock";
     int fd = open(lock_file.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd == -1) {
-        ORCH_LOG("DatabaseManager: WARNING - Failed to open lock file: %s\n", strerror(errno));
-        ORCH_LOG("DatabaseManager: Continuing without lock (unsafe but better than failing)\n");
+        LOG_INFO("DatabaseManager: WARNING - Failed to open lock file: %s\n", strerror(errno));
+        LOG_INFO("DatabaseManager: Continuing without lock (unsafe but better than failing)\n");
         // Continue anyway - better to try than fail completely
     } else {
         // Acquire exclusive lock (blocks until available)
-        ORCH_LOG("DatabaseManager: Waiting for lock...\n");
+        LOG_INFO("DatabaseManager: Waiting for lock...\n");
         if (flock(fd, LOCK_EX) != 0) {
-            ORCH_LOG("DatabaseManager: WARNING - Failed to acquire lock: %s\n", strerror(errno));
+            LOG_INFO("DatabaseManager: WARNING - Failed to acquire lock: %s\n", strerror(errno));
         } else {
-            ORCH_LOG("DatabaseManager: Lock acquired successfully\n");
+            LOG_INFO("DatabaseManager: Lock acquired successfully\n");
         }
     }
 
-    ORCH_LOG("DatabaseManager: About to call save_database()\n");
+    LOG_INFO("DatabaseManager: About to call save_database()\n");
 
     // Create request to execute save_database on main thread
     struct SaveDatabaseRequest : exec_request_t {
@@ -126,16 +126,16 @@ bool DatabaseManager::save_current_database() {
     SaveDatabaseRequest req;
     execute_sync(req, MFF_WRITE);  // MFF_WRITE for database modification
 
-    ORCH_LOG("DatabaseManager: save_database() returned %d\n", req.result ? 1 : 0);
+    LOG_INFO("DatabaseManager: save_database() returned %d\n", req.result ? 1 : 0);
 
     // Release lock
     if (fd != -1) {
         flock(fd, LOCK_UN);
         close(fd);
-        ORCH_LOG("DatabaseManager: Lock released\n");
+        LOG_INFO("DatabaseManager: Lock released\n");
     }
 
-    ORCH_LOG("DatabaseManager: Saved main database\n");
+    LOG_INFO("DatabaseManager: Saved main database\n");
 
     return req.result;
 }
@@ -143,18 +143,18 @@ bool DatabaseManager::save_current_database() {
 std::string DatabaseManager::create_agent_database(const std::string& agent_id) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    ORCH_LOG("DatabaseManager: create_agent_database called for %s\n", agent_id.c_str());
+    LOG_INFO("DatabaseManager: create_agent_database called for %s\n", agent_id.c_str());
 
-    ORCH_LOG("DatabaseManager: Calling save_current_database()\n");
+    LOG_INFO("DatabaseManager: Calling save_current_database()\n");
     if (!save_current_database()) {
-        ORCH_LOG("DatabaseManager: Failed to save current database\n");
+        LOG_INFO("DatabaseManager: Failed to save current database\n");
         return "";
     }
-    ORCH_LOG("DatabaseManager: save_current_database() completed successfully\n");
+    LOG_INFO("DatabaseManager: save_current_database() completed successfully\n");
 
     // Create agent directory
     fs::path agent_dir = fs::path(workspace_dir_) / "agents" / agent_id;
-    ORCH_LOG("DatabaseManager: Creating directory for agent at %s\n", agent_dir.string().c_str());
+    LOG_INFO("DatabaseManager: Creating directory for agent at %s\n", agent_dir.string().c_str());
 
     try {
         fs::create_directories(agent_dir);
@@ -166,7 +166,7 @@ std::string DatabaseManager::create_agent_database(const std::string& agent_id) 
         for (const auto& file : db_files) {
             fs::path dest = agent_dir / file.filename();
             fs::copy_file(file, dest, fs::copy_options::overwrite_existing);
-            ORCH_LOG("DatabaseManager: Copied %s to %s\n",
+            LOG_INFO("DatabaseManager: Copied %s to %s\n",
                 file.filename().string().c_str(),
                 dest.string().c_str());
         }
@@ -178,20 +178,20 @@ std::string DatabaseManager::create_agent_database(const std::string& agent_id) 
 
             try {
                 fs::copy_file(binary_source, binary_dest, fs::copy_options::overwrite_existing);
-                ORCH_LOG("DatabaseManager: Copied binary %s to %s\n",
+                LOG_INFO("DatabaseManager: Copied binary %s to %s\n",
                     binary_source.filename().string().c_str(),
                     binary_dest.string().c_str());
 
                 // Store the binary path for this agent
                 agent_binaries_[agent_id] = binary_dest.string();
             } catch (const fs::filesystem_error& e) {
-                ORCH_LOG("DatabaseManager: Warning - failed to copy binary: %s\n", e.what());
+                LOG_INFO("DatabaseManager: Warning - failed to copy binary: %s\n", e.what());
                 // Continue even if binary copy fails - database is more important
                 // we only copy the binary for patching
                 // if it can't copy the binary and the agent tries to inject a segment then stuff will break or if it patches
             }
         } else {
-            ORCH_LOG("DatabaseManager: No binary file to copy or file doesn't exist\n");
+            LOG_INFO("DatabaseManager: No binary file to copy or file doesn't exist\n");
         }
 
         // Get the main database file in the agent directory
@@ -201,13 +201,13 @@ std::string DatabaseManager::create_agent_database(const std::string& agent_id) 
         // Track this agent's database
         agent_databases_[agent_id] = agent_db.string();
 
-        ORCH_LOG("DatabaseManager: Created agent database for %s at %s\n",
+        LOG_INFO("DatabaseManager: Created agent database for %s at %s\n",
             agent_id.c_str(), agent_db.string().c_str());
 
         return agent_db.string();
 
     } catch (const fs::filesystem_error& e) {
-        ORCH_LOG("DatabaseManager: Failed to create agent database: %s\n", e.what());
+        LOG_INFO("DatabaseManager: Failed to create agent database: %s\n", e.what());
         return "";
     }
 }
@@ -236,9 +236,9 @@ std::vector<fs::path> DatabaseManager::get_database_files(const std::string& bas
     
     if (fs::exists(i64_file)) {
         files.push_back(i64_file);
-        ORCH_LOG("DatabaseManager: Will copy packed database %s\n", i64_file.string().c_str());
+        LOG_INFO("DatabaseManager: Will copy packed database %s\n", i64_file.string().c_str());
     } else {
-        ORCH_LOG("DatabaseManager: Warning - no .i64 file found for %s\n", base_path.c_str());
+        LOG_INFO("DatabaseManager: Warning - no .i64 file found for %s\n", base_path.c_str());
     }
     
     return files;
@@ -261,7 +261,7 @@ bool DatabaseManager::copy_database_files(const std::string& source, const std::
         return true;
         
     } catch (const fs::filesystem_error& e) {
-        ORCH_LOG("DatabaseManager: Copy failed: %s\n", e.what());
+        LOG_INFO("DatabaseManager: Copy failed: %s\n", e.what());
         return false;
     }
 }

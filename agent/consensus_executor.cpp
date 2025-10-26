@@ -1,4 +1,5 @@
 #include "consensus_executor.h"
+#include "../core/logger.h"
 #include <sstream>
 #include <iomanip>
 
@@ -40,21 +41,21 @@ json ConsensusExecutor::execute_consensus(const std::map<std::string, std::strin
         if (response.stop_reason == claude::StopReason::ToolUse) {
             process_tool_calls(response.message, 0);
         } else {
-            msg("ConsensusExecutor: No tool use in response, stop reason: %d\n", 
+            LOG("ConsensusExecutor: No tool use in response, stop reason: %d\n", 
                 static_cast<int>(response.stop_reason));
         }
     } catch (const std::exception& e) {
-        msg("ConsensusExecutor: Exception during consensus execution: %s\n", e.what());
+        LOG("ConsensusExecutor: Exception during consensus execution: %s\n", e.what());
     }
     
     // If we didn't capture a tool call
     if (captured_tool_call_.is_null() || !tool_intercepted_) {
-        msg("ConsensusExecutor: No tool captured\n");
+        LOG("ConsensusExecutor: No tool captured\n");
     } else {
         // Validate captured tool matches expected
         if (captured_tool_call_.contains("tool_name") && 
             captured_tool_call_["tool_name"] != original_conflict.first_call.tool_name) {
-            msg("ConsensusExecutor: WARNING - Different tool selected: %s vs expected %s\n",
+            LOG("ConsensusExecutor: WARNING - Different tool selected: %s vs expected %s\n",
                 captured_tool_call_["tool_name"].get<std::string>().c_str(),
                 original_conflict.first_call.tool_name.c_str());
         }
@@ -78,7 +79,7 @@ std::vector<claude::messages::Message> ConsensusExecutor::process_tool_calls(
         };
         tool_intercepted_ = true;
         
-        ::msg("ConsensusExecutor: Intercepted tool call: %s with params: %s\n",
+        LOG("ConsensusExecutor: Intercepted tool call: %s with params: %s\n",
             tool_use->name.c_str(), tool_use->input.dump().c_str());
         
         // Return fake success to satisfy the system (though we won't use it)

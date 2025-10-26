@@ -5,9 +5,13 @@
 #include "patching/patch_manager.h"
 #include "patching/code_injection_manager.h"
 #include "core/ida_utils.h"
+#include "core/logger.h"
 #include "core/ida_validators.h"
 #include <loader.hpp>
 #include <fstream>
+
+// LIEF headers for binary modification
+#include <LIEF/LIEF.hpp>
 
 namespace llm_re {
 
@@ -27,7 +31,7 @@ bool PatchManager::initialize() {
     return IDAUtils::execute_sync_wrapper([this]() -> bool {
         // Initialize Keystone assembler
         if (!init_keystone()) {
-            msg("WARNING: Failed to initialize Keystone assembler. Assembly patching will be unavailable.\n");
+            LOG("WARNING: Failed to initialize Keystone assembler. Assembly patching will be unavailable.\n");
             // Don't fail initialization - byte patching can still work
             return true;
         }
@@ -287,6 +291,75 @@ AssemblyPatchResult PatchManager::apply_assembly_patch(ea_t address,
     }, MFF_WRITE);
 }
 
+// Core method 2b: Apply segment injection
+SegmentInjectionResult PatchManager::apply_segment_injection(
+    ea_t address,
+    size_t size,
+    const std::vector<uint8_t>& code,
+    const std::string& segment_name,
+    const std::string& description) {
+
+    return IDAUtils::execute_sync_wrapper([&]() -> SegmentInjectionResult {
+        SegmentInjectionResult result;
+
+        // Validate address not already patched
+        if (patches_.find(address) != patches_.end()) {
+            result.error_message = "Address already patched. Revert existing patch first.";
+            return result;
+        }
+
+        // Validate code size fits in segment size
+        if (code.size() > size) {
+            result.error_message = "Code size (" + std::to_string(code.size()) +
+                                  ") exceeds segment size (" + std::to_string(size) + ")";
+            return result;
+        }
+
+        // 1. Create segment in IDA database
+        if (!create_segment_in_ida(address, size, segment_name)) {
+            result.error_message = "Failed to create segment in IDA database";
+            return result;
+        }
+
+        // 2. Write code to segment in IDA
+        patch_bytes(address, code.data(), code.size());
+
+        // 3. Add segment to binary file via LIEF (if binary path set)
+        if (!binary_path_.empty()) {
+            if (!add_segment_to_binary_with_lief(address, size, segment_name, code)) {
+                result.error_message = "Failed to add segment to binary file";
+                // Rollback: delete IDA segment
+                del_segm(address, SEGMOD_KILL);
+                return result;
+            }
+        }
+
+        // 4. Track the injection in patches_
+        PatchEntry entry;
+        entry.address = address;
+        entry.original_bytes = {};  // No original bytes for new segment
+        entry.patched_bytes = code;
+        entry.description = description;
+        entry.timestamp = std::chrono::system_clock::now();
+        entry.is_assembly_patch = false;
+        entry.is_segment_injection = true;
+        entry.segment_name = segment_name;
+        entry.segment_size = size;
+
+        patches_[address] = entry;
+
+        LOG("PatchManager: Segment injection successful at 0x%llX, size 0x%zX\n",
+            (uint64_t)address, size);
+
+        result.success = true;
+        result.segment_address = address;
+        result.segment_name = segment_name;
+        result.allocated_size = size;
+
+        return result;
+    }, MFF_WRITE);
+}
+
 // Core method 3: Revert patch
 bool PatchManager::revert_patch(ea_t address) {
     return IDAUtils::execute_sync_wrapper([&]() -> bool {
@@ -294,18 +367,41 @@ bool PatchManager::revert_patch(ea_t address) {
         if (it == patches_.end()) {
             return false;
         }
-        
-        // Restore original bytes
-        if (!write_bytes(address, it->second.original_bytes)) {
-            return false;
+
+        const PatchEntry& patch = it->second;
+
+        if (patch.is_segment_injection) {
+            // Revert segment injection
+            LOG("Reverting segment injection at 0x%llX ('%s')\n",
+                (uint64_t)address, patch.segment_name.c_str());
+
+            // 1. Delete segment from IDA database
+            if (!del_segm(address, SEGMOD_KILL)) {
+                LOG("ERROR: Failed to delete segment from IDA at 0x%llX\n", (uint64_t)address);
+                return false;
+            }
+
+            // 2. Remove segment from binary file
+            if (!binary_path_.empty()) {
+                if (!remove_segment_from_binary(address, patch.segment_name)) {
+                    LOG("WARNING: Removed from IDA but failed to remove from binary file\n");
+                    // Continue - IDA is reverted which is critical
+                }
+            }
+
+            LOG("Successfully reverted segment injection at 0x%llX\n", (uint64_t)address);
+        } else {
+            // Revert byte/assembly patch (existing logic)
+            if (!write_bytes(address, patch.original_bytes)) {
+                return false;
+            }
+
+            trigger_reanalysis(address, patch.original_bytes.size());
         }
-        
-        // Remove from patches
+
+        // Remove from patches map
         patches_.erase(it);
-        
-        // Trigger reanalysis
-        trigger_reanalysis(address, it->second.original_bytes.size());
-        
+
         return true;
     }, MFF_WRITE);
 }
@@ -616,20 +712,20 @@ bool PatchManager::init_keystone() {
         }
     } else if (PH.id == PLFM_HPPA) {
         // HPPA is not supported by Keystone
-        msg("WARNING: HPPA architecture is not supported by Keystone assembler\n");
+        LOG("WARNING: HPPA architecture is not supported by Keystone assembler\n");
         return false;
     } else if (PH.id == PLFM_68K) {
         // M68K is not fully supported by Keystone
-        msg("WARNING: M68K architecture is not supported by Keystone assembler\n");
+        LOG("WARNING: M68K architecture is not supported by Keystone assembler\n");
         return false;
     } else if (PH.id == PLFM_6502 || PH.id == PLFM_65C816) {
         // 6502 family is not supported by Keystone
-        msg("WARNING: 6502 family architecture is not supported by Keystone assembler\n");
+        LOG("WARNING: 6502 family architecture is not supported by Keystone assembler\n");
         return false;
     } else {
         // Log specific processor ID for debugging
         const char *proc_name = (PH.plnames && PH.plnames[0]) ? PH.plnames[0] : "unknown";
-        msg("WARNING: Unsupported processor type for Keystone: %d (%s)\n", 
+        LOG("WARNING: Unsupported processor type for Keystone: %d (%s)\n", 
             PH.id, proc_name);
         return false;
     }
@@ -644,7 +740,7 @@ bool PatchManager::init_keystone() {
     ks_err err = ks_open(arch, mode, &ks_);
     if (err != KS_ERR_OK) {
         const char *proc_name = (PH.plnames && PH.plnames[0]) ? PH.plnames[0] : "unknown";
-        msg("Failed to initialize Keystone: %s (arch=%d, mode=0x%X, processor=%s)\n", 
+        LOG("Failed to initialize Keystone: %s (arch=%d, mode=0x%X, processor=%s)\n", 
             ks_strerror(err), arch, mode, proc_name);
         ks_ = nullptr;
         return false;
@@ -654,12 +750,12 @@ bool PatchManager::init_keystone() {
     if (arch == KS_ARCH_X86) {
         err = ks_option(ks_, KS_OPT_SYNTAX, KS_OPT_SYNTAX_INTEL);
         if (err != KS_ERR_OK) {
-            msg("WARNING: Failed to set Intel syntax for x86: %s\n", ks_strerror(err));
+            LOG("WARNING: Failed to set Intel syntax for x86: %s\n", ks_strerror(err));
         }
     }
     
     const char *proc_name = (PH.plnames && PH.plnames[0]) ? PH.plnames[0] : "unknown";
-    msg("Keystone initialized successfully for %s (arch=%d, mode=0x%X)\n", 
+    LOG("Keystone initialized successfully for %s (arch=%d, mode=0x%X)\n", 
         proc_name, arch, mode);
     return true;
 }
@@ -677,13 +773,13 @@ void PatchManager::cleanup_keystone() {
 
 std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const std::string& asm_str, ea_t address) {
     if (!ks_) {
-        msg("ERROR: Keystone not initialized for assembly\n");
+        LOG("ERROR: Keystone not initialized for assembly\n");
         return {false, {}};
     }
     
     // Validate input
     if (asm_str.empty()) {
-        msg("ERROR: Empty assembly string provided\n");
+        LOG("ERROR: Empty assembly string provided\n");
         return {false, {}};
     }
     
@@ -727,7 +823,7 @@ std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const s
         
         ks_err err = ks_open(arch, mode, &ks_);
         if (err != KS_ERR_OK) {
-            msg("ERROR: Failed to reinitialize Keystone for mode change: %s\n", ks_strerror(err));
+            LOG("ERROR: Failed to reinitialize Keystone for mode change: %s\n", ks_strerror(err));
             return {false, {}};
         }
         
@@ -752,18 +848,18 @@ std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const s
         ks_err err = ks_errno(ks_);
         const char* err_msg = ks_strerror(err);
         
-        msg("ERROR: Keystone assembly failed\n");
-        msg("  Error: %s (code: %d)\n", err_msg, err);
-        msg("  Assembly: '%s'\n", cleaned_asm.c_str());
-        msg("  Address: 0x%llX\n", (uint64_t)address);
+        LOG("ERROR: Keystone assembly failed\n");
+        LOG("  Error: %s (code: %d)\n", err_msg, err);
+        LOG("  Assembly: '%s'\n", cleaned_asm.c_str());
+        LOG("  Address: 0x%llX\n", (uint64_t)address);
         
         // Common error hints
         if (err == KS_ERR_ASM_INVALIDOPERAND) {
-            msg("  Hint: Check operand syntax and register names\n");
+            LOG("  Hint: Check operand syntax and register names\n");
         } else if (err == KS_ERR_ASM_MISSINGFEATURE) {
-            msg("  Hint: This instruction may not be supported by Keystone\n");
+            LOG("  Hint: This instruction may not be supported by Keystone\n");
         } else if (err == KS_ERR_ASM_MNEMONICFAIL) {
-            msg("  Hint: Unknown instruction mnemonic\n");
+            LOG("  Hint: Unknown instruction mnemonic\n");
         }
         
         return {false, {}};
@@ -771,14 +867,14 @@ std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const s
     
     // Validate assembled output
     if (!encode || size == 0) {
-        msg("ERROR: Keystone produced no output for: '%s'\n", cleaned_asm.c_str());
+        LOG("ERROR: Keystone produced no output for: '%s'\n", cleaned_asm.c_str());
         if (encode) ks_free(encode);
         return {false, {}};
     }
     
     // Check if multiple instructions were assembled when we expected one
     if (count > 1) {
-        msg("WARNING: Multiple instructions assembled (%zu) from: '%s'\n", count, cleaned_asm.c_str());
+        LOG("WARNING: Multiple instructions assembled (%zu) from: '%s'\n", count, cleaned_asm.c_str());
     }
     
     // Copy to vector
@@ -786,7 +882,7 @@ std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const s
     try {
         bytes.assign(encode, encode + size);
     } catch (const std::exception& e) {
-        msg("ERROR: Failed to copy assembled bytes: %s\n", e.what());
+        LOG("ERROR: Failed to copy assembled bytes: %s\n", e.what());
         ks_free(encode);
         return {false, {}};
     }
@@ -795,7 +891,7 @@ std::pair<bool, std::vector<uint8_t>> PatchManager::assemble_instruction(const s
     ks_free(encode);
     
     // Log successful assembly for debugging
-    msg("Successfully assembled '%s' to %zu bytes\n", cleaned_asm.c_str(), bytes.size());
+    LOG("Successfully assembled '%s' to %zu bytes\n", cleaned_asm.c_str(), bytes.size());
     
     return {true, bytes};
 }
@@ -848,7 +944,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
     }
     
     if (count > 1024) {
-        msg("WARNING: Unusually large NOP padding requested: %zu bytes\n", count);
+        LOG("WARNING: Unusually large NOP padding requested: %zu bytes\n", count);
     }
     
     if (PH.id == PLFM_386) {
@@ -874,7 +970,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
             // Handle remaining bytes - ARM64 requires 4-byte alignment
             size_t remaining = count % 4;
             if (remaining > 0) {
-                msg("WARNING: NOP padding size %zu is not aligned to 4 bytes for ARM64. "
+                LOG("WARNING: NOP padding size %zu is not aligned to 4 bytes for ARM64. "
                     "Remaining %zu bytes will be filled with 0x00\n", count, remaining);
                 for (size_t i = 0; i < remaining; ++i) {
                     nops.push_back(0x00);
@@ -920,7 +1016,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
                 // Handle remaining bytes - ARM32 requires 4-byte alignment
                 size_t remaining = count % 4;
                 if (remaining > 0) {
-                    msg("WARNING: NOP padding size %zu is not aligned to 4 bytes for ARM32. "
+                    LOG("WARNING: NOP padding size %zu is not aligned to 4 bytes for ARM32. "
                         "Remaining %zu bytes will be filled with 0x00\n", count, remaining);
                     for (size_t i = 0; i < remaining; ++i) {
                         nops.push_back(0x00);
@@ -947,7 +1043,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
         // Handle remaining bytes
         size_t remaining = count % 4;
         if (remaining > 0) {
-            msg("WARNING: NOP padding size %zu is not aligned to 4 bytes for PowerPC. "
+            LOG("WARNING: NOP padding size %zu is not aligned to 4 bytes for PowerPC. "
                 "Remaining %zu bytes will be filled with 0x00\n", count, remaining);
             for (size_t i = 0; i < remaining; ++i) {
                 nops.push_back(0x00);
@@ -965,7 +1061,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
         // Handle remaining bytes
         size_t remaining = count % 4;
         if (remaining > 0) {
-            msg("WARNING: NOP padding size %zu is not aligned to 4 bytes for MIPS. "
+            LOG("WARNING: NOP padding size %zu is not aligned to 4 bytes for MIPS. "
                 "Remaining %zu bytes will be filled with 0x00\n", count, remaining);
             for (size_t i = 0; i < remaining; ++i) {
                 nops.push_back(0x00);
@@ -995,7 +1091,7 @@ std::vector<uint8_t> PatchManager::get_nop_bytes(size_t count, ea_t address) {
     } else {
         // Unknown architecture - fill with zeros (safest option)
         const char *proc_name = (PH.plnames && PH.plnames[0]) ? PH.plnames[0] : "unknown";
-        msg("WARNING: Using zero-fill for NOP padding on unknown architecture: %s (id=%d)\n", 
+        LOG("WARNING: Using zero-fill for NOP padding on unknown architecture: %s (id=%d)\n", 
             proc_name, PH.id);
         nops.resize(count, 0x00);
     }
@@ -1013,20 +1109,20 @@ std::vector<uint8_t> PatchManager::read_bytes(ea_t address, size_t size) {
 bool PatchManager::write_bytes(ea_t address, const std::vector<uint8_t>& bytes) {
     // Validate parameters
     if (bytes.empty()) {
-        msg("ERROR: Cannot write empty byte array\n");
+        LOG("ERROR: Cannot write empty byte array\n");
         return false;
     }
 
     // Check if address is valid and writable
     if (!is_mapped(address)) {
-        msg("ERROR: Address 0x%llX is not mapped\n", (uint64_t)address);
+        LOG("ERROR: Address 0x%llX is not mapped\n", (uint64_t)address);
         return false;
     }
 
     // Check if we can write to this segment
     segment_t* seg = getseg(address);
     if (!seg) {
-        msg("ERROR: No segment at address 0x%llX\n", (uint64_t)address);
+        LOG("ERROR: No segment at address 0x%llX\n", (uint64_t)address);
         return false;
     }
 
@@ -1036,23 +1132,23 @@ bool PatchManager::write_bytes(ea_t address, const std::vector<uint8_t>& bytes) 
     // Check if we should also patch the file
     if (code_injection_manager_ && code_injection_manager_->is_in_temp_workspace(address)) {
         // Only patch IDA database for temporary workspace
-        msg("Patched temporary workspace at 0x%llX (IDA DB only)\n", (uint64_t)address);
+        LOG("Patched temporary workspace at 0x%llX (IDA DB only)\n", (uint64_t)address);
     } else if (!binary_path_.empty()) {
         // Also patch the binary file if we have a path
         uint32_t file_offset = get_fileregion_offset(address);
         if (file_offset != BADADDR) {
             if (apply_to_file(file_offset, bytes)) {
-                msg("Applied dual patch at 0x%llX (IDA DB + file at offset 0x%X)\n",
+                LOG("Applied dual patch at 0x%llX (IDA DB + file at offset 0x%X)\n",
                     (uint64_t)address, file_offset);
             } else {
-                msg("WARNING: Patched IDA DB but failed to patch file at 0x%llX\n", (uint64_t)address);
+                LOG("WARNING: Patched IDA DB but failed to patch file at 0x%llX\n", (uint64_t)address);
                 // Continue anyway - IDA DB patch succeeded
             }
         } else {
-            msg("WARNING: Could not get file offset for 0x%llX, IDA DB patched only\n", (uint64_t)address);
+            LOG("WARNING: Could not get file offset for 0x%llX, IDA DB patched only\n", (uint64_t)address);
         }
     } else {
-        msg("Patched at 0x%llX (IDA DB only - no binary path)\n", (uint64_t)address);
+        LOG("Patched at 0x%llX (IDA DB only - no binary path)\n", (uint64_t)address);
     }
 
     // patch_bytes doesn't return a value, so we assume success if we get here
@@ -1060,7 +1156,7 @@ bool PatchManager::write_bytes(ea_t address, const std::vector<uint8_t>& bytes) 
 }
 
 void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
-    msg("Triggering reanalysis for patch at 0x%llX (size: %zu bytes)\n", 
+    LOG("Triggering reanalysis for patch at 0x%llX (size: %zu bytes)\n", 
         (uint64_t)address, size);
     
     // Check if the address is inside a function
@@ -1070,7 +1166,7 @@ void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
         ea_t func_start = func->start_ea;
         ea_t func_end = func->end_ea;
         
-        msg("Patch at 0x%llX is inside function at 0x%llX-0x%llX, reanalyzing entire function\n", 
+        LOG("Patch at 0x%llX is inside function at 0x%llX-0x%llX, reanalyzing entire function\n", 
             (uint64_t)address, (uint64_t)func_start, (uint64_t)func_end);
         
         // Delete the function definition first
@@ -1087,11 +1183,11 @@ void PatchManager::trigger_reanalysis(ea_t address, size_t size) {
         
         // Try to recreate the function
         if (!add_func(func_start, func_end)) {
-            msg("Failed to recreate function with original boundaries, trying auto-detection\n");
+            LOG("Failed to recreate function with original boundaries, trying auto-detection\n");
             // If add_func with explicit end fails, try without end address
             // This lets IDA determine the function boundaries
             if (!add_func(func_start, BADADDR)) {
-                msg("WARNING: Failed to recreate function at 0x%llX after patch\n", (uint64_t)func_start);
+                LOG("WARNING: Failed to recreate function at 0x%llX after patch\n", (uint64_t)func_start);
                 // Last resort: create instructions manually
                 create_insn(func_start);
             }
@@ -1115,7 +1211,7 @@ bool PatchManager::apply_to_file(uint32_t offset, const std::vector<uint8_t>& by
 
     std::fstream file(binary_path_, std::ios::in | std::ios::out | std::ios::binary);
     if (!file.is_open()) {
-        msg("PatchManager: Failed to open binary file: %s\n", binary_path_.c_str());
+        LOG("PatchManager: Failed to open binary file: %s\n", binary_path_.c_str());
         return false;
     }
 
@@ -1124,6 +1220,333 @@ bool PatchManager::apply_to_file(uint32_t offset, const std::vector<uint8_t>& by
     file.close();
 
     return true;
+}
+
+// Segment injection helpers
+bool PatchManager::create_segment_in_ida(ea_t address, size_t size, const std::string& name) {
+    segment_t seg;
+    seg.start_ea = address;
+    seg.end_ea = address + size;
+    seg.perm = SEGPERM_EXEC | SEGPERM_READ | SEGPERM_WRITE;
+    seg.type = SEG_CODE;
+
+    // Set bitness based on application
+    uint app_bitness = inf_get_app_bitness();
+    switch (app_bitness) {
+        case 64:
+            seg.bitness = 2;  // 64-bit
+            break;
+        case 32:
+            seg.bitness = 1;  // 32-bit
+            break;
+        case 16:
+            seg.bitness = 0;  // 16-bit
+            break;
+        default:
+            LOG("PatchManager: WARNING - Unknown bitness %d, defaulting to 32-bit\n", app_bitness);
+            seg.bitness = 1;
+            break;
+    }
+
+    if (!add_segm_ex(&seg, name.c_str(), "CODE", ADDSEG_OR_DIE)) {
+        LOG("PatchManager: ERROR - Failed to create segment %s at 0x%llX\n",
+            name.c_str(), (uint64_t)address);
+        return false;
+    }
+
+    LOG("PatchManager: Created segment %s at 0x%llX-0x%llX\n",
+        name.c_str(), (uint64_t)address, (uint64_t)(address + size));
+    return true;
+}
+
+
+// Add segment to binary using LIEF
+bool PatchManager::add_segment_to_binary_with_lief(ea_t address, size_t size,
+                                                   const std::string& name,
+                                                   const std::vector<uint8_t>& code) {
+    LOG("PatchManager: Adding new segment '%s' to binary using LIEF at address 0x%llX, size 0x%llX\n",
+        name.c_str(), (uint64_t)address, (uint64_t)size);
+
+    try {
+        // Parse the binary with LIEF
+        std::unique_ptr<LIEF::Binary> binary = LIEF::Parser::parse(binary_path_);
+        if (!binary) {
+            LOG("PatchManager: Failed to parse binary with LIEF: %s\n", binary_path_.c_str());
+            return false;
+        }
+
+        // Detect binary type using IDA's information
+        filetype_t file_type = inf_get_filetype();
+
+        // Use the parameters directly
+        uint64_t target_address = address;
+        size_t target_size = size;
+        std::string segment_name = name;
+
+        // Handle different binary formats
+        if (file_type == f_PE) {
+            // Handle PE (Windows) binaries
+            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
+            if (!pe_binary) {
+                LOG("PatchManager: Failed to cast to PE binary\n");
+                return false;
+            }
+
+            // Create a new section using the provided name
+            LIEF::PE::Section new_section;
+            new_section.name(segment_name);
+            new_section.characteristics(
+                static_cast<uint32_t>(LIEF::PE::Section::CHARACTERISTICS::MEM_READ |
+                                      LIEF::PE::Section::CHARACTERISTICS::MEM_EXECUTE |
+                                      LIEF::PE::Section::CHARACTERISTICS::CNT_CODE)
+            );
+
+            // Set virtual address to match IDA segment
+            // For PE, we need to convert absolute address to RVA
+            uint64_t image_base = pe_binary->optional_header().imagebase();
+            uint32_t rva = static_cast<uint32_t>(target_address - image_base);
+            new_section.virtual_address(rva);
+            new_section.virtual_size(target_size);
+
+            // Set the content
+            new_section.content(code);
+
+            // Add the section to the binary
+            LIEF::PE::Section* added_section = pe_binary->add_section(new_section);
+
+            LOG("PatchManager: Added PE section at RVA 0x%X (VA: 0x%llX)\n",
+                rva, target_address);
+
+        } else if (file_type == f_ELF) {
+            // Handle ELF (Linux) binaries
+            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
+            if (!elf_binary) {
+                LOG("PatchManager: Failed to cast to ELF binary\n");
+                return false;
+            }
+
+            // Create a new segment (PT_LOAD)
+            LIEF::ELF::Segment new_segment;
+            new_segment.type(LIEF::ELF::SEGMENT_TYPES::PT_LOAD);
+            new_segment.flags(
+                LIEF::ELF::ELF_SEGMENT_FLAGS::PF_R |
+                LIEF::ELF::ELF_SEGMENT_FLAGS::PF_X
+            );
+            new_segment.content(code);
+            new_segment.alignment(0x1000);  // Page alignment
+
+            // Use the address from the parameters
+            new_segment.virtual_address(target_address);
+            new_segment.virtual_size(target_size);
+            new_segment.physical_address(target_address);  // Usually same as virtual
+            new_segment.physical_size(code.size());
+
+            // Add the segment
+            elf_binary->add(new_segment);
+
+            // Also create a section for better compatibility
+            LIEF::ELF::Section new_section;
+            new_section.name(segment_name);
+            new_section.type(LIEF::ELF::ELF_SECTION_TYPES::SHT_PROGBITS);
+            new_section.flags(
+                static_cast<uint64_t>(LIEF::ELF::ELF_SECTION_FLAGS::SHF_ALLOC) |
+                static_cast<uint64_t>(LIEF::ELF::ELF_SECTION_FLAGS::SHF_EXECINSTR)
+            );
+            new_section.virtual_address(target_address);
+            new_section.size(code.size());
+            new_section.content(code);
+
+            elf_binary->add(new_section);
+
+            LOG("PatchManager: Added ELF segment at 0x%llX\n", target_address);
+
+        } else if (file_type == f_MACHO) {
+            // Handle Mach-O (macOS) binaries
+            auto* macho = dynamic_cast<LIEF::MachO::FatBinary*>(binary.get());
+            LIEF::MachO::Binary* macho_binary = nullptr;
+
+            if (macho && !macho->empty()) {
+                // Fat binary, use first architecture
+                macho_binary = macho->at(0);
+            } else {
+                // Thin binary
+                macho_binary = dynamic_cast<LIEF::MachO::Binary*>(binary.get());
+            }
+
+            if (!macho_binary) {
+                LOG("PatchManager: Failed to cast to Mach-O binary\n");
+                return false;
+            }
+
+            // Create a new segment using the provided name
+            LIEF::MachO::SegmentCommand new_segment;
+            new_segment.name(segment_name);
+            new_segment.init_protection(
+                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_READ) |
+                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_EXECUTE)
+            );
+            new_segment.max_protection(
+                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_READ) |
+                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_EXECUTE)
+            );
+
+            // Use the address from the parameters
+            new_segment.virtual_address(target_address);
+            new_segment.virtual_size(target_size);
+            new_segment.file_size(code.size());
+
+            // Create a section within the segment
+            LIEF::MachO::Section new_section;
+            new_section.segment_name(segment_name);
+            new_section.name("__text");
+            new_section.address(target_address);
+            new_section.size(code.size());
+            new_section.content(code);
+            new_section.type(LIEF::MachO::MACHO_SECTION_TYPES::S_REGULAR);
+            new_section.flags(
+                static_cast<uint32_t>(LIEF::MachO::MACHO_SECTION_FLAGS::S_ATTR_SOME_INSTRUCTIONS) |
+                static_cast<uint32_t>(LIEF::MachO::MACHO_SECTION_FLAGS::S_ATTR_PURE_INSTRUCTIONS)
+            );
+
+            // Add section to segment
+            new_segment.add_section(new_section);
+
+            // Add segment to binary
+            macho_binary->add(new_segment);
+
+            LOG("PatchManager: Added Mach-O segment at 0x%llX\n", target_address);
+
+        } else {
+            LOG("PatchManager: Unsupported file type: %d\n", file_type);
+            return false;
+        }
+
+        // Write the modified binary back
+        // Build and write the modified binary
+        // LIEF uses format-specific builders or direct write
+        if (file_type == f_PE) {
+            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
+            if (pe_binary) {
+                LIEF::PE::Builder builder(*pe_binary);
+                builder.build();
+                builder.write(binary_path_);
+            }
+        } else if (file_type == f_ELF) {
+            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
+            if (elf_binary) {
+                LIEF::ELF::Builder builder(*elf_binary);
+                builder.build();
+                builder.write(binary_path_);
+            }
+        } else if (file_type == f_MACHO) {
+            // MachO uses direct write, no builder needed
+            binary->write(binary_path_);
+        }
+
+        LOG("PatchManager: Successfully wrote modified binary to %s\n", binary_path_.c_str());
+
+        return true;
+
+    } catch (const std::exception& e) {
+        LOG("PatchManager: Exception: %s\n", e.what());
+        return false;
+    }
+}
+
+// Remove segment from binary using LIEF
+bool PatchManager::remove_segment_from_binary(ea_t address, const std::string& segment_name) {
+    if (binary_path_.empty()) {
+        return true;  // No binary to modify
+    }
+
+    try {
+        std::unique_ptr<LIEF::Binary> binary = LIEF::Parser::parse(binary_path_);
+        if (!binary) {
+            LOG("PatchManager: ERROR - Failed to parse binary with LIEF: %s\n", binary_path_.c_str());
+            return false;
+        }
+
+        filetype_t file_type = inf_get_filetype();
+        bool removed = false;
+
+        if (file_type == f_PE) {
+            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
+            if (pe_binary) {
+                // Find section by name and remove
+                LIEF::PE::Section* section = pe_binary->get_section(segment_name);
+                if (section) {
+                    pe_binary->remove_section(segment_name);
+                    removed = true;
+                }
+            }
+        } else if (file_type == f_ELF) {
+            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
+            if (elf_binary) {
+                // Remove section by name
+                LIEF::ELF::Section* section = elf_binary->get_section(segment_name);
+                if (section) {
+                    elf_binary->remove(*section);
+                    removed = true;
+                }
+                // Also remove corresponding segment
+                for (auto& segment : elf_binary->segments()) {
+                    if (segment.virtual_address() == address) {
+                        elf_binary->remove(segment);
+                        break;
+                    }
+                }
+            }
+        } else if (file_type == f_MACHO) {
+            auto* macho = dynamic_cast<LIEF::MachO::FatBinary*>(binary.get());
+            LIEF::MachO::Binary* macho_binary = nullptr;
+
+            if (macho && !macho->empty()) {
+                macho_binary = macho->at(0);
+            } else {
+                macho_binary = dynamic_cast<LIEF::MachO::Binary*>(binary.get());
+            }
+
+            if (macho_binary) {
+                // Remove segment by name
+                LIEF::MachO::SegmentCommand* segment = macho_binary->get_segment(segment_name);
+                if (segment) {
+                    macho_binary->remove(*segment);
+                    removed = true;
+                }
+            }
+        }
+
+        if (!removed) {
+            LOG("PatchManager: WARNING - Could not find segment '%s' to remove\n", segment_name.c_str());
+            return false;
+        }
+
+        // Write modified binary
+        if (file_type == f_PE) {
+            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
+            if (pe_binary) {
+                LIEF::PE::Builder builder(*pe_binary);
+                builder.build();
+                builder.write(binary_path_);
+            }
+        } else if (file_type == f_ELF) {
+            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
+            if (elf_binary) {
+                LIEF::ELF::Builder builder(*elf_binary);
+                builder.build();
+                builder.write(binary_path_);
+            }
+        } else if (file_type == f_MACHO) {
+            binary->write(binary_path_);
+        }
+
+        LOG("PatchManager: Removed segment '%s' from binary\n", segment_name.c_str());
+        return true;
+
+    } catch (const std::exception& e) {
+        LOG("PatchManager: ERROR - Exception removing segment: %s\n", e.what());
+        return false;
+    }
 }
 
 } // namespace llm_re

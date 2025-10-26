@@ -2,6 +2,7 @@
 
 #include "event_bus.h"
 #include "../sdk/messages/types.h"
+#include "../core/logger.h"
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -53,14 +54,14 @@ private:
                 int level = event.payload.value("level", 0);
                 std::string message = event.payload.value("message", "");
                 std::string prefix = format_log_prefix(static_cast<LogLevel>(level), event.source);
-                msg("%s: %s\n", prefix.c_str(), message.c_str());
+                LOG("%s: %s\n", prefix.c_str(), message.c_str());
                 break;
             }
             
             case AgentEvent::STATE: {
                 int status = event.payload.value("status", -1);
                 std::string status_str = format_status(status);
-                msg("[%s] State: %s\n", event.source.c_str(), status_str.c_str());
+                LOG("[%s] State: %s\n", event.source.c_str(), status_str.c_str());
                 break;
             }
             
@@ -69,22 +70,22 @@ private:
                 std::string tool_name = event.payload.value("tool_name", "unknown");
                 
                 if (phase == "started") {
-                    msg("[%s] Tool: Starting %s\n", event.source.c_str(), tool_name.c_str());
+                    LOG("[%s] Tool: Starting %s\n", event.source.c_str(), tool_name.c_str());
                 } else if (phase == "completed") {
-                    msg("[%s] Tool: Completed %s\n", event.source.c_str(), tool_name.c_str());
+                    LOG("[%s] Tool: Completed %s\n", event.source.c_str(), tool_name.c_str());
                 }
                 break;
             }
             
             case AgentEvent::ERROR: {
                 std::string error = event.payload.value("error", "Unknown error");
-                msg("[%s] ERROR: %s\n", event.source.c_str(), error.c_str());
+                LOG("[%s] ERROR: %s\n", event.source.c_str(), error.c_str());
                 break;
             }
             
             case AgentEvent::ANALYSIS_RESULT: {
                 std::string report = event.payload.value("report", "");
-                msg("[%s] Final Report: %s\n", event.source.c_str(), report.c_str());
+                LOG("[%s] Final Report: %s\n", event.source.c_str(), report.c_str());
                 break;
             }
             
@@ -128,7 +129,7 @@ public:
     void start() override {
         log_file_.open(filename_, std::ios::app);
         if (!log_file_.is_open()) {
-            msg("FileLogAdapter: Failed to open log file %s\n", filename_.c_str());
+            LOG("FileLogAdapter: Failed to open log file %s\n", filename_.c_str());
             return;
         }
         

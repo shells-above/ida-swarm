@@ -1,6 +1,8 @@
 // Include order is critical! ui_common.h handles the proper ordering
 #include "ui_common.h"
 #include "orchestrator_worker.h"
+#include "../orchestrator/orchestrator.h"
+#include "../core/logger.h"
 
 #include <QDebug>
 
@@ -11,15 +13,15 @@ OrchestratorWorker::OrchestratorWorker(orchestrator::Orchestrator* orch, QObject
 }
 
 void OrchestratorWorker::process_task(const QString& task) {
-    msg("OrchestratorWorker: process_task called with: %s\n", task.toStdString().c_str());
+    LOG("OrchestratorWorker: process_task called with: %s\n", task.toStdString().c_str());
     
     if (!orchestrator_) {
-        msg("OrchestratorWorker: ERROR - orchestrator_ is null\n");
+        LOG("OrchestratorWorker: ERROR - orchestrator_ is null\n");
         emit error_occurred("Orchestrator not initialized");
         return;
     }
     
-    msg("OrchestratorWorker: Emitting processing_started signal\n");
+    LOG("OrchestratorWorker: Emitting processing_started signal\n");
     // Emit started signal
     emit processing_started();
     emit status_update("Processing task...");

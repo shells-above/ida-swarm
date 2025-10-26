@@ -1,5 +1,5 @@
 #include "tool_call_tracker.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include <chrono>
 #include <sstream>
 #include <filesystem>
@@ -14,7 +14,11 @@ const std::vector<std::string> ToolCallTracker::WRITE_TOOLS = {
     "set_variable",
     "set_local_type",
     "patch_bytes",
-    "patch_assembly"
+    "patch_assembly",
+    "start_semantic_patch",
+    "compile_replacement",
+    "preview_semantic_patch",
+    "finalize_semantic_patch"
 };
 
 ToolCallTracker::ToolCallTracker(const std::string& binary_name, EventBus* event_bus) 
@@ -36,9 +40,9 @@ bool ToolCallTracker::initialize() {
     std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
     try {
         std::filesystem::create_directories(workspace_dir);
-        ORCH_LOG("ToolCallTracker: Created workspace directory: %s\n", workspace_dir.string().c_str());
+        LOG_INFO("ToolCallTracker: Created workspace directory: %s\n", workspace_dir.string().c_str());
     } catch (const std::exception& e) {
-        ORCH_LOG("ToolCallTracker: Failed to create workspace directory: %s\n", e.what());
+        LOG_INFO("ToolCallTracker: Failed to create workspace directory: %s\n", e.what());
         return false;
     }
     
@@ -47,23 +51,23 @@ bool ToolCallTracker::initialize() {
     int rc = sqlite3_open(db_path.string().c_str(), &db_);
     
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to open database: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to open database: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
     // Create tables
     if (!create_tables()) {
-        ORCH_LOG("ToolCallTracker: Failed to create tables\n");
+        LOG_INFO("ToolCallTracker: Failed to create tables\n");
         return false;
     }
     
     // Prepare statements
     if (!prepare_statements()) {
-        ORCH_LOG("ToolCallTracker: Failed to prepare statements\n");
+        LOG_INFO("ToolCallTracker: Failed to prepare statements\n");
         return false;
     }
     
-    ORCH_LOG("ToolCallTracker: Initialized with database at %s\n", db_path.string().c_str());
+    LOG_INFO("ToolCallTracker: Initialized with database at %s\n", db_path.string().c_str());
     return true;
 }
 
@@ -108,7 +112,7 @@ bool ToolCallTracker::create_tables() {
     if (!has_manual_column) {
         const char* add_column = "ALTER TABLE tool_calls ADD COLUMN is_manual INTEGER DEFAULT 0";
         if (!execute_sql(add_column)) {
-            ORCH_LOG("ToolCallTracker: Warning - Could not add is_manual column (may already exist)\n");
+            LOG_INFO("ToolCallTracker: Warning - Could not add is_manual column (may already exist)\n");
         }
     }
     
@@ -122,7 +126,7 @@ bool ToolCallTracker::prepare_statements() {
         "VALUES (?, ?, ?, ?, ?, ?, ?)";
     
     if (sqlite3_prepare_v2(db_, insert_sql, -1, &insert_stmt_, nullptr) != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to prepare insert statement: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to prepare insert statement: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
@@ -176,16 +180,16 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
                                       const json& parameters) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    ORCH_LOG("ToolCallTracker: Recording call - agent=%s, tool=%s, addr=0x%llx\n", 
+    LOG_INFO("ToolCallTracker: Recording call - agent=%s, tool=%s, addr=0x%llx\n", 
         agent_id.c_str(), tool_name.c_str(), address);
     
     if (!db_) {
-        ORCH_LOG("ToolCallTracker: ERROR - Database not initialized\n");
+        LOG_INFO("ToolCallTracker: ERROR - Database not initialized\n");
         return false;
     }
     
     if (!insert_stmt_) {
-        ORCH_LOG("ToolCallTracker: ERROR - Insert statement not prepared\n");
+        LOG_INFO("ToolCallTracker: ERROR - Insert statement not prepared\n");
         return false;
     }
     
@@ -195,26 +199,26 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
     // Bind parameters
     int rc = sqlite3_bind_text(insert_stmt_, 1, agent_id.c_str(), -1, SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind agent_id: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind agent_id: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
     rc = sqlite3_bind_text(insert_stmt_, 2, tool_name.c_str(), -1, SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind tool_name: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind tool_name: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
     rc = sqlite3_bind_int64(insert_stmt_, 3, address);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind address: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind address: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
     std::string params_str = parameters.dump();
     rc = sqlite3_bind_text(insert_stmt_, 4, params_str.c_str(), -1, SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind parameters: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind parameters: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
@@ -222,13 +226,13 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
     auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
     rc = sqlite3_bind_int64(insert_stmt_, 5, timestamp);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind timestamp: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind timestamp: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
     rc = sqlite3_bind_int(insert_stmt_, 6, is_write_tool(tool_name) ? 1 : 0);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind is_write: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind is_write: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
@@ -236,7 +240,7 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
     bool is_manual = parameters.contains("__is_manual") && parameters["__is_manual"];
     rc = sqlite3_bind_int(insert_stmt_, 7, is_manual ? 1 : 0);
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to bind is_manual: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to bind is_manual: %s\n", sqlite3_errmsg(db_));
         return false;
     }
     
@@ -244,12 +248,12 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
     rc = sqlite3_step(insert_stmt_);
     
     if (rc != SQLITE_DONE) {
-        ORCH_LOG("ToolCallTracker: Failed to insert tool call: %s (code=%d)\n", 
+        LOG_INFO("ToolCallTracker: Failed to insert tool call: %s (code=%d)\n", 
             sqlite3_errmsg(db_), rc);
         return false;
     }
     
-    ORCH_LOG("ToolCallTracker: Successfully recorded tool call (rowid=%lld)\n", 
+    LOG_INFO("ToolCallTracker: Successfully recorded tool call (rowid=%lld)\n", 
         sqlite3_last_insert_rowid(db_));
     
     return true;
@@ -391,7 +395,7 @@ std::vector<ToolCall> ToolCallTracker::get_manual_tool_calls(const std::string& 
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: Failed to prepare manual calls query: %s\n", sqlite3_errmsg(db_));
+        LOG_INFO("ToolCallTracker: Failed to prepare manual calls query: %s\n", sqlite3_errmsg(db_));
         return calls;
     }
     
@@ -405,7 +409,7 @@ std::vector<ToolCall> ToolCallTracker::get_manual_tool_calls(const std::string& 
     
     sqlite3_finalize(stmt);
     
-    ORCH_LOG("ToolCallTracker: Found %zu manual tool calls%s\n", 
+    LOG_INFO("ToolCallTracker: Found %zu manual tool calls%s\n", 
              calls.size(), agent_id.empty() ? "" : (" for agent " + agent_id).c_str());
     
     return calls;
@@ -416,7 +420,7 @@ bool ToolCallTracker::execute_sql(const char* sql) {
     int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &err_msg);
     
     if (rc != SQLITE_OK) {
-        ORCH_LOG("ToolCallTracker: SQL error: %s\n", err_msg);
+        LOG_INFO("ToolCallTracker: SQL error: %s\n", err_msg);
         sqlite3_free(err_msg);
         return false;
     }
@@ -452,7 +456,7 @@ void ToolCallTracker::start_monitoring() {
     
     monitoring_ = true;
     monitor_thread_ = std::thread(&ToolCallTracker::monitor_loop, this);
-    ORCH_LOG("ToolCallTracker: Started monitoring thread\n");
+    LOG_INFO("ToolCallTracker: Started monitoring thread\n");
 }
 
 void ToolCallTracker::stop_monitoring() {
@@ -464,7 +468,7 @@ void ToolCallTracker::stop_monitoring() {
     if (monitor_thread_.joinable()) {
         monitor_thread_.join();
     }
-    ORCH_LOG("ToolCallTracker: Stopped monitoring thread\n");
+    LOG_INFO("ToolCallTracker: Stopped monitoring thread\n");
 }
 
 void ToolCallTracker::monitor_loop() {
@@ -484,7 +488,7 @@ void ToolCallTracker::monitor_loop() {
             sqlite3_stmt* stmt = nullptr;
             int rc = sqlite3_prepare_v2(db_, query, -1, &stmt, nullptr);
             if (rc != SQLITE_OK) {
-                ORCH_LOG("ToolCallTracker: Failed to prepare monitor query: %s\n", sqlite3_errmsg(db_));
+                LOG_INFO("ToolCallTracker: Failed to prepare monitor query: %s\n", sqlite3_errmsg(db_));
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
@@ -512,7 +516,7 @@ void ToolCallTracker::monitor_loop() {
                 // Update last seen ID
                 last_seen_id_ = call.id;
                 
-                ORCH_LOG("ToolCallTracker: Emitted TOOL_CALL event for %s - %s at 0x%llx\n",
+                LOG_INFO("ToolCallTracker: Emitted TOOL_CALL event for %s - %s at 0x%llx\n",
                     call.agent_id.c_str(), call.tool_name.c_str(), call.address);
             }
             

@@ -1,7 +1,9 @@
 // Include order is critical! ui_common.h handles the proper ordering
 #include "ui_common.h"
+#include "../orchestrator/orchestrator.h"  // Include BEFORE other UI headers to avoid forward declaration issues
 #include "orchestrator_ui.h"
 #include "ui_orchestrator_bridge.h"
+#include "../core/logger.h"
 #include "preferences_dialog.h"
 #include "log_window.h"
 #include "activity_feed_panel.h"
@@ -47,7 +49,7 @@ OrchestratorUI::OrchestratorUI(QWidget* parent)
     : QMainWindow(parent) {
     // Register AgentEvent with Qt's meta-type system for signal/slot connections
     qRegisterMetaType<AgentEvent>("AgentEvent");
-    msg("OrchestratorUI: Registered AgentEvent metatype for Qt signal/slot system\n");
+    LOG("OrchestratorUI: Registered AgentEvent metatype for Qt signal/slot system\n");
     
     setup_ui();
     setup_event_subscriptions();
@@ -128,27 +130,27 @@ void OrchestratorUI::setup_ui() {
             });
     
     // Connect to bridge signals for progress updates
-    msg("OrchestratorUI: Connecting to bridge signals...\n");
+    LOG("OrchestratorUI: Connecting to bridge signals...\n");
     
     bool connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_started,
                            this, &OrchestratorUI::on_processing_started,
                            Qt::AutoConnection);
-    msg("OrchestratorUI: processing_started connection: %s\n", connected ? "SUCCESS" : "FAILED");
+    LOG("OrchestratorUI: processing_started connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::processing_completed,
                        this, &OrchestratorUI::on_processing_completed,
                        Qt::AutoConnection);
-    msg("OrchestratorUI: processing_completed connection: %s\n", connected ? "SUCCESS" : "FAILED");
+    LOG("OrchestratorUI: processing_completed connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::status_update,
                        this, &OrchestratorUI::on_status_update,
                        Qt::AutoConnection);
-    msg("OrchestratorUI: status_update connection: %s\n", connected ? "SUCCESS" : "FAILED");
+    LOG("OrchestratorUI: status_update connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     connected = connect(&UIOrchestratorBridge::instance(), &UIOrchestratorBridge::error_occurred,
                        this, &OrchestratorUI::on_error_occurred,
                        Qt::AutoConnection);
-    msg("OrchestratorUI: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
+    LOG("OrchestratorUI: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
     
     // Create menu bar
     create_menus();
@@ -178,7 +180,9 @@ void OrchestratorUI::setup_event_subscriptions() {
     // Subscribe to ALL EventBus events
     event_subscription_id_ = event_bus_.subscribe(
         [this](const AgentEvent& event) {
-            msg("OrchestratorUI: EventBus subscription received event type %d from source '%s'\n", 
+            // Use ::msg() directly here to avoid infinite recursion
+            // (LOG() would trigger OrchestratorLogger which emits EventBus events)
+            ::msg("OrchestratorUI: EventBus subscription received event type %d from source '%s'\n",
                 static_cast<int>(event.type), event.source.c_str());
             // Emit signal to handle in UI thread
             emit event_received(event);
@@ -188,26 +192,26 @@ void OrchestratorUI::setup_event_subscriptions() {
 
 
 void OrchestratorUI::handle_event(const AgentEvent& event) {
-    msg("OrchestratorUI::handle_event called with event type %d from source '%s'\n",
+    LOG("OrchestratorUI::handle_event called with event type %d from source '%s'\n",
         static_cast<int>(event.type), event.source.c_str());
     
     // Route events to appropriate widgets based on type
     switch (event.type) {
         case AgentEvent::ORCHESTRATOR_INPUT:
-            msg("OrchestratorUI: Handling ORCHESTRATOR_INPUT event\n");
+            LOG("OrchestratorUI: Handling ORCHESTRATOR_INPUT event\n");
             if (event.payload.contains("input")) {
                 task_panel_->add_user_input(event.payload["input"]);
             }
             break;
             
         case AgentEvent::ORCHESTRATOR_THINKING:
-            msg("OrchestratorUI: Handling ORCHESTRATOR_THINKING event\n");
+            LOG("OrchestratorUI: Handling ORCHESTRATOR_THINKING event\n");
             task_panel_->set_thinking_state(true);
             statusBar()->showMessage("Orchestrator thinking...");
             break;
             
         case AgentEvent::ORCHESTRATOR_RESPONSE:
-            msg("OrchestratorUI: Handling ORCHESTRATOR_RESPONSE event\n");
+            LOG("OrchestratorUI: Handling ORCHESTRATOR_RESPONSE event\n");
             task_panel_->set_thinking_state(false);
             if (event.payload.contains("response")) {
                 task_panel_->add_orchestrator_message(event.payload["response"]);
@@ -216,7 +220,7 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
             break;
             
         case AgentEvent::AGENT_SPAWNING:
-            msg("OrchestratorUI: Handling AGENT_SPAWNING event for agent %s\n",
+            LOG("OrchestratorUI: Handling AGENT_SPAWNING event for agent %s\n",
                 event.payload.contains("agent_id") ? event.payload["agent_id"].get<std::string>().c_str() : "unknown");
             if (event.payload.contains("agent_id") && event.payload.contains("task")) {
                 agent_monitor_->on_agent_spawning(
@@ -373,9 +377,6 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                 std::string agent_id = event.payload["agent_id"];
                 json token_data = event.payload["tokens"];
                 
-                msg("DEBUG: Received AGENT_TOKEN_UPDATE for %s: %s", 
-                    agent_id.c_str(), token_data.dump().c_str());
-                
                 token_tracker_->update_agent_tokens(agent_id, token_data);
                 
                 // Get the TOTAL usage across all agents and orchestrator
@@ -422,9 +423,9 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                     size_t session_input = session_tokens.value("input_tokens", input_tokens);
                     size_t session_cache_read = session_tokens.value("cache_read_tokens", cache_read_tokens);
                     
-                    msg("DEBUG: Agent %s cumulative - In: %zu, Cache Read: %zu",
+                    LOG("DEBUG: Agent %s cumulative - In: %zu, Cache Read: %zu",
                         agent_id.c_str(), input_tokens, cache_read_tokens);
-                    msg("DEBUG: Agent %s per-iteration - In: %zu, Cache Read: %zu",
+                    LOG("DEBUG: Agent %s per-iteration - In: %zu, Cache Read: %zu",
                         agent_id.c_str(), session_input, session_cache_read);
                     
                     // Calculate context percentage using per-iteration tokens
@@ -434,7 +435,7 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                     size_t total_context_used = session_input + session_cache_read;
                     double context_percent = (total_context_used * 100.0) / max_context_tokens;
                     
-                    msg("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)",
+                    LOG("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)",
                         agent_id.c_str(), total_context_used, max_context_tokens, context_percent);
                     
                     // Update the agent's context bar with per-iteration percentage but cumulative token counts
@@ -446,21 +447,21 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
 }
 
 void OrchestratorUI::on_task_submitted() {
-    msg("OrchestratorUI: on_task_submitted called\n");
+    LOG("OrchestratorUI: on_task_submitted called\n");
     
     std::string task = task_panel_->get_task_input();
     if (task.empty()) {
-        msg("OrchestratorUI: Task is empty, returning\n");
+        LOG("OrchestratorUI: Task is empty, returning\n");
         return;
     }
     
-    msg("OrchestratorUI: Task: %s\n", task.c_str());
+    LOG("OrchestratorUI: Task: %s\n", task.c_str());
     
     // Clear input
     task_panel_->clear_input();
     
     // Submit task to orchestrator via bridge
-    msg("OrchestratorUI: Submitting task to bridge\n");
+    LOG("OrchestratorUI: Submitting task to bridge\n");
     UIOrchestratorBridge::instance().submit_task(task);
 }
 
@@ -491,7 +492,7 @@ void OrchestratorUI::on_preferences_clicked() {
 }
 
 void OrchestratorUI::on_processing_started() {
-    msg("OrchestratorUI: on_processing_started called!\n");
+    LOG("OrchestratorUI: on_processing_started called!\n");
     
     // Disable input while processing
     task_panel_->submit_button_->setEnabled(false);
@@ -501,7 +502,7 @@ void OrchestratorUI::on_processing_started() {
     task_panel_->set_thinking_state(true);
     statusBar()->showMessage("Processing task...");
     
-    msg("OrchestratorUI: UI updated to show processing state\n");
+    LOG("OrchestratorUI: UI updated to show processing state\n");
 }
 
 void OrchestratorUI::on_processing_completed() {
@@ -552,10 +553,12 @@ TaskPanel::TaskPanel(QWidget* parent) : QWidget(parent) {
     
     // Input area
     auto* input_layout = new QHBoxLayout();
-    
-    task_input_ = new QLineEdit(this);
-    task_input_->setPlaceholderText("Enter task for orchestrator...");
+
+    task_input_ = new QTextEdit(this);
+    task_input_->setPlaceholderText("Enter task for orchestrator... (Ctrl+Enter to submit)");
     task_input_->setFont(QFont("Consolas", 10));
+    task_input_->setMaximumHeight(100);  // Limit height to keep UI compact
+    task_input_->setAcceptRichText(false);  // Plain text only
     
     submit_button_ = new QPushButton("Submit Task", this);
     clear_button_ = new QPushButton("Clear", this);
@@ -573,11 +576,10 @@ TaskPanel::TaskPanel(QWidget* parent) : QWidget(parent) {
     connect(submit_button_, &QPushButton::clicked, [this]() {
         emit task_submitted();
     });
-    
-    connect(task_input_, &QLineEdit::returnPressed, [this]() {
-        emit task_submitted();
-    });
-    
+
+    // Install event filter to handle Ctrl+Enter for submission
+    task_input_->installEventFilter(this);
+
     connect(clear_button_, &QPushButton::clicked, [this]() {
         clear_history();
         // Also clear the orchestrator conversation
@@ -621,7 +623,7 @@ void TaskPanel::clear_history() {
 }
 
 std::string TaskPanel::get_task_input() const {
-    return task_input_->text().toStdString();
+    return task_input_->toPlainText().toStdString();
 }
 
 void TaskPanel::clear_input() {
@@ -636,6 +638,19 @@ void TaskPanel::set_thinking_state(bool thinking) {
         status_label_->setText("Ready");
         status_label_->setStyleSheet("QLabel { color: green; font-weight: bold; }");
     }
+}
+
+bool TaskPanel::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == task_input_ && event->type() == QEvent::KeyPress) {
+        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+        // Submit on Ctrl+Enter or Ctrl+Return
+        if ((keyEvent->modifiers() & Qt::ControlModifier) &&
+            (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
+            emit task_submitted();
+            return true;  // Event handled
+        }
+    }
+    return QWidget::eventFilter(obj, event);
 }
 
 // AgentMonitor implementation
@@ -1818,7 +1833,7 @@ TokenTracker::TokenTracker(QWidget* parent) : QWidget(parent) {
 }
 
 void TokenTracker::update_agent_tokens(const std::string& agent_id, const json& token_data) {
-    msg("TokenTracker: Updating tokens for %s with data: %s", 
+    LOG("TokenTracker: Updating tokens for %s with data: %s", 
         agent_id.c_str(), token_data.dump().c_str());
     
     // Update or create agent entry

@@ -1,5 +1,5 @@
 #include "nogo_zone_manager.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include <format>
 #include <sstream>
 #include <algorithm>
@@ -7,7 +7,7 @@
 namespace llm_re::orchestrator {
 
 NoGoZoneManager::NoGoZoneManager() {
-    ORCH_LOG("NoGoZoneManager: Initialized\n");
+    LOG_INFO("NoGoZoneManager: Initialized\n");
 }
 
 NoGoZoneManager::~NoGoZoneManager() {
@@ -19,7 +19,7 @@ void NoGoZoneManager::add_zone(const NoGoZone& zone) {
     // Check for overlaps with existing zones
     for (const auto& existing : zones_) {
         if (existing.overlaps(zone.start_address, zone.end_address)) {
-            ORCH_LOG("NoGoZoneManager: WARNING - New zone from %s overlaps with existing zone from %s\n",
+            LOG_INFO("NoGoZoneManager: WARNING - New zone from %s overlaps with existing zone from %s\n",
                 zone.agent_id.c_str(), existing.agent_id.c_str());
         }
     }
@@ -30,7 +30,7 @@ void NoGoZoneManager::add_zone(const NoGoZone& zone) {
     agent_zone_indices_[zone.agent_id].insert(index);
 
     const char* type_str = (zone.type == NoGoZoneType::TEMP_SEGMENT) ? "TEMP_SEGMENT" : "CODE_CAVE";
-    ORCH_LOG("NoGoZoneManager: Added %s zone from %s: 0x%llX-0x%llX\n",
+    LOG_INFO("NoGoZoneManager: Added %s zone from %s: 0x%llX-0x%llX\n",
         type_str, zone.agent_id.c_str(),
         (uint64_t)zone.start_address, (uint64_t)zone.end_address);
 }
@@ -62,7 +62,7 @@ void NoGoZoneManager::remove_agent_zones(const std::string& agent_id) {
         agent_zone_indices_[zones_[i].agent_id].insert(i);
     }
 
-    ORCH_LOG("NoGoZoneManager: Removed all zones for agent %s\n", agent_id.c_str());
+    LOG_INFO("NoGoZoneManager: Removed all zones for agent %s\n", agent_id.c_str());
 }
 
 std::vector<NoGoZone> NoGoZoneManager::get_all_zones() const {

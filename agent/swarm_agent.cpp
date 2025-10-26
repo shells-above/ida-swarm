@@ -1,5 +1,5 @@
 #include "swarm_agent.h"
-#include "swarm_logger.h"
+#include "../core/logger.h"
 #include "agent_irc_tools.h"
 #include "../sdk/messages/types.h"
 #include <format>
@@ -22,31 +22,36 @@ SwarmAgent::~SwarmAgent() {
 
 bool SwarmAgent::initialize(const json& swarm_config) {
     // First msg before logger is initialized goes to console only
-    msg("SwarmAgent: Starting initialization for agent %s\n", agent_id_.c_str());
+    LOG("SwarmAgent: Starting initialization for agent %s\n", agent_id_.c_str());
     swarm_config_ = swarm_config;
     
     // Extract binary name from config
     if (swarm_config.contains("binary_name")) {
         binary_name_ = swarm_config["binary_name"].get<std::string>();
-        msg("SwarmAgent: Binary name: %s\n", binary_name_.c_str());
+        LOG("SwarmAgent: Binary name: %s\n", binary_name_.c_str());
     } else {
-        msg("SwarmAgent: WARNING - No binary_name in config, using default\n");
+        LOG("SwarmAgent: WARNING - No binary_name in config, using default\n");
         binary_name_ = "unknown_binary";
     }
-    
+
     // Initialize the logger ASAP so we capture all subsequent logs
-    if (!g_swarm_logger.initialize(binary_name_, agent_id_)) {
-        msg("SwarmAgent: ERROR - Failed to initialize logger for %s\n", agent_id_.c_str());
+    std::filesystem::path log_dir = std::filesystem::path("/tmp/ida_swarm_workspace")
+                                  / binary_name_
+                                  / "agents"
+                                  / agent_id_;
+    std::filesystem::path log_path = log_dir / "agent.log";
+    if (!g_logger.initialize(log_path.string(), agent_id_)) {
+        LOG("SwarmAgent: ERROR - Failed to initialize logger for %s\n", agent_id_.c_str());
         // Continue anyway, but logs will only go to console
     }
-    
-    // From here on, use SWARM_LOG for all logging
-    SWARM_LOG("SwarmAgent: Initializing agent %s with binary %s\n", agent_id_.c_str(), binary_name_.c_str());
+
+    // From here on, use LOG_INFO for all logging
+    LOG_INFO("SwarmAgent: Initializing agent %s with binary %s\n", agent_id_.c_str(), binary_name_.c_str());
     
     // Update API client log filename to include binary name
     std::string log_filename = std::format("anthropic_requests_{}_{}.log", binary_name_, agent_id_);
     api_client_.set_request_log_filename(log_filename);
-    SWARM_LOG("SwarmAgent: Set API request log to /tmp/%s\n", log_filename.c_str());
+    LOG_INFO("SwarmAgent: Set API request log to /tmp/%s\n", log_filename.c_str());
     
     // Create conflict detector now that we have binary_name
     conflict_detector_ = std::make_unique<ConflictDetector>(agent_id_, binary_name_);
@@ -58,35 +63,35 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     // Extract IRC configuration - use provided values or fall back to defaults
     irc_server_ = swarm_config.value("irc_server", config_.irc.server);
     irc_port_ = swarm_config.value("irc_port", 0);  // Default to 0 - orchestrator must provide port
-    SWARM_LOG("SwarmAgent: IRC config - server: %s, port: %d\n", irc_server_.c_str(), irc_port_);
+    LOG_INFO("SwarmAgent: IRC config - server: %s, port: %d\n", irc_server_.c_str(), irc_port_);
 
     // Initialize agent memory handler
     if (swarm_config.contains("memory_directory")) {
         std::string memory_dir = swarm_config["memory_directory"].get<std::string>();
         set_memory_directory(memory_dir);
-        SWARM_LOG("SwarmAgent: Memory handler initialized at %s\n", memory_dir.c_str());
+        LOG_INFO("SwarmAgent: Memory handler initialized at %s\n", memory_dir.c_str());
     } else {
-        SWARM_LOG("SwarmAgent: WARNING - No memory_directory in config, memory tool will not work\n");
+        LOG_INFO("SwarmAgent: WARNING - No memory_directory in config, memory tool will not work\n");
     }
 
     // Log task if present
     if (swarm_config.contains("task")) {
-        SWARM_LOG("SwarmAgent: Task: %s\n", swarm_config["task"].get<std::string>().c_str());
+        LOG_INFO("SwarmAgent: Task: %s\n", swarm_config["task"].get<std::string>().c_str());
     }
 
     // Initialize conflict detector
-    SWARM_LOG("SwarmAgent: Initializing conflict detector\n");
+    LOG_INFO("SwarmAgent: Initializing conflict detector\n");
     if (!conflict_detector_->initialize()) {
-        SWARM_LOG("SwarmAgent: ERROR - Failed to initialize conflict detector\n");
+        LOG_INFO("SwarmAgent: ERROR - Failed to initialize conflict detector\n");
         emit_log(LogLevel::ERROR, "Failed to initialize conflict detector");
         return false;
     }
-    SWARM_LOG("SwarmAgent: Conflict detector initialized successfully\n");
+    LOG_INFO("SwarmAgent: Conflict detector initialized successfully\n");
     
     // Connect to IRC
-    SWARM_LOG("SwarmAgent: Attempting to connect to IRC server\n");
+    LOG_INFO("SwarmAgent: Attempting to connect to IRC server\n");
     if (!connect_to_irc()) {
-        SWARM_LOG("SwarmAgent: WARNING - Failed to connect to IRC, continuing without collaboration\n");
+        LOG_INFO("SwarmAgent: WARNING - Failed to connect to IRC, continuing without collaboration\n");
         emit_log(LogLevel::WARNING, "Failed to connect to IRC - continuing without collaboration");
         // Don't fail completely, agent can still work
     }
@@ -96,52 +101,52 @@ bool SwarmAgent::initialize(const json& swarm_config) {
         if (event.type == AgentEvent::ANALYSIS_RESULT && event.source == agent_id_) {
             if (event.payload.contains("report")) {
                 std::string report = event.payload["report"];
-                SWARM_LOG("SwarmAgent: Final grader report: %s\n", report.c_str());
+                LOG_INFO("SwarmAgent: Final grader report: %s\n", report.c_str());
             }
         }
     }, {AgentEvent::ANALYSIS_RESULT});
     
     // Register SwarmAgent-specific IRC tools
-    SWARM_LOG("SwarmAgent: Registering IRC communication tools\n");
+    LOG_INFO("SwarmAgent: Registering IRC communication tools\n");
     register_swarm_irc_tools(tool_registry_, this);
 
     // Start the base agent
-    SWARM_LOG("SwarmAgent: Starting base agent worker thread\n");
+    LOG_INFO("SwarmAgent: Starting base agent worker thread\n");
     start();
 
     // Apply any collected no-go zones to the CodeInjectionManager if it exists
     if (code_injection_manager_ && !collected_no_go_zones_.empty()) {
         code_injection_manager_->set_no_go_zones(collected_no_go_zones_);
-        SWARM_LOG("SwarmAgent: Applied %zu collected no-go zones to CodeInjectionManager\n",
+        LOG_INFO("SwarmAgent: Applied %zu collected no-go zones to CodeInjectionManager\n",
                   collected_no_go_zones_.size());
     }
 
-    SWARM_LOG("SwarmAgent: Agent %s initialization complete\n", agent_id_.c_str());
+    LOG_INFO("SwarmAgent: Agent %s initialization complete\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, std::format("SwarmAgent {} initialized", agent_id_));
     return true;
 }
 
 void SwarmAgent::start_task(const std::string& orchestrator_prompt) {
     set_task(orchestrator_prompt);
-    SWARM_LOG("SwarmAgent: Agent is now processing\n");
+    LOG_INFO("SwarmAgent: Agent is now processing\n");
 }
 
 void SwarmAgent::shutdown() {
-    SWARM_LOG("SwarmAgent: Shutting down agent %s\n", agent_id_.c_str());
+    LOG_INFO("SwarmAgent: Shutting down agent %s\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, "SwarmAgent shutting down");
 
     // Server will automatically broadcast departure
     if (irc_client_ && irc_connected_) {
-        SWARM_LOG("SwarmAgent: Disconnecting from IRC\n");
+        LOG_INFO("SwarmAgent: Disconnecting from IRC\n");
         irc_client_->disconnect();
     }
 
     // Stop base agent
-    SWARM_LOG("SwarmAgent: Stopping base agent\n");
+    LOG_INFO("SwarmAgent: Stopping base agent\n");
     stop();
 
     // Clean up
-    SWARM_LOG("SwarmAgent: Cleaning up resources\n");
+    LOG_INFO("SwarmAgent: Cleaning up resources\n");
     if (console_adapter_) {
         console_adapter_->stop();
         console_adapter_.reset();
@@ -153,25 +158,25 @@ void SwarmAgent::shutdown() {
     conflict_detector_.reset();
     irc_client_.reset();
 
-    SWARM_LOG("SwarmAgent: Shutdown complete\n");
+    LOG_INFO("SwarmAgent: Shutdown complete\n");
 }
 
 void SwarmAgent::trigger_shutdown() {
-    SWARM_LOG("SwarmAgent: Trigger shutdown for agent %s\n", agent_id_.c_str());
+    LOG_INFO("SwarmAgent: Trigger shutdown for agent %s\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, "SwarmAgent trigger shutdown - sending IRC logout");
 
     // Server will automatically broadcast departure
     if (irc_client_ && irc_connected_) {
-        SWARM_LOG("SwarmAgent: Disconnecting from IRC\n");
+        LOG_INFO("SwarmAgent: Disconnecting from IRC\n");
         irc_client_->disconnect();
         irc_connected_ = false;
     }
 
-    SWARM_LOG("SwarmAgent: IRC cleanup complete\n");
+    LOG_INFO("SwarmAgent: IRC cleanup complete\n");
 }
 
 void SwarmAgent::request_graceful_shutdown() {
-    SWARM_LOG("SwarmAgent: Graceful shutdown requested for agent %s\n", agent_id_.c_str());
+    LOG_INFO("SwarmAgent: Graceful shutdown requested for agent %s\n", agent_id_.c_str());
     emit_log(LogLevel::INFO, "SwarmAgent graceful shutdown initiated");
 
     // The base Agent class will publish ANALYSIS_RESULT event which MessageAdapter
@@ -236,7 +241,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         return;  // Don't inject as user message
     }
     
-    SWARM_LOG("SwarmAgent: IRC message in %s from %s: %s\n", channel.c_str(), sender.c_str(), message.c_str());
+    LOG_INFO("SwarmAgent: IRC message in %s from %s: %s\n", channel.c_str(), sender.c_str(), message.c_str());
     
     // Emit IRC message event for UI
     event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
@@ -251,17 +256,17 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         if (conflict->waiting_for_consensus_complete) {
             // Just inject the message for context but don't trigger any action
             inject_user_message(std::format("[{}] {}: {}", channel, sender, message));
-            SWARM_LOG("SwarmAgent: Received message while waiting for consensus complete, not updating turn\n");
+            LOG_INFO("SwarmAgent: Received message while waiting for consensus complete, not updating turn\n");
         }
         // Skip turn updates for CONFLICT DETAILS messages
         else if (message.find("CONFLICT DETAILS:") == 0) {
             // Inject as context without triggering turn change
             inject_user_message(std::format("[{}] {}: {}", channel, sender, message));
-            SWARM_LOG("SwarmAgent: Received CONFLICT DETAILS message, not updating turn\n");
+            LOG_INFO("SwarmAgent: Received CONFLICT DETAILS message, not updating turn\n");
         } else {
             // Turn-based discussion - update turn for this specific conflict
             conflict->my_turn = true;  // Other agent spoke, now our turn
-            SWARM_LOG("SwarmAgent: Received message from %s in channel %s, now our turn\n", sender.c_str(), channel.c_str());
+            LOG_INFO("SwarmAgent: Received message from %s in channel %s, now our turn\n", sender.c_str(), channel.c_str());
 
             // Just show the message and remind to respond
             std::string response_prompt = std::format(
@@ -286,7 +291,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
             std::string conflict_channel = parts.substr(pipe + 1);
 
             if (target == agent_id_) {
-                SWARM_LOG("SwarmAgent: Invited to join conflict channel %s\n", conflict_channel.c_str());
+                LOG_INFO("SwarmAgent: Invited to join conflict channel %s\n", conflict_channel.c_str());
 
                 // Create basic conflict state for tracking
                 SimpleConflictState state;
@@ -296,7 +301,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
 
                 // Add to conflicts map
                 active_conflicts_[conflict_channel] = state;
-                SWARM_LOG("SwarmAgent: Added conflict for channel %s (total active: %zu)\n",
+                LOG_INFO("SwarmAgent: Added conflict for channel %s (total active: %zu)\n",
                           conflict_channel.c_str(), active_conflicts_.size());
 
                 // Join the conflict channel
@@ -318,13 +323,13 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         SimpleConflictState* conflict = get_conflict_by_channel(channel);
         if (conflict) {
             conflict->consensus_reached = true;
-            SWARM_LOG("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking consensus reached\n", channel.c_str());
+            LOG_INFO("SwarmAgent: Received CONSENSUS_COMPLETE for %s, marking consensus reached\n", channel.c_str());
             inject_user_message("[SYSTEM] Consensus has been reached and applied by the system. Conflict resolution complete.");
 
             // Leave the conflict channel
             if (irc_client_ && irc_connected_) {
                 irc_client_->leave_channel(channel);
-                SWARM_LOG("SwarmAgent: Left conflict channel %s after consensus complete\n", channel.c_str());
+                LOG_INFO("SwarmAgent: Left conflict channel %s after consensus complete\n", channel.c_str());
             }
 
             // Clean up completed conflicts
@@ -341,7 +346,7 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
 
 void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
     emit_log(LogLevel::INFO, "Handling conflict notification");
-    SWARM_LOG("SwarmAgent: Conflict detected, setting up discussion channel\n");
+    LOG_INFO("SwarmAgent: Conflict detected, setting up discussion channel\n");
 
     // Generate unique channel name with timestamp to prevent collisions
     std::string base_channel = generate_conflict_channel(conflict);
@@ -357,7 +362,7 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
 
     // Add to conflicts map (don't overwrite existing conflicts)
     active_conflicts_[channel] = state;
-    SWARM_LOG("SwarmAgent: Created conflict channel %s (total active: %zu)\n",
+    LOG_INFO("SwarmAgent: Created conflict channel %s (total active: %zu)\n",
               channel.c_str(), active_conflicts_.size());
 
     // Join the conflict channel
@@ -382,7 +387,7 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
         // Format: JOIN_CONFLICT|target|channel
         std::string join_msg = std::format("JOIN_CONFLICT|{}|{}", other_agent, channel);
         irc_client_->send_message("#agents", join_msg);
-        SWARM_LOG("SwarmAgent: Sent request for agent %s to join conflict channel %s\n",
+        LOG_INFO("SwarmAgent: Sent request for agent %s to join conflict channel %s\n",
                   other_agent.c_str(), channel.c_str());
     }
 
@@ -403,7 +408,7 @@ void SwarmAgent::handle_conflict_notification(const ToolConflict& conflict) {
             other_agent, their_params.dump(2)
         );
         irc_client_->send_message(channel, conflict_details);
-        SWARM_LOG("SwarmAgent: Posted conflict details to channel %s\n", channel.c_str());
+        LOG_INFO("SwarmAgent: Posted conflict details to channel %s\n", channel.c_str());
     }
 
     // Prompt for the initiating agent
@@ -445,7 +450,7 @@ void SwarmAgent::send_irc_message(const std::string& channel, const std::string&
         SimpleConflictState* conflict = get_conflict_by_channel(channel);
         if (conflict && !conflict->consensus_reached) {
             conflict->my_turn = false;  // After sending, it's no longer our turn
-            SWARM_LOG("SwarmAgent: Sent message to conflict channel %s, now waiting for response (%s)\n",
+            LOG_INFO("SwarmAgent: Sent message to conflict channel %s, now waiting for response (%s)\n",
                       channel.c_str(), message.c_str());
         }
     } else {
@@ -462,7 +467,7 @@ void SwarmAgent::join_irc_channel(const std::string& channel) {
 }
 
 void SwarmAgent::restore_conversation_history(const json& saved_conversation) {
-    SWARM_LOG("SwarmAgent: Restoring conversation history\n");
+    LOG_INFO("SwarmAgent: Restoring conversation history\n");
     emit_log(LogLevel::INFO, "Restoring conversation history from saved state");
 
     try {
@@ -532,7 +537,7 @@ void SwarmAgent::restore_conversation_history(const json& saved_conversation) {
             execution_state_.add_message(std::move(message));
         }
 
-        SWARM_LOG("SwarmAgent: Restored %zu messages\n",
+        LOG_INFO("SwarmAgent: Restored %zu messages\n",
                   execution_state_.message_count());
         emit_log(LogLevel::INFO, std::format("Restored {} messages from saved state with full content preservation",
                                              execution_state_.message_count()));
@@ -541,7 +546,7 @@ void SwarmAgent::restore_conversation_history(const json& saved_conversation) {
         execution_state_.set_valid(true);
 
     } catch (const std::exception& e) {
-        SWARM_LOG("SwarmAgent: Failed to restore conversation: %s\n", e.what());
+        LOG_INFO("SwarmAgent: Failed to restore conversation: %s\n", e.what());
         emit_log(LogLevel::ERROR, std::format("Failed to restore conversation: {}", e.what()));
     }
 }
@@ -550,21 +555,21 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
     // Log assistant's text response if present
     std::optional<std::string> assistant_text = claude::messages::ContentExtractor::extract_text(message);
     if (assistant_text.has_value() && !assistant_text->empty()) {
-        SWARM_LOG("SwarmAgent: Assistant response: %s\n", assistant_text->c_str());
+        LOG_INFO("SwarmAgent: Assistant response: %s\n", assistant_text->c_str());
     }
     
     // First, extract tool uses to record them in our database
     std::vector<const claude::messages::ToolUseContent*> tool_uses = claude::messages::ContentExtractor::extract_tool_uses(message);
 
     if (!tool_uses.empty()) {
-        SWARM_LOG("SwarmAgent: Recording %zu tool calls to database\n", tool_uses.size());
+        LOG_INFO("SwarmAgent: Recording %zu tool calls to database\n", tool_uses.size());
     }
 
     // Record each tool call and check for conflicts BEFORE execution
     for (const claude::messages::ToolUseContent* tool_use: tool_uses) {
         if (!tool_use) continue;
 
-        SWARM_LOG("SwarmAgent: Processing tool: %s\n", tool_use->name.c_str());
+        LOG_INFO("SwarmAgent: Processing tool: %s\n", tool_use->name.c_str());
 
         // Check turn enforcement for send_irc_message during conflicts
         // this should never happen
@@ -575,7 +580,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
                 if (conflict) {
                     // Check if it's our turn in this specific conflict
                     if (!conflict->my_turn && !conflict->consensus_reached) {
-                        SWARM_LOG("SwarmAgent: Blocking send_irc_message for channel %s - not our turn\n",
+                        LOG_INFO("SwarmAgent: Blocking send_irc_message for channel %s - not our turn\n",
                                   target_channel.c_str());
                         // Return error to make agent wait
                         return {claude::messages::Message::tool_result(
@@ -602,29 +607,29 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
                     address = tool_use->input["address"].get<ea_t>();
                 }
             } catch (...) {
-                SWARM_LOG("SwarmAgent: Could not parse address from tool input\n");
+                LOG_INFO("SwarmAgent: Could not parse address from tool input\n");
             }
         }
 
         // Check for conflicts BEFORE recording if it's a write operation
         if (orchestrator::ToolCallTracker::is_write_tool(tool_use->name) && address != 0) {
-            SWARM_LOG("SwarmAgent: Checking for conflicts for write operation %s at 0x%llx\n", tool_use->name.c_str(), address);
+            LOG_INFO("SwarmAgent: Checking for conflicts for write operation %s at 0x%llx\n", tool_use->name.c_str(), address);
 
             std::vector<ToolConflict> conflicts = conflict_detector_->check_conflict(tool_use->name, address);
 
             if (!conflicts.empty()) {
-                SWARM_LOG("SwarmAgent: CONFLICT DETECTED - %zu conflicts found\n", conflicts.size());
+                LOG_INFO("SwarmAgent: CONFLICT DETECTED - %zu conflicts found\n", conflicts.size());
                 emit_log(LogLevel::WARNING, std::format("Conflict detected for {} at 0x{:x}", tool_use->name, address));
 
                 // Handle each conflict
                 for (const ToolConflict& conflict : conflicts) {
-                    SWARM_LOG("SwarmAgent: Handling conflict with agent %s\n", conflict.first_call.agent_id.c_str());
+                    LOG_INFO("SwarmAgent: Handling conflict with agent %s\n", conflict.first_call.agent_id.c_str());
                     handle_conflict_notification(conflict);
                 }
 
                 // CRITICAL: Don't record or execute the tools if there's a conflict!
                 // Return error results for each tool instead
-                SWARM_LOG("SwarmAgent: Preventing tool execution due to conflict (not recording in database)\n");
+                LOG_INFO("SwarmAgent: Preventing tool execution due to conflict (not recording in database)\n");
                 std::vector<claude::messages::Message> error_results;
                 for (const auto* tool_use : tool_uses) {
                     if (tool_use) {
@@ -642,10 +647,10 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
         }
 
         // Only record the tool call if there's no conflict (or it's not a write operation)
-        SWARM_LOG("SwarmAgent: Recording tool call %s at 0x%llx in database\n", tool_use->name.c_str(), address);
+        LOG_INFO("SwarmAgent: Recording tool call %s at 0x%llx in database\n", tool_use->name.c_str(), address);
         bool recorded = conflict_detector_->record_tool_call(tool_use->name, address, tool_use->input);
         if (!recorded) {
-            SWARM_LOG("SwarmAgent: WARNING - Failed to record tool call in database\n");
+            LOG_INFO("SwarmAgent: WARNING - Failed to record tool call in database\n");
         }
     }
 
@@ -666,7 +671,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             break;  // Conflict was removed
         }
 
-        SWARM_LOG("SwarmAgent: Waiting for response in conflict channel %s\n", waiting_channel.c_str());
+        LOG_INFO("SwarmAgent: Waiting for response in conflict channel %s\n", waiting_channel.c_str());
         emit_log(LogLevel::INFO, std::format("Waiting for other agent's response in {}", waiting_channel));
 
         // Wait for this specific conflict to update
@@ -676,13 +681,13 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
             // Check if conflict still exists and is valid
             conflict = get_conflict_by_channel(waiting_channel);
             if (!conflict) {
-                SWARM_LOG("SwarmAgent: Conflict %s was removed, continuing\n", waiting_channel.c_str());
+                LOG_INFO("SwarmAgent: Conflict %s was removed, continuing\n", waiting_channel.c_str());
                 break;
             }
 
             // Check for timeout
             if (++wait_iterations > max_wait_iterations) {
-                SWARM_LOG("SwarmAgent: Timeout waiting for response in %s, abandoning conflict\n",
+                LOG_INFO("SwarmAgent: Timeout waiting for response in %s, abandoning conflict\n",
                           waiting_channel.c_str());
                 conflict->consensus_reached = true;  // Mark as completed to exit
                 inject_user_message(std::format("[SYSTEM] Conflict resolution timed out for {}. Proceeding.",
@@ -695,7 +700,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
         }
 
         if (conflict && conflict->my_turn) {
-            SWARM_LOG("SwarmAgent: It's now our turn in %s, continuing\n", waiting_channel.c_str());
+            LOG_INFO("SwarmAgent: It's now our turn in %s, continuing\n", waiting_channel.c_str());
         }
 
         // Clean up any completed conflicts
@@ -706,19 +711,19 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
 }
 
 bool SwarmAgent::connect_to_irc() {
-    SWARM_LOG("SwarmAgent: Creating IRC client for %s\n", agent_id_.c_str());
+    LOG_INFO("SwarmAgent: Creating IRC client for %s\n", agent_id_.c_str());
     irc_client_ = std::make_unique<irc::IRCClient>(agent_id_, irc_server_, irc_port_);
 
-    SWARM_LOG("SwarmAgent: Connecting to IRC %s:%d\n", irc_server_.c_str(), irc_port_);
+    LOG_INFO("SwarmAgent: Connecting to IRC %s:%d\n", irc_server_.c_str(), irc_port_);
     if (!irc_client_->connect()) {
-        SWARM_LOG("SwarmAgent: Failed to connect to IRC server\n");
+        LOG_INFO("SwarmAgent: Failed to connect to IRC server\n");
         emit_log(LogLevel::ERROR, "Failed to connect to IRC server");
         return false;
     }
-    SWARM_LOG("SwarmAgent: Successfully connected to IRC\n");
+    LOG_INFO("SwarmAgent: Successfully connected to IRC\n");
 
     // Set up message callback
-    SWARM_LOG("SwarmAgent: Setting up IRC message callback\n");
+    LOG_INFO("SwarmAgent: Setting up IRC message callback\n");
     irc_client_->set_message_callback(
         [this](const std::string& channel, const std::string& sender, const std::string& message) {
             handle_irc_message(channel, sender, message);
@@ -726,11 +731,11 @@ bool SwarmAgent::connect_to_irc() {
     );
 
     // Join the standard agent coordination channel
-    SWARM_LOG("SwarmAgent: Joining #agents channel\n");
+    LOG_INFO("SwarmAgent: Joining #agents channel\n");
     irc_client_->join_channel("#agents");
 
     irc_connected_ = true;
-    SWARM_LOG("SwarmAgent: IRC setup complete\n");
+    LOG_INFO("SwarmAgent: IRC setup complete\n");
     emit_log(LogLevel::INFO, "Connected to IRC server");
 
     // Set up IRC adapter for event-based communication
@@ -794,7 +799,7 @@ bool SwarmAgent::parse_manual_tool_message(const std::string& message, std::stri
         parameters = json::parse(params_str);
         return true;
     } catch (const json::exception& e) {
-        SWARM_LOG("SwarmAgent: Failed to parse tool parameters: %s\n", e.what());
+        LOG_INFO("SwarmAgent: Failed to parse tool parameters: %s\n", e.what());
         return false;
     }
 }
@@ -805,7 +810,7 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
     json parameters;
     
     if (!parse_manual_tool_message(message, target_agent, tool_name, parameters)) {
-        SWARM_LOG("SwarmAgent: Invalid manual tool execution message format\n");
+        LOG_INFO("SwarmAgent: Invalid manual tool execution message format\n");
         return;
     }
     
@@ -815,7 +820,7 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
         return;
     }
     
-    SWARM_LOG("SwarmAgent: Executing manual tool call: %s with params: %s\n", 
+    LOG_INFO("SwarmAgent: Executing manual tool call: %s with params: %s\n", 
               tool_name.c_str(), parameters.dump().c_str());
     emit_log(LogLevel::INFO, std::format("Executing consensus-enforced tool: {}", tool_name));
     
@@ -834,7 +839,7 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
                     address = parameters["address"].get<ea_t>();
                 }
             } catch (...) {
-                SWARM_LOG("SwarmAgent: Could not parse address from parameters\n");
+                LOG_INFO("SwarmAgent: Could not parse address from parameters\n");
             }
         }
         
@@ -845,7 +850,7 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
         
         bool recorded = conflict_detector_->record_tool_call(tool_name, address, params_with_manual);
         if (!recorded) {
-            SWARM_LOG("SwarmAgent: WARNING - Failed to record manual tool call in database\n");
+            LOG_INFO("SwarmAgent: WARNING - Failed to record manual tool call in database\n");
         }
         
         // Inject user message to inform the agent
@@ -869,7 +874,7 @@ void SwarmAgent::send_manual_tool_result(const std::string& channel, bool succes
     
     send_irc_message(channel, message);
     
-    SWARM_LOG("SwarmAgent: Sent manual tool result: %s\n", status.c_str());
+    LOG_INFO("SwarmAgent: Sent manual tool result: %s\n", status.c_str());
     emit_log(LogLevel::INFO, std::format("Manual tool execution {}", status));
 }
 
@@ -878,14 +883,14 @@ void SwarmAgent::handle_no_go_zone_message(const std::string& message) {
     std::optional<orchestrator::NoGoZone> zone_opt = orchestrator::NoGoZoneManager::deserialize_zone(message);
 
     if (!zone_opt.has_value()) {
-        SWARM_LOG("SwarmAgent: Failed to parse no-go zone message: %s\n", message.c_str());
+        LOG_INFO("SwarmAgent: Failed to parse no-go zone message: %s\n", message.c_str());
         return;
     }
 
     const orchestrator::NoGoZone &zone = zone_opt.value();
     const char* type_str = (zone.type == orchestrator::NoGoZoneType::TEMP_SEGMENT) ? "TEMP_SEGMENT" : "CODE_CAVE";
 
-    SWARM_LOG("SwarmAgent: Received no-go zone from %s: %s at 0x%llX-0x%llX\n",
+    LOG_INFO("SwarmAgent: Received no-go zone from %s: %s at 0x%llX-0x%llX\n",
         zone.agent_id.c_str(), type_str,
         (uint64_t)zone.start_address, (uint64_t)zone.end_address);
 
@@ -895,10 +900,10 @@ void SwarmAgent::handle_no_go_zone_message(const std::string& message) {
     // Pass to CodeInjectionManager if it exists
     if (code_injection_manager_) {
         code_injection_manager_->set_no_go_zones(collected_no_go_zones_);
-        SWARM_LOG("SwarmAgent: Updated CodeInjectionManager with %zu no-go zones\n",
+        LOG_INFO("SwarmAgent: Updated CodeInjectionManager with %zu no-go zones\n",
                   collected_no_go_zones_.size());
     } else {
-        SWARM_LOG("SwarmAgent: CodeInjectionManager not available, stored no-go zone for later\n");
+        LOG_INFO("SwarmAgent: CodeInjectionManager not available, stored no-go zone for later\n");
     }
 
     emit_log(LogLevel::DEBUG, std::format("Received no-go zone from {}: {:#x}-{:#x}",
@@ -916,7 +921,7 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
     }
 
     if (tokens.size() != 5 || tokens[0] != "PATCH") {
-        SWARM_LOG("SwarmAgent: Invalid patch replication message format\n");
+        LOG_INFO("SwarmAgent: Invalid patch replication message format\n");
         return;
     }
 
@@ -928,7 +933,7 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
     try {
         address = std::stoull(tokens[3], nullptr, 0);
     } catch (...) {
-        SWARM_LOG("SwarmAgent: Failed to parse address in patch message\n");
+        LOG_INFO("SwarmAgent: Failed to parse address in patch message\n");
         return;
     }
 
@@ -937,11 +942,11 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
     try {
         parameters = json::parse(tokens[4]);
     } catch (...) {
-        SWARM_LOG("SwarmAgent: Failed to parse parameters in patch message\n");
+        LOG_INFO("SwarmAgent: Failed to parse parameters in patch message\n");
         return;
     }
 
-    SWARM_LOG("SwarmAgent: Received patch replication from %s: %s at 0x%llX\n",
+    LOG_INFO("SwarmAgent: Received patch replication from %s: %s at 0x%llX\n",
         source_agent.c_str(), tool_name.c_str(), (uint64_t)address);
 
     // Execute the tool locally
@@ -957,7 +962,7 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
         claude::messages::Message result = tool_registry_.execute_tool_call(tool_use);
 
         // Log the result
-        SWARM_LOG("SwarmAgent: Successfully replicated %s from %s\n",
+        LOG_INFO("SwarmAgent: Successfully replicated %s from %s\n",
             tool_name.c_str(), source_agent.c_str());
 
         // Don't inject this into the conversation - it's background synchronization
@@ -965,7 +970,7 @@ void SwarmAgent::handle_patch_replication_message(const std::string& message) {
             tool_name, source_agent, address));
 
     } catch (const std::exception& e) {
-        SWARM_LOG("SwarmAgent: Failed to replicate patch: %s\n", e.what());
+        LOG_INFO("SwarmAgent: Failed to replicate patch: %s\n", e.what());
         emit_log(LogLevel::WARNING, std::format("Failed to replicate {} from {}: {}",
             tool_name, source_agent, e.what()));
     }
@@ -1015,7 +1020,7 @@ void SwarmAgent::remove_completed_conflicts() {
         }
     }
     for (const std::string& channel : to_remove) {
-        SWARM_LOG("SwarmAgent: Removing completed conflict from channel %s\n", channel.c_str());
+        LOG_INFO("SwarmAgent: Removing completed conflict from channel %s\n", channel.c_str());
         active_conflicts_.erase(channel);
     }
 }
@@ -1098,6 +1103,7 @@ Respond ONLY with the JSON, no other text.)";
     builder.with_model(claude::Model::Haiku45)
            .with_max_tokens(500)
            .with_temperature(0.3)
+           .with_system_prompt("You are a status extractor. You have no power, you are PURELY informational. Your output will be displayed in the UI, and nothing else will happen. Perform your status extraction.")  // haiku 45 hallucinates that it can stop the agent from running
            .enable_thinking(false);
 
     builder.add_message(claude::messages::Message::user_text(status_prompt));
@@ -1108,14 +1114,14 @@ Respond ONLY with the JSON, no other text.)";
     claude::ChatResponse response = api_client_.send_request(request);
 
     if (!response.success) {
-        SWARM_LOG("SwarmAgent: Failed to generate status update\n");
+        LOG_INFO("SwarmAgent: Failed to generate status update\n");
         return;
     }
 
     // Extract and parse JSON response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
     if (!text) {
-        SWARM_LOG("SwarmAgent: No text in status update response\n");
+        LOG_INFO("SwarmAgent: No text in status update response\n");
         return;
     }
 
@@ -1150,7 +1156,7 @@ Respond ONLY with the JSON, no other text.)";
 
         // Validate required fields
         if (!status_data.contains("current_status") || !status_data.contains("emoji")) {
-            SWARM_LOG("SwarmAgent: Status update missing required fields\n");
+            LOG_INFO("SwarmAgent: Status update missing required fields\n");
             return;
         }
 
@@ -1161,12 +1167,12 @@ Respond ONLY with the JSON, no other text.)";
         std::string status_message = status_data.dump();
         send_irc_message("#status", status_message);
 
-        SWARM_LOG("SwarmAgent: Sent status update: %s - %s\n",
+        LOG_INFO("SwarmAgent: Sent status update: %s - %s\n",
                   status_data["emoji"].get<std::string>().c_str(),
                   status_data["current_status"].get<std::string>().c_str());
 
     } catch (const json::exception& e) {
-        SWARM_LOG("SwarmAgent: Failed to parse status update JSON: %s\n", e.what());
+        LOG_INFO("SwarmAgent: Failed to parse status update JSON: %s\n", e.what());
     }
 }
 

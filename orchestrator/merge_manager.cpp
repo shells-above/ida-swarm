@@ -1,5 +1,5 @@
 #include "merge_manager.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include "../core/config.h"
 #include "../patching/code_injection_manager.h"
 #include <format>
@@ -18,7 +18,11 @@ const std::set<std::string> MergeManager::WRITE_TOOLS = {
     "patch_assembly",
     "allocate_code_workspace",
     "preview_code_injection",
-    "finalize_code_injection"
+    "finalize_code_injection",
+    "start_semantic_patch",
+    "compile_replacement",
+    "preview_semantic_patch",
+    "finalize_semantic_patch"
 };
 
 MergeManager::MergeManager(ToolCallTracker* tracker)
@@ -30,7 +34,7 @@ MergeManager::MergeManager(ToolCallTracker* tracker)
 
     // Initialize the patch manager
     if (!patch_manager_->initialize()) {
-        ORCH_LOG("MergeManager: WARNING - Failed to initialize patch manager, patching operations will fail\n");
+        LOG_INFO("MergeManager: WARNING - Failed to initialize patch manager, patching operations will fail\n");
     }
 
     // Get the main binary path for dual patching
@@ -38,9 +42,9 @@ MergeManager::MergeManager(ToolCallTracker* tracker)
     char input_path[MAXSTR];
     if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
         binary_path = input_path;
-        ORCH_LOG("MergeManager: Main binary path: %s\n", binary_path.c_str());
+        LOG_INFO("MergeManager: Main binary path: %s\n", binary_path.c_str());
     } else {
-        ORCH_LOG("MergeManager: WARNING - Could not get binary path\n");
+        LOG_INFO("MergeManager: WARNING - Could not get binary path\n");
     }
 
     // Set up code injection if we have a binary path
@@ -49,17 +53,26 @@ MergeManager::MergeManager(ToolCallTracker* tracker)
         code_injection_manager_ = std::make_shared<CodeInjectionManager>(patch_manager_.get(), binary_path);
         if (code_injection_manager_->initialize()) {
             patch_manager_->set_code_injection_manager(code_injection_manager_.get());
-            ORCH_LOG("MergeManager: Code injection manager initialized\n");
+            LOG_INFO("MergeManager: Code injection manager initialized\n");
         } else {
-            ORCH_LOG("MergeManager: WARNING - Failed to initialize code injection manager\n");
+            LOG_INFO("MergeManager: WARNING - Failed to initialize code injection manager\n");
             code_injection_manager_ = nullptr;
         }
     }
 
-    // Register the same tools that agents use (pass Config instance for conditional tool registration)
-    tools::register_ida_tools(tool_registry_, executor_, nullptr, patch_manager_, code_injection_manager_, Config::instance());
+    // Initialize semantic patch manager if dependencies are available
+    if (patch_manager_ && code_injection_manager_) {
+        semantic_patch_manager_ = std::make_shared<semantic::SemanticPatchManager>(
+            patch_manager_.get(),
+            code_injection_manager_.get()
+        );
+        LOG_INFO("MergeManager: Semantic patch manager initialized\n");
+    }
+
+    // Register the same tools that agents use
+    tools::register_ida_tools(tool_registry_, executor_, nullptr, patch_manager_, code_injection_manager_, semantic_patch_manager_, Config::instance());
     
-    ORCH_LOG("MergeManager: Initialized with tool registry and patch manager\n");
+    LOG_INFO("MergeManager: Initialized with tool registry and patch manager\n");
 }
 
 MergeManager::~MergeManager() {
@@ -68,7 +81,7 @@ MergeManager::~MergeManager() {
 MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
     MergeResult result;
     
-    ORCH_LOG("MergeManager: Starting merge for agent %s\n", agent_id.c_str());
+    LOG_INFO("MergeManager: Starting merge for agent %s\n", agent_id.c_str());
     
     // Get all tool calls from the agent in chronological order
     std::vector<ToolCall> tool_calls = tool_tracker_->get_agent_tool_calls(agent_id);
@@ -76,11 +89,11 @@ MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
     if (tool_calls.empty()) {
         result.success = true;
         result.error_message = "No tool calls to merge";
-        ORCH_LOG("MergeManager: No tool calls found for agent %s\n", agent_id.c_str());
+        LOG_INFO("MergeManager: No tool calls found for agent %s\n", agent_id.c_str());
         return result;
     }
     
-    ORCH_LOG("MergeManager: Found %zu tool calls from agent\n", tool_calls.size());
+    LOG_INFO("MergeManager: Found %zu tool calls from agent\n", tool_calls.size());
     
     // Process each tool call
     int total_write_ops = 0;
@@ -91,7 +104,7 @@ MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
         }
         
         total_write_ops++;
-        ORCH_LOG("MergeManager: Replaying %s (call #%d)\n", call.tool_name.c_str(), call.id);
+        LOG_INFO("MergeManager: Replaying %s (call #%d)\n", call.tool_name.c_str(), call.id);
         
         // Execute the tool call on the main database
         try {
@@ -127,14 +140,14 @@ MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
                             message.substr(0, 100));  // Truncate long messages
                         result.applied_changes.push_back(summary);
                         
-                        ORCH_LOG("MergeManager: Successfully applied %s\n", call.tool_name.c_str());
+                        LOG_INFO("MergeManager: Successfully applied %s\n", call.tool_name.c_str());
                     } else {
                         result.changes_failed++;
                         std::string error = result_json.value("error", "Unknown error");
                         result.failed_changes.push_back(
                             std::format("{}: {}", call.tool_name, error)
                         );
-                        ORCH_LOG("MergeManager: Failed to apply %s: %s\n",
+                        LOG_INFO("MergeManager: Failed to apply %s: %s\n",
                             call.tool_name.c_str(), error.c_str());
                     }
                 } catch (const json::exception&) {
@@ -142,21 +155,21 @@ MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
                     result.failed_changes.push_back(
                         std::format("{}: Failed to parse result", call.tool_name)
                     );
-                    ORCH_LOG("MergeManager: Failed to parse result for %s\n", call.tool_name.c_str());
+                    LOG_INFO("MergeManager: Failed to parse result for %s\n", call.tool_name.c_str());
                 }
             } else {
                 result.changes_failed++;
                 result.failed_changes.push_back(
                     std::format("{}: No tool result returned", call.tool_name)
                 );
-                ORCH_LOG("MergeManager: No result returned for %s\n", call.tool_name.c_str());
+                LOG_INFO("MergeManager: No result returned for %s\n", call.tool_name.c_str());
             }
         } catch (const std::exception& e) {
             result.changes_failed++;
             result.failed_changes.push_back(
                 std::format("{}: Exception - {}", call.tool_name, e.what())
             );
-            ORCH_LOG("MergeManager: Exception applying %s: %s\n", 
+            LOG_INFO("MergeManager: Exception applying %s: %s\n", 
                 call.tool_name.c_str(), e.what());
         }
     }
@@ -167,7 +180,7 @@ MergeResult MergeManager::merge_agent_changes(const std::string& agent_id) {
     // Log the merge operation
     log_merge(agent_id, result);
     
-    ORCH_LOG("MergeManager: Merge complete - Applied: %d, Failed: %d (from %d write ops)\n",
+    LOG_INFO("MergeManager: Merge complete - Applied: %d, Failed: %d (from %d write ops)\n",
         result.changes_applied, result.changes_failed, total_write_ops);
     
     return result;
@@ -178,27 +191,27 @@ bool MergeManager::is_write_tool(const std::string& tool_name) {
 }
 
 void MergeManager::log_merge(const std::string& agent_id, const MergeResult& result) {
-    ORCH_LOG("================== MERGE SUMMARY ==================\n");
-    ORCH_LOG("Agent: %s\n", agent_id.c_str());
-    ORCH_LOG("Status: %s\n", result.success ? "SUCCESS" : "PARTIAL");
-    ORCH_LOG("Changes Applied: %d\n", result.changes_applied);
-    ORCH_LOG("Changes Failed: %d\n", result.changes_failed);
+    LOG_INFO("================== MERGE SUMMARY ==================\n");
+    LOG_INFO("Agent: %s\n", agent_id.c_str());
+    LOG_INFO("Status: %s\n", result.success ? "SUCCESS" : "PARTIAL");
+    LOG_INFO("Changes Applied: %d\n", result.changes_applied);
+    LOG_INFO("Changes Failed: %d\n", result.changes_failed);
 
     if (!result.applied_changes.empty()) {
-        ORCH_LOG("Applied Changes:\n");
+        LOG_INFO("Applied Changes:\n");
         for (const std::string& change: result.applied_changes) {
-            ORCH_LOG("  - %s\n", change.c_str());
+            LOG_INFO("  - %s\n", change.c_str());
         }
     }
     
     if (!result.failed_changes.empty()) {
-        ORCH_LOG("Failed Changes:\n");
+        LOG_INFO("Failed Changes:\n");
         for (const std::string& failure: result.failed_changes) {
-            ORCH_LOG("  - %s\n", failure.c_str());
+            LOG_INFO("  - %s\n", failure.c_str());
         }
     }
     
-    ORCH_LOG("==================================================\n");
+    LOG_INFO("==================================================\n");
 }
 
 } // namespace llm_re::orchestrator

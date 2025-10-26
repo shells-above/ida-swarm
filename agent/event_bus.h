@@ -6,6 +6,7 @@
 #include <mutex>
 #include <chrono>
 #include "../core/common.h"
+#include "../core/logger.h"
 
 namespace llm_re {
 
@@ -122,7 +123,7 @@ public:
                 handler(event);
             } catch (const std::exception& e) {
                 // Log but don't propagate exceptions from handlers
-                msg("EventBus: Handler exception: %s\n", e.what());
+                LOG("EventBus: Handler exception: %s\n", e.what());
             }
         }
     }

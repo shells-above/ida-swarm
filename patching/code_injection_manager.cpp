@@ -1,4 +1,6 @@
 #include "code_injection_manager.h"
+#include "../core/logger.h"
+#include "core/ida_utils.h"
 #include <ida.hpp>
 #include <idp.hpp>
 #include <auto.hpp>
@@ -36,11 +38,73 @@ CodeInjectionManager::~CodeInjectionManager() {
 // Initialize the manager
 bool CodeInjectionManager::initialize() {
     if (agent_binary_path_.empty()) {
-        msg("CodeInjectionManager: Warning - no binary path provided\n");
+        LOG("CodeInjectionManager: Warning - no binary path provided\n");
     } else {
-        msg("CodeInjectionManager: Using binary path: %s\n", agent_binary_path_.c_str());
+        LOG("CodeInjectionManager: Using binary path: %s\n", agent_binary_path_.c_str());
     }
     return true;
+}
+
+// PaddingDetector implementation
+CodeInjectionManager::PaddingDetector::PaddingDetector() {
+    // Get platform information
+    arch_ = PH.id;
+    is_64bit_ = inf_is_64bit();
+    file_type_ = inf_get_filetype();
+
+    // Initialize padding bytes based on architecture and file format
+    switch (arch_) {
+        case PLFM_386:  // x86/x64 (Intel/AMD)
+            // x86 uses NOP (0x90), INT3 (0xCC), and zeros (0x00)
+            // PE files favor INT3, ELF/Mach-O favor NOP
+            if (file_type_ == f_PE) {
+                // Windows PE: INT3 is most common for padding
+                padding_bytes_ = {0xCC, 0x90, 0x00};
+                primary_padding_ = 0xCC;
+            } else {
+                // Linux ELF / macOS Mach-O: NOP is most common
+                padding_bytes_ = {0x90, 0xCC, 0x00};
+                primary_padding_ = 0x90;
+            }
+            break;
+
+        case PLFM_ARM:  // ARM (32-bit and 64-bit)
+            // ARM uses zero padding
+            padding_bytes_ = {0x00};
+            primary_padding_ = 0x00;
+            break;
+
+        case PLFM_MIPS:  // MIPS
+            // MIPS uses zero padding (NOP is 0x00000000)
+            padding_bytes_ = {0x00};
+            primary_padding_ = 0x00;
+            break;
+
+        case PLFM_PPC:  // PowerPC
+            // PowerPC uses zero padding
+            padding_bytes_ = {0x00};
+            primary_padding_ = 0x00;
+            break;
+
+        default:
+            // Conservative default: only accept zeros
+            padding_bytes_ = {0x00};
+            primary_padding_ = 0x00;
+            LOG("CodeInjectionManager: Unknown architecture %u, using conservative padding detection (0x00 only)\n", (unsigned int)arch_);
+            break;
+    }
+}
+
+bool CodeInjectionManager::PaddingDetector::is_padding_byte(uint8_t byte) const {
+    return std::find(padding_bytes_.begin(), padding_bytes_.end(), byte) != padding_bytes_.end();
+}
+
+// Helper to get padding detector (lazy initialization)
+const CodeInjectionManager::PaddingDetector& CodeInjectionManager::get_padding_detector() const {
+    if (!padding_detector_) {
+        padding_detector_ = std::make_unique<PaddingDetector>();
+    }
+    return *padding_detector_;
 }
 
 // Stage 1: Allocate temporary workspace for code development
@@ -85,7 +149,7 @@ WorkspaceAllocation CodeInjectionManager::allocate_code_workspace(size_t request
     result.segment_name = seg_name;
     result.is_temporary = true;
 
-    msg("CodeInjectionManager: Allocated temporary workspace at 0x%llX, size 0x%zX\n",
+    LOG("CodeInjectionManager: Allocated temporary workspace at 0x%llX, size 0x%zX\n",
         (uint64_t)new_ea, actual_size);
 
     return result;
@@ -146,7 +210,7 @@ CodePreviewResult CodeInjectionManager::preview_code_injection(ea_t start_addres
     result.disassembly = disasm;
     result.final_bytes = bytes;
 
-    msg("CodeInjectionManager: Preview successful for range 0x%llX-0x%llX (%lu bytes)\n",
+    LOG("CodeInjectionManager: Preview successful for range 0x%llX-0x%llX (%lu bytes)\n",
         (uint64_t)start_address, (uint64_t)end_address, bytes.size());
 
     return result;
@@ -178,32 +242,67 @@ CodeFinalizationResult CodeInjectionManager::finalize_code_injection(ea_t start_
         final_address = cave.address;
         method = "code_cave";
 
-        // Apply to actual binary file
-        if (!apply_to_binary_file(cave.file_offset, preview.final_bytes)) {
-            result.error_message = "Failed to apply code to binary file at code cave";
+        // Read original bytes from the code cave (padding bytes)
+        std::vector<uint8_t> original_bytes = get_bytes_from_range(cave.address, cave.address + needed_size);
+
+        // Use PatchManager to apply byte patch to code cave
+        BytePatchResult patch_result = patch_manager_->apply_byte_patch(
+            cave.address,
+            PatchManager::bytes_to_hex_string(original_bytes),
+            PatchManager::bytes_to_hex_string(preview.final_bytes),
+            "Code injection via code cave"
+        );
+
+        if (!patch_result.success) {
+            result.error_message = "Failed to patch code cave: " + patch_result.error_message;
             return result;
         }
 
-        msg("CodeInjectionManager: Using code cave at 0x%llX\n", (uint64_t)cave.address);
+        LOG("CodeInjectionManager: Patched code cave at 0x%llX via PatchManager\n", (uint64_t)cave.address);
     } else {
         // Need to create new segment
-        NewSegment new_seg = create_permanent_segment(needed_size);
-        if (new_seg.address == BADADDR) {
-            result.error_message = "Failed to create new segment for code injection";
+        // Find address for new segment
+        ea_t segment_address = find_safe_address_after_segments();
+        if (segment_address == BADADDR) {
+            result.error_message = "Failed to find safe address for new segment";
             return result;
         }
 
-        final_address = new_seg.address;
+        // Align size to page boundary
+        size_t aligned_size = align_up(needed_size, 0x1000);
+
+        // Generate platform-appropriate segment name
+        std::string segment_name = generate_segment_name_for_address(segment_address);
+
+        // Use PatchManager to create segment injection
+        SegmentInjectionResult seg_result = patch_manager_->apply_segment_injection(
+            segment_address,
+            aligned_size,
+            preview.final_bytes,
+            segment_name,
+            "Code injection via new segment"
+        );
+
+        if (!seg_result.success) {
+            result.error_message = "Failed to inject segment: " + seg_result.error_message;
+            return result;
+        }
+
+        final_address = seg_result.segment_address;
         method = "new_segment";
 
-        // Use LIEF to add segment to actual binary
-        if (!add_segment_with_lief(new_seg, preview.final_bytes)) {
-            result.error_message = "Failed to add new segment to binary with LIEF";
-            return result;
-        }
-
-        msg("CodeInjectionManager: Created new segment at 0x%llX\n", (uint64_t)new_seg.address);
+        LOG("CodeInjectionManager: Created new segment at 0x%llX via PatchManager\n", (uint64_t)final_address);
     }
+
+    // Mark the relocated code as CODE for IDA analysis
+    // This ensures IDA disassembles it instead of showing raw data bytes
+    LOG("CodeInjectionManager: Marking relocated code at 0x%llX as CODE\n", (uint64_t)final_address);
+    IDAUtils::execute_sync_wrapper([&]() -> bool {
+        plan_range(final_address, final_address + needed_size);
+        plan_and_wait(final_address, final_address + needed_size);
+        return true;
+    }, MFF_WRITE);
+    LOG("CodeInjectionManager: Code analysis complete at 0x%llX\n", (uint64_t)final_address);
 
     // Delete temporary segment from IDA database
     delete_temp_segment(start_address);
@@ -219,9 +318,9 @@ CodeFinalizationResult CodeInjectionManager::finalize_code_injection(ea_t start_
     result.code_size = needed_size;
     result.relocation_method = method;
 
-    msg("CodeInjectionManager: Code relocated from 0x%llX to 0x%llX using %s\n",
+    LOG("CodeInjectionManager: Code relocated from 0x%llX to 0x%llX using %s\n",
         (uint64_t)start_address, (uint64_t)final_address, method.c_str());
-    msg("CodeInjectionManager: IMPORTANT - Review all patches for references to old address\n");
+    LOG("CodeInjectionManager: IMPORTANT - Review all patches for references to old address\n");
 
     return result;
 }
@@ -272,38 +371,52 @@ ea_t CodeInjectionManager::find_safe_address_after_segments() const {
 
 // Create a temporary segment in IDA database only
 bool CodeInjectionManager::create_temp_segment(ea_t address, size_t size, const std::string& name) {
-    segment_t seg;
-    seg.start_ea = address;
-    seg.end_ea = address + size;
-    seg.perm = SEGPERM_EXEC | SEGPERM_READ | SEGPERM_WRITE;
-    seg.type = SEG_CODE;
+    // Use add_segm() which is simpler and avoids segment_t memory management issues
+    // add_segm() signature: add_segm(para, start, end, name, sclass, flags)
+    // - para: paragraph (alignment) - use 0 for default
+    // - start/end: address range
+    // - name: segment name
+    // - sclass: segment class
+    // - flags: ADDSEG_* flags
 
-    // Detect binary bitness and set segment appropriately
-    uint app_bitness = inf_get_app_bitness();
-    switch (app_bitness) {
-        case 64:
-            seg.bitness = 2;  // 64-bit
-            break;
-        case 32:
-            seg.bitness = 1;  // 32-bit
-            break;
-        case 16:
-            seg.bitness = 0;  // 16-bit
-            break;
-        default:
-            seg.bitness = 1;  // Default to 32-bit if unknown
-            msg("CodeInjectionManager: Warning - Unknown bitness %d, defaulting to 32-bit\n", app_bitness);
-            break;
-    }
-
-    // Use add_segm_ex for more control
-    if (!add_segm_ex(&seg, name.c_str(), "CODE", ADDSEG_OR_DIE)) {
-        msg("CodeInjectionManager: Failed to create segment %s at 0x%llX\n",
+    // ADDSEG_QUIET: Silent mode for automated operation
+    // ADDSEG_SPARSE: Use sparse storage (efficient for temp segments)
+    if (!add_segm(0, address, address + size, name.c_str(), "CODE",
+                  ADDSEG_QUIET | ADDSEG_SPARSE)) {
+        LOG("CodeInjectionManager: Failed to create segment %s at 0x%llX\n",
             name.c_str(), (uint64_t)address);
         return false;
     }
 
-    msg("CodeInjectionManager: Created temporary segment %s at 0x%llX-0x%llX\n",
+    // After creation, get the segment and set its permissions
+    segment_t* seg = getseg(address);
+    if (seg) {
+        seg->perm = SEGPERM_EXEC | SEGPERM_READ | SEGPERM_WRITE;
+        seg->type = SEG_CODE;
+
+        // Set bitness based on binary's architecture
+        uint app_bitness = inf_get_app_bitness();
+        switch (app_bitness) {
+            case 64:
+                seg->bitness = 2;  // 64-bit
+                break;
+            case 32:
+                seg->bitness = 1;  // 32-bit
+                break;
+            case 16:
+                seg->bitness = 0;  // 16-bit
+                break;
+            default:
+                seg->bitness = 1;  // Default to 32-bit if unknown
+                LOG("CodeInjectionManager: Warning - Unknown bitness %d, defaulting to 32-bit\n", app_bitness);
+                break;
+        }
+
+        // Update the segment in the database
+        update_segm(seg);
+    }
+
+    LOG("CodeInjectionManager: Created temporary segment %s at 0x%llX-0x%llX\n",
         name.c_str(), (uint64_t)address, (uint64_t)(address + size));
 
     return true;
@@ -314,17 +427,17 @@ bool CodeInjectionManager::delete_temp_segment(ea_t address) {
     // Find the segment at this address
     segment_t* seg = getseg(address);
     if (!seg) {
-        msg("CodeInjectionManager: No segment found at 0x%llX\n", (uint64_t)address);
+        LOG("CodeInjectionManager: No segment found at 0x%llX\n", (uint64_t)address);
         return false;
     }
 
     // Delete the segment
     if (!del_segm(address, SEGMOD_KILL)) {
-        msg("CodeInjectionManager: Failed to delete segment at 0x%llX\n", (uint64_t)address);
+        LOG("CodeInjectionManager: Failed to delete segment at 0x%llX\n", (uint64_t)address);
         return false;
     }
 
-    msg("CodeInjectionManager: Deleted temporary segment at 0x%llX\n", (uint64_t)address);
+    LOG("CodeInjectionManager: Deleted temporary segment at 0x%llX\n", (uint64_t)address);
     return true;
 }
 
@@ -344,7 +457,9 @@ CodeInjectionManager::CodeCave CodeInjectionManager::find_code_cave(size_t neede
             continue;
         }
 
-        // Scan the segment for caves (consecutive 0x00 or 0x90 bytes)
+        // Scan the segment for caves (architecture-aware padding byte detection)
+        // x86/x64: NOP (0x90), INT3 (0xCC), zeros (0x00)
+        // ARM/MIPS/PPC: zeros (0x00)
         ea_t current = seg->start_ea;
         while (current < seg->end_ea) {
             // Check how many consecutive cave bytes we have at this position
@@ -353,7 +468,7 @@ CodeInjectionManager::CodeCave CodeInjectionManager::find_code_cave(size_t neede
             if (cave_bytes >= needed_size) {
                 // Check if this cave is in a no-go zone
                 if (is_in_no_go_zone(current, needed_size)) {
-                    msg("CodeInjectionManager: Skipping code cave at 0x%llX - in no-go zone\n",
+                    LOG("CodeInjectionManager: Skipping code cave at 0x%llX - in no-go zone\n",
                         (uint64_t)current);
                     current += needed_size;  // Skip past this cave
                     continue;
@@ -365,7 +480,7 @@ CodeInjectionManager::CodeCave CodeInjectionManager::find_code_cave(size_t neede
                 result.size = needed_size;
                 result.file_offset = get_fileregion_offset(current);
 
-                msg("CodeInjectionManager: Found code cave at 0x%llX, size 0x%zX\n",
+                LOG("CodeInjectionManager: Found code cave at 0x%llX, size 0x%zX\n",
                     (uint64_t)current, needed_size);
                 return result;
             }
@@ -377,318 +492,54 @@ CodeInjectionManager::CodeCave CodeInjectionManager::find_code_cave(size_t neede
         }
     }
 
-    msg("CodeInjectionManager: No suitable code cave found for size 0x%zX\n", needed_size);
+    LOG("CodeInjectionManager: No suitable code cave found for size 0x%zX\n", needed_size);
     return result;
 }
 
-// Count consecutive padding bytes (0x00 or 0xFF) starting at address
+// Count consecutive padding bytes using architecture-aware detection
 size_t CodeInjectionManager::count_cave_bytes(ea_t address, size_t max_size) const {
-    size_t count = 0;
+    const PaddingDetector& detector = get_padding_detector();
 
-    // Look for common padding bytes (zeros or 0xFF)
-    while (count < max_size) {
-        uint8_t byte = get_byte(address + count);
-        if (byte == 0x00 || byte == 0xFF) {
-            count++;
-        } else {
-            break;  // Found a non-padding byte
-        }
+    // Get the first byte - must be a valid padding byte for this architecture
+    uint8_t first_byte = get_byte(address);
+    if (!detector.is_padding_byte(first_byte)) {
+        return 0;  // Not a valid padding byte for this platform
+    }
+
+    // Count consecutive instances of the SAME padding byte
+    // (Caves must be homogeneous - all same byte value)
+    size_t count = 0;
+    while (count < max_size && get_byte(address + count) == first_byte) {
+        count++;
+    }
+
+    // If we found no padding, return early
+    if (count == 0) {
+        return 0;
     }
 
     // Additional validation: make sure this area is not in active code
-    if (count > 0) {
-        func_t* func = get_func(address);
-        if (func && func->start_ea <= address && func->end_ea > address) {
-            // Check if this is padding at the end of a function
-            if (address + count > func->end_ea) {
-                return 0;  // Cave extends beyond function, not usable
-            }
+    func_t* func = get_func(address);
+    if (func && func->start_ea <= address && func->end_ea > address) {
+        // Inside a function - need extra validation
 
-            // Check if there are any actual instructions in this range
-            ea_t ea = address;
-            while (ea < address + count) {
-                if (is_code(get_flags(ea))) {
-                    return 0;  // Contains actual code, not a cave
-                }
-                ea = next_head(ea, address + count);
-                if (ea == BADADDR) break;
+        // Check if cave extends beyond function boundary
+        if (address + count > func->end_ea) {
+            return 0;  // Cave extends beyond function, not usable
+        }
+
+        // Check if there are any actual instructions in this range
+        ea_t ea = address;
+        while (ea < address + count) {
+            if (is_code(get_flags(ea))) {
+                return 0;  // Contains actual code, not a cave
             }
+            ea = next_head(ea, address + count);
+            if (ea == BADADDR) break;
         }
     }
 
     return count;
-}
-
-// Apply bytes to binary file
-bool CodeInjectionManager::apply_to_binary_file(uint32_t file_offset, const std::vector<uint8_t>& bytes) {
-    if (agent_binary_path_.empty()) {
-        msg("CodeInjectionManager: No binary path available\n");
-        return false;
-    }
-
-    std::fstream file(agent_binary_path_, std::ios::in | std::ios::out | std::ios::binary);
-    if (!file.is_open()) {
-        msg("CodeInjectionManager: Failed to open binary file: %s\n", agent_binary_path_.c_str());
-        return false;
-    }
-
-    file.seekp(file_offset);
-    file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    file.close();
-
-    msg("CodeInjectionManager: Applied %lu bytes to binary at offset 0x%X\n",
-        bytes.size(), file_offset);
-
-    return true;
-}
-
-// Create a permanent segment (when no code cave is found)
-CodeInjectionManager::NewSegment CodeInjectionManager::create_permanent_segment(size_t needed_size) {
-    NewSegment result = {BADADDR, 0, ""};
-
-    // Find address for new segment
-    ea_t new_address = find_safe_address_after_segments();
-    if (new_address == BADADDR) {
-        return result;
-    }
-
-    // Align size to page boundary
-    size_t aligned_size = align_up(needed_size, 0x1000);
-
-    // Generate platform-appropriate segment name based on address
-    std::stringstream name_ss;
-    name_ss << std::hex << new_address;
-    std::string seg_name;
-
-    // Detect binary type and create appropriate name
-    filetype_t file_type = inf_get_filetype();
-    if (file_type == f_PE) {
-        // PE section names are limited to 8 characters
-        seg_name = ".i" + name_ss.str().substr(name_ss.str().length() >= 6 ? name_ss.str().length() - 6 : 0);
-        if (seg_name.length() > 8) {
-            seg_name = seg_name.substr(0, 8);
-        }
-    } else if (file_type == f_ELF) {
-        // ELF sections can have longer names
-        seg_name = ".inj_" + name_ss.str();
-    } else if (file_type == f_MACHO) {
-        // Mach-O segment names are limited to 16 characters
-        seg_name = "__INJ_" + name_ss.str().substr(name_ss.str().length() >= 10 ? name_ss.str().length() - 10 : 0);
-        if (seg_name.length() > 16) {
-            seg_name = seg_name.substr(0, 16);
-        }
-    } else {
-        // Default fallback
-        seg_name = ".inj";
-    }
-
-    // Create segment in IDA database with the same name
-    if (!create_temp_segment(new_address, aligned_size, seg_name)) {
-        return result;
-    }
-
-    result.address = new_address;
-    result.size = aligned_size;
-    result.name = seg_name;
-
-    return result;
-}
-
-// Add segment to binary using LIEF
-bool CodeInjectionManager::add_segment_with_lief(const NewSegment& segment, const std::vector<uint8_t>& bytes) {
-    msg("CodeInjectionManager: Adding new segment '%s' to binary using LIEF at address 0x%llX, size 0x%llX\n",
-        segment.name.c_str(), (uint64_t)segment.address, (uint64_t)segment.size);
-
-    try {
-        // Parse the binary with LIEF
-        std::unique_ptr<LIEF::Binary> binary = LIEF::Parser::parse(agent_binary_path_);
-        if (!binary) {
-            msg("CodeInjectionManager: Failed to parse binary with LIEF: %s\n", agent_binary_path_.c_str());
-            return false;
-        }
-
-        // Detect binary type using IDA's information
-        filetype_t file_type = inf_get_filetype();
-
-        // Use the address, size, and name from the segment parameter
-        uint64_t target_address = segment.address;
-        size_t target_size = segment.size;
-        std::string segment_name = segment.name;
-
-        // Handle different binary formats
-        if (file_type == f_PE) {
-            // Handle PE (Windows) binaries
-            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
-            if (!pe_binary) {
-                msg("CodeInjectionManager: Failed to cast to PE binary\n");
-                return false;
-            }
-
-            // Create a new section using the provided name
-            LIEF::PE::Section new_section;
-            new_section.name(segment_name);
-            new_section.characteristics(
-                static_cast<uint32_t>(LIEF::PE::Section::CHARACTERISTICS::MEM_READ |
-                                      LIEF::PE::Section::CHARACTERISTICS::MEM_EXECUTE |
-                                      LIEF::PE::Section::CHARACTERISTICS::CNT_CODE)
-            );
-
-            // Set virtual address to match IDA segment
-            // For PE, we need to convert absolute address to RVA
-            uint64_t image_base = pe_binary->optional_header().imagebase();
-            uint32_t rva = static_cast<uint32_t>(target_address - image_base);
-            new_section.virtual_address(rva);
-            new_section.virtual_size(target_size);
-
-            // Set the content
-            new_section.content(bytes);
-
-            // Add the section to the binary
-            LIEF::PE::Section* added_section = pe_binary->add_section(new_section);
-
-            msg("CodeInjectionManager: Added PE section at RVA 0x%X (VA: 0x%llX)\n",
-                rva, target_address);
-
-        } else if (file_type == f_ELF) {
-            // Handle ELF (Linux) binaries
-            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
-            if (!elf_binary) {
-                msg("CodeInjectionManager: Failed to cast to ELF binary\n");
-                return false;
-            }
-
-            // Create a new segment (PT_LOAD)
-            LIEF::ELF::Segment new_segment;
-            new_segment.type(LIEF::ELF::SEGMENT_TYPES::PT_LOAD);
-            new_segment.flags(
-                LIEF::ELF::ELF_SEGMENT_FLAGS::PF_R |
-                LIEF::ELF::ELF_SEGMENT_FLAGS::PF_X
-            );
-            new_segment.content(bytes);
-            new_segment.alignment(0x1000);  // Page alignment
-
-            // Use the address from the segment parameter
-            new_segment.virtual_address(target_address);
-            new_segment.virtual_size(target_size);
-            new_segment.physical_address(target_address);  // Usually same as virtual
-            new_segment.physical_size(bytes.size());
-
-            // Add the segment
-            elf_binary->add(new_segment);
-
-            // Also create a section for better compatibility
-            LIEF::ELF::Section new_section;
-            new_section.name(segment_name);
-            new_section.type(LIEF::ELF::ELF_SECTION_TYPES::SHT_PROGBITS);
-            new_section.flags(
-                static_cast<uint64_t>(LIEF::ELF::ELF_SECTION_FLAGS::SHF_ALLOC) |
-                static_cast<uint64_t>(LIEF::ELF::ELF_SECTION_FLAGS::SHF_EXECINSTR)
-            );
-            new_section.virtual_address(target_address);
-            new_section.size(bytes.size());
-            new_section.content(bytes);
-
-            elf_binary->add(new_section);
-
-            msg("CodeInjectionManager: Added ELF segment at 0x%llX\n", target_address);
-
-        } else if (file_type == f_MACHO) {
-            // Handle Mach-O (macOS) binaries
-            auto* macho = dynamic_cast<LIEF::MachO::FatBinary*>(binary.get());
-            LIEF::MachO::Binary* macho_binary = nullptr;
-
-            if (macho && !macho->empty()) {
-                // Fat binary, use first architecture
-                macho_binary = macho->at(0);
-            } else {
-                // Thin binary
-                macho_binary = dynamic_cast<LIEF::MachO::Binary*>(binary.get());
-            }
-
-            if (!macho_binary) {
-                msg("CodeInjectionManager: Failed to cast to Mach-O binary\n");
-                return false;
-            }
-
-            // Create a new segment using the provided name
-            LIEF::MachO::SegmentCommand new_segment;
-            new_segment.name(segment_name);
-            new_segment.init_protection(
-                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_READ) |
-                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_EXECUTE)
-            );
-            new_segment.max_protection(
-                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_READ) |
-                static_cast<uint32_t>(LIEF::MachO::VM_PROTECTIONS::VM_PROT_EXECUTE)
-            );
-
-            // Use the address from the segment parameter
-            new_segment.virtual_address(target_address);
-            new_segment.virtual_size(target_size);
-            new_segment.file_size(bytes.size());
-
-            // Create a section within the segment
-            LIEF::MachO::Section new_section;
-            new_section.segment_name(segment_name);
-            new_section.name("__text");
-            new_section.address(target_address);
-            new_section.size(bytes.size());
-            new_section.content(bytes);
-            new_section.type(LIEF::MachO::MACHO_SECTION_TYPES::S_REGULAR);
-            new_section.flags(
-                static_cast<uint32_t>(LIEF::MachO::MACHO_SECTION_FLAGS::S_ATTR_SOME_INSTRUCTIONS) |
-                static_cast<uint32_t>(LIEF::MachO::MACHO_SECTION_FLAGS::S_ATTR_PURE_INSTRUCTIONS)
-            );
-
-            // Add section to segment
-            new_segment.add_section(new_section);
-
-            // Add segment to binary
-            macho_binary->add(new_segment);
-
-            msg("CodeInjectionManager: Added Mach-O segment at 0x%llX\n", target_address);
-
-        } else {
-            msg("CodeInjectionManager: Unsupported file type: %d\n", file_type);
-            return false;
-        }
-
-        // Write the modified binary back
-        // // Create a backup first
-        // std::string backup_path = agent_binary_path_ + ".backup";
-        // std::filesystem::copy_file(agent_binary_path_, backup_path,
-        //                            std::filesystem::copy_options::overwrite_existing);
-
-        // Build and write the modified binary
-        // LIEF uses format-specific builders or direct write
-        if (file_type == f_PE) {
-            auto* pe_binary = dynamic_cast<LIEF::PE::Binary*>(binary.get());
-            if (pe_binary) {
-                LIEF::PE::Builder builder(*pe_binary);
-                builder.build();
-                builder.write(agent_binary_path_);
-            }
-        } else if (file_type == f_ELF) {
-            auto* elf_binary = dynamic_cast<LIEF::ELF::Binary*>(binary.get());
-            if (elf_binary) {
-                LIEF::ELF::Builder builder(*elf_binary);
-                builder.build();
-                builder.write(agent_binary_path_);
-            }
-        } else if (file_type == f_MACHO) {
-            // MachO uses direct write, no builder needed
-            binary->write(agent_binary_path_);
-        }
-
-        msg("CodeInjectionManager: Successfully wrote modified binary to %s\n", agent_binary_path_.c_str());
-        // msg("CodeInjectionManager: Original binary backed up to %s\n", backup_path.c_str());
-
-        return true;
-
-    } catch (const std::exception& e) {
-        msg("CodeInjectionManager: Exception: %s\n", e.what());
-        return false;
-    }
 }
 
 // Get disassembly for a range
@@ -739,10 +590,40 @@ std::string CodeInjectionManager::format_address(ea_t address) const {
     return ss.str();
 }
 
+// Utility: Generate platform-appropriate segment name for address
+std::string CodeInjectionManager::generate_segment_name_for_address(ea_t address) const {
+    std::stringstream addr_ss;
+    addr_ss << std::hex << address;
+    std::string addr_hex = addr_ss.str();
+    std::string seg_name;
+
+    filetype_t file_type = inf_get_filetype();
+
+    if (file_type == f_PE) {
+        // PE section names limited to 8 characters
+        seg_name = ".i" + addr_hex.substr(addr_hex.length() >= 6 ? addr_hex.length() - 6 : 0);
+        if (seg_name.length() > 8) {
+            seg_name = seg_name.substr(0, 8);
+        }
+    } else if (file_type == f_ELF) {
+        seg_name = ".inj_" + addr_hex;
+    } else if (file_type == f_MACHO) {
+        // Mach-O segment names limited to 16 characters
+        seg_name = "__INJ_" + addr_hex.substr(addr_hex.length() >= 10 ? addr_hex.length() - 10 : 0);
+        if (seg_name.length() > 16) {
+            seg_name = seg_name.substr(0, 16);
+        }
+    } else {
+        seg_name = ".inj";
+    }
+
+    return seg_name;
+}
+
 // Set no-go zones from orchestrator
 void CodeInjectionManager::set_no_go_zones(const std::vector<orchestrator::NoGoZone>& zones) {
     no_go_zones_ = zones;
-    msg("CodeInjectionManager: Updated with %lu no-go zones\n", zones.size());
+    LOG("CodeInjectionManager: Updated with %lu no-go zones\n", zones.size());
 
     // Create placeholder segments for the zones
     create_placeholder_segments_for_no_go_zones();
@@ -791,31 +672,24 @@ void CodeInjectionManager::create_placeholder_segments_for_no_go_zones() {
                     seg_name = ".nogo_" + addr_hex.substr(0, 8);
                 }
 
-                // Create a placeholder segment in IDA with the generated name
-                if (create_temp_segment(zone.start_address, zone_size, seg_name)) {
-                    msg("CodeInjectionManager: Created IDA placeholder segment '%s' for no-go zone from %s\n",
+                // Create empty content (zeros) for the placeholder
+                std::vector<uint8_t> empty_bytes(zone_size, 0);
+
+                // Use PatchManager to create placeholder segment (tracks for reverting)
+                SegmentInjectionResult placeholder = patch_manager_->apply_segment_injection(
+                    zone.start_address,
+                    zone_size,
+                    empty_bytes,
+                    seg_name,
+                    "No-go zone placeholder from agent " + zone.agent_id
+                );
+
+                if (placeholder.success) {
+                    LOG("CodeInjectionManager: Created placeholder segment '%s' for no-go zone from %s\n",
                         seg_name.c_str(), zone.agent_id.c_str());
-
-                    // Also add the segment to the actual binary file
-                    // This ensures binary stays synchronized with IDA's view
-                    NewSegment binary_segment;
-                    binary_segment.address = zone.start_address;
-                    binary_segment.size = zone_size;
-                    binary_segment.name = seg_name;  // Use the same name for consistency
-
-                    // Create empty content (zeros) for the placeholder
-                    std::vector<uint8_t> empty_bytes(zone_size, 0);
-
-                    if (add_segment_with_lief(binary_segment, empty_bytes)) {
-                        msg("CodeInjectionManager: Added no-go zone to binary for agent %s at 0x%llX\n",
-                            zone.agent_id.c_str(), (uint64_t)zone.start_address);
-                    } else {
-                        msg("CodeInjectionManager: WARNING - Failed to add no-go zone to binary for agent %s\n",
-                            zone.agent_id.c_str());
-                    }
                 } else {
-                    msg("CodeInjectionManager: Failed to create IDA segment for no-go zone from %s\n",
-                        zone.agent_id.c_str());
+                    LOG("CodeInjectionManager: Failed to create placeholder for no-go zone from %s: %s\n",
+                        zone.agent_id.c_str(), placeholder.error_message.c_str());
                 }
             }
         }

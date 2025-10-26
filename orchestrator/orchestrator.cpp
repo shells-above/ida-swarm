@@ -1,6 +1,6 @@
 #include "orchestrator.h"
 #include "orchestrator_tools.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include "../agent/consensus_executor.h"
 #include "../sdk/auth/oauth_manager.h"
 #include <iostream>
@@ -58,8 +58,9 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     std::string log_filename = std::format("anthropic_requests_{}_orchestrator.log", binary_name_);
     api_client_->set_request_log_filename(log_filename);
 
-    // Set component ID for profiling
-    api_client_->set_component_id("orchestrator", profiling::Component::ORCHESTRATOR);
+    // Inject profiler adapter and set component ID for metrics collection
+    api_client_->set_metrics_collector(&profiler_adapter_);
+    api_client_->set_component_id("orchestrator", claude::MetricsComponent::ORCHESTRATOR);
     
     // Register orchestrator tools
     register_orchestrator_tools(tool_registry_, this);
@@ -81,19 +82,20 @@ bool Orchestrator::initialize() {
             // Can't log yet, logger not initialized
         }
     }
-    
+
     // NOW initialize logger after cleanup
-    g_orch_logger.initialize(binary_name_);
-    ORCH_LOG("Orchestrator: Initializing subsystems...\n");
-    ORCH_LOG("Orchestrator: Workspace cleaned and logger initialized for binary: %s\n", binary_name_.c_str());
+    std::filesystem::path log_path = workspace_dir / "orchestrator.log";
+    g_logger.initialize(log_path.string(), "orchestrator");
+    LOG_INFO("Orchestrator: Initializing subsystems...\n");
+    LOG_INFO("Orchestrator: Workspace cleaned and logger initialized for binary: %s\n", binary_name_.c_str());
     
     // Ignore SIGPIPE to prevent crashes when IRC connections break
     signal(SIGPIPE, SIG_IGN);
-    ORCH_LOG("Orchestrator: Configured SIGPIPE handler\n");
+    LOG_INFO("Orchestrator: Configured SIGPIPE handler\n");
     
     // Initialize tool tracker database
     if (!tool_tracker_->initialize()) {
-        ORCH_LOG("Orchestrator: Failed to initialize tool tracker\n");
+        LOG_INFO("Orchestrator: Failed to initialize tool tracker\n");
         return false;
     }
 
@@ -104,14 +106,14 @@ bool Orchestrator::initialize() {
     std::filesystem::path orch_memory_dir = workspace_dir / "memories";
     std::filesystem::create_directories(orch_memory_dir);
     memory_handler_ = std::make_unique<MemoryToolHandler>(orch_memory_dir.string());
-    ORCH_LOG("Orchestrator: Memory handler initialized at %s\n", orch_memory_dir.string().c_str());
+    LOG_INFO("Orchestrator: Memory handler initialized at %s\n", orch_memory_dir.string().c_str());
 
     // Enable profiling if configured
     if (config_.profiling.enabled) {
         profiling::ProfilingManager::instance().enable();
-        ORCH_LOG("Orchestrator: Profiling enabled\n");
+        LOG_INFO("Orchestrator: Profiling enabled\n");
     } else {
-        ORCH_LOG("Orchestrator: Profiling disabled (config)\n");
+        LOG_INFO("Orchestrator: Profiling disabled (config)\n");
     }
 
     // Copy extract_results.sh script to workspace
@@ -365,12 +367,12 @@ echo ""
                 chmod(script_path.string().c_str(), 0755);
                 #endif
 
-                ORCH_LOG("Orchestrator: Created extract_results.sh script at %s\n", script_path.string().c_str());
+                LOG_INFO("Orchestrator: Created extract_results.sh script at %s\n", script_path.string().c_str());
             } else {
-                ORCH_LOG("Orchestrator: WARNING - Failed to create extract_results.sh script\n");
+                LOG_INFO("Orchestrator: WARNING - Failed to create extract_results.sh script\n");
             }
         } catch (const std::exception& e) {
-            ORCH_LOG("Orchestrator: WARNING - Error creating extract_results.sh: %s\n", e.what());
+            LOG_INFO("Orchestrator: WARNING - Error creating extract_results.sh: %s\n", e.what());
         }
     }
 
@@ -381,7 +383,7 @@ echo ""
         },
         {AgentEvent::TOOL_CALL}
     );
-    ORCH_LOG("Orchestrator: Subscribed to TOOL_CALL events for real-time processing\n");
+    LOG_INFO("Orchestrator: Subscribed to TOOL_CALL events for real-time processing\n");
     
     // Allocate unique port for IRC server based on binary name
     allocated_irc_port_ = allocate_unique_port();
@@ -391,16 +393,16 @@ echo ""
     std::string binary_name = idb_path.stem().string();
     irc_server_ = std::make_unique<irc::IRCServer>(allocated_irc_port_, binary_name);
     if (!irc_server_->start()) {
-        ORCH_LOG("Orchestrator: Failed to start IRC server on port %d\n", allocated_irc_port_);
+        LOG_INFO("Orchestrator: Failed to start IRC server on port %d\n", allocated_irc_port_);
         return false;
     }
     
-    ORCH_LOG("Orchestrator: IRC server started on port %d (unique for %s)\n", allocated_irc_port_, binary_name_.c_str());
+    LOG_INFO("Orchestrator: IRC server started on port %d (unique for %s)\n", allocated_irc_port_, binary_name_.c_str());
     
     // Connect IRC client for orchestrator communication
     irc_client_ = std::make_unique<irc::IRCClient>("orchestrator", config_.irc.server, allocated_irc_port_);
     if (!irc_client_->connect()) {
-        ORCH_LOG("Orchestrator: Failed to connect IRC client to %s:%d\n", 
+        LOG_INFO("Orchestrator: Failed to connect IRC client to %s:%d\n", 
             config_.irc.server.c_str(), allocated_irc_port_);
         return false;
     }
@@ -418,10 +420,10 @@ echo ""
         }
     );
     
-    ORCH_LOG("Orchestrator: IRC client connected\n");
+    LOG_INFO("Orchestrator: IRC client connected\n");
 
     // Start conflict channel monitoring thread
-    ORCH_LOG("Orchestrator: Starting conflict channel monitor\n");
+    LOG_INFO("Orchestrator: Starting conflict channel monitor\n");
     conflict_monitor_thread_ = std::thread([this]() {
         while (!conflict_monitor_should_stop_ && !shutting_down_) {
             // Sleep first to give system time to initialize
@@ -471,23 +473,23 @@ echo ""
                             }
 
                             active_conflicts_[channel] = session;
-                            ORCH_LOG("Orchestrator: Proactively joined conflict channel %s\n", channel.c_str());
+                            LOG_INFO("Orchestrator: Proactively joined conflict channel %s\n", channel.c_str());
                         }
                     }
                 }
             }
         }
-        ORCH_LOG("Orchestrator: Conflict channel monitor thread exiting\n");
+        LOG_INFO("Orchestrator: Conflict channel monitor thread exiting\n");
     });
 
     // Initialize database manager
     if (!db_manager_->initialize()) {
-        ORCH_LOG("Orchestrator: Failed to initialize database manager\n");
+        LOG_INFO("Orchestrator: Failed to initialize database manager\n");
         return false;
     }
     
     initialized_ = true;
-    ORCH_LOG("Orchestrator: Initialization complete\n");
+    LOG_INFO("Orchestrator: Initialization complete\n");
     return true;
 }
 
@@ -509,10 +511,10 @@ bool Orchestrator::initialize_mcp_mode(const std::string& session_id,
         return false;
     }
 
-    ORCH_LOG("Orchestrator: MCP mode initialized for session %s\n", session_id.c_str());
-    ORCH_LOG("Orchestrator: Session directory: %s\n", session_dir.c_str());
-    ORCH_LOG("Orchestrator: Request file: %s\n", mcp_request_file_.c_str());
-    ORCH_LOG("Orchestrator: Response file: %s\n", mcp_response_file_.c_str());
+    LOG_INFO("Orchestrator: MCP mode initialized for session %s\n", session_id.c_str());
+    LOG_INFO("Orchestrator: Session directory: %s\n", session_dir.c_str());
+    LOG_INFO("Orchestrator: Request file: %s\n", mcp_request_file_.c_str());
+    LOG_INFO("Orchestrator: Response file: %s\n", mcp_response_file_.c_str());
 
     return true;
 }
@@ -555,10 +557,10 @@ static bool write_seq_file(const std::string& filepath, uint64_t seq) {
 
 void Orchestrator::start_mcp_listener() {
     if (!show_ui_ && !mcp_session_dir_.empty()) {
-        ORCH_LOG("Orchestrator: Starting MCP listener thread\n");
+        LOG_INFO("Orchestrator: Starting MCP listener thread\n");
 
         mcp_listener_thread_ = std::thread([this]() {
-            ORCH_LOG("Orchestrator: MCP listener polling %s\n", mcp_request_file_.c_str());
+            LOG_INFO("Orchestrator: MCP listener polling %s\n", mcp_request_file_.c_str());
 
             while (!mcp_listener_should_stop_) {
                 // Poll for new requests by checking sequence file
@@ -569,7 +571,7 @@ void Orchestrator::start_mcp_listener() {
                     try {
                         std::ifstream in(mcp_request_file_);
                         if (!in.is_open()) {
-                            ORCH_LOG("Orchestrator: Failed to open request file\n");
+                            LOG_INFO("Orchestrator: Failed to open request file\n");
                             std::this_thread::sleep_for(std::chrono::milliseconds(100));
                             continue;
                         }
@@ -581,7 +583,7 @@ void Orchestrator::start_mcp_listener() {
                         json request = json::parse(content);
                         mcp_request_seq_ = current_seq;
 
-                        ORCH_LOG("Orchestrator: Received MCP request (seq %llu): %s\n",
+                        LOG_INFO("Orchestrator: Received MCP request (seq %llu): %s\n",
                             current_seq, request["method"].get<std::string>().c_str());
 
                         // Process request
@@ -602,15 +604,15 @@ void Orchestrator::start_mcp_listener() {
                             mcp_response_seq_++;
                             write_seq_file(mcp_response_seq_file_, mcp_response_seq_);
 
-                            ORCH_LOG("Orchestrator: Sent MCP response (seq %llu) for method '%s'\n",
+                            LOG_INFO("Orchestrator: Sent MCP response (seq %llu) for method '%s'\n",
                                 mcp_response_seq_, method.c_str());
                         } else {
-                            ORCH_LOG("Orchestrator: ERROR - Failed to write response file\n");
+                            LOG_INFO("Orchestrator: ERROR - Failed to write response file\n");
                         }
 
                         // Handle shutdown after response is sent
                         if (method == "shutdown") {
-                            ORCH_LOG("Orchestrator: Shutdown response sent, initiating graceful IDA close...\n");
+                            LOG_INFO("Orchestrator: Shutdown response sent, initiating graceful IDA close...\n");
 
                             // Set flags to stop threads before database close
                             mcp_listener_should_stop_ = true;
@@ -619,24 +621,24 @@ void Orchestrator::start_mcp_listener() {
                             // Request IDA to save and close the database
                             struct CloseRequest : exec_request_t {
                                 virtual ssize_t idaapi execute() override {
-                                    msg("MCP: Saving database before close...\n");
+                                    LOG("MCP: Saving database before close...\n");
 
                                     // First save the database
                                     if (save_database()) {
-                                        msg("MCP: Database saved successfully\n");
+                                        LOG("MCP: Database saved successfully\n");
                                     } else {
-                                        msg("MCP: Warning - Failed to save database\n");
+                                        LOG("MCP: Warning - Failed to save database\n");
                                     }
 
                                     // Then terminate the database
-                                    msg("MCP: Calling term_database()...\n");
+                                    LOG("MCP: Calling term_database()...\n");
                                     term_database();
 
                                     return 0;
                                 }
                             };
 
-                            ORCH_LOG("Orchestrator: Requesting IDA to save and close database...\n");
+                            LOG_INFO("Orchestrator: Requesting IDA to save and close database...\n");
                             CloseRequest req;
                             execute_sync(req, MFF_WRITE);
 
@@ -644,9 +646,9 @@ void Orchestrator::start_mcp_listener() {
                         }
 
                     } catch (const json::exception& e) {
-                        ORCH_LOG("Orchestrator: Failed to parse MCP request: %s\n", e.what());
+                        LOG_INFO("Orchestrator: Failed to parse MCP request: %s\n", e.what());
                     } catch (const std::exception& e) {
-                        ORCH_LOG("Orchestrator: Error reading request: %s\n", e.what());
+                        LOG_INFO("Orchestrator: Error reading request: %s\n", e.what());
                     }
                 }
 
@@ -654,7 +656,7 @@ void Orchestrator::start_mcp_listener() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            ORCH_LOG("Orchestrator: MCP listener thread exiting\n");
+            LOG_INFO("Orchestrator: MCP listener thread exiting\n");
         });
     }
 }
@@ -668,7 +670,7 @@ json Orchestrator::process_mcp_request(const json& request) {
 
     if (method == "start_task") {
         std::string task = request["params"]["task"];
-        ORCH_LOG("Orchestrator: Processing start_task: %s\n", task.c_str());
+        LOG_INFO("Orchestrator: Processing start_task: %s\n", task.c_str());
 
         // Clear any previous conversation
         clear_conversation();
@@ -682,9 +684,9 @@ json Orchestrator::process_mcp_request(const json& request) {
         });
 
         // Wait for task to complete
-        ORCH_LOG("Orchestrator: Waiting for task completion...\n");
+        LOG_INFO("Orchestrator: Waiting for task completion...\n");
         wait_for_task_completion();
-        ORCH_LOG("Orchestrator: Task completed, sending response\n");
+        LOG_INFO("Orchestrator: Task completed, sending response\n");
 
         // Join the processing thread
         processing_thread.join();
@@ -695,7 +697,7 @@ json Orchestrator::process_mcp_request(const json& request) {
 
     } else if (method == "process_input") {
         std::string input = request["params"]["input"];
-        ORCH_LOG("Orchestrator: Processing follow-up input: %s\n", input.c_str());
+        LOG_INFO("Orchestrator: Processing follow-up input: %s\n", input.c_str());
 
         // Reset completion flag for continuation
         reset_task_completion();
@@ -706,9 +708,9 @@ json Orchestrator::process_mcp_request(const json& request) {
         });
 
         // Wait for continuation to complete
-        ORCH_LOG("Orchestrator: Waiting for continuation completion...\n");
+        LOG_INFO("Orchestrator: Waiting for continuation completion...\n");
         wait_for_task_completion();
-        ORCH_LOG("Orchestrator: Continuation completed, sending response\n");
+        LOG_INFO("Orchestrator: Continuation completed, sending response\n");
 
         // Join the processing thread
         processing_thread.join();
@@ -723,7 +725,7 @@ json Orchestrator::process_mcp_request(const json& request) {
         response["result"]["agents_active"] = agents_.size() - completed_count;
 
     } else if (method == "shutdown") {
-        ORCH_LOG("Orchestrator: Received shutdown request\n");
+        LOG_INFO("Orchestrator: Received shutdown request\n");
         response["result"]["status"] = "shutting_down";
 
         // Note: shutdown() will be called after this response is sent
@@ -737,7 +739,7 @@ json Orchestrator::process_mcp_request(const json& request) {
 }
 
 void Orchestrator::clear_conversation() {
-    ORCH_LOG("Orchestrator: Clearing conversation and starting fresh\n");
+    LOG_INFO("Orchestrator: Clearing conversation and starting fresh\n");
     
     // Clear conversation history
     conversation_history_.clear();
@@ -758,7 +760,7 @@ void Orchestrator::clear_conversation() {
     // Clear current task
     current_user_task_.clear();
 
-    ORCH_LOG("Orchestrator: Conversation cleared, ready for new task\n");
+    LOG_INFO("Orchestrator: Conversation cleared, ready for new task\n");
 }
 
 void Orchestrator::signal_task_completion() {
@@ -782,7 +784,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     if (conversation_active_) {
         // Continue existing conversation - just add the new user message
         conversation_history_.push_back(claude::messages::Message::user_text(input));
-        ORCH_LOG("Orchestrator: Continuing conversation with: %s\n", input.c_str());
+        LOG_INFO("Orchestrator: Continuing conversation with: %s\n", input.c_str());
     } else {
         // New conversation - clear everything and start fresh
         current_user_task_ = input;
@@ -803,13 +805,13 @@ void Orchestrator::process_user_input(const std::string& input) {
         
         // Mark conversation as active
         conversation_active_ = true;
-        ORCH_LOG("Orchestrator: Starting new conversation with: %s\n", input.c_str());
+        LOG_INFO("Orchestrator: Starting new conversation with: %s\n", input.c_str());
     }
     
-    ORCH_LOG("Orchestrator: Processing task: %s\n", input.c_str());
+    LOG_INFO("Orchestrator: Processing task: %s\n", input.c_str());
 
     // Emit thinking event
-    ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_THINKING event\n");
+    LOG_INFO("Orchestrator: Publishing ORCHESTRATOR_THINKING event\n");
     event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_THINKING, "orchestrator", {}));
     
     // Send to Claude API
@@ -823,7 +825,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     }
     
     if (!response.success) {
-        ORCH_LOG("Orchestrator: Failed to process request: %s\n",
+        LOG_INFO("Orchestrator: Failed to process request: %s\n",
             response.error ? response.error->c_str() : "Unknown error");
 
         if (!show_ui_) {
@@ -833,7 +835,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     }
     
     // Track initial response tokens
-    ORCH_LOG("DEBUG: Initial response usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
+    LOG_INFO("DEBUG: Initial response usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
         response.usage.input_tokens, response.usage.output_tokens,
         response.usage.cache_read_tokens, response.usage.cache_creation_tokens);
     token_stats_.add_usage(response.usage);
@@ -842,7 +844,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     // Log context clearing if it occurred
     if (response.context_management) {
         for (const auto& edit : response.context_management->applied_edits) {
-            ORCH_LOG("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
+            LOG_INFO("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
                 edit.cleared_tool_uses, edit.cleared_input_tokens);
         }
     }
@@ -850,7 +852,7 @@ void Orchestrator::process_user_input(const std::string& input) {
     // Display orchestrator's response
     std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(response.message);
     if (text) {
-        ORCH_LOG("Orchestrator: %s\n", text->c_str());
+        LOG_INFO("Orchestrator: %s\n", text->c_str());
         
         // Only emit the response if there are no tool calls (otherwise wait for final response)
         std::vector<const claude::messages::ToolUseContent*> initial_tool_calls = 
@@ -860,7 +862,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             if (text && !text->empty()) {
                 last_response_text_ = *text;  // Store for MCP mode
             }
-            ORCH_LOG("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event (no tools)\n");
+            LOG_INFO("Orchestrator: Publishing ORCHESTRATOR_RESPONSE event (no tools)\n");
             if (show_ui_) {
                 event_bus_.publish(AgentEvent(AgentEvent::ORCHESTRATOR_RESPONSE, "orchestrator", {
                     {"response", *text}
@@ -906,14 +908,14 @@ void Orchestrator::process_user_input(const std::string& input) {
 
                 // Check if this is a recoverable error (500s, timeouts, etc.)
                 if (!claude::Client::is_recoverable_error(continuation)) {
-                    ORCH_LOG("Orchestrator: Non-recoverable continuation error: %s\n",
+                    LOG_INFO("Orchestrator: Non-recoverable continuation error: %s\n",
                         continuation.error ? continuation.error->c_str() : "Unknown error");
                     break;
                 }
 
                 // Don't retry if we've exhausted attempts
                 if (retry == MAX_CONTINUATION_RETRIES) {
-                    ORCH_LOG("Orchestrator: Max continuation retries (%d) exhausted: %s\n",
+                    LOG_INFO("Orchestrator: Max continuation retries (%d) exhausted: %s\n",
                         MAX_CONTINUATION_RETRIES,
                         continuation.error ? continuation.error->c_str() : "Unknown error");
                     break;
@@ -922,7 +924,7 @@ void Orchestrator::process_user_input(const std::string& input) {
                 // Calculate exponential backoff delay
                 int delay_ms = BASE_RETRY_DELAY_MS * (1 << retry);  // 2s, 4s, 8s
 
-                ORCH_LOG("Orchestrator: Continuation request failed (recoverable), retrying in %d ms (attempt %d/%d): %s\n",
+                LOG_INFO("Orchestrator: Continuation request failed (recoverable), retrying in %d ms (attempt %d/%d): %s\n",
                     delay_ms, retry + 1, MAX_CONTINUATION_RETRIES,
                     continuation.error ? continuation.error->c_str() : "Unknown error");
 
@@ -930,7 +932,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             }
 
             if (!request_succeeded) {
-                ORCH_LOG("Orchestrator: Failed to get continuation after retries: %s\n",
+                LOG_INFO("Orchestrator: Failed to get continuation after retries: %s\n",
                     continuation.error ? continuation.error->c_str() : "Unknown error");
 
                 // Signal task completion for MCP mode before breaking
@@ -941,7 +943,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             }
             
             // Track tokens from continuation response
-            ORCH_LOG("DEBUG: Continuation usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
+            LOG_INFO("DEBUG: Continuation usage - In: %d, Out: %d, Cache Read: %d, Cache Write: %d\n",
                 continuation.usage.input_tokens, continuation.usage.output_tokens,
                 continuation.usage.cache_read_tokens, continuation.usage.cache_creation_tokens);
             token_stats_.add_usage(continuation.usage);
@@ -949,7 +951,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             // Log context clearing if it occurred
             if (continuation.context_management) {
                 for (const auto& edit : continuation.context_management->applied_edits) {
-                    ORCH_LOG("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
+                    LOG_INFO("Orchestrator: Context management cleared %d tool uses (%d tokens)\n",
                         edit.cleared_tool_uses, edit.cleared_input_tokens);
                 }
             }
@@ -957,7 +959,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             // Display text if present
             auto cont_text = claude::messages::ContentExtractor::extract_text(continuation.message);
             if (cont_text) {
-                ORCH_LOG("Orchestrator: %s\n", cont_text->c_str());
+                LOG_INFO("Orchestrator: %s\n", cont_text->c_str());
             }
             
             // Process any tool calls in the continuation
@@ -996,7 +998,7 @@ void Orchestrator::process_user_input(const std::string& input) {
             // Log token usage after each continuation (pass per-iteration for context calc)
             log_token_usage(continuation.usage, token_stats_.get_total());
             
-            ORCH_LOG("Orchestrator: Processed %zu more tool calls, continuing conversation...\n", 
+            LOG_INFO("Orchestrator: Processed %zu more tool calls, continuing conversation...\n", 
                 cont_tool_results.size());
         }
     }
@@ -1023,7 +1025,7 @@ claude::ChatResponse Orchestrator::send_continuation_request() {
         builder.add_message(msg);
     }
 
-    ORCH_LOG("Orchestrator: Sending continuation request with %zu messages\n", conversation_history_.size());
+    LOG_INFO("Orchestrator: Sending continuation request with %zu messages\n", conversation_history_.size());
     return send_request_with_memory(builder);
 }
 
@@ -1102,7 +1104,7 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
     
     for (const claude::messages::ToolUseContent* tool_use : tool_calls) {
         if (tool_use->name == "spawn_agent") {
-            ORCH_LOG("Orchestrator: Executing spawn_agent tool via registry (id: %s)\n", tool_use->id.c_str());
+            LOG_INFO("Orchestrator: Executing spawn_agent tool via registry (id: %s)\n", tool_use->id.c_str());
 
             // Execute via tool registry (which calls spawn_agent_async)
             claude::messages::Message result = tool_registry_.execute_tool_call(*tool_use);
@@ -1123,21 +1125,21 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                         std::string agent_id = result_json["agent_id"];
                         tool_to_agent[tool_use->id] = agent_id;
                         spawned_agent_ids.push_back(agent_id);
-                        ORCH_LOG("Orchestrator: Spawned agent %s for tool call %s\n", 
+                        LOG_INFO("Orchestrator: Spawned agent %s for tool call %s\n", 
                             agent_id.c_str(), tool_use->id.c_str());
                     } else {
-                        ORCH_LOG("Orchestrator: spawn_agent failed for tool call %s\n", tool_use->id.c_str());
+                        LOG_INFO("Orchestrator: spawn_agent failed for tool call %s\n", tool_use->id.c_str());
                         tool_to_agent[tool_use->id] = "";  // Empty means error
                     }
                 } catch (const std::exception& e) {
-                    ORCH_LOG("Orchestrator: Failed to parse spawn_agent result: %s\n", e.what());
+                    LOG_INFO("Orchestrator: Failed to parse spawn_agent result: %s\n", e.what());
                     tool_to_agent[tool_use->id] = "";  // Empty means error
                 }
             }
             // Don't add to results yet - we'll enrich it after waiting
         } else if (tool_use->name == "memory") {
             // Intercept memory tool calls and handle locally
-            ORCH_LOG("Orchestrator: Executing memory tool (id: %s)\n", tool_use->id.c_str());
+            LOG_INFO("Orchestrator: Executing memory tool (id: %s)\n", tool_use->id.c_str());
 
             json result = memory_handler_
                 ? memory_handler_->execute_command(tool_use->input)
@@ -1153,7 +1155,7 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
             non_spawn_results.push_back({tool_use->id, memory_result});
         } else {
             // Execute other tools normally and store for later
-            ORCH_LOG("Orchestrator: Executing non-spawn_agent tool: %s\n", tool_use->name.c_str());
+            LOG_INFO("Orchestrator: Executing non-spawn_agent tool: %s\n", tool_use->name.c_str());
             non_spawn_results.push_back({tool_use->id, tool_registry_.execute_tool_call(*tool_use)});
 
             // Record orchestrator tool call
@@ -1163,9 +1165,9 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
     
     // If we spawned any agents, wait for ALL of them to complete
     if (!spawned_agent_ids.empty()) {
-        ORCH_LOG("Orchestrator: Waiting for %zu agents to complete their tasks...\n", spawned_agent_ids.size());
+        LOG_INFO("Orchestrator: Waiting for %zu agents to complete their tasks...\n", spawned_agent_ids.size());
         wait_for_agents_completion(spawned_agent_ids);
-        ORCH_LOG("Orchestrator: All %zu agents have completed\n", spawned_agent_ids.size());
+        LOG_INFO("Orchestrator: All %zu agents have completed\n", spawned_agent_ids.size());
     }
     
     // Add non-spawn_agent results to the combined message first
@@ -1214,7 +1216,7 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                         tool_use->id, result_json.dump(), false
                     ));
                     
-                    ORCH_LOG("Orchestrator: Added spawn_agent result with report for %s\n", agent_id.c_str());
+                    LOG_INFO("Orchestrator: Added spawn_agent result with report for %s\n", agent_id.c_str());
                 } else {
                     // Create error result
                     json error_json = {
@@ -1226,7 +1228,7 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
                         tool_use->id, error_json.dump(), true  // is_error = true
                     ));
                     
-                    ORCH_LOG("Orchestrator: Added spawn_agent error result\n");
+                    LOG_INFO("Orchestrator: Added spawn_agent error result\n");
                 }
             }
         }
@@ -1241,22 +1243,22 @@ std::vector<claude::messages::Message> Orchestrator::process_orchestrator_tools(
 }
 
 json Orchestrator::spawn_agent_async(const std::string& task, const std::string& context) {
-    ORCH_LOG("Orchestrator: Spawning agent for task: %s\n", task.c_str());
+    LOG_INFO("Orchestrator: Spawning agent for task: %s\n", task.c_str());
     
     // Generate agent ID
     std::string agent_id = std::format("agent_{}", next_agent_id_++);
     
     // Emit agent spawning event
-    ORCH_LOG("Orchestrator: Publishing AGENT_SPAWNING event for %s\n", agent_id.c_str());
+    LOG_INFO("Orchestrator: Publishing AGENT_SPAWNING event for %s\n", agent_id.c_str());
     event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWNING, "orchestrator", {
         {"agent_id", agent_id},
         {"task", task}
     }));
     
     // Save and pack current database
-    ORCH_LOG("Orchestrator: Creating agent database for %s\n", agent_id.c_str());
+    LOG_INFO("Orchestrator: Creating agent database for %s\n", agent_id.c_str());
     std::string agent_db_path = db_manager_->create_agent_database(agent_id);
-    ORCH_LOG("Orchestrator: Agent database created at: %s\n", agent_db_path.c_str());
+    LOG_INFO("Orchestrator: Agent database created at: %s\n", agent_db_path.c_str());
     if (agent_db_path.empty()) {
         return {
             {"success", false},
@@ -1271,7 +1273,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
     std::filesystem::path agent_memory_dir = workspace_dir / "agents" / agent_id / "memories";
     std::filesystem::create_directories(agent_memory_dir);
-    ORCH_LOG("Orchestrator: Created agent memory directory at %s\n", agent_memory_dir.string().c_str());
+    LOG_INFO("Orchestrator: Created agent memory directory at %s\n", agent_memory_dir.string().c_str());
 
     // Prepare agent configuration with swarm settings
     json agent_config = {
@@ -1286,9 +1288,9 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     };
     
     // Spawn the agent process
-    ORCH_LOG("Orchestrator: About to spawn agent process for %s\n", agent_id.c_str());
+    LOG_INFO("Orchestrator: About to spawn agent process for %s\n", agent_id.c_str());
     int pid = agent_spawner_->spawn_agent(agent_id, agent_db_path, agent_config);
-    ORCH_LOG("Orchestrator: Agent spawner returned PID %d for %s\n", pid, agent_id.c_str());
+    LOG_INFO("Orchestrator: Agent spawner returned PID %d for %s\n", pid, agent_id.c_str());
     
     if (pid <= 0) {
         // Emit spawn failed event
@@ -1304,7 +1306,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     }
     
     // Emit spawn complete event
-    ORCH_LOG("Orchestrator: Publishing AGENT_SPAWN_COMPLETE event for %s\n", agent_id.c_str());
+    LOG_INFO("Orchestrator: Publishing AGENT_SPAWN_COMPLETE event for %s\n", agent_id.c_str());
     event_bus_.publish(AgentEvent(AgentEvent::AGENT_SPAWN_COMPLETE, "orchestrator", {
         {"agent_id", agent_id}
     }));
@@ -1318,7 +1320,7 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
     
     agents_[agent_id] = info;
     
-    ORCH_LOG("Orchestrator: Agent %s spawned with PID %d (async)\n", agent_id.c_str(), pid);
+    LOG_INFO("Orchestrator: Agent %s spawned with PID %d (async)\n", agent_id.c_str(), pid);
     
     return {
         {"success", true},
@@ -1346,7 +1348,7 @@ json Orchestrator::merge_database(const std::string& agent_id) {
         };
     }
     
-    ORCH_LOG("Orchestrator: Merging database from agent %s\n", agent_id.c_str());
+    LOG_INFO("Orchestrator: Merging database from agent %s\n", agent_id.c_str());
     
     // Get agent's tool calls
     std::vector<ToolCall> tool_calls = tool_tracker_->get_agent_tool_calls(agent_id);
@@ -1355,7 +1357,7 @@ json Orchestrator::merge_database(const std::string& agent_id) {
     auto result = merge_manager_->merge_agent_changes(agent_id);
     
     if (result.success) {
-        ORCH_LOG("Orchestrator: Successfully merged %d changes from agent %s\n", 
+        LOG_INFO("Orchestrator: Successfully merged %d changes from agent %s\n", 
             result.changes_applied, agent_id.c_str());
             
         return {
@@ -1521,13 +1523,13 @@ int Orchestrator::allocate_unique_port() {
     }
     
     // Should not happen unless system has major port exhaustion
-    ORCH_LOG("Orchestrator: Warning - Could not find available port in range [%d, %d]\n", 
+    LOG_INFO("Orchestrator: Warning - Could not find available port in range [%d, %d]\n", 
         BASE_PORT, BASE_PORT + PORT_RANGE - 1);
     return BASE_PORT;  // Return base port as fallback
 }
 
 void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& agent_ids) {
-    ORCH_LOG("Orchestrator: Waiting for %zu agents to complete...\n", agent_ids.size());
+    LOG_INFO("Orchestrator: Waiting for %zu agents to complete...\n", agent_ids.size());
     
     // Wait for all specified agents to send their results or exit
     int check_count = 0;
@@ -1552,7 +1554,7 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
                 int pid = agent_it->second.process_id;
                 if (pid > 0 && !agent_spawner_->is_agent_running(pid)) {
                     process_exited = true;
-                    ORCH_LOG("Orchestrator: Agent %s process %d has exited\n", agent_id.c_str(), pid);
+                    LOG_INFO("Orchestrator: Agent %s process %d has exited\n", agent_id.c_str(), pid);
                 }
             }
 
@@ -1562,7 +1564,7 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
 
                 // If process exited but no IRC message, mark as completed with default message
                 if (process_exited && !has_irc_result) {
-                    ORCH_LOG("Orchestrator: Agent %s exited without sending result, marking as completed\n", agent_id.c_str());
+                    LOG_INFO("Orchestrator: Agent %s exited without sending result, marking as completed\n", agent_id.c_str());
                     {
                         std::lock_guard<std::mutex> lock(agent_state_mutex_);
                         completed_agents_.insert(agent_id);
@@ -1580,12 +1582,12 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
             std::lock_guard<std::mutex> lock(agent_state_mutex_);
             completed_count = completed_agents_.size();
         }
-        ORCH_LOG("Orchestrator: Check #%d - %zu/%zu agents completed (IRC: %zu)\n",
+        LOG_INFO("Orchestrator: Check #%d - %zu/%zu agents completed (IRC: %zu)\n",
             ++check_count, agents_done.size(), agent_ids.size(), completed_count);
         
         // Check if all requested agents have completed
         if (agents_done.size() >= agent_ids.size()) {
-            ORCH_LOG("Orchestrator: All %zu agents have completed\n", agent_ids.size());
+            LOG_INFO("Orchestrator: All %zu agents have completed\n", agent_ids.size());
             break;
         }
         
@@ -1593,11 +1595,11 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     
-    ORCH_LOG("Orchestrator: Agent wait complete\n");
+    LOG_INFO("Orchestrator: Agent wait complete\n");
 }
 
 void Orchestrator::handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message) {
-    ORCH_LOG("DEBUG: IRC message received - Channel: %s, Sender: %s, Message: %s\n", channel.c_str(), sender.c_str(), message.c_str());
+    LOG_INFO("DEBUG: IRC message received - Channel: %s, Sender: %s, Message: %s\n", channel.c_str(), sender.c_str(), message.c_str());
     // Emit all IRC messages to the UI for display
     event_bus_.publish(AgentEvent(AgentEvent::MESSAGE, sender, {
         {"channel", channel},
@@ -1632,7 +1634,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             std::string target_agent = parts.substr(0, pipe);
             std::string conflict_channel = parts.substr(pipe + 1);
 
-            ORCH_LOG("Orchestrator: Request for agent %s to join conflict channel %s\n", target_agent.c_str(), conflict_channel.c_str());
+            LOG_INFO("Orchestrator: Request for agent %s to join conflict channel %s\n", target_agent.c_str(), conflict_channel.c_str());
 
             // Check if agent is running or completed
             auto agent_it = agents_.find(target_agent);
@@ -1650,7 +1652,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
 
                 if (was_completed) {
                     // Agent has completed - resurrect it
-                    ORCH_LOG("Orchestrator: Agent %s has completed, resurrecting for conflict resolution...\n", target_agent.c_str());
+                    LOG_INFO("Orchestrator: Agent %s has completed, resurrecting for conflict resolution...\n", target_agent.c_str());
 
                 std::string db_path = agent_it->second.database_path;
 
@@ -1663,7 +1665,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 // Resurrect the agent (no lock held during expensive operation)
                 int pid = agent_spawner_->resurrect_agent(target_agent, db_path, resurrection_config);
                 if (pid > 0) {
-                    ORCH_LOG("Orchestrator: Successfully resurrected agent %s (PID %d)\n",
+                    LOG_INFO("Orchestrator: Successfully resurrected agent %s (PID %d)\n",
                         target_agent.c_str(), pid);
 
                     // Update the agent info with new PID
@@ -1673,7 +1675,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     // The resurrected agent will join the conflict channel and see the
                     // conflict details that the initiating agent posts there
                 } else {
-                    ORCH_LOG("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
+                    LOG_INFO("Orchestrator: Failed to resurrect agent %s\n", target_agent.c_str());
                     // Add back to completed since resurrection failed
                     {
                         std::lock_guard<std::mutex> lock(agent_state_mutex_);
@@ -1682,19 +1684,19 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 }
                 } else {
                     // Agent is still running - send CONFLICT_INVITE
-                    ORCH_LOG("Orchestrator: Agent %s is still running, sending conflict invite...\n",
+                    LOG_INFO("Orchestrator: Agent %s is still running, sending conflict invite...\n",
                              target_agent.c_str());
 
                     std::string invite_msg = std::format("CONFLICT_INVITE|{}|{}", target_agent, conflict_channel);
                     irc_client_->send_message("#agents", invite_msg);
-                    ORCH_LOG("Orchestrator: Sent CONFLICT_INVITE to agent %s for channel %s\n",
+                    LOG_INFO("Orchestrator: Sent CONFLICT_INVITE to agent %s for channel %s\n",
                              target_agent.c_str(), conflict_channel.c_str());
                 }
             } else {
-                ORCH_LOG("Orchestrator: Agent %s not found in agents map\n", target_agent.c_str());
+                LOG_INFO("Orchestrator: Agent %s not found in agents map\n", target_agent.c_str());
             }
         } else {
-            ORCH_LOG("Orchestrator: Invalid JOIN_CONFLICT message format - expecting target|channel\n");
+            LOG_INFO("Orchestrator: Invalid JOIN_CONFLICT message format - expecting target|channel\n");
         }
         return;
     }
@@ -1710,7 +1712,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             std::string agent_id = content.substr(0, first_pipe);
             std::string consensus = content.substr(first_pipe + 1);
 
-            ORCH_LOG("Orchestrator: Agent %s marked consensus for %s: %s\n",
+            LOG_INFO("Orchestrator: Agent %s marked consensus for %s: %s\n",
                      agent_id.c_str(), channel.c_str(), consensus.c_str());
 
             // Track the consensus mark
@@ -1735,7 +1737,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     }
 
                     if (all_marked && session.participating_agents.size() >= 2 && !session.resolved) {
-                        ORCH_LOG("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", channel.c_str());
+                        LOG_INFO("Orchestrator: All agents marked consensus for %s, extracting and enforcing\n", channel.c_str());
 
                         // Mark as resolved to prevent re-processing
                         session.resolved = true;
@@ -1764,12 +1766,12 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 }
 
                 if (!any_agents_alive) {
-                    ORCH_LOG("Orchestrator: All participating agents have exited, skipping manual enforcement\n");
+                    LOG_INFO("Orchestrator: All participating agents have exited, skipping manual enforcement\n");
                     // Just send CONSENSUS_COMPLETE and clean up
                     if (irc_client_) {
                         irc_client_->send_message(channel, "CONSENSUS_COMPLETE");
                     }
-                    ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification\n");
+                    LOG_INFO("Orchestrator: Sent CONSENSUS_COMPLETE notification\n");
 
                     // Clean up conflict session
                     std::lock_guard<std::mutex> cleanup_lock(conflicts_mutex_);
@@ -1785,7 +1787,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                             // Send to the conflict channel so participating agents see it
                             irc_client_->send_message(channel, "CONSENSUS_COMPLETE");
                         }
-                        ORCH_LOG("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
+                        LOG_INFO("Orchestrator: Sent CONSENSUS_COMPLETE notification to all agents\n");
 
                         // Clean up after a delay
                         std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -1810,7 +1812,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         // Format: AGENT_TOKEN_UPDATE | {json}
         std::string json_str = message.substr(21);  // Skip "AGENT_TOKEN_UPDATE | "
         
-        ORCH_LOG("DEBUG: Received AGENT_TOKEN_UPDATE from IRC: %s\n", json_str.c_str());
+        LOG_INFO("DEBUG: Received AGENT_TOKEN_UPDATE from IRC: %s\n", json_str.c_str());
         
         try {
             json metric_json = json::parse(json_str);
@@ -1827,10 +1829,10 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 {"iteration", iteration}
             }));
             
-            ORCH_LOG("Orchestrator: Received token metrics from %s (iteration %d)\n", 
+            LOG_INFO("Orchestrator: Received token metrics from %s (iteration %d)\n", 
                 agent_id.c_str(), iteration);
         } catch (const std::exception& e) {
-            ORCH_LOG("Orchestrator: Failed to parse agent metric JSON: %s\n", e.what());
+            LOG_INFO("Orchestrator: Failed to parse agent metric JSON: %s\n", e.what());
         }
         return;
     }
@@ -1846,7 +1848,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             std::string agent_id = result_json["agent_id"];
             std::string report = result_json["report"];
             
-            ORCH_LOG("Orchestrator: Received result from %s: %s\n", agent_id.c_str(), report.c_str());
+            LOG_INFO("Orchestrator: Received result from %s: %s\n", agent_id.c_str(), report.c_str());
             
             // Emit swarm result event
             event_bus_.publish(AgentEvent(AgentEvent::SWARM_RESULT, "orchestrator", {
@@ -1862,7 +1864,7 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                 completed_agents_.insert(agent_id);
                 completed_count = completed_agents_.size();
             }
-            ORCH_LOG("Orchestrator: Marked %s as completed (have %zu/%zu completions)\n",
+            LOG_INFO("Orchestrator: Marked %s as completed (have %zu/%zu completions)\n",
                 agent_id.c_str(), completed_count, agents_.size());
 
             // Emit task complete event for UI updates
@@ -1872,40 +1874,40 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
             auto it = agents_.find(agent_id);
             if (it != agents_.end()) {
                 // Display the agent's result to the user
-                ORCH_LOG("===========================================\n");
-                ORCH_LOG("Agent %s completed task: %s\n", agent_id.c_str(), it->second.task.c_str());
-                ORCH_LOG("Result: %s\n", report.c_str());
-                ORCH_LOG("===========================================\n");
+                LOG_INFO("===========================================\n");
+                LOG_INFO("Agent %s completed task: %s\n", agent_id.c_str(), it->second.task.c_str());
+                LOG_INFO("Result: %s\n", report.c_str());
+                LOG_INFO("===========================================\n");
                 
                 // Automatically merge the agent's database changes
-                ORCH_LOG("Orchestrator: Auto-merging database changes from agent %s\n", agent_id.c_str());
+                LOG_INFO("Orchestrator: Auto-merging database changes from agent %s\n", agent_id.c_str());
                 json merge_result = merge_database(agent_id);
                 
                 if (merge_result["success"]) {
-                    ORCH_LOG("Orchestrator: Successfully auto-merged %d changes from agent %s\n",
+                    LOG_INFO("Orchestrator: Successfully auto-merged %d changes from agent %s\n",
                         merge_result.value("changes_applied", 0), agent_id.c_str());
                     if (merge_result.value("changes_failed", 0) > 0) {
-                        ORCH_LOG("Orchestrator: Warning - %d changes failed to merge\n",
+                        LOG_INFO("Orchestrator: Warning - %d changes failed to merge\n",
                             merge_result.value("changes_failed", 0));
                     }
                 } else {
-                    ORCH_LOG("Orchestrator: Failed to auto-merge changes from agent %s: %s\n",
+                    LOG_INFO("Orchestrator: Failed to auto-merge changes from agent %s: %s\n",
                         agent_id.c_str(), merge_result.value("error", "Unknown error").c_str());
                 }
             }
         } catch (const std::exception& e) {
-            ORCH_LOG("Orchestrator: Failed to parse agent result JSON: %s\n", e.what());
+            LOG_INFO("Orchestrator: Failed to parse agent result JSON: %s\n", e.what());
         }
         }
     }
 }
 
 json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
-    ORCH_LOG("Orchestrator: Extracting consensus tool call from multiple agent statements\n");
+    LOG_INFO("Orchestrator: Extracting consensus tool call from multiple agent statements\n");
 
     // Check if we have the original conflict details
     if (session.original_conflict.first_call.tool_name.empty()) {
-        ORCH_LOG("Orchestrator: WARNING - No original conflict details, falling back\n");
+        LOG_INFO("Orchestrator: WARNING - No original conflict details, falling back\n");
 
         return {
             {"tool_name", "unknown"}
@@ -1920,7 +1922,7 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
         json tool_call = executor.execute_consensus(session.consensus_statements, session.original_conflict);
 
         if (tool_call.is_null() || !tool_call.contains("tool_name")) {
-            ORCH_LOG("Orchestrator: ConsensusExecutor failed to extract tool call\n");
+            LOG_INFO("Orchestrator: ConsensusExecutor failed to extract tool call\n");
             // not necessarily a failure, the agents could have decided that no modification was needed in which case no tool call will be extracted
 
             return {
@@ -1928,11 +1930,11 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
             };
         }
 
-        ORCH_LOG("Orchestrator: ConsensusExecutor extracted tool call: %s\n", tool_call.dump().c_str());
+        LOG_INFO("Orchestrator: ConsensusExecutor extracted tool call: %s\n", tool_call.dump().c_str());
         return tool_call;
 
     } catch (const std::exception& e) {
-        ORCH_LOG("Orchestrator: ERROR in ConsensusExecutor: %s\n", e.what());
+        LOG_INFO("Orchestrator: ERROR in ConsensusExecutor: %s\n", e.what());
 
         return {
             {"tool_name", "unknown"}
@@ -1943,11 +1945,11 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
 
 void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, const json& tool_call,
                                                    const std::set<std::string>& agents) {
-    ORCH_LOG("Orchestrator: Enforcing consensus tool execution for %zu agents\n", agents.size());
+    LOG_INFO("Orchestrator: Enforcing consensus tool execution for %zu agents\n", agents.size());
 
     // Safely extract tool_name with error checking
     if (!tool_call.contains("tool_name") || !tool_call["tool_name"].is_string()) {
-        ORCH_LOG("Orchestrator: ERROR - Invalid or missing tool_name in consensus\n");
+        LOG_INFO("Orchestrator: ERROR - Invalid or missing tool_name in consensus\n");
         return;
     }
     std::string tool_name = tool_call["tool_name"].get<std::string>();
@@ -1958,7 +1960,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
         if (tool_call["parameters"].is_object()) {
             parameters = tool_call["parameters"];
         } else if (!tool_call["parameters"].is_null()) {
-            ORCH_LOG("Orchestrator: WARNING - parameters is not an object, using empty object\n");
+            LOG_INFO("Orchestrator: WARNING - parameters is not an object, using empty object\n");
         }
     }
 
@@ -1973,18 +1975,18 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
             if (pid > 0 && agent_spawner_->is_agent_running(pid)) {
                 alive_agents.insert(agent_id);
             } else {
-                ORCH_LOG("Orchestrator: Agent %s (PID %d) has exited, skipping enforcement for this agent\n",
+                LOG_INFO("Orchestrator: Agent %s (PID %d) has exited, skipping enforcement for this agent\n",
                     agent_id.c_str(), pid);
             }
         }
     }
 
     if (alive_agents.empty()) {
-        ORCH_LOG("Orchestrator: All agents have exited, skipping consensus enforcement entirely\n");
+        LOG_INFO("Orchestrator: All agents have exited, skipping consensus enforcement entirely\n");
         return;
     }
 
-    ORCH_LOG("Orchestrator: %zu of %zu agents still alive, proceeding with enforcement\n",
+    LOG_INFO("Orchestrator: %zu of %zu agents still alive, proceeding with enforcement\n",
         alive_agents.size(), agents.size());
 
     // Track responses only for alive agents
@@ -2003,7 +2005,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
         std::stringstream hex_stream;
         hex_stream << "0x" << std::hex << addr;
         parameters["address"] = hex_stream.str();
-        ORCH_LOG("Orchestrator: Converted decimal address to hex: %s\n", hex_stream.str().c_str());
+        LOG_INFO("Orchestrator: Converted decimal address to hex: %s\n", hex_stream.str().c_str());
     }
 
     // Send manual tool execution only to alive agents
@@ -2013,7 +2015,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
 
         if (irc_client_) {
             irc_client_->send_message(channel, message);
-            ORCH_LOG("Orchestrator: Sent manual tool exec to %s\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: Sent manual tool exec to %s\n", agent_id.c_str());
         }
     }
     
@@ -2035,7 +2037,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
         }
         
         if (all_responded) {
-            ORCH_LOG("Orchestrator: All agents executed consensus tool successfully\n");
+            LOG_INFO("Orchestrator: All agents executed consensus tool successfully\n");
             break;
         }
 
@@ -2044,7 +2046,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
 
         // Check timeout
         if (std::chrono::steady_clock::now() - start_time > timeout) {
-            ORCH_LOG("Orchestrator: WARNING - Timeout waiting for manual tool execution responses\n");
+            LOG_INFO("Orchestrator: WARNING - Timeout waiting for manual tool execution responses\n");
             
             // For agents that didn't respond, send fallback message
             std::lock_guard<std::mutex> lock(manual_tool_mutex_);
@@ -2077,7 +2079,7 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
                 address = parameters["address"].get<ea_t>();
             }
         } catch (...) {
-            ORCH_LOG("Orchestrator: Could not extract address for verification\n");
+            LOG_INFO("Orchestrator: Could not extract address for verification\n");
         }
     }
     
@@ -2087,14 +2089,14 @@ void Orchestrator::enforce_consensus_tool_execution(const std::string& channel, 
 
         // Only verify if we have alive agents - if some agents died, skip verification
         if (alive_agents.size() < agents.size()) {
-            ORCH_LOG("Orchestrator: Some agents died (%zu alive of %zu total), skipping verification\n",
+            LOG_INFO("Orchestrator: Some agents died (%zu alive of %zu total), skipping verification\n",
                 alive_agents.size(), agents.size());
         } else {
             bool verified = verify_consensus_applied(alive_agents, address);
             if (verified) {
-                ORCH_LOG("Orchestrator: Consensus enforcement verified successfully\n");
+                LOG_INFO("Orchestrator: Consensus enforcement verified successfully\n");
             } else {
-                ORCH_LOG("Orchestrator: WARNING - Consensus enforcement verification failed\n");
+                LOG_INFO("Orchestrator: WARNING - Consensus enforcement verification failed\n");
             }
         }
     }
@@ -2117,25 +2119,25 @@ void Orchestrator::handle_manual_tool_result(const std::string& message) {
     std::string status = content.substr(first_delim + 1, second_delim - first_delim - 1);
     std::string result_json = content.substr(second_delim + 1);
 
-    ORCH_LOG("Orchestrator: Received manual tool result from '%s': %s\n", agent_id.c_str(), status.c_str());
+    LOG_INFO("Orchestrator: Received manual tool result from '%s': %s\n", agent_id.c_str(), status.c_str());
 
     // Mark agent as responded
     {
         std::lock_guard<std::mutex> lock(manual_tool_mutex_);
         if (manual_tool_responses_.find(agent_id) != manual_tool_responses_.end()) {
             manual_tool_responses_[agent_id] = true;
-            ORCH_LOG("Orchestrator: Marked agent '%s' as responded\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: Marked agent '%s' as responded\n", agent_id.c_str());
         } else {
-            ORCH_LOG("Orchestrator: WARNING - Agent '%s' not found in tracking map\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: WARNING - Agent '%s' not found in tracking map\n", agent_id.c_str());
         }
     }
 
     // Debug logging to check what agents we're tracking AFTER update
     {
         std::lock_guard<std::mutex> lock(manual_tool_mutex_);
-        ORCH_LOG("Orchestrator: Current response status:\n");
+        LOG_INFO("Orchestrator: Current response status:\n");
         for (const auto& [id, responded] : manual_tool_responses_) {
-            ORCH_LOG("  - '%s': %s\n", id.c_str(), responded ? "responded" : "waiting");
+            LOG_INFO("  - '%s': %s\n", id.c_str(), responded ? "responded" : "waiting");
         }
     }
     
@@ -2143,21 +2145,21 @@ void Orchestrator::handle_manual_tool_result(const std::string& message) {
     try {
         json result = json::parse(result_json);
         if (result["success"]) {
-            ORCH_LOG("Orchestrator: Agent %s successfully executed manual tool\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: Agent %s successfully executed manual tool\n", agent_id.c_str());
         } else {
-            ORCH_LOG("Orchestrator: Agent %s failed manual tool execution: %s\n", 
+            LOG_INFO("Orchestrator: Agent %s failed manual tool execution: %s\n", 
                      agent_id.c_str(), result.value("error", "unknown error").c_str());
         }
     } catch (const std::exception& e) {
-        ORCH_LOG("Orchestrator: Failed to parse result JSON: %s\n", e.what());
+        LOG_INFO("Orchestrator: Failed to parse result JSON: %s\n", e.what());
     }
 }
 
 bool Orchestrator::verify_consensus_applied(const std::set<std::string>& agents, ea_t address) {
-    ORCH_LOG("Orchestrator: Verifying consensus was applied by all agents at address 0x%llx\n", address);
+    LOG_INFO("Orchestrator: Verifying consensus was applied by all agents at address 0x%llx\n", address);
     
     if (!tool_tracker_) {
-        ORCH_LOG("Orchestrator: ERROR - Tool tracker not initialized\n");
+        LOG_INFO("Orchestrator: ERROR - Tool tracker not initialized\n");
         return false;
     }
     
@@ -2182,7 +2184,7 @@ bool Orchestrator::verify_consensus_applied(const std::set<std::string>& agents,
     
     // Check if all agents have the same parameters
     if (agent_params.empty()) {
-        ORCH_LOG("Orchestrator: WARNING - No manual tool calls found for verification\n");
+        LOG_INFO("Orchestrator: WARNING - No manual tool calls found for verification\n");
         return false;
     }
     
@@ -2191,13 +2193,13 @@ bool Orchestrator::verify_consensus_applied(const std::set<std::string>& agents,
         if (reference_params.is_null()) {
             reference_params = params;
         } else if (params != reference_params) {
-            ORCH_LOG("Orchestrator: ERROR - Agent %s applied different parameters: %s vs %s\n",
+            LOG_INFO("Orchestrator: ERROR - Agent %s applied different parameters: %s vs %s\n",
                      agent_id.c_str(), params.dump().c_str(), reference_params.dump().c_str());
             return false;
         }
     }
     
-    ORCH_LOG("Orchestrator: SUCCESS - All %zu agents applied identical values\n", agent_params.size());
+    LOG_INFO("Orchestrator: SUCCESS - All %zu agents applied identical values\n", agent_params.size());
     return true;
 }
 
@@ -2220,7 +2222,7 @@ void Orchestrator::log_token_usage(const claude::TokenUsage& per_iteration_usage
         {"cache_creation_tokens", per_iteration_usage.cache_creation_tokens}
     };
     
-    ORCH_LOG("DEBUG: Publishing token event - Cumulative In: %d, Out: %d | Per-iter In: %d, Out: %d\n",
+    LOG_INFO("DEBUG: Publishing token event - Cumulative In: %d, Out: %d | Per-iter In: %d, Out: %d\n",
         cumulative_usage.input_tokens, cumulative_usage.output_tokens,
         per_iteration_usage.input_tokens, per_iteration_usage.output_tokens);
     
@@ -2231,7 +2233,7 @@ void Orchestrator::log_token_usage(const claude::TokenUsage& per_iteration_usage
         {"session_tokens", session_tokens_json}  // Per-iteration for context calc
     }));
     
-    ORCH_LOG("Orchestrator: Token usage - Input: %d, Output: %d (cumulative)\n",
+    LOG_INFO("Orchestrator: Token usage - Input: %d, Output: %d (cumulative)\n",
         cumulative_usage.input_tokens, cumulative_usage.output_tokens);
 }
 
@@ -2246,12 +2248,12 @@ void Orchestrator::shutdown() {
     if (shutting_down_) return;
     shutting_down_ = true;
 
-    ORCH_LOG("Orchestrator: Shutting down...\n");
+    LOG_INFO("Orchestrator: Shutting down...\n");
 
     // Stop conflict monitor thread
     conflict_monitor_should_stop_ = true;
     if (conflict_monitor_thread_.joinable()) {
-        ORCH_LOG("Orchestrator: Waiting for conflict monitor thread to exit...\n");
+        LOG_INFO("Orchestrator: Waiting for conflict monitor thread to exit...\n");
         conflict_monitor_thread_.join();
     }
 
@@ -2280,13 +2282,13 @@ void Orchestrator::shutdown() {
 
     // Save profiling report
     if (profiling::ProfilingManager::instance().is_enabled()) {
-        ORCH_LOG("Orchestrator: Saving profiling report...\n");
+        LOG_INFO("Orchestrator: Saving profiling report...\n");
         bool saved = profiling::ProfilingManager::instance().save_report(binary_name_);
         if (saved) {
             std::string report_dir = profiling::ProfilingManager::instance().get_report_directory(binary_name_);
-            ORCH_LOG("Orchestrator: Profiling report saved to %s\n", report_dir.c_str());
+            LOG_INFO("Orchestrator: Profiling report saved to %s\n", report_dir.c_str());
         } else {
-            ORCH_LOG("Orchestrator: WARNING - Failed to save profiling report\n");
+            LOG_INFO("Orchestrator: WARNING - Failed to save profiling report\n");
         }
     }
 
@@ -2296,7 +2298,7 @@ void Orchestrator::shutdown() {
     agent_spawner_.reset();
     db_manager_.reset();
 
-    ORCH_LOG("Orchestrator: Shutdown complete\n");
+    LOG_INFO("Orchestrator: Shutdown complete\n");
 }
 
 
@@ -2333,7 +2335,7 @@ void Orchestrator::handle_tool_call_event(const AgentEvent& event) {
             // Broadcast to all agents
             broadcast_no_go_zone(zone);
 
-            ORCH_LOG("Orchestrator: Broadcasted temp segment no-go zone from %s: 0x%llX-0x%llX\n",
+            LOG_INFO("Orchestrator: Broadcasted temp segment no-go zone from %s: 0x%llX-0x%llX\n",
                 agent_id.c_str(), (uint64_t)start_addr, (uint64_t)end_addr);
         }
     }
@@ -2361,7 +2363,7 @@ void Orchestrator::handle_tool_call_event(const AgentEvent& event) {
             // Broadcast to all agents
             broadcast_no_go_zone(zone);
 
-            ORCH_LOG("Orchestrator: Broadcasted code cave no-go zone from %s: 0x%llX-0x%llX\n",
+            LOG_INFO("Orchestrator: Broadcasted code cave no-go zone from %s: 0x%llX-0x%llX\n",
                 agent_id.c_str(), (uint64_t)cave_addr, (uint64_t)(cave_addr + size));
         }
     }
@@ -2381,7 +2383,7 @@ void Orchestrator::handle_tool_call_event(const AgentEvent& event) {
         // Replicate to all other agents
         replicate_patch_to_agents(agent_id, call);
 
-        ORCH_LOG("Orchestrator: Replicating %s from %s to all other agents\n",
+        LOG_INFO("Orchestrator: Replicating %s from %s to all other agents\n",
             tool_name.c_str(), agent_id.c_str());
     }
 }
@@ -2393,9 +2395,9 @@ void Orchestrator::broadcast_no_go_zone(const NoGoZone& zone) {
     // Broadcast to all agents via IRC
     if (irc_client_ && irc_client_->is_connected()) {
         irc_client_->send_message("#agents", message);
-        ORCH_LOG("Orchestrator: Broadcasted no-go zone via IRC: %s\n", message.c_str());
+        LOG_INFO("Orchestrator: Broadcasted no-go zone via IRC: %s\n", message.c_str());
     } else {
-        ORCH_LOG("Orchestrator: WARNING - Could not broadcast no-go zone, IRC not connected\n");
+        LOG_INFO("Orchestrator: WARNING - Could not broadcast no-go zone, IRC not connected\n");
     }
 }
 
@@ -2409,7 +2411,7 @@ void Orchestrator::replicate_patch_to_agents(const std::string& source_agent, co
         // Get the agent's database path
         std::string agent_db = db_manager_->get_agent_database(agent_id);
         if (agent_db.empty()) {
-            ORCH_LOG("Orchestrator: Could not find database for agent %s\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: Could not find database for agent %s\n", agent_id.c_str());
             continue;
         }
 
@@ -2434,7 +2436,7 @@ void Orchestrator::replicate_patch_to_agents(const std::string& source_agent, co
             // Send to specific agent channel
             std::string agent_channel = "#agent_" + agent_id;
             irc_client_->send_message(agent_channel, patch_msg);
-            ORCH_LOG("Orchestrator: Sent patch replication to %s\n", agent_id.c_str());
+            LOG_INFO("Orchestrator: Sent patch replication to %s\n", agent_id.c_str());
         }
     }
 }

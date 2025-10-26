@@ -56,7 +56,8 @@ public:
         
         // Create API client based on config
         if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-            std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->get_credentials();
+            std::shared_ptr<claude::OAuthCredentials> oauth_creds =
+                oauth_manager_->get_credentials();
             if (oauth_creds) {
                 deep_analysis_client_ = std::make_unique<claude::Client>(oauth_creds, oauth_manager_, config.api.base_url);
             } else {

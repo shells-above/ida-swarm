@@ -1,5 +1,5 @@
 #include "conflict_detector.h"
-#include "swarm_logger.h"  // For SWARM_LOG
+#include "../core/logger.h"
 
 namespace llm_re::agent {
 
@@ -14,11 +14,11 @@ ConflictDetector::~ConflictDetector() {
 bool ConflictDetector::initialize() {
     // Initialize the shared tracker
     if (!tracker_->initialize()) {
-        SWARM_LOG("ConflictDetector: Failed to initialize tracker\n");
+        LOG_INFO("ConflictDetector: Failed to initialize tracker\n");
         return false;
     }
     
-    SWARM_LOG("ConflictDetector: Initialized for agent %s\n", agent_id_.c_str());
+    LOG_INFO("ConflictDetector: Initialized for agent %s\n", agent_id_.c_str());
     return true;
 }
 
@@ -28,7 +28,7 @@ std::vector<orchestrator::ToolConflict> ConflictDetector::check_conflict(const s
     
     if (!conflicts.empty()) {
         conflict_count_ += conflicts.size();
-        SWARM_LOG("ConflictDetector: Found %zu conflicts for %s at 0x%llx\n", 
+        LOG_INFO("ConflictDetector: Found %zu conflicts for %s at 0x%llx\n", 
             conflicts.size(), tool_name.c_str(), address);
     }
     
@@ -40,9 +40,9 @@ bool ConflictDetector::record_tool_call(const std::string& tool_name, ea_t addre
     bool success = tracker_->record_tool_call(agent_id_, tool_name, address, parameters);
     
     if (success) {
-        SWARM_LOG("ConflictDetector: Recorded %s at 0x%llx\n", tool_name.c_str(), address);
+        LOG_INFO("ConflictDetector: Recorded %s at 0x%llx\n", tool_name.c_str(), address);
     } else {
-        SWARM_LOG("ConflictDetector: Failed to record %s at 0x%llx\n", tool_name.c_str(), address);
+        LOG_INFO("ConflictDetector: Failed to record %s at 0x%llx\n", tool_name.c_str(), address);
     }
     
     return success;

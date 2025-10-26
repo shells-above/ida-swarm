@@ -7,8 +7,10 @@
 
 #include "core/common.h"
 #include "core/config.h"
+#include "core/logger.h"
 #include "core/profiler.h"
 #include "core/profiling_manager.h"
+#include "core/profiler_adapter.h"
 #include "sdk/claude_sdk.h"
 #include "agent/tool_system.h"
 #include "agent/grader.h"
@@ -18,6 +20,7 @@
 #include "analysis/memory_tool.h"
 #include "patching/patch_manager.h"
 #include "patching/code_injection_manager.h"
+#include "semantic_patch/semantic_patch_manager.h"
 #include <nalt.hpp>  // For get_input_file_path
 #include <fstream>
 #include <filesystem>
@@ -340,7 +343,96 @@ CRITICAL RULE ABOUT TOOL USAGE:
   2. Have no tools because you're truly done (triggers final evaluation)
 - There is no middle ground - if you don't use tools, you're saying you're done
 
-Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.)";
+Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.
+
+SEMANTIC PATCHING: Working at the Algorithm Level
+
+You have a profound capability: modifying binary behavior by working at the C code level, not assembly.
+
+THE FUNDAMENTAL QUESTION:
+When you see decompiled code, ask yourself: "How much do I trust this reconstruction?"
+
+Decompilation is Hex-Rays making its best guess. Sometimes it's nearly perfect. Sometimes types are wrong, variable purposes are misunderstood, control flow is misrepresented. The assembly is TRUTH. The decompilation is a HYPOTHESIS.
+
+THE DECISION FRAMEWORK:
+For each modification you want to make, reason through:
+
+1. What level of change am I making?
+   - Single instruction (NOP a check, change a constant)
+   - Small logic (flip an if condition, modify a branch)
+   - Complex logic (change algorithm, add instrumentation, replace entire function)
+
+2. How much do I trust the decompilation?
+   - Have I verified the types are correct?
+   - Do the variable names suggest understanding?
+   - Does the control flow make sense?
+   - Have other agents annotated this function?
+
+3. What's the cost of being wrong?
+   - If decompilation is wrong, will my semantic patch break things subtly?
+   - Can I test the modification?
+   - Is this a critical function (startup, security, core algorithm)?
+
+THE TOOL CHOICE:
+Small, precise changes → assembly patching (allocate_code_workspace, patch_assembly)
+Complex, algorithmic changes → semantic patching (start_semantic_patch workflow)
+
+THE SEMANTIC PATCHING WORKFLOW:
+This isn't a recipe to follow. It's a verification framework:
+
+1. start_semantic_patch(address)
+   → Gives you decompilation + detected calling convention
+   → First question: Do I trust this decompilation?
+
+2. Modify the C code
+   → Think: What am I actually changing?
+   → Think: What assumptions am I making about the original behavior?
+
+3. compile_replacement(session, c_code)
+   → Compiler finds undefined symbols
+   → IDA resolves them automatically
+   → You get assembly back
+   → Second question: Do the symbol resolutions make sense?
+
+4. preview_semantic_patch(session)
+   → Shows calling convention compatibility
+   → Third question: Is my compiled code actually a valid replacement?
+   → If ABI incompatible, semantic patching CANNOT work for this function
+
+5. If confident, finalize_semantic_patch(session)
+   → Makes it permanent
+   → Original function now jumps to your code
+
+THE SYMBOL RESOLUTION UNDERSTANDING:
+When your C code references external functions, the compiler can't find them. It fails: "undefined reference to 'check_credentials'"
+
+We use this failure as information. For each undefined symbol, we ask IDA: "Where is this?"
+- If IDA knows: We inject its address into your code and recompile
+- If IDA doesn't know: You get an error - you must resolve manually
+
+This means: verify the resolved symbols are what you expect. If we resolved "log_function" to 0x405000, is that actually a logging function? Or did we grab the wrong symbol?
+
+THE CALLING CONVENTION REALITY:
+Caller and callee must agree on where arguments live. This is the ABI contract.
+
+We detect the original function's convention. We compile with that same convention. We verify they match before patching. This verification isn't optional - it's preventing crashes.
+
+If ABI is incompatible, semantic patching won't work. Use assembly-level patching instead.
+
+THE VERIFICATION PHILOSOPHY:
+Each step asks you to verify an assumption:
+- Do I trust the decompilation? (when starting)
+- Are symbol resolutions correct? (after compiling)
+- Is calling convention compatible? (before finalizing)
+
+These aren't bureaucratic steps. They're risk checkpoints. You're building confidence that semantic modification is safe.
+
+THE POWER AND RESPONSIBILITY:
+Semantic patching lets you think in algorithms, not opcodes. You can replace complex logic, add heavy instrumentation, fix bugs at the source code level.
+
+But you're working from a reconstruction that might be wrong. The verification steps exist to catch this. Use your thinking tokens to reason about whether each verification passes the "smell test."
+
+When in doubt: work at the assembly level. It's more tedious but more certain.)";
 
     // Helper function to create AnthropicClient based on config
     claude::Client create_api_client(const Config& config) {
@@ -350,25 +442,21 @@ Remember: You're building deep understanding through investigation and thinking,
         }
         
         if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-            // Try to refresh if needed (checks expiry and refreshes automatically)
-            std::shared_ptr<claude::OAuthCredentials> oauth_creds = oauth_manager_->refresh_if_needed();
-            
+            // Get best available account globally
+            // Client will handle token refresh and account switching automatically
+            std::shared_ptr<claude::OAuthCredentials> oauth_creds =
+                oauth_manager_->get_credentials();
+
             if (!oauth_creds) {
-                // Fallback to getting credentials without refresh
-                oauth_creds = oauth_manager_->get_credentials();
-            }
-            
-            if (!oauth_creds) {
-                msg("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n", 
+                LOG("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n",
                     oauth_manager_->get_last_error().c_str());
-                msg("LLM RE: WARNING - Falling back to API key authentication\n");
-                msg("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
+                LOG("LLM RE: WARNING - Falling back to API key authentication\n");
+                LOG("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
                 std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
                 return claude::Client(config.api.api_key, config.api.base_url, log_filename);
             }
-            
-            // Pass the shared_ptr so all clients share the same credentials
-            // Also pass oauth_manager_ so Client can handle token refresh automatically
+
+            // Client handles all token refresh and account switching automatically
             std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
             return claude::Client(oauth_creds, oauth_manager_, config.api.base_url, log_filename);
         }
@@ -397,8 +485,9 @@ public:
             profiling::ProfilingManager::instance().enable();
         }
 
-        // Set component ID for profiling
-        api_client_.set_component_id(agent_id_, profiling::Component::AGENT);
+        // Inject profiler adapter for metrics collection
+        api_client_.set_metrics_collector(&profiler_adapter_);
+        api_client_.set_component_id(agent_id_, claude::MetricsComponent::AGENT);
 
         // Register all tools
         // Initialize patch manager
@@ -435,8 +524,17 @@ public:
             }
         }
 
+        // Initialize semantic patch manager
+        if (patch_manager_ && code_injection_manager_) {
+            semantic_patch_manager_ = std::make_shared<semantic::SemanticPatchManager>(
+                patch_manager_.get(),
+                code_injection_manager_.get()
+            );
+            emit_log(LogLevel::DEBUG, "Semantic patch manager initialized");
+        }
+
         // Register tools
-        tools::register_ida_tools(tool_registry_, executor_, deep_analysis_manager_, patch_manager_, code_injection_manager_, config_);
+        tools::register_ida_tools(tool_registry_, executor_, deep_analysis_manager_, patch_manager_, code_injection_manager_, semantic_patch_manager_, config_);
 
         // Set up API client logging
         api_client_.set_general_logger([this](LogLevel level, const std::string& msg) {
@@ -613,12 +711,14 @@ protected:  // Changed to protected so SwarmAgent can access
     std::shared_ptr<DeepAnalysisManager> deep_analysis_manager_;     // manages deep analysis tasks
     std::shared_ptr<PatchManager> patch_manager_;                    // patch manager
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;   // code injection manager
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;  // semantic patching system
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
     std::unique_ptr<MemoryToolHandler> memory_handler_;              // memory tool handler for /memories filesystem
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
     std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
     claude::Client api_client_;                                      // agent api client
-    
+    ProfilerAdapter profiler_adapter_;                               // Metrics adapter for profiling
+
     // Emit log event
     void emit_log(LogLevel level, const std::string& msg) {
         event_bus_.emit_log(agent_id_, level, msg);
@@ -668,8 +768,8 @@ protected:  // Changed to protected so SwarmAgent can access
 
             // Record tool execution time
             int64_t tool_duration_ms = tool_timer.elapsed_ms();
-            if (profiling::Profiler::instance().is_enabled()) {
-                profiling::ToolExecutionMetric metric;
+            if (profiler_adapter_.is_enabled()) {
+                claude::ToolMetric metric;
                 metric.component_id = agent_id_;
                 metric.tool_name = tool_use->name;
                 metric.duration_ms = tool_duration_ms;
@@ -677,7 +777,7 @@ protected:  // Changed to protected so SwarmAgent can access
                 metric.timestamp = std::chrono::system_clock::now();
                 metric.iteration = iteration;
 
-                profiling::Profiler::instance().record_tool_execution(metric);
+                profiler_adapter_.record_tool_execution(metric);
 
                 emit_log(LogLevel::DEBUG, std::format("Tool {} executed in {}ms", tool_use->name, tool_duration_ms));
             }

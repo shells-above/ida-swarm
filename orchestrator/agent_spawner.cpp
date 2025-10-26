@@ -1,5 +1,5 @@
 #include "agent_spawner.h"
-#include "orchestrator_logger.h"
+#include "../core/logger.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -40,14 +40,14 @@ int AgentSpawner::spawn_agent(const std::string& agent_id,
     // Find IDA executable
     std::string ida_exe = find_ida_executable();
     if (ida_exe.empty()) {
-        ORCH_LOG("AgentSpawner: Could not find IDA executable\n");
+        LOG_INFO("AgentSpawner: Could not find IDA executable\n");
         return -1;
     }
     
     // Create config file for agent
     std::string config_path = create_agent_config_file(agent_id, agent_config);
     if (config_path.empty()) {
-        ORCH_LOG("AgentSpawner: Failed to create agent config\n");
+        LOG_INFO("AgentSpawner: Failed to create agent config\n");
         return -1;
     }
     
@@ -63,9 +63,9 @@ int AgentSpawner::spawn_agent(const std::string& agent_id,
     
     if (pid > 0) {
         active_processes_[pid] = agent_id;
-        ORCH_LOG("AgentSpawner: Launched agent %s with PID %d\n", agent_id.c_str(), pid);
+        LOG_INFO("AgentSpawner: Launched agent %s with PID %d\n", agent_id.c_str(), pid);
     } else {
-        ORCH_LOG("AgentSpawner: Failed to launch agent %s\n", agent_id.c_str());
+        LOG_INFO("AgentSpawner: Failed to launch agent %s\n", agent_id.c_str());
     }
     
     return pid;
@@ -76,12 +76,12 @@ int AgentSpawner::resurrect_agent(const std::string& agent_id,
                                  const json& resurrection_config) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    ORCH_LOG("AgentSpawner: Resurrecting agent %s\n", agent_id.c_str());
+    LOG_INFO("AgentSpawner: Resurrecting agent %s\n", agent_id.c_str());
     
     // Find IDA executable
     std::string ida_exe = find_ida_executable();
     if (ida_exe.empty()) {
-        ORCH_LOG("AgentSpawner: Could not find IDA executable\n");
+        LOG_INFO("AgentSpawner: Could not find IDA executable\n");
         return -1;
     }
 
@@ -93,10 +93,10 @@ int AgentSpawner::resurrect_agent(const std::string& agent_id,
         if (file.is_open()) {
             file << resurrection_config.dump(2);
             file.close();
-            ORCH_LOG("AgentSpawner: Saved resurrection config for %s\n", agent_id.c_str());
+            LOG_INFO("AgentSpawner: Saved resurrection config for %s\n", agent_id.c_str());
         }
     } catch (const std::exception& e) {
-        ORCH_LOG("AgentSpawner: Failed to save resurrection config: %s\n", e.what());
+        LOG_INFO("AgentSpawner: Failed to save resurrection config: %s\n", e.what());
     }
     
     // Prepare launch arguments
@@ -110,9 +110,9 @@ int AgentSpawner::resurrect_agent(const std::string& agent_id,
     
     if (pid > 0) {
         active_processes_[pid] = agent_id;
-        ORCH_LOG("AgentSpawner: Resurrected agent %s with PID %d\n", agent_id.c_str(), pid);
+        LOG_INFO("AgentSpawner: Resurrected agent %s with PID %d\n", agent_id.c_str(), pid);
     } else {
-        ORCH_LOG("AgentSpawner: Failed to resurrect agent %s\n", agent_id.c_str());
+        LOG_INFO("AgentSpawner: Failed to resurrect agent %s\n", agent_id.c_str());
     }
     
     return pid;
@@ -142,7 +142,7 @@ bool AgentSpawner::terminate_agent(int pid) {
     
     if (result) {
         active_processes_.erase(it);
-        ORCH_LOG("AgentSpawner: Terminated process %d\n", pid);
+        LOG_INFO("AgentSpawner: Terminated process %d\n", pid);
     }
     
     return result;
@@ -157,7 +157,7 @@ void AgentSpawner::terminate_all_agents() {
 #else
         terminate_unix_process(pid);
 #endif
-        ORCH_LOG("AgentSpawner: Terminated agent %s (PID %d)\n", agent_id.c_str(), pid);
+        LOG_INFO("AgentSpawner: Terminated agent %s (PID %d)\n", agent_id.c_str(), pid);
     }
     
     active_processes_.clear();
@@ -193,7 +193,7 @@ std::string AgentSpawner::find_ida_executable() const {
     // Check each path
     for (const auto& path : possible_paths) {
         if (fs::exists(path)) {
-            ORCH_LOG("AgentSpawner: Found IDA at %s\n", path.c_str());
+            LOG_INFO("AgentSpawner: Found IDA at %s\n", path.c_str());
             return path;
         }
     }
@@ -221,7 +221,7 @@ std::string AgentSpawner::create_agent_config_file(const std::string& agent_id, 
             return config_file.string();
         }
     } catch (const std::exception& e) {
-        ORCH_LOG("AgentSpawner: Failed to write config: %s\n", e.what());
+        LOG_INFO("AgentSpawner: Failed to write config: %s\n", e.what());
     }
     
     return "";
@@ -255,7 +255,7 @@ int AgentSpawner::launch_unix_process(const std::string& command, const std::vec
     if (result == 0) {
         return static_cast<int>(pid);
     } else {
-        ORCH_LOG("AgentSpawner: posix_spawn failed: %d\n", result);
+        LOG_INFO("AgentSpawner: posix_spawn failed: %d\n", result);
         return -1;
     }
 }
@@ -288,7 +288,7 @@ bool AgentSpawner::is_unix_process_running(int pid) const {
         return true;
     } else if (result == pid) {
         // Process has exited and we've reaped it
-        ORCH_LOG("AgentSpawner: Process %d has exited (status: %d)\n", pid, status);
+        LOG_INFO("AgentSpawner: Process %d has exited (status: %d)\n", pid, status);
         return false;
     } else {
         // Process doesn't exist or we can't wait for it (not our child)
