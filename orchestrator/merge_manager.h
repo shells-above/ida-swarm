@@ -4,6 +4,7 @@
 #include "../analysis/actions.h"
 #include "../patching/patch_manager.h"
 #include "../patching/code_injection_manager.h"
+#include "../semantic_patch/semantic_patch_manager.h"
 #include "../sdk/tools/registry.h"
 #include "../agent/tool_system.h"
 #include "tool_call_tracker.h"
@@ -36,6 +37,7 @@ private:
     std::shared_ptr<ActionExecutor> executor_;
     std::shared_ptr<PatchManager> patch_manager_;
     std::shared_ptr<CodeInjectionManager> code_injection_manager_;
+    std::shared_ptr<semantic::SemanticPatchManager> semantic_patch_manager_;
     claude::tools::ToolRegistry tool_registry_;
     ToolCallTracker* tool_tracker_;
     
