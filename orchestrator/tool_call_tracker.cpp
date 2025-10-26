@@ -4,6 +4,10 @@
 #include <sstream>
 #include <filesystem>
 #include <cstring>
+#include <fcntl.h>      // For open()
+#include <sys/file.h>   // For flock()
+#include <cerrno>       // For errno
+#include <unistd.h>     // For close()
 
 namespace llm_re::orchestrator {
 
@@ -35,8 +39,10 @@ ToolCallTracker::~ToolCallTracker() {
 
 bool ToolCallTracker::initialize() {
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    // Create workspace directory structure
+
+    LOG_INFO("ToolCallTracker: Acquiring inter-process lock for database initialization...\n");
+
+    // Create workspace directory structure first (needed for per-binary lock file)
     std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
     try {
         std::filesystem::create_directories(workspace_dir);
@@ -45,28 +51,83 @@ bool ToolCallTracker::initialize() {
         LOG_INFO("ToolCallTracker: Failed to create workspace directory: %s\n", e.what());
         return false;
     }
-    
-    // Open database with binary-specific path
+
+    // Create/open lock file for inter-process synchronization
+    // This is PER-BINARY so different analysis sessions don't block each other
+    std::filesystem::path lock_file = workspace_dir / "tool_tracker.lock";
+    int fd = open(lock_file.string().c_str(), O_CREAT | O_RDWR, 0666);
+    if (fd == -1) {
+        LOG_INFO("ToolCallTracker: WARNING - Failed to open lock file: %s\n", strerror(errno));
+        LOG_INFO("ToolCallTracker: Continuing without lock (unsafe but better than failing)\n");
+    } else {
+        // Acquire exclusive lock (blocks until available)
+        LOG_INFO("ToolCallTracker: Waiting for initialization lock...\n");
+        if (flock(fd, LOCK_EX) != 0) {
+            LOG_INFO("ToolCallTracker: WARNING - Failed to acquire lock: %s\n", strerror(errno));
+        } else {
+            LOG_INFO("ToolCallTracker: Lock acquired successfully\n");
+        }
+    }
+
+    // Open database with binary-specific path (workspace_dir already created above)
     std::filesystem::path db_path = workspace_dir / "tool_calls.db";
     int rc = sqlite3_open(db_path.string().c_str(), &db_);
-    
+
     if (rc != SQLITE_OK) {
         LOG_INFO("ToolCallTracker: Failed to open database: %s\n", sqlite3_errmsg(db_));
+        if (fd != -1) {
+            flock(fd, LOCK_UN);
+            close(fd);
+        }
         return false;
     }
-    
-    // Create tables
+
+    // Enable WAL mode for better concurrent access from multiple processes
+    char* err_msg = nullptr;
+    rc = sqlite3_exec(db_, "PRAGMA journal_mode=WAL;", nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK) {
+        LOG_INFO("ToolCallTracker: WARNING - Failed to enable WAL mode: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        // Continue anyway - WAL is optional but recommended
+    } else {
+        LOG_INFO("ToolCallTracker: Enabled WAL mode for concurrent access\n");
+    }
+
+    // Set busy timeout to 5 seconds to handle concurrent access
+    sqlite3_busy_timeout(db_, 5000);
+    LOG_INFO("ToolCallTracker: Set busy timeout to 5 seconds\n");
+
+    // Create tables (only first process will actually create them)
     if (!create_tables()) {
         LOG_INFO("ToolCallTracker: Failed to create tables\n");
+        sqlite3_close(db_);
+        db_ = nullptr;
+        if (fd != -1) {
+            flock(fd, LOCK_UN);
+            close(fd);
+        }
         return false;
     }
-    
+
     // Prepare statements
     if (!prepare_statements()) {
         LOG_INFO("ToolCallTracker: Failed to prepare statements\n");
+        sqlite3_close(db_);
+        db_ = nullptr;
+        if (fd != -1) {
+            flock(fd, LOCK_UN);
+            close(fd);
+        }
         return false;
     }
-    
+
+    // Release lock
+    if (fd != -1) {
+        flock(fd, LOCK_UN);
+        close(fd);
+        LOG_INFO("ToolCallTracker: Lock released\n");
+    }
+
     LOG_INFO("ToolCallTracker: Initialized with database at %s\n", db_path.string().c_str());
     return true;
 }

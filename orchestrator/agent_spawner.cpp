@@ -241,17 +241,38 @@ int AgentSpawner::launch_unix_process(const std::string& command, const std::vec
     std::vector<std::string> stable_args;
     stable_args.push_back(command);  // argv[0] is the program name
     stable_args.insert(stable_args.end(), args.begin(), args.end());
-    
+
     // Build argv array from stable strings
     std::vector<char*> argv;
     for (auto& arg : stable_args) {
         argv.push_back(const_cast<char*>(arg.c_str()));
     }
     argv.push_back(nullptr);
-    
+
+    // Build clean environment for agents - filter out MCP session variables
+    // Agents should NOT inherit MCP variables as they are not MCP orchestrators
+    std::vector<std::string> env_storage;
+    std::vector<char*> clean_env;
+
+    for (char** env = environ; *env != nullptr; env++) {
+        std::string env_str(*env);
+        // Skip MCP-specific environment variables
+        if (env_str.find("IDA_SWARM_MCP_SESSION") != 0) {
+            env_storage.emplace_back(env_str);
+        } else {
+            LOG_INFO("AgentSpawner: Filtering MCP env var: %s\n", env_str.substr(0, 30).c_str());
+        }
+    }
+
+    // Build char* array for environment
+    for (auto& env_str : env_storage) {
+        clean_env.push_back(const_cast<char*>(env_str.c_str()));
+    }
+    clean_env.push_back(nullptr);
+
     pid_t pid;
-    int result = posix_spawn(&pid, command.c_str(), nullptr, nullptr, argv.data(), environ);
-    
+    int result = posix_spawn(&pid, command.c_str(), nullptr, nullptr, argv.data(), clean_env.data());
+
     if (result == 0) {
         return static_cast<int>(pid);
     } else {
