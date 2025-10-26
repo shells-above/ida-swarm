@@ -5,6 +5,11 @@
 #include <QThread>
 #include <string>
 
+// Forward declaration - full definition in orchestrator.h (include in .cpp only)
+namespace llm_re::orchestrator {
+    class Orchestrator;
+}
+
 namespace llm_re::ui {
 
 // Worker class that runs orchestrator operations on a background thread

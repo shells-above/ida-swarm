@@ -6,6 +6,11 @@
 #include <QThread>
 #include <memory>
 
+// Forward declaration - full definition in orchestrator.h (include in .cpp only)
+namespace llm_re::orchestrator {
+    class Orchestrator;
+}
+
 namespace llm_re::ui {
 
 // Bridge between orchestrator and UI - handles task submission

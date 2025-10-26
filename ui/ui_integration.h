@@ -4,6 +4,7 @@
 #include "ui_common.h"
 #include "orchestrator_ui.h"
 #include "../core/common_base.h"  // For ask_str
+#include "../orchestrator/orchestrator.h"  // For Orchestrator method calls
 
 namespace llm_re::ui {
 

@@ -94,13 +94,16 @@ public:
     void format_message(const std::string& speaker, const std::string& message, const QString& color);
     
     // Make these accessible for UI control
-    QLineEdit* task_input_;
+    QTextEdit* task_input_;
     QPushButton* submit_button_;
 
 signals:
     void task_submitted();
     void clear_conversation_requested();
-    
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private:
     QTextEdit* conversation_display_;
     QPushButton* clear_button_;

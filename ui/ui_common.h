@@ -27,7 +27,12 @@
 
 // Include any headers that might conflict with Qt
 #include "../agent/event_bus.h"
-#include "../orchestrator/orchestrator.h"
+#include "../sdk/claude_sdk.h"
+// NOTE: orchestrator.h is NOT included here to avoid MOC namespace pollution.
+// orchestrator.h includes tool_system.h which declares namespace llm_re::tools,
+// causing MOC to generate incorrect namespaces (llm_re::tools::llm_re::ui).
+// Files that need Orchestrator should use forward declarations in headers
+// and include orchestrator.h in .cpp files only.
 
 // Step 3: Restore Qt's emit macro before including Qt headers
 #ifdef QT_EMIT_WAS_DEFINED
