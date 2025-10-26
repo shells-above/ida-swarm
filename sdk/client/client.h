@@ -9,7 +9,7 @@
 #include "../messages/types.h"
 #include "../tools/registry.h"
 #include "../auth/oauth_manager.h"
-#include "../core/profiler.h"
+#include "../metrics/metrics_collector.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -25,6 +25,7 @@
 #include <format>
 #include <thread>
 #include <curl/curl.h>
+#include <openssl/rand.h>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -699,9 +700,11 @@ class Client {
     std::function<void(LogLevel, const std::string&)> general_logger;
     int current_iteration = 0;
 
-    // Profiling
+    // Metrics collection (optional - defaults to no-op)
     std::string component_id_ = "unknown";
-    llm_re::profiling::Component component_type_ = llm_re::profiling::Component::UNKNOWN;
+    MetricsComponent component_type_ = MetricsComponent::UNKNOWN;
+    IMetricsCollector* metrics_collector_ = nullptr;
+    NullMetricsCollector null_metrics_collector_; // Default no-op collector
 
     // Request tracking
     struct RequestStats {
@@ -764,23 +767,12 @@ class Client {
     // Attempt to refresh OAuth token if manager is available
     // Returns true if refresh succeeded or wasn't needed, false if refresh failed
     bool refresh_oauth_token_if_needed() {
-        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH) {
+        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH || !oauth_creds) {
             return true; // Not using OAuth or no manager, no refresh needed
         }
 
-        // Try to reload from disk first (another process may have refreshed)
-        oauth_manager_->clear_cache();
-        auto reloaded_creds = oauth_manager_->get_credentials();
-
-        if (reloaded_creds && !reloaded_creds->is_expired(300)) {
-            // Successfully reloaded fresh credentials from disk
-            oauth_creds = reloaded_creds;
-            log(LogLevel::INFO, "Reloaded fresh OAuth credentials from disk");
-            return true;
-        }
-
-        // Need to force refresh via API
-        auto refreshed_creds = oauth_manager_->force_refresh();
+        // Try to refresh the specific account
+        auto refreshed_creds = oauth_manager_->refresh_account(oauth_creds->account_uuid);
         if (!refreshed_creds) {
             log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
             return false;
@@ -788,6 +780,34 @@ class Client {
 
         oauth_creds = refreshed_creds;
         log(LogLevel::INFO, "Successfully refreshed OAuth token via API");
+        return true;
+    }
+
+    // Switch to next available OAuth account (for rate limit handling)
+    bool switch_oauth_account() {
+        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH) {
+            return false;
+        }
+
+        // Get best available account globally
+        // This may wait if all accounts are rate limited
+        auto new_creds = oauth_manager_->get_credentials();
+        if (!new_creds) {
+            log(LogLevel::ERROR, "No OAuth accounts available: " + oauth_manager_->get_last_error());
+            return false;
+        }
+
+        // Update credentials and use them
+        // Note: May be same account if it just became available after waiting
+        std::string old_uuid = oauth_creds ? oauth_creds->account_uuid : "";
+        oauth_creds = new_creds;
+
+        if (old_uuid != oauth_creds->account_uuid) {
+            log(LogLevel::INFO, "Switched to OAuth account: " + oauth_creds->account_uuid);
+        } else {
+            log(LogLevel::INFO, "Using OAuth account after rate limit expired: " + oauth_creds->account_uuid);
+        }
+
         return true;
     }
 
@@ -889,15 +909,20 @@ public:
         return stats;
     }
 
-    // Set component ID and type for profiling
-    void set_component_id(const std::string& id, llm_re::profiling::Component type = llm_re::profiling::Component::UNKNOWN) {
+    // Set component ID and type for metrics collection
+    void set_component_id(const std::string& id, MetricsComponent type = MetricsComponent::UNKNOWN) {
         component_id_ = id;
         component_type_ = type;
     }
 
+    // Set metrics collector (optional - if not set, uses no-op collector)
+    void set_metrics_collector(IMetricsCollector* collector) {
+        metrics_collector_ = collector;
+    }
+
     ChatResponse send_request_with_retry(ChatRequest request) {
-        const int MAX_RETRIES = 5;
-        const int BASE_DELAY_MS = 1000;  // Start with 1 second
+        // Multi-account OAuth handles rate limits automatically, so we only need minimal retry logic
+        const int MAX_ATTEMPTS = 2;  // Original + 1 retry after account switch
 
         // Before sending request, check if OAuth token is expired and refresh if needed
         if (oauth_manager_ && auth_method == AuthMethod::OAUTH && oauth_creds) {
@@ -912,7 +937,18 @@ public:
             }
         }
 
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        // Get initial credentials (best available account globally)
+        if (oauth_manager_ && auth_method == AuthMethod::OAUTH && !oauth_creds) {
+            oauth_creds = oauth_manager_->get_credentials();
+            if (!oauth_creds) {
+                ChatResponse failed_response;
+                failed_response.success = false;
+                failed_response.error = "No OAuth credentials available";
+                return failed_response;
+            }
+        }
+
+        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             ChatResponse response = send_request_internal(request);
 
             // Success - return immediately
@@ -920,62 +956,73 @@ public:
                 return response;
             }
 
-            // Check if this is an OAuth authentication error
+            // Check if this is a rate limit error (429)
+            bool is_rate_limit = false;
+            int retry_after_seconds = 60;  // Default
+
+            if (response.error) {
+                const std::string& error_msg = *response.error;
+                is_rate_limit = (error_msg.find("429") != std::string::npos ||
+                                error_msg.find("rate limit") != std::string::npos ||
+                                error_msg.find("Rate limit") != std::string::npos);
+
+                // Extract retry_after if available
+                if (response.retry_after_seconds.has_value()) {
+                    retry_after_seconds = response.retry_after_seconds.value();
+                }
+            }
+
+            // Handle rate limit: mark account and try to switch
+            if (is_rate_limit && oauth_manager_ && oauth_creds) {
+                log(LogLevel::WARNING, std::format(
+                    "Rate limit hit on account {}, retry after {} seconds",
+                    oauth_creds->account_uuid, retry_after_seconds));
+
+                // Mark current account as rate limited
+                oauth_manager_->mark_account_rate_limited(oauth_creds->account_uuid, retry_after_seconds);
+
+                // Try to switch to another account (may wait if all are rate limited)
+                if (switch_oauth_account()) {
+                    log(LogLevel::INFO, "Retrying with available account...");
+                    continue;  // Retry with account
+                } else {
+                    // Truly no accounts available
+                    log(LogLevel::ERROR, "No OAuth accounts available");
+                    return response;
+                }
+            }
+
+            // Check if this is an OAuth authentication error (401)
             bool is_oauth_error = false;
             if (response.error) {
                 const std::string& error_msg = *response.error;
                 is_oauth_error = (error_msg.find("401") != std::string::npos ||
                                   error_msg.find("unauthorized") != std::string::npos ||
-                                  error_msg.find("revoked") != std::string::npos ||
-                                  error_msg.find("expired") != std::string::npos);
+                                  error_msg.find("revoked") != std::string::npos);
             }
 
-            // If OAuth error, try to refresh token and retry immediately (no delay)
+            // If OAuth error, try to refresh token
             if (is_oauth_error && oauth_manager_) {
                 log(LogLevel::WARNING, "OAuth authentication error detected, attempting token refresh...");
                 if (refresh_oauth_token_if_needed()) {
                     log(LogLevel::INFO, "Token refreshed, retrying request immediately...");
-                    // Don't increment attempt counter for OAuth errors - they should retry immediately
                     continue;
                 } else {
-                    log(LogLevel::ERROR, "Failed to refresh OAuth token, cannot retry");
-                    return response; // Return the error
+                    log(LogLevel::ERROR, "Failed to refresh OAuth token");
+                    return response;
                 }
             }
 
-            // Check if this is a different recoverable error
-            if (!is_recoverable_error(response)) {
-                return response; // Non-recoverable error
-            }
-
-            // Check if we've exhausted retries
-            if (attempt == MAX_RETRIES) {
-                log(LogLevel::ERROR, std::format("Max retries ({}) reached for API request", MAX_RETRIES));
-                return response;
-            }
-
-            // Calculate delay with exponential backoff
-            int delay_ms = BASE_DELAY_MS * (1 << attempt);  // 1s, 2s, 4s, 8s, 16s
-
-            // If we have a retry-after value from the API, use that instead
-            // For rate limits, we should respect the full duration requested by the API
-            if (response.retry_after_seconds.has_value()) {
-                delay_ms = response.retry_after_seconds.value() * 1000;
-            }
-
-            log(LogLevel::WARNING, std::format(
-                "Retrying request (attempt {}/{}) after {} ms due to: {}",
-                attempt + 1, MAX_RETRIES, delay_ms, response.error.value_or("Unknown error")
-            ));
-
-            // Sleep before retry
-            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            // For other errors, don't retry (server errors, network errors, etc.)
+            // The user can retry if needed, but we don't automatically retry here
+            log(LogLevel::ERROR, std::format("Request failed: {}", response.error.value_or("Unknown error")));
+            return response;
         }
 
         // Should not reach here, but return a failed response just in case
         ChatResponse failed_response;
         failed_response.success = false;
-        failed_response.error = "Unexpected error in retry logic";
+        failed_response.error = "Max retry attempts reached";
         return failed_response;
     }
     
@@ -1132,12 +1179,13 @@ public:
         // curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);  // 5 minute timeout
 
         // Start timing the API request
-        llm_re::profiling::Timer api_timer;
+        auto api_start = std::chrono::steady_clock::now();
 
         CURLcode res = curl_easy_perform(curl);
 
         // Record the API request duration
-        int64_t api_duration_ms = api_timer.elapsed_ms();
+        auto api_end = std::chrono::steady_clock::now();
+        int64_t api_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(api_end - api_start).count();
 
         if (res == CURLE_OK) {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -1240,9 +1288,10 @@ public:
                 stats.successful_requests++;
                 stats.total_usage += response.usage;
 
-                // Record profiling metric for successful API requests
-                if (llm_re::profiling::Profiler::instance().is_enabled()) {
-                    llm_re::profiling::ApiRequestMetric metric;
+                // Record metrics for successful API requests
+                IMetricsCollector* collector = metrics_collector_ ? metrics_collector_ : &null_metrics_collector_;
+                if (collector->is_enabled()) {
+                    ApiMetric metric;
                     metric.component_id = component_id_;
                     metric.component = component_type_;
                     metric.duration_ms = api_duration_ms;
@@ -1254,9 +1303,9 @@ public:
                     metric.timestamp = std::chrono::system_clock::now();
                     metric.iteration = current_iteration;
 
-                    llm_re::profiling::Profiler::instance().record_api_request(metric);
+                    collector->record_api_request(metric);
 
-                    // Log profiling info
+                    // Log metrics info
                     log(LogLevel::INFO, std::format(
                         "API Request: {}ms, in={} out={} cache_r={} cache_c={} tokens",
                         api_duration_ms,

@@ -1,4 +1,5 @@
 #include "config.h"
+#include "logger.h"
 #include <ida.hpp>
 #include <kernwin.hpp>
 
@@ -52,7 +53,7 @@ bool Config::save_to_file(const std::string& path) const {
         file << j.dump(4);
         return true;
     } catch (const std::exception& e) {
-        msg("LLM RE: Error saving config: %s\n", e.what());
+        LOG("LLM RE: Error saving config: %s\n", e.what());
         return false;
     }
 }
@@ -131,7 +132,7 @@ bool Config::load_from_file(const std::string& path) {
 
         return true;
     } catch (const std::exception& e) {
-        msg("LLM RE: Error loading config: %s\n", e.what());
+        LOG("LLM RE: Error loading config: %s\n", e.what());
         return false;
     }
 }
@@ -144,9 +145,9 @@ void Config::load() {
     
     // Try to load from file, ignore if it doesn't exist (will use defaults)
     if (load_from_file(config_path)) {
-        msg("LLM RE: Configuration loaded from: %s\n", config_path);
+        LOG("LLM RE: Configuration loaded from: %s\n", config_path);
     } else {
-        msg("LLM RE: Using default configuration (no config file found or load failed)\n");
+        LOG("LLM RE: Using default configuration (no config file found or load failed)\n");
     }
 }
 
@@ -157,7 +158,7 @@ void Config::save() const {
     qstrncat(config_path, "/llm_re_config.json", sizeof(config_path));
     
     if (!save_to_file(config_path)) {
-        msg("LLM RE: ERROR - Failed to save configuration to: %s\n", config_path);
+        LOG("LLM RE: ERROR - Failed to save configuration to: %s\n", config_path);
     }
 }
 

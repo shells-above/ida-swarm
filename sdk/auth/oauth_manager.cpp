@@ -1,4 +1,5 @@
 #include "oauth_manager.h"
+#include "oauth_account_pool.h"
 #include "oauth_flow.h"
 #include <fstream>
 #include <sstream>
@@ -118,7 +119,8 @@ namespace {
     }
 }
 
-OAuthManager::OAuthManager(const std::string& config_dir_override) {
+OAuthManager::OAuthManager(const std::string& config_dir_override)
+    : account_pool_(std::make_unique<OAuthAccountPool>()) {
     // Determine config directory
     if (!config_dir_override.empty()) {
         config_dir = expand_home_directory(config_dir_override);
@@ -132,11 +134,16 @@ OAuthManager::OAuthManager(const std::string& config_dir_override) {
             return;
         }
     }
-    
+
     // Set file paths
     credentials_file = config_dir / "credentials.json";
     key_file = config_dir / ".key";
+
+    // Load accounts from disk on construction
+    load_accounts_from_disk();
 }
+
+OAuthManager::~OAuthManager() = default;
 
 std::filesystem::path OAuthManager::expand_home_directory(const std::string& path) const {
     if (path.empty() || path[0] != '~') {
@@ -156,173 +163,54 @@ bool OAuthManager::has_credentials() const {
 }
 
 std::shared_ptr<OAuthCredentials> OAuthManager::get_credentials() {
-    // Check cache first
-    auto now = std::chrono::steady_clock::now();
-    if (cached_credentials) {
-        long long elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cache_time).count();
-        if (elapsed < CACHE_DURATION_SECONDS) {
-            return cached_credentials;
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
+        return nullptr;
+    }
+
+    // Try to reload from disk if no accounts (may have been added externally)
+    if (account_pool_->account_count() == 0) {
+        load_accounts_from_disk();
+    }
+
+    // Get best available account (highest priority, not rate limited)
+    auto creds = account_pool_->get_best_available_account();
+
+    if (!creds) {
+        last_error = "No OAuth credentials available";
+        return nullptr;
+    }
+
+    // If credentials are expired (within 300 second buffer), try to refresh them automatically
+    if (creds->is_expired(300)) {
+        if (!creds->refresh_token.empty()) {
+            // Attempt to refresh the expired token
+            auto refreshed_creds = refresh_account(creds->account_uuid);
+            if (refreshed_creds) {
+                return refreshed_creds;
+            }
+            // Refresh failed, but return the expired creds anyway
+            // The client has its own refresh logic as a fallback
         }
     }
-    
-    // Check if files exist
-    if (!has_credentials()) {
-        last_error = "OAuth credentials not found in " + config_dir.string();
-        return nullptr;
-    }
-    
-    // Read encryption key
-    std::optional<std::string> key_data = read_file(key_file);
-    if (!key_data) {
-        last_error = "Failed to read encryption key";
-        return nullptr;
-    }
-    
-    // Read encrypted credentials
-    std::optional<std::string> encrypted_data = read_file(credentials_file);
-    if (!encrypted_data) {
-        last_error = "Failed to read credentials file";
-        return nullptr;
-    }
-    
-    // Decrypt credentials
-    std::optional<std::string> decrypted_data = decrypt_data(*encrypted_data, *key_data);
-    if (!decrypted_data) {
-        last_error = "Failed to decrypt credentials";
-        return nullptr;
-    }
-    
-    // Parse JSON
-    std::optional<json> creds_json = parse_credentials_json(*decrypted_data);
-    if (!creds_json) {
-        last_error = "Failed to parse credentials JSON";
-        return nullptr;
-    }
-    
-    // Extract OAuth credentials
-    try {
-        OAuthCredentials creds = extract_oauth_credentials(*creds_json);
-        
-        // If we have existing cached credentials, update them in-place
-        // This ensures all clients sharing the pointer get the update
-        if (cached_credentials) {
-            *cached_credentials = creds;
-        } else {
-            // First time, create new shared instance
-            cached_credentials = std::make_shared<OAuthCredentials>(creds);
-        }
-        cache_time = now;
-        
-        return cached_credentials;
-    } catch (const std::exception& e) {
-        last_error = std::string("Failed to extract OAuth credentials: ") + e.what();
-        return nullptr;
-    }
+
+    return creds;
 }
 
-std::shared_ptr<OAuthCredentials> OAuthManager::get_cached_credentials() const {
-    return cached_credentials;
-}
-
-void OAuthManager::clear_cache() {
-    cached_credentials.reset();
-}
-
-bool OAuthManager::save_credentials(const OAuthCredentials& creds) {
-    try {
-        // Ensure config directory exists
-        if (!std::filesystem::exists(config_dir)) {
-            std::filesystem::create_directories(config_dir);
-        }
-        
-        // Create the credentials JSON structure
-        json oauth_tokens;
-        oauth_tokens["claude_ai"] = {
-            {"access_token", creds.access_token},
-            {"refresh_token", creds.refresh_token},
-            {"expires_at", creds.expires_at},
-            {"account_uuid", creds.account_uuid},
-            {"scopes", json::array({"user:profile", "user:inference"})}
-        };
-        
-        json stored_creds = {
-            {"version", 1},
-            {"api_key", nullptr},
-            {"default_provider", "claude_ai"},
-            {"oauth_tokens", oauth_tokens}
-        };
-        
-        std::string json_str = stored_creds.dump();
-        
-        // Get or create encryption key
-        std::string key_str;
-        if (std::filesystem::exists(key_file)) {
-            // Read existing key
-            auto key_data = read_file(key_file);
-            if (!key_data) {
-                last_error = "Failed to read encryption key";
-                return false;
-            }
-            key_str = *key_data;
-        } else {
-            // Generate new key (32 bytes = 256 bits)
-            std::vector<uint8_t> key_bytes(KEY_SIZE);
-            if (RAND_bytes(key_bytes.data(), KEY_SIZE) != 1) {
-                last_error = "Failed to generate encryption key";
-                return false;
-            }
-            
-            // Convert to base64url string
-            key_str = base64url_encode(key_bytes);
-            
-            // Save the key
-            std::ofstream key_out(key_file, std::ios::binary);
-            if (!key_out) {
-                last_error = "Failed to save encryption key";
-                return false;
-            }
-            key_out << key_str;
-            key_out.close();
-            
-            // Set restrictive permissions on key file
-#ifndef _WIN32
-            chmod(key_file.c_str(), 0600);
-#endif
-        }
-        
-        // Encrypt the credentials
-        std::string encrypted_data = encrypt_data(json_str, key_str);
-        
-        // Write encrypted data to file
-        std::ofstream out(credentials_file, std::ios::binary);
-        if (!out) {
-            last_error = "Failed to open credentials file for writing";
-            return false;
-        }
-        
-        out.write(encrypted_data.c_str(), encrypted_data.length());
-        out.close();
-        
-        // Set restrictive permissions
-#ifndef _WIN32
-        chmod(credentials_file.c_str(), 0600);
-#endif
-        
-        // Update cache - if we already have a shared instance, update it in-place
-        // This ensures all clients see the update
-        if (cached_credentials) {
-            *cached_credentials = creds;
-        } else {
-            cached_credentials = std::make_shared<OAuthCredentials>(creds);
-        }
-        cache_time = std::chrono::steady_clock::now();
-        
-        return true;
-        
-    } catch (const std::exception& e) {
-        last_error = std::string("Failed to save credentials: ") + e.what();
+bool OAuthManager::save_credentials(const OAuthCredentials& creds, int priority) {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
         return false;
     }
+
+    // Add/update account in pool
+    if (!account_pool_->add_account(creds, priority)) {
+        last_error = "Failed to add account to pool";
+        return false;
+    }
+
+    // Save to disk
+    return save_accounts_to_disk();
 }
 
 std::string OAuthManager::encrypt_data(const std::string& plaintext, const std::string& key_str) const {
@@ -534,144 +422,241 @@ std::optional<json> OAuthManager::parse_credentials_json(const std::string& decr
     }
 }
 
-OAuthCredentials OAuthManager::extract_oauth_credentials(const json& creds_json) const {
-    OAuthCredentials creds;
-    
-    // {
-    //   "version": 1,
-    //   "api_key": null or string,
-    //   "default_provider": "console" or "claude_ai",
-    //   "oauth_tokens": {
-    //     "console": {
-    //       "access_token": "...",
-    //       "refresh_token": "...",
-    //       "expires_at": 1234567890.0,
-    //       "account_uuid": "...",
-    //       "scopes": [...]
-    //     }
-    //   }
-    // }
-    
-    if (!creds_json.contains("oauth_tokens") || !creds_json["oauth_tokens"].is_object()) {
-        throw std::runtime_error("No OAuth tokens found in credentials");
+void OAuthManager::mark_account_rate_limited(const std::string& account_uuid, int retry_after_seconds) {
+    if (!account_pool_) {
+        return;
     }
 
-    const nlohmann::basic_json<> &oauth_tokens = creds_json["oauth_tokens"];
-    
-    // Try to get the default provider first
-    std::string provider = "console";  // Default to console
-    if (creds_json.contains("default_provider") && creds_json["default_provider"].is_string()) {
-        provider = creds_json["default_provider"];
-    }
-    
-    // Check if we have tokens for this provider
-    if (!oauth_tokens.contains(provider)) {
-        // Try to find any available provider
-        if (oauth_tokens.contains("console")) {
-            provider = "console";
-        } else if (oauth_tokens.contains("claude_ai")) {
-            provider = "claude_ai";
-        } else if (!oauth_tokens.empty()) {
-            // Use the first available provider
-            provider = oauth_tokens.begin().key();
-        } else {
-            throw std::runtime_error("No OAuth tokens available");
-        }
-    }
-
-    const nlohmann::basic_json<>& token_data = oauth_tokens[provider];
-    
-    // Extract token fields
-    if (token_data.contains("access_token") && token_data["access_token"].is_string()) {
-        creds.access_token = token_data["access_token"];
-    } else {
-        throw std::runtime_error("Missing access_token");
-    }
-    
-    if (token_data.contains("refresh_token") && token_data["refresh_token"].is_string()) {
-        creds.refresh_token = token_data["refresh_token"];
-    }
-    
-    if (token_data.contains("expires_at") && token_data["expires_at"].is_number()) {
-        creds.expires_at = token_data["expires_at"];
-    }
-    
-    if (token_data.contains("account_uuid") && token_data["account_uuid"].is_string()) {
-        creds.account_uuid = token_data["account_uuid"];
-    }
-    
-    // Log success (commented out to reduce spam during startup)
-    // msg("LLM RE: Successfully loaded OAuth credentials for provider: %s\n", provider.c_str());
-    
-    return creds;
+    account_pool_->mark_rate_limited(account_uuid, retry_after_seconds);
 }
 
-bool OAuthManager::needs_refresh() {
-    // First check cache
-    auto creds = get_cached_credentials();
-    if (!creds) {
-        // Cache is empty, try to load credentials
-        creds = get_credentials();
-        if (!creds) {
-            return false;
-        }
-    }
-
-    return creds && creds->is_expired(300);
-}
-
-std::shared_ptr<OAuthCredentials> OAuthManager::refresh_if_needed() {
-    // Check if refresh is needed
-    if (!needs_refresh()) {
-        return get_cached_credentials();
-    }
-    
-    return force_refresh();
-}
-
-std::shared_ptr<OAuthCredentials> OAuthManager::force_refresh() {
-    // Get current credentials
-    auto current_creds = get_credentials();
-    if (!current_creds) {
-        last_error = "No OAuth credentials available to refresh";
+std::shared_ptr<OAuthCredentials> OAuthManager::refresh_account(const std::string& account_uuid) {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
         return nullptr;
     }
-    
+
+    // Get all accounts to find the one to refresh
+    auto accounts = account_pool_->get_all_accounts();
+    OAuthCredentials* target_creds = nullptr;
+
+    for (auto& account : accounts) {
+        if (account.credentials.account_uuid == account_uuid) {
+            target_creds = &account.credentials;
+            break;
+        }
+    }
+
+    if (!target_creds) {
+        last_error = "Account not found: " + account_uuid;
+        return nullptr;
+    }
+
     // Check if we have a refresh token
-    if (current_creds->refresh_token.empty()) {
-        last_error = "No refresh token available";
+    if (target_creds->refresh_token.empty()) {
+        last_error = "No refresh token available for account";
         return nullptr;
     }
-    
+
     try {
         OAuthFlow oauth_flow;
-        
+
         // Attempt to refresh the token
         OAuthCredentials new_creds = oauth_flow.refresh_token(
-            current_creds->refresh_token,
-            current_creds->account_uuid
+            target_creds->refresh_token,
+            target_creds->account_uuid
         );
-        
-        // Update the shared credentials in-place
-        // This ensures all clients immediately see the new credentials
-        if (cached_credentials) {
-            *cached_credentials = new_creds;
-        } else {
-            cached_credentials = std::make_shared<OAuthCredentials>(new_creds);
+
+        // Update account in pool
+        if (!account_pool_->update_account_credentials(account_uuid, new_creds)) {
+            last_error = "Failed to update account credentials in pool";
+            return nullptr;
         }
-        cache_time = std::chrono::steady_clock::now();
-        
-        // Save the updated credentials to disk
-        if (!save_credentials(new_creds)) {
-            last_error = "Failed to save refreshed credentials";
-            // Still return the updated credentials since they're valid
+
+        // Save to disk
+        if (!save_accounts_to_disk()) {
+            last_error = "Failed to save refreshed credentials to disk";
+            // Still continue since we updated in memory
         }
-        
-        return cached_credentials;
-        
+
+        return std::make_shared<OAuthCredentials>(new_creds);
+
     } catch (const std::exception& e) {
         last_error = std::string("Token refresh failed: ") + e.what();
         return nullptr;
+    }
+}
+
+size_t OAuthManager::get_account_count() const {
+    if (!account_pool_) {
+        return 0;
+    }
+    return account_pool_->account_count();
+}
+
+bool OAuthManager::remove_account(const std::string& account_uuid) {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
+        return false;
+    }
+
+    if (!account_pool_->remove_account(account_uuid)) {
+        last_error = "Failed to remove account from pool";
+        return false;
+    }
+
+    // Save to disk
+    return save_accounts_to_disk();
+}
+
+bool OAuthManager::swap_account_priorities(const std::string& uuid1, const std::string& uuid2) {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
+        return false;
+    }
+
+    if (!account_pool_->swap_priorities(uuid1, uuid2)) {
+        last_error = "Failed to swap account priorities";
+        return false;
+    }
+
+    // Save to disk
+    return save_accounts_to_disk();
+}
+
+std::vector<OAuthAccountPool::AccountInfo> OAuthManager::get_all_accounts_info() const {
+    if (!account_pool_) {
+        return {};
+    }
+
+    return account_pool_->get_all_accounts_info();
+}
+
+bool OAuthManager::load_accounts_from_disk() {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
+        return false;
+    }
+
+    // Check if files exist
+    if (!has_credentials()) {
+        // Not an error - just no credentials yet
+        return true;
+    }
+
+    // Read encryption key
+    std::optional<std::string> key_data = read_file(key_file);
+    if (!key_data) {
+        last_error = "Failed to read encryption key";
+        return false;
+    }
+
+    // Read encrypted credentials
+    std::optional<std::string> encrypted_data = read_file(credentials_file);
+    if (!encrypted_data) {
+        last_error = "Failed to read credentials file";
+        return false;
+    }
+
+    // Decrypt credentials
+    std::optional<std::string> decrypted_data = decrypt_data(*encrypted_data, *key_data);
+    if (!decrypted_data) {
+        last_error = "Failed to decrypt credentials";
+        return false;
+    }
+
+    // Parse JSON
+    std::optional<json> creds_json = parse_credentials_json(*decrypted_data);
+    if (!creds_json) {
+        last_error = "Failed to parse credentials JSON";
+        return false;
+    }
+
+    // Load into account pool
+    if (!account_pool_->load_from_json(*creds_json)) {
+        last_error = "Failed to load accounts from JSON";
+        return false;
+    }
+
+    return true;
+}
+
+bool OAuthManager::save_accounts_to_disk() {
+    if (!account_pool_) {
+        last_error = "Account pool not initialized";
+        return false;
+    }
+
+    try {
+        // Ensure config directory exists
+        if (!std::filesystem::exists(config_dir)) {
+            std::filesystem::create_directories(config_dir);
+        }
+
+        // Get JSON from account pool
+        json accounts_json = account_pool_->save_to_json();
+
+        std::string json_str = accounts_json.dump();
+
+        // Get or create encryption key
+        std::string key_str;
+        if (std::filesystem::exists(key_file)) {
+            // Read existing key
+            auto key_data = read_file(key_file);
+            if (!key_data) {
+                last_error = "Failed to read encryption key";
+                return false;
+            }
+            key_str = *key_data;
+        } else {
+            // Generate new key (32 bytes = 256 bits)
+            std::vector<uint8_t> key_bytes(KEY_SIZE);
+            if (RAND_bytes(key_bytes.data(), KEY_SIZE) != 1) {
+                last_error = "Failed to generate encryption key";
+                return false;
+            }
+
+            // Convert to base64url string
+            key_str = base64url_encode(key_bytes);
+
+            // Save the key
+            std::ofstream key_out(key_file, std::ios::binary);
+            if (!key_out) {
+                last_error = "Failed to save encryption key";
+                return false;
+            }
+            key_out << key_str;
+            key_out.close();
+
+            // Set restrictive permissions on key file
+#ifndef _WIN32
+            chmod(key_file.c_str(), 0600);
+#endif
+        }
+
+        // Encrypt the credentials
+        std::string encrypted_data = encrypt_data(json_str, key_str);
+
+        // Write encrypted data to file
+        std::ofstream out(credentials_file, std::ios::binary);
+        if (!out) {
+            last_error = "Failed to open credentials file for writing";
+            return false;
+        }
+
+        out.write(encrypted_data.c_str(), encrypted_data.length());
+        out.close();
+
+        // Set restrictive permissions
+#ifndef _WIN32
+        chmod(credentials_file.c_str(), 0600);
+#endif
+
+        return true;
+
+    } catch (const std::exception& e) {
+        last_error = std::string("Failed to save credentials: ") + e.what();
+        return false;
     }
 }
 

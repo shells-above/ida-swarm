@@ -492,12 +492,16 @@ std::optional<OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(const std
 bool OAuthAuthorizer::saveCredentials(const OAuthCredentials& creds) {
     // Use OAuthManager to save credentials in encrypted format
     OAuthManager oauth_manager;
-    
-    if (!oauth_manager.save_credentials(creds)) {
+
+    // Calculate next priority (existing accounts + 1)
+    size_t existing_count = oauth_manager.get_account_count();
+    int priority = static_cast<int>(existing_count);  // 0-indexed priorities
+
+    if (!oauth_manager.save_credentials(creds, priority)) {
         last_error_ = "Failed to save credentials: " + oauth_manager.get_last_error();
         return false;
     }
-    
+
     return true;
 }
 
