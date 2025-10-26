@@ -256,6 +256,7 @@ include(cmake/BuildKeystone.cmake)
 set(SDK_SOURCES
         sdk/client/client.cpp
         sdk/auth/oauth_manager.cpp
+        sdk/auth/oauth_account_pool.cpp
         sdk/auth/oauth_flow.cpp
         sdk/auth/oauth_authorizer.cpp
 )
@@ -264,15 +265,18 @@ set(SDK_SOURCES
 set(COMMON_SOURCES
         core/ida_utils.cpp
         core/config.cpp
+        core/logger.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory_tool.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
         patching/code_injection_manager.cpp
+        semantic_patch/calling_convention.cpp
+        semantic_patch/c_compiler.cpp
+        semantic_patch/semantic_patch_manager.cpp
         irc/irc_server.cpp
         irc/irc_client.cpp
-        orchestrator/orchestrator_logger.cpp
 )
 
 # Unified plugin sources - combines all functionality
@@ -287,7 +291,6 @@ set(PLUGIN_SOURCES
         orchestrator/nogo_zone_manager.cpp
         # Agent components
         agent/swarm_agent.cpp
-        agent/swarm_logger.cpp
         agent/conflict_detector.cpp
         agent/consensus_executor.cpp
         # UI components
@@ -341,6 +344,9 @@ set(HEADERS
         analysis/memory_tool.h
         patching/patch_manager.h
         patching/code_injection_manager.h
+        semantic_patch/calling_convention.h
+        semantic_patch/c_compiler.h
+        semantic_patch/semantic_patch_manager.h
         agent/agent.h
         agent/tool_system.h
         agent/grader.h
