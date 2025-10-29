@@ -15,6 +15,7 @@
 #include "tool_call_tracker.h"
 #include "merge_manager.h"
 #include "nogo_zone_manager.h"
+#include "auto_decompile_manager.h"
 #include "../irc/irc_server.h"
 #include "../irc/irc_client.h"
 #include <memory>
@@ -37,6 +38,8 @@ struct AgentInfo {
 
 // The Orchestrator - The ONLY entity that talks to the user
 class Orchestrator {
+    friend class AutoDecompileManager;  // Needs access to agents_ and completed_agents_ for health checks
+
 public:
     Orchestrator(const Config& config, const std::string& main_db_path, bool show_ui = true);
     ~Orchestrator();
@@ -70,6 +73,10 @@ public:
     // Clear conversation and start fresh
     void clear_conversation();
 
+    // Auto-decompile
+    void start_auto_decompile();
+    void stop_auto_decompile();
+
     // Check if conversation is active
     bool is_conversation_active() const { return conversation_active_; }
 
@@ -78,6 +85,9 @@ public:
 
     // Get last response text (for MCP mode)
     std::string get_last_response() const { return last_response_text_; }
+
+    // Get binary name
+    const std::string& get_binary_name() const { return binary_name_; }
 
 private:
     // Core components
@@ -89,6 +99,7 @@ private:
     std::unique_ptr<ToolCallTracker> tool_tracker_;
     std::unique_ptr<MergeManager> merge_manager_;
     std::unique_ptr<NoGoZoneManager> nogo_zone_manager_;
+    std::unique_ptr<AutoDecompileManager> auto_decompile_manager_;
     std::unique_ptr<irc::IRCServer> irc_server_;
     std::unique_ptr<irc::IRCClient> irc_client_;
     
@@ -144,17 +155,15 @@ private:
     std::thread conflict_monitor_thread_;
     std::atomic<bool> conflict_monitor_should_stop_{false};
 
-    // MCP mode support
+    // MCP mode support (pipe-based communication)
     bool show_ui_ = true;
     std::string mcp_session_id_;
     std::string last_response_text_;
     std::string mcp_session_dir_;        // Session directory path
-    std::string mcp_request_file_;       // request.json
-    std::string mcp_response_file_;      // response.json
-    std::string mcp_request_seq_file_;   // request_seq
-    std::string mcp_response_seq_file_;  // response_seq
-    uint64_t mcp_request_seq_ = 0;       // Last processed request sequence
-    uint64_t mcp_response_seq_ = 0;      // Last sent response sequence
+    std::string mcp_request_pipe_;       // request.pipe (MCP → Orchestrator)
+    std::string mcp_response_pipe_;      // response.pipe (Orchestrator → MCP)
+    int mcp_request_fd_ = -1;            // File descriptor for reading requests
+    int mcp_response_fd_ = -1;           // File descriptor for writing responses
     std::thread mcp_listener_thread_;
     std::atomic<bool> mcp_listener_should_stop_{false};
 

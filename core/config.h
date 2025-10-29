@@ -88,7 +88,51 @@ public:
     } orchestrator;
     
     struct SwarmSettings {
-        // Swarm-specific settings
+        // Auto-decompile settings
+        int max_parallel_auto_decompile_agents = 10;  // Max parallel agents for auto-decompile
+
+        // Function Prioritization Heuristics
+        // Each heuristic can be enabled/disabled with a weight
+        // Positive weights = higher priority, negative weights = lower priority
+
+        // API calls: Functions calling library functions (fopen, malloc, etc.)
+        // High positive weight: API names reveal function purpose
+        bool enable_api_call_heuristic = true;
+        double api_call_weight = 2.0;
+
+        // Caller count: Functions called by many others (high-impact utilities)
+        // High positive weight: Understanding these helps many other functions
+        bool enable_caller_count_heuristic = true;
+        double caller_count_weight = 1.5;
+
+        // String-heavy: Functions with many string references
+        // High positive weight: Strings reveal function purpose
+        bool enable_string_heavy_heuristic = true;
+        double string_heavy_weight = 2.0;
+        int min_string_length_for_priority = 10;
+
+        // Function size: Smaller functions first
+        // Positive weight: Small functions = quick wins, build momentum
+        bool enable_function_size_heuristic = true;
+        double function_size_weight = 1.5;
+
+        // Internal callees: Functions calling many internal (non-library) functions
+        // NEGATIVE weight: These need callees analyzed first (bottom-up)
+        bool enable_internal_callee_heuristic = true;
+        double internal_callee_weight = -1.0;  // Negative by default
+
+        // Entry points: main(), DllMain, exports
+        // Default NEGATIVE: Entry points benefit from bottom-up analysis
+        // Set POSITIVE for libraries (exports are the API) or if you want top-down
+        bool enable_entry_point_heuristic = true;
+        double entry_point_weight = -1.0;  // Negative by default (bottom-up)
+
+        // Entry point scoring mode
+        enum class EntryPointMode {
+            BOTTOM_UP,    // Negative scores: analyze entry points LAST (default)
+            TOP_DOWN,     // Positive scores: analyze entry points FIRST
+            NEUTRAL       // Zero scores: don't prioritize or deprioritize
+        } entry_point_mode = EntryPointMode::BOTTOM_UP;
     } swarm;
 
     struct ProfilingSettings {

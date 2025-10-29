@@ -82,6 +82,7 @@ void PreferencesDialog::setupUi() {
     createAgentTab();
     createIrcTab();
     createProfilingTab();
+    createSwarmTab();
 
     layout->addWidget(tabWidget_);
     
@@ -406,14 +407,14 @@ void PreferencesDialog::createAgentTab() {
     enablePythonToolCheck_ = new QCheckBox("Enable Python tool", analysisGroup);
     enablePythonToolCheck_->setToolTip("Allows agent to execute Python code (security risk)");
     analysisLayout->addRow("", enablePythonToolCheck_);
-    
+
     pythonToolWarning_ = new QLabel(
         "<font color='red'>⚠️ Warning: Enabling Python tool allows code execution. "
         "Only enable if you trust the agent's actions.</font>", analysisGroup);
     pythonToolWarning_->setWordWrap(true);
     pythonToolWarning_->setVisible(false);
     analysisLayout->addRow("", pythonToolWarning_);
-    
+
     layout->addWidget(analysisGroup);
     layout->addStretch();
     
@@ -462,6 +463,139 @@ void PreferencesDialog::createProfilingTab() {
     layout->addStretch();
 
     tabWidget_->addTab(widget, "Profiling");
+}
+
+void PreferencesDialog::createSwarmTab() {
+    auto* widget = new QWidget();
+    auto* layout = new QVBoxLayout(widget);
+
+    // Full Binary Analysis settings
+    auto* fullAnalysisGroup = new QGroupBox("Full Binary Analysis", widget);
+    auto* fullAnalysisLayout = new QFormLayout(fullAnalysisGroup);
+
+    // Max parallel agents
+    maxParallelAgentsSpin_ = new QSpinBox(fullAnalysisGroup);
+    maxParallelAgentsSpin_->setRange(1, 20);
+    maxParallelAgentsSpin_->setValue(10);
+    maxParallelAgentsSpin_->setToolTip("Maximum number of agents to run in parallel during full binary analysis");
+    fullAnalysisLayout->addRow("Max Parallel Agents:", maxParallelAgentsSpin_);
+
+    // Function Prioritization Heuristics
+    auto* prioritizationGroup = new QGroupBox("Function Prioritization Heuristics", widget);
+    auto* prioritizationLayout = new QVBoxLayout(prioritizationGroup);
+
+    auto* heuristicsInfo = new QLabel(
+        "Configure how functions are prioritized for analysis. "
+        "Positive weights = analyze first, negative weights = analyze last.");
+    heuristicsInfo->setWordWrap(true);
+    heuristicsInfo->setStyleSheet("QLabel { color: gray; margin-bottom: 10px; }");
+    prioritizationLayout->addWidget(heuristicsInfo);
+
+    auto* heuristicsForm = new QFormLayout();
+
+    // API Call Heuristic
+    auto* apiCallLayout = new QHBoxLayout();
+    apiCallHeuristicCheck_ = new QCheckBox("Enable");
+    apiCallHeuristicCheck_->setToolTip("Functions calling APIs (fopen, malloc, etc.) - API names reveal purpose");
+    apiCallWeightSpin_ = new QDoubleSpinBox();
+    apiCallWeightSpin_->setRange(-10.0, 10.0);
+    apiCallWeightSpin_->setSingleStep(0.1);
+    apiCallWeightSpin_->setValue(2.0);
+    apiCallWeightSpin_->setPrefix("Weight: ");
+    apiCallLayout->addWidget(apiCallHeuristicCheck_);
+    apiCallLayout->addWidget(apiCallWeightSpin_);
+    apiCallLayout->addStretch();
+    heuristicsForm->addRow("API Calls:", apiCallLayout);
+
+    // Caller Count Heuristic
+    auto* callerCountLayout = new QHBoxLayout();
+    callerCountHeuristicCheck_ = new QCheckBox("Enable");
+    callerCountHeuristicCheck_->setToolTip("Functions called by many others (high-impact utilities)");
+    callerCountWeightSpin_ = new QDoubleSpinBox();
+    callerCountWeightSpin_->setRange(-10.0, 10.0);
+    callerCountWeightSpin_->setSingleStep(0.1);
+    callerCountWeightSpin_->setValue(1.5);
+    callerCountWeightSpin_->setPrefix("Weight: ");
+    callerCountLayout->addWidget(callerCountHeuristicCheck_);
+    callerCountLayout->addWidget(callerCountWeightSpin_);
+    callerCountLayout->addStretch();
+    heuristicsForm->addRow("Caller Count:", callerCountLayout);
+
+    // String-Heavy Heuristic
+    auto* stringHeavyLayout = new QHBoxLayout();
+    stringHeavyHeuristicCheck_ = new QCheckBox("Enable");
+    stringHeavyHeuristicCheck_->setToolTip("Functions with many strings (self-documenting)");
+    stringHeavyWeightSpin_ = new QDoubleSpinBox();
+    stringHeavyWeightSpin_->setRange(-10.0, 10.0);
+    stringHeavyWeightSpin_->setSingleStep(0.1);
+    stringHeavyWeightSpin_->setValue(2.0);
+    stringHeavyWeightSpin_->setPrefix("Weight: ");
+    minStringLengthSpin_ = new QSpinBox();
+    minStringLengthSpin_->setRange(5, 100);
+    minStringLengthSpin_->setValue(10);
+    minStringLengthSpin_->setPrefix("Min length: ");
+    minStringLengthSpin_->setToolTip("Minimum string length to count");
+    stringHeavyLayout->addWidget(stringHeavyHeuristicCheck_);
+    stringHeavyLayout->addWidget(stringHeavyWeightSpin_);
+    stringHeavyLayout->addWidget(minStringLengthSpin_);
+    stringHeavyLayout->addStretch();
+    heuristicsForm->addRow("String-Heavy:", stringHeavyLayout);
+
+    // Function Size Heuristic
+    auto* functionSizeLayout = new QHBoxLayout();
+    functionSizeHeuristicCheck_ = new QCheckBox("Enable");
+    functionSizeHeuristicCheck_->setToolTip("Smaller functions first (easier wins, builds momentum)");
+    functionSizeWeightSpin_ = new QDoubleSpinBox();
+    functionSizeWeightSpin_->setRange(-10.0, 10.0);
+    functionSizeWeightSpin_->setSingleStep(0.1);
+    functionSizeWeightSpin_->setValue(1.5);
+    functionSizeWeightSpin_->setPrefix("Weight: ");
+    functionSizeLayout->addWidget(functionSizeHeuristicCheck_);
+    functionSizeLayout->addWidget(functionSizeWeightSpin_);
+    functionSizeLayout->addStretch();
+    heuristicsForm->addRow("Function Size:", functionSizeLayout);
+
+    // Internal Callee Heuristic
+    auto* internalCalleeLayout = new QHBoxLayout();
+    internalCalleeHeuristicCheck_ = new QCheckBox("Enable");
+    internalCalleeHeuristicCheck_->setToolTip("Functions calling many internals (use NEGATIVE weight for bottom-up analysis)");
+    internalCalleeWeightSpin_ = new QDoubleSpinBox();
+    internalCalleeWeightSpin_->setRange(-10.0, 10.0);
+    internalCalleeWeightSpin_->setSingleStep(0.1);
+    internalCalleeWeightSpin_->setValue(-1.0);
+    internalCalleeWeightSpin_->setPrefix("Weight: ");
+    internalCalleeLayout->addWidget(internalCalleeHeuristicCheck_);
+    internalCalleeLayout->addWidget(internalCalleeWeightSpin_);
+    internalCalleeLayout->addStretch();
+    heuristicsForm->addRow("Internal Callees:", internalCalleeLayout);
+
+    // Entry Point Heuristic
+    auto* entryPointLayout = new QHBoxLayout();
+    entryPointHeuristicCheck_ = new QCheckBox("Enable");
+    entryPointHeuristicCheck_->setToolTip("Entry points (main, DllMain, exports)");
+    entryPointWeightSpin_ = new QDoubleSpinBox();
+    entryPointWeightSpin_->setRange(-10.0, 10.0);
+    entryPointWeightSpin_->setSingleStep(0.1);
+    entryPointWeightSpin_->setValue(-1.0);
+    entryPointWeightSpin_->setPrefix("Weight: ");
+    entryPointModeCombo_ = new QComboBox();
+    entryPointModeCombo_->addItem("Bottom-Up (analyze last)", 0);
+    entryPointModeCombo_->addItem("Top-Down (analyze first)", 1);
+    entryPointModeCombo_->addItem("Neutral (no priority)", 2);
+    entryPointModeCombo_->setToolTip("Bottom-Up: good for executables\nTop-Down: good for libraries (exports are the API)");
+    entryPointLayout->addWidget(entryPointHeuristicCheck_);
+    entryPointLayout->addWidget(entryPointWeightSpin_);
+    entryPointLayout->addWidget(entryPointModeCombo_);
+    entryPointLayout->addStretch();
+    heuristicsForm->addRow("Entry Points:", entryPointLayout);
+
+    prioritizationLayout->addLayout(heuristicsForm);
+
+    layout->addWidget(fullAnalysisGroup);
+    layout->addWidget(prioritizationGroup);
+    layout->addStretch();
+
+    tabWidget_->addTab(widget, "Swarm");
 }
 
 void PreferencesDialog::connectSignals() {
@@ -703,6 +837,30 @@ void PreferencesDialog::loadConfiguration() {
     // Profiling settings
     profilingEnabledCheck_->setChecked(config.profiling.enabled);
 
+    // Swarm settings
+    maxParallelAgentsSpin_->setValue(config.swarm.max_parallel_auto_decompile_agents);
+
+    // Heuristic settings
+    apiCallHeuristicCheck_->setChecked(config.swarm.enable_api_call_heuristic);
+    apiCallWeightSpin_->setValue(config.swarm.api_call_weight);
+
+    callerCountHeuristicCheck_->setChecked(config.swarm.enable_caller_count_heuristic);
+    callerCountWeightSpin_->setValue(config.swarm.caller_count_weight);
+
+    stringHeavyHeuristicCheck_->setChecked(config.swarm.enable_string_heavy_heuristic);
+    stringHeavyWeightSpin_->setValue(config.swarm.string_heavy_weight);
+    minStringLengthSpin_->setValue(config.swarm.min_string_length_for_priority);
+
+    functionSizeHeuristicCheck_->setChecked(config.swarm.enable_function_size_heuristic);
+    functionSizeWeightSpin_->setValue(config.swarm.function_size_weight);
+
+    internalCalleeHeuristicCheck_->setChecked(config.swarm.enable_internal_callee_heuristic);
+    internalCalleeWeightSpin_->setValue(config.swarm.internal_callee_weight);
+
+    entryPointHeuristicCheck_->setChecked(config.swarm.enable_entry_point_heuristic);
+    entryPointWeightSpin_->setValue(config.swarm.entry_point_weight);
+    entryPointModeCombo_->setCurrentIndex(static_cast<int>(config.swarm.entry_point_mode));
+
     configModified_ = false;
 }
 
@@ -751,6 +909,30 @@ void PreferencesDialog::saveConfiguration() {
 
     // Profiling settings
     config.profiling.enabled = profilingEnabledCheck_->isChecked();
+
+    // Swarm settings
+    config.swarm.max_parallel_auto_decompile_agents = maxParallelAgentsSpin_->value();
+
+    // Heuristic settings
+    config.swarm.enable_api_call_heuristic = apiCallHeuristicCheck_->isChecked();
+    config.swarm.api_call_weight = apiCallWeightSpin_->value();
+
+    config.swarm.enable_caller_count_heuristic = callerCountHeuristicCheck_->isChecked();
+    config.swarm.caller_count_weight = callerCountWeightSpin_->value();
+
+    config.swarm.enable_string_heavy_heuristic = stringHeavyHeuristicCheck_->isChecked();
+    config.swarm.string_heavy_weight = stringHeavyWeightSpin_->value();
+    config.swarm.min_string_length_for_priority = minStringLengthSpin_->value();
+
+    config.swarm.enable_function_size_heuristic = functionSizeHeuristicCheck_->isChecked();
+    config.swarm.function_size_weight = functionSizeWeightSpin_->value();
+
+    config.swarm.enable_internal_callee_heuristic = internalCalleeHeuristicCheck_->isChecked();
+    config.swarm.internal_callee_weight = internalCalleeWeightSpin_->value();
+
+    config.swarm.enable_entry_point_heuristic = entryPointHeuristicCheck_->isChecked();
+    config.swarm.entry_point_weight = entryPointWeightSpin_->value();
+    config.swarm.entry_point_mode = static_cast<Config::SwarmSettings::EntryPointMode>(entryPointModeCombo_->currentIndex());
 
     // Save to file
     config.save();

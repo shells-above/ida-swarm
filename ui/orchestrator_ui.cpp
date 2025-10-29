@@ -8,6 +8,7 @@
 #include "log_window.h"
 #include "activity_feed_panel.h"
 #include "patch_tracker.h"
+#include "auto_decompile_progress_panel.h"
 #include "../core/config.h"
 
 // Now we can safely include Qt implementation headers
@@ -45,12 +46,12 @@
 namespace llm_re::ui {
 
 // Main OrchestratorUI implementation
-OrchestratorUI::OrchestratorUI(QWidget* parent) 
-    : QMainWindow(parent) {
+OrchestratorUI::OrchestratorUI(const std::string& binary_name, QWidget* parent)
+    : QMainWindow(parent), binary_name_(binary_name) {
     // Register AgentEvent with Qt's meta-type system for signal/slot connections
     qRegisterMetaType<AgentEvent>("AgentEvent");
     LOG("OrchestratorUI: Registered AgentEvent metatype for Qt signal/slot system\n");
-    
+
     setup_ui();
     setup_event_subscriptions();
 }
@@ -63,7 +64,11 @@ OrchestratorUI::~OrchestratorUI() {
 }
 
 void OrchestratorUI::setup_ui() {
-    setWindowTitle("IDA Swarm - Orchestrator Control");
+    if (binary_name_.empty()) {
+        setWindowTitle("IDA Swarm - Orchestrator Control");
+    } else {
+        setWindowTitle(QString("IDA Swarm - %1").arg(QString::fromStdString(binary_name_)));
+    }
     resize(1400, 900);
     
     // Create central widget and main layout
@@ -97,9 +102,11 @@ void OrchestratorUI::setup_ui() {
     tool_tracker_ = new ToolCallTracker(this);
     activity_feed_ = new ActivityFeedPanel(this);  // Create activity feed
     patch_tracker_ = new PatchTracker(this);  // Create patch tracker
+    auto_decompile_panel_ = new AutoDecompileProgressPanel(this);  // Create auto-decompile panel
     log_window_ = new LogWindow(this);
 
     bottom_tabs_->addTab(activity_feed_, "Activity Feed");  // Add as first tab
+    bottom_tabs_->addTab(auto_decompile_panel_, "Auto-Decompile");  // Add auto-decompile tab
     bottom_tabs_->addTab(irc_viewer_, "IRC Communication");
     bottom_tabs_->addTab(tool_tracker_, "Tool Calls");
     bottom_tabs_->addTab(patch_tracker_, "Patches");  // Add patches tab
@@ -151,7 +158,17 @@ void OrchestratorUI::setup_ui() {
                        this, &OrchestratorUI::on_error_occurred,
                        Qt::AutoConnection);
     LOG("OrchestratorUI: error_occurred connection: %s\n", connected ? "SUCCESS" : "FAILED");
-    
+
+    // Connect auto-decompile panel signals
+    connect(auto_decompile_panel_, &AutoDecompileProgressPanel::start_analysis_requested,
+            this, &OrchestratorUI::on_auto_decompile_clicked);
+
+    // Connect stop signal to bridge
+    connect(auto_decompile_panel_, &AutoDecompileProgressPanel::stop_analysis_requested,
+            []() {
+                UIOrchestratorBridge::instance().stop_auto_decompile();
+            });
+
     // Create menu bar
     create_menus();
     
@@ -160,9 +177,9 @@ void OrchestratorUI::setup_ui() {
 }
 
 void OrchestratorUI::create_menus() {
-    // Create File menu  
+    // Create File menu
     QMenu* fileMenu = menuBar()->addMenu("&File");
-    
+
     // Add preferences action with standard keyboard shortcut
     QAction* preferencesAction = new QAction("&Preferences...", this);
     // Use standard preferences shortcut (Cmd+, on Mac, Ctrl+, on other platforms)
@@ -423,11 +440,11 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                     size_t session_input = session_tokens.value("input_tokens", input_tokens);
                     size_t session_cache_read = session_tokens.value("cache_read_tokens", cache_read_tokens);
                     
-                    LOG("DEBUG: Agent %s cumulative - In: %zu, Cache Read: %zu",
+                    LOG("DEBUG: Agent %s cumulative - In: %zu, Cache Read: %zu\n",
                         agent_id.c_str(), input_tokens, cache_read_tokens);
-                    LOG("DEBUG: Agent %s per-iteration - In: %zu, Cache Read: %zu",
+                    LOG("DEBUG: Agent %s per-iteration - In: %zu, Cache Read: %zu\n",
                         agent_id.c_str(), session_input, session_cache_read);
-                    
+
                     // Calculate context percentage using per-iteration tokens
                     // Total context = input + cache_read
                     const Config& config = Config::instance();
@@ -435,12 +452,60 @@ void OrchestratorUI::handle_event(const AgentEvent& event) {
                     size_t total_context_used = session_input + session_cache_read;
                     double context_percent = (total_context_used * 100.0) / max_context_tokens;
                     
-                    LOG("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)",
+                    LOG("DEBUG: Agent %s context usage: %zu / %zu = %.2f%% (per-iteration)\n",
                         agent_id.c_str(), total_context_used, max_context_tokens, context_percent);
                     
                     // Update the agent's context bar with per-iteration percentage but cumulative token counts
                     metrics_panel_->update_agent_context(agent_id, context_percent, input_tokens, cache_read_tokens);
                 }
+            }
+            break;
+
+        case AgentEvent::AUTO_DECOMPILE_STARTED:
+            LOG("OrchestratorUI: Handling AUTO_DECOMPILE_STARTED event");
+            if (event.payload.contains("total_functions")) {
+                size_t total = event.payload["total_functions"];
+                auto_decompile_panel_->on_analysis_started(total);
+                statusBar()->showMessage(
+                    QString("Auto-decompile started: analyzing %1 functions").arg(total),
+                    5000
+                );
+            }
+            break;
+
+        case AgentEvent::AUTO_DECOMPILE_PROGRESS:
+            LOG("OrchestratorUI: Handling AUTO_DECOMPILE_PROGRESS event");
+            if (event.payload.contains("total_functions")) {
+                orchestrator::AnalysisProgress progress;
+                progress.total_functions = event.payload["total_functions"];
+                progress.completed_functions = event.payload["completed_functions"];
+                progress.active_functions = event.payload["active_functions"];
+                progress.pending_functions = event.payload["pending_functions"];
+                progress.percent_complete = event.payload["percent_complete"];
+
+                // Build active agents map from event payload
+                if (event.payload.contains("active_agents")) {
+                    for (const auto& [agent_id, function_ea] : event.payload["active_agents"].items()) {
+                        progress.active_agents[agent_id] = function_ea.get<ea_t>();
+                    }
+                }
+
+                auto_decompile_panel_->update_progress(progress);
+            }
+            break;
+
+        case AgentEvent::AUTO_DECOMPILE_COMPLETED:
+            LOG("OrchestratorUI: Handling AUTO_DECOMPILE_COMPLETED event");
+            auto_decompile_panel_->on_analysis_completed();
+            if (event.payload.contains("completed_functions")) {
+                size_t completed = event.payload["completed_functions"];
+                double elapsed = event.payload.value("elapsed_seconds", 0.0);
+                statusBar()->showMessage(
+                    QString("Auto-decompile completed: %1 functions analyzed in %2s")
+                        .arg(completed)
+                        .arg(static_cast<int>(elapsed)),
+                    10000
+                );
             }
             break;
     }
@@ -479,7 +544,7 @@ void OrchestratorUI::on_clear_console() {
 
 void OrchestratorUI::on_preferences_clicked() {
     PreferencesDialog dialog(this);
-    
+
     // Connect to configuration changed signal to update UI if needed
     connect(&dialog, &PreferencesDialog::configurationChanged,
             [this]() {
@@ -487,8 +552,25 @@ void OrchestratorUI::on_preferences_clicked() {
                 // The UI components will use Config::instance() directly
                 // so no need to manually update anything here
             });
-    
+
     dialog.exec();
+}
+
+void OrchestratorUI::on_auto_decompile_clicked() {
+    LOG("OrchestratorUI: Auto-decompile menu item clicked");
+
+    // Switch to the auto-decompile tab
+    for (int i = 0; i < bottom_tabs_->count(); i++) {
+        if (bottom_tabs_->tabText(i) == "Auto-Decompile") {
+            bottom_tabs_->setCurrentIndex(i);
+            break;
+        }
+    }
+
+    // Trigger auto-decompile via bridge
+    UIOrchestratorBridge::instance().start_auto_decompile();
+
+    statusBar()->showMessage("Starting auto-decompile...", 3000);
 }
 
 void OrchestratorUI::on_processing_started() {
@@ -1833,9 +1915,6 @@ TokenTracker::TokenTracker(QWidget* parent) : QWidget(parent) {
 }
 
 void TokenTracker::update_agent_tokens(const std::string& agent_id, const json& token_data) {
-    LOG("TokenTracker: Updating tokens for %s with data: %s", 
-        agent_id.c_str(), token_data.dump().c_str());
-    
     // Update or create agent entry
     AgentTokens& agent = agent_tokens_[agent_id];
     

@@ -33,10 +33,14 @@ public:
     
     // Submit task to orchestrator (non-blocking)
     void submit_task(const std::string& task);
-    
+
     // Clear the conversation in orchestrator
     void clear_conversation();
-    
+
+    // Auto-decompile
+    void start_auto_decompile();
+    void stop_auto_decompile();
+
     // Check if currently processing
     bool is_processing() const { return is_processing_; }
 

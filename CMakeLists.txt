@@ -269,6 +269,7 @@ set(COMMON_SOURCES
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory_tool.cpp
+        analysis/function_prioritizer.cpp
         agent/grader.cpp
         patching/patch_manager.cpp
         patching/code_injection_manager.cpp
@@ -289,6 +290,7 @@ set(PLUGIN_SOURCES
         orchestrator/tool_call_tracker.cpp
         orchestrator/merge_manager.cpp
         orchestrator/nogo_zone_manager.cpp
+        orchestrator/auto_decompile_manager.cpp
         # Agent components
         agent/swarm_agent.cpp
         agent/conflict_detector.cpp
@@ -301,6 +303,7 @@ set(PLUGIN_SOURCES
         ui/log_window.cpp
         ui/activity_feed_panel.cpp
         ui/patch_tracker.cpp
+        ui/auto_decompile_progress_panel.cpp
         # Common sources
         ${COMMON_SOURCES}
 )

@@ -46,10 +46,34 @@ bool Config::save_to_file(const std::string& path) const {
         // Profiling settings
         j["profiling"]["enabled"] = profiling.enabled;
 
+        // Swarm settings
+        j["swarm"]["max_parallel_auto_decompile_agents"] = swarm.max_parallel_auto_decompile_agents;
+
+        // Function prioritization heuristics
+        j["swarm"]["enable_api_call_heuristic"] = swarm.enable_api_call_heuristic;
+        j["swarm"]["api_call_weight"] = swarm.api_call_weight;
+
+        j["swarm"]["enable_caller_count_heuristic"] = swarm.enable_caller_count_heuristic;
+        j["swarm"]["caller_count_weight"] = swarm.caller_count_weight;
+
+        j["swarm"]["enable_string_heavy_heuristic"] = swarm.enable_string_heavy_heuristic;
+        j["swarm"]["string_heavy_weight"] = swarm.string_heavy_weight;
+        j["swarm"]["min_string_length_for_priority"] = swarm.min_string_length_for_priority;
+
+        j["swarm"]["enable_function_size_heuristic"] = swarm.enable_function_size_heuristic;
+        j["swarm"]["function_size_weight"] = swarm.function_size_weight;
+
+        j["swarm"]["enable_internal_callee_heuristic"] = swarm.enable_internal_callee_heuristic;
+        j["swarm"]["internal_callee_weight"] = swarm.internal_callee_weight;
+
+        j["swarm"]["enable_entry_point_heuristic"] = swarm.enable_entry_point_heuristic;
+        j["swarm"]["entry_point_weight"] = swarm.entry_point_weight;
+        j["swarm"]["entry_point_mode"] = static_cast<int>(swarm.entry_point_mode);
+
         // Write to file
         std::ofstream file(path);
         if (!file) return false;
-        
+
         file << j.dump(4);
         return true;
     } catch (const std::exception& e) {
@@ -128,6 +152,34 @@ bool Config::load_from_file(const std::string& path) {
         // Profiling settings
         if (j.contains("profiling")) {
             profiling.enabled = j["profiling"].value("enabled", profiling.enabled);
+        }
+
+        // Swarm settings
+        if (j.contains("swarm")) {
+            swarm.max_parallel_auto_decompile_agents = j["swarm"].value("max_parallel_auto_decompile_agents", swarm.max_parallel_auto_decompile_agents);
+
+            // Function prioritization heuristics
+            swarm.enable_api_call_heuristic = j["swarm"].value("enable_api_call_heuristic", swarm.enable_api_call_heuristic);
+            swarm.api_call_weight = j["swarm"].value("api_call_weight", swarm.api_call_weight);
+
+            swarm.enable_caller_count_heuristic = j["swarm"].value("enable_caller_count_heuristic", swarm.enable_caller_count_heuristic);
+            swarm.caller_count_weight = j["swarm"].value("caller_count_weight", swarm.caller_count_weight);
+
+            swarm.enable_string_heavy_heuristic = j["swarm"].value("enable_string_heavy_heuristic", swarm.enable_string_heavy_heuristic);
+            swarm.string_heavy_weight = j["swarm"].value("string_heavy_weight", swarm.string_heavy_weight);
+            swarm.min_string_length_for_priority = j["swarm"].value("min_string_length_for_priority", swarm.min_string_length_for_priority);
+
+            swarm.enable_function_size_heuristic = j["swarm"].value("enable_function_size_heuristic", swarm.enable_function_size_heuristic);
+            swarm.function_size_weight = j["swarm"].value("function_size_weight", swarm.function_size_weight);
+
+            swarm.enable_internal_callee_heuristic = j["swarm"].value("enable_internal_callee_heuristic", swarm.enable_internal_callee_heuristic);
+            swarm.internal_callee_weight = j["swarm"].value("internal_callee_weight", swarm.internal_callee_weight);
+
+            swarm.enable_entry_point_heuristic = j["swarm"].value("enable_entry_point_heuristic", swarm.enable_entry_point_heuristic);
+            swarm.entry_point_weight = j["swarm"].value("entry_point_weight", swarm.entry_point_weight);
+
+            int mode_int = j["swarm"].value("entry_point_mode", static_cast<int>(swarm.entry_point_mode));
+            swarm.entry_point_mode = static_cast<Config::SwarmSettings::EntryPointMode>(mode_int);
         }
 
         return true;

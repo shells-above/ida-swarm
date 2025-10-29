@@ -1,5 +1,6 @@
 #include "swarm_agent.h"
 #include "../core/logger.h"
+#include "../core/ida_utils.h"
 #include "agent_irc_tools.h"
 #include "../sdk/messages/types.h"
 #include <format>
@@ -47,6 +48,25 @@ bool SwarmAgent::initialize(const json& swarm_config) {
 
     // From here on, use LOG_INFO for all logging
     LOG_INFO("SwarmAgent: Initializing agent %s with binary %s\n", agent_id_.c_str(), binary_name_.c_str());
+
+    // Enable batch mode for agents (suppress all IDA dialogs for headless operation)
+    batch = true;
+    LOG_INFO("SwarmAgent: Batch mode enabled for headless operation\n");
+
+    // Check if this is auto-decompile mode and configure accordingly
+    if (swarm_config.contains("context")) {
+        std::string context = swarm_config["context"].get<std::string>();
+        if (context == "auto_decompile") {
+            LOG_INFO("SwarmAgent: Auto-decompile mode enabled\n");
+            set_auto_decompile_mode(true);
+
+            // Disable grader for auto-decompile - grader can't evaluate comprehensive reversal tasks effectively
+            if (grader_) {
+                LOG_INFO("SwarmAgent: Disabling grader for auto-decompile mode\n");
+                grader_.reset();
+            }
+        }
+    }
     
     // Update API client log filename to include binary name
     std::string log_filename = std::format("anthropic_requests_{}_{}.log", binary_name_, agent_id_);
@@ -222,7 +242,13 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
             return;
         }
     }
-    
+
+    // Check for write replication in auto decompile mode
+    if (is_auto_decompile_mode_ && message.find("WRITE_REPLICATE|") == 0) {
+        handle_write_replicate_message(message);
+        return;  // Don't inject as user message
+    }
+
     // Check for manual tool execution messages from orchestrator
     if (message.find("MANUAL_TOOL_EXEC|") == 0) {
         handle_manual_tool_execution(channel, message);
@@ -615,7 +641,7 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
         if (orchestrator::ToolCallTracker::is_write_tool(tool_use->name) && address != 0) {
             LOG_INFO("SwarmAgent: Checking for conflicts for write operation %s at 0x%llx\n", tool_use->name.c_str(), address);
 
-            std::vector<ToolConflict> conflicts = conflict_detector_->check_conflict(tool_use->name, address);
+            std::vector<ToolConflict> conflicts = conflict_detector_->check_conflict(tool_use->name, address, tool_use->input);
 
             if (!conflicts.empty()) {
                 LOG_INFO("SwarmAgent: CONFLICT DETECTED - %zu conflicts found\n", conflicts.size());
@@ -657,6 +683,78 @@ std::vector<claude::messages::Message> SwarmAgent::process_tool_calls(const clau
     // Now call the base class implementation to actually execute the tools
     // This handles tracking, messaging, and execution
     std::vector<claude::messages::Message> results = Agent::process_tool_calls(message, iteration);
+
+    // Broadcast write tools to other agents in auto decompile mode
+    if (is_auto_decompile_mode_ && tool_uses.size() == results.size()) {
+        for (size_t i = 0; i < tool_uses.size(); i++) {
+            const claude::messages::ToolUseContent* tool_use = tool_uses[i];
+            if (!tool_use) continue;
+
+            // Check if it's a write tool
+            if (!orchestrator::ToolCallTracker::is_write_tool(tool_use->name)) {
+                continue;
+            }
+
+            // Check if the tool execution was successful by parsing the result
+            // Use defensive programming to ensure failed operations are NEVER broadcast
+            try {
+                // Extract the tool result content using ContentExtractor
+                claude::messages::ContentExtractor extractor;
+                for (const std::unique_ptr<claude::messages::Content>& content : results[i].contents()) {
+                    content->accept(extractor);
+                }
+
+                const auto& tool_result_contents = extractor.get_tool_results();
+                if (tool_result_contents.empty()) {
+                    LOG_INFO("SwarmAgent: No tool result content for %s, skipping broadcast\n",
+                             tool_use->name.c_str());
+                    continue;
+                }
+
+                const auto* tool_result = tool_result_contents[0];
+                if (!tool_result) {
+                    LOG_INFO("SwarmAgent: Null tool result for %s, skipping broadcast\n",
+                             tool_use->name.c_str());
+                    continue;
+                }
+
+                if (tool_result->is_error) {
+                    LOG_INFO("SwarmAgent: Tool %s has error flag set, NOT broadcasting\n",
+                             tool_use->name.c_str());
+                    continue;
+                }
+
+                // Parse the content string as JSON (separate try/catch to be explicit)
+                json result_json;
+                try {
+                    result_json = json::parse(tool_result->content);
+                } catch (const json::parse_error& e) {
+                    LOG_INFO("SwarmAgent: Failed to parse JSON for %s: %s, NOT broadcasting\n",
+                             tool_use->name.c_str(), e.what());
+                    continue;
+                }
+
+                // Check success field - this is the critical check
+                bool is_success = result_json.value("success", false);
+
+                if (!is_success) {
+                    LOG_INFO("SwarmAgent: Tool %s failed (success=false), NOT broadcasting\n",
+                             tool_use->name.c_str());
+                    continue;
+                }
+
+                // All checks passed - safe to broadcast
+                LOG_INFO("SwarmAgent: Broadcasting write tool %s (verified success)\n",
+                         tool_use->name.c_str());
+                broadcast_write_tool(tool_use->name, tool_use->input);
+
+            } catch (const std::exception& e) {
+                LOG_INFO("SwarmAgent: Exception in broadcast check for %s: %s, NOT broadcasting\n",
+                         tool_use->name.c_str(), e.what());
+                // Explicitly do NOT broadcast on any exception
+            }
+        }
+    }
 
     // After sending a message in a conflict channel, wait for responses
     // Check if we have any conflicts where we're waiting for a response
@@ -808,25 +906,27 @@ void SwarmAgent::handle_manual_tool_execution(const std::string& channel, const 
     std::string target_agent;
     std::string tool_name;
     json parameters;
-    
+
     if (!parse_manual_tool_message(message, target_agent, tool_name, parameters)) {
         LOG_INFO("SwarmAgent: Invalid manual tool execution message format\n");
         return;
     }
-    
+
     // Check if this message is for us
     if (target_agent != agent_id_ && target_agent != "*") {
         // Not for us, ignore
         return;
     }
-    
-    LOG_INFO("SwarmAgent: Executing manual tool call: %s with params: %s\n", 
+
+    LOG_INFO("SwarmAgent: Executing manual tool call: %s with params: %s\n",
               tool_name.c_str(), parameters.dump().c_str());
     emit_log(LogLevel::INFO, std::format("Executing consensus-enforced tool: {}", tool_name));
-    
-    // Execute the tool using base class method
-    json result = execute_manual_tool(tool_name, parameters);
-    
+
+    // Execute the tool on IDA main thread (all tool operations require main thread)
+    json result = IDAUtils::execute_sync_wrapper([this, &tool_name, &parameters]() {
+        return execute_manual_tool(tool_name, parameters);
+    }, MFF_WRITE);
+
     // Record in conflict detector with manual flag
     if (result["success"]) {
         // Extract address if present for recording
@@ -871,11 +971,79 @@ void SwarmAgent::send_manual_tool_result(const std::string& channel, bool succes
     std::string status = success ? "success" : "failure";
     std::string message = std::format("MANUAL_TOOL_RESULT | {}|{}|{}",
                                       agent_id_, status, result.dump());
-    
+
     send_irc_message(channel, message);
-    
+
     LOG_INFO("SwarmAgent: Sent manual tool result: %s\n", status.c_str());
     emit_log(LogLevel::INFO, std::format("Manual tool execution {}", status));
+}
+
+void SwarmAgent::broadcast_write_tool(const std::string& tool_name, const json& parameters) {
+    std::string params_str = parameters.dump();
+    std::string message = std::format("WRITE_REPLICATE|{}|{}|{}",
+                                     agent_id_, tool_name, params_str);
+    send_irc_message("#agents", message);
+    LOG_INFO("SwarmAgent: Broadcasted write tool: %s\n", tool_name.c_str());
+}
+
+void SwarmAgent::handle_write_replicate_message(const std::string& message) {
+    std::string source_agent;
+    std::string tool_name;
+    json parameters;
+
+    if (!parse_write_replicate_message(message, source_agent, tool_name, parameters)) {
+        LOG_INFO("SwarmAgent: Invalid write replicate message\n");
+        return;
+    }
+
+    // Don't replicate our own writes
+    if (source_agent == agent_id_) {
+        return;
+    }
+
+    LOG_INFO("SwarmAgent: Replicating write from %s: %s\n",
+             source_agent.c_str(), tool_name.c_str());
+
+    // Execute the tool on IDA main thread (write operations require main thread)
+    IDAUtils::execute_sync_wrapper([this, &tool_name, &parameters]() {
+        // Execute the tool silently (no conflict detection, no broadcast loop)
+        json result = execute_manual_tool(tool_name, parameters);
+
+        if (!result["success"]) {
+            LOG_INFO("SwarmAgent: Write replication failed: %s\n",
+                     result.value("error", "unknown").c_str());
+        }
+    }, MFF_WRITE);
+}
+
+bool SwarmAgent::parse_write_replicate_message(const std::string& message,
+                                                std::string& source_agent,
+                                                std::string& tool_name,
+                                                json& parameters) {
+    // Format: WRITE_REPLICATE|agent_id|tool_name|params_json
+    if (message.find("WRITE_REPLICATE|") != 0) {
+        return false;
+    }
+
+    std::string content = message.substr(16); // Skip "WRITE_REPLICATE|"
+
+    size_t first_delim = content.find('|');
+    if (first_delim == std::string::npos) return false;
+
+    size_t second_delim = content.find('|', first_delim + 1);
+    if (second_delim == std::string::npos) return false;
+
+    source_agent = content.substr(0, first_delim);
+    tool_name = content.substr(first_delim + 1, second_delim - first_delim - 1);
+    std::string params_str = content.substr(second_delim + 1);
+
+    try {
+        parameters = json::parse(params_str);
+        return true;
+    } catch (const json::exception& e) {
+        LOG_INFO("SwarmAgent: Failed to parse replicate parameters: %s\n", e.what());
+        return false;
+    }
 }
 
 void SwarmAgent::handle_no_go_zone_message(const std::string& message) {
@@ -1027,8 +1195,11 @@ void SwarmAgent::remove_completed_conflicts() {
 
 void SwarmAgent::on_iteration_start(int iteration) {
     // Send status update on first iteration and every 10 iterations
+    // Skip in auto-decompile mode to save costs and reduce latency
     status_update_counter_++;
-    if ((status_update_counter_ == 1 || status_update_counter_ % 10 == 0) && irc_connected_) {
+    if ((status_update_counter_ == 1 || status_update_counter_ % 10 == 0) &&
+        irc_connected_ &&
+        !is_auto_decompile_mode_) {
         generate_and_send_status_update();
     }
 }

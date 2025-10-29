@@ -40,7 +40,12 @@ struct AgentEvent {
         AGENT_SPAWN_FAILED,      // Agent spawn failed
         SWARM_RESULT,           // Collected result from swarm
         ORCHESTRATOR_INPUT,     // User input to orchestrator
-        AGENT_TOKEN_UPDATE      // Real-time token usage from agent
+        AGENT_TOKEN_UPDATE,     // Real-time token usage from agent
+
+        // Auto-decompile events
+        AUTO_DECOMPILE_STARTED,   // Auto-decompile started
+        AUTO_DECOMPILE_PROGRESS,  // Progress update for auto-decompile
+        AUTO_DECOMPILE_COMPLETED  // Auto-decompile completed
     };
     
     Type type;
@@ -155,7 +160,12 @@ public:
             {"error", error}
         }));
     }
-    
+
+    // Generic emit method for any event type with payload
+    void emit(const std::string& source, AgentEvent::Type type, const json& payload) {
+        publish(AgentEvent(type, source, payload));
+    }
+
 };
 
 // Global event bus instance (or could be passed around)

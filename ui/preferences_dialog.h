@@ -77,6 +77,7 @@ private:
     void createAgentTab();
     void createIrcTab();
     void createProfilingTab();
+    void createSwarmTab();
     void connectSignals();
     
     // Configuration methods
@@ -153,6 +154,30 @@ private:
 
     // Profiling Tab widgets
     QCheckBox* profilingEnabledCheck_;
+
+    // Swarm Tab widgets
+    QSpinBox* maxParallelAgentsSpin_;
+
+    // Heuristic controls (enable + weight for each)
+    QCheckBox* apiCallHeuristicCheck_;
+    QDoubleSpinBox* apiCallWeightSpin_;
+
+    QCheckBox* callerCountHeuristicCheck_;
+    QDoubleSpinBox* callerCountWeightSpin_;
+
+    QCheckBox* stringHeavyHeuristicCheck_;
+    QDoubleSpinBox* stringHeavyWeightSpin_;
+    QSpinBox* minStringLengthSpin_;
+
+    QCheckBox* functionSizeHeuristicCheck_;
+    QDoubleSpinBox* functionSizeWeightSpin_;
+
+    QCheckBox* internalCalleeHeuristicCheck_;
+    QDoubleSpinBox* internalCalleeWeightSpin_;
+
+    QCheckBox* entryPointHeuristicCheck_;
+    QDoubleSpinBox* entryPointWeightSpin_;
+    QComboBox* entryPointModeCombo_;
 
     // Additional buttons
     QPushButton* exportButton_;

@@ -18,13 +18,14 @@ namespace llm_re::ui {
     class LogWindow;
     class ActivityFeedPanel;
     class PatchTracker;
+    class AutoDecompileProgressPanel;
 
 // Main UI window that observes the EventBus
 class OrchestratorUI : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit OrchestratorUI(QWidget* parent = nullptr);
+    explicit OrchestratorUI(const std::string& binary_name = "", QWidget* parent = nullptr);
     ~OrchestratorUI();
 
     // Show the UI (called from plugin)
@@ -42,7 +43,8 @@ private slots:
     void on_task_submitted();
     void on_clear_console();
     void on_preferences_clicked();
-    
+    void on_auto_decompile_clicked();
+
     // Bridge signals
     void on_processing_started();
     void on_processing_completed();
@@ -65,13 +67,17 @@ private:
     ActivityFeedPanel* activity_feed_;  // Status and discovery feed
     PatchTracker* patch_tracker_;  // Track all patches made
     LogWindow* log_window_;
+    AutoDecompileProgressPanel* auto_decompile_panel_;  // Auto-decompile progress
     
     // Layout
     QSplitter* main_splitter_;
     QSplitter* left_splitter_;
     QSplitter* right_splitter_;
     QTabWidget* bottom_tabs_;
-    
+
+    // Binary name for window title
+    std::string binary_name_;
+
     // EventBus subscription
     std::string event_subscription_id_;
     EventBus& event_bus_ = get_event_bus();

@@ -138,6 +138,31 @@ void UIOrchestratorBridge::clear_conversation() {
     LOG("UIOrchestratorBridge: Conversation cleared in orchestrator\n");
 }
 
+void UIOrchestratorBridge::start_auto_decompile() {
+    LOG("UIOrchestratorBridge: start_auto_decompile called");
+
+    if (!orchestrator_) {
+        LOG("UIOrchestratorBridge: ERROR - orchestrator_ is null");
+        emit error_occurred("Orchestrator not initialized");
+        return;
+    }
+
+    // Trigger auto-decompile on orchestrator
+    orchestrator_->start_auto_decompile();
+}
+
+void UIOrchestratorBridge::stop_auto_decompile() {
+    LOG("UIOrchestratorBridge: stop_auto_decompile called");
+
+    if (!orchestrator_) {
+        LOG("UIOrchestratorBridge: ERROR - orchestrator_ is null");
+        return;
+    }
+
+    // Stop auto-decompile on orchestrator
+    orchestrator_->stop_auto_decompile();
+}
+
 void UIOrchestratorBridge::on_processing_started() {
     LOG("UIOrchestratorBridge: on_processing_started called\n");
     is_processing_ = true;

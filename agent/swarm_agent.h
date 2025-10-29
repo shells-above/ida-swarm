@@ -146,7 +146,13 @@ private:
     static bool parse_manual_tool_message(const std::string& message, std::string& target_agent,
                                    std::string& tool_name, json& parameters);
     void send_manual_tool_result(const std::string& channel, bool success, const json& result);
-    
+
+    // Write tool replication for auto decompile mode
+    void broadcast_write_tool(const std::string& tool_name, const json& parameters);
+    void handle_write_replicate_message(const std::string& message);
+    static bool parse_write_replicate_message(const std::string& message, std::string& source_agent,
+                                             std::string& tool_name, json& parameters);
+
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;
     std::unique_ptr<IRCAdapter> irc_adapter_;

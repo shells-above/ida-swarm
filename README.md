@@ -263,7 +263,48 @@ When multiple agents work in parallel, conflicts arise:
 
 This protocol prevents race conditions while preserving the benefits of parallel analysis.
 
-### 7. Integration Capabilities
+### 7. Auto Decompile Mode
+
+**Full-Binary Parallel Analysis**
+
+Auto decompile mode performs comprehensive analysis of all non-library functions through coordinated parallel agents. Unlike normal analysis where the orchestrator decomposes a specific user request into subtasks, auto decompile automatically generates analysis tasks for every function in the binary.
+
+**Function Prioritization System**
+
+Functions are analyzed in priority order determined by configurable heuristics:
+
+- **API calls** (weight: 2.0): Functions calling external APIs - API names provide semantic context
+- **String references** (weight: 2.0): Functions with significant string content - strings reveal purpose
+- **Caller count** (weight: 1.5): Functions called by many others - understanding these benefits downstream analysis
+- **Function size** (weight: 1.5): Smaller functions prioritized - builds momentum through quick completions
+- **Internal callees** (weight: -1.0): Functions calling many internals deprioritized - dependencies should be analyzed first (bottom-up)
+- **Entry points** (weight: -1.0 default): main/DllMain/exports analyzed late by default, configurable for top-down analysis
+
+Each function receives a composite score from enabled heuristics. Priority queue feeds agents highest-scoring functions first.
+
+**Collaborative Database Mode**
+
+Auto decompile enables a different synchronization model than normal multi-agent analysis:
+
+- **Normal mode**: Agents work on isolated database copies to form independent interpretations. Analysis results (names, types, comments) remain isolated until agent completion, then merged. Prevents bias from other agents' conclusions.
+
+- **Auto decompile mode**: Analysis writes replicate immediately between agents. All agents see each other's work in real-time. Agents collaborate toward comprehensive coverage rather than exploring different viewpoints independently.
+
+- **Both modes**: Binary patches always replicate immediately (consistent binary state required for meaningful analysis).
+
+Conflicts still occur when agents simultaneously analyze the same entity and disagree on naming/typing - standard conflict resolution protocol applies.
+
+**Agent Task Specification**
+
+Each agent receives a single function and performs comprehensive reversal:
+- Name all local variables and parameters semantically
+- Determine precise types for all variables
+- Set accurate function prototype with calling convention
+- Add explanatory comments for non-obvious logic
+- Define or reuse struct/enum types as appropriate
+- Coordinate type definitions with other agents via search_local_types()
+
+### 8. Integration Capabilities
 
 **MCP Server Integration**
 - Model Context Protocol server for external tool integration

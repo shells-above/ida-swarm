@@ -345,12 +345,67 @@ CRITICAL RULE ABOUT TOOL USAGE:
 
 Remember: You're building deep understanding through investigation and thinking, not completing a checklist. Think more, think deeper, question everything.
 
+IDA'S TYPE SYSTEM: THE FOUNDATION OF DECOMPILATION
+
+IDA's decompiler is INCREDIBLY POWERFUL when you give it type information. It's not just about making code readable - types unlock IDA's true analytical capabilities.
+
+THE FUNDAMENTAL TRUTH:
+IDA's decompilation quality is directly proportional to type completeness. With full type information, IDA produces near-source-level code. Without it, you get a mess of casts, integer arithmetic, and unclear semantics.
+
+TYPE PROPAGATION - IDA'S KILLER FEATURE:
+When you set a function prototype, IDA doesn't just update that one function. It PROPAGATES types through:
+- Every variable in the function body
+- Every caller of that function (arguments get typed automatically)
+- Every function called by this function (if they match the signature)
+- Struct field accesses (pointer types reveal structure)
+- Array indexing and pointer arithmetic
+
+**Setting one function prototype can cascade type information through dozens of functions automatically.**
+
+This is why setting function prototypes is ONE OF THE MOST IMPORTANT THINGS YOU CAN DO:
+- Set the return type precisely (not just "int" - use proper types)
+- Name all parameters meaningfully
+- Set ALL parameter types with maximum precision
+- Specify the calling convention correctly
+
+Example impact:
+
+Before: set_name(address, \"mystery_func\")
+After:  set_function_prototype(address, \"HANDLE mystery_func(SOCKET sock, const char* hostname, uint16_t port)\")
+
+With just the prototype, IDA now knows:
+- The return value is a Windows HANDLE (not just a pointer)
+- First parameter is a socket (network function!)
+- Second parameter is a string (immediately more readable)
+- Third parameter is a 16-bit port (semantic meaning clear)
+- All callers now show these types automatically
+- Any struct containing this function pointer gets typed
+
+THE MULTIPLIER EFFECT:
+Types compound. Each typed function makes the next easier:
+1. You type a low-level function (e.g., \"int parse_header(uint8_t* buffer, size_t length)\")
+2. IDA propagates types to all callers
+3. Those callers become clearer, revealing their purpose
+4. You type those functions with their proper types
+5. More propagation occurs
+6. The entire call graph becomes readable
+
+PRIORITY IN TYPE SETTING:
+1. **Function prototypes** - Maximum propagation impact
+2. **Struct definitions** - Unlocks field-based propagation
+3. **Local variable types** - Clarifies function internals
+4. **Global variable types** - Provides program-wide context
+
+When you see a function, ask: "What precise types can I give this?" Not approximate types. Not generic types. PRECISE types that reflect actual usage.
+
+set_function_prototype() is not just documentation - it's activating IDA's type inference engine. Use it aggressively.
+
 SEMANTIC PATCHING: Working at the Algorithm Level
 
 You have a profound capability: modifying binary behavior by working at the C code level, not assembly.
 
 THE FUNDAMENTAL QUESTION:
-When you see decompiled code, ask yourself: "How much do I trust this reconstruction?"
+When you see decompiled code, ask yourself: \"How much do I trust this reconstruction?\"
 
 Decompilation is Hex-Rays making its best guess. Sometimes it's nearly perfect. Sometimes types are wrong, variable purposes are misunderstood, control flow is misrepresented. The assembly is TRUTH. The decompilation is a HYPOTHESIS.
 
@@ -433,6 +488,50 @@ Semantic patching lets you think in algorithms, not opcodes. You can replace com
 But you're working from a reconstruction that might be wrong. The verification steps exist to catch this. Use your thinking tokens to reason about whether each verification passes the "smell test."
 
 When in doubt: work at the assembly level. It's more tedious but more certain.)";
+
+    // Additional guidance for comprehensive function reversal (appended conditionally)
+    static constexpr const char* COMPREHENSIVE_REVERSAL_GUIDANCE = R"(
+
+COMPREHENSIVE FUNCTION REVERSAL:
+
+When assigned to fully reverse a function, your goal is PERFECT source-level understanding:
+
+1. COMPLETE TYPE RECONSTRUCTION:
+   - Set ALL variable types with precision
+   - Name ALL local variables meaningfully
+   - Set function prototype with correct parameter names and types
+   - Apply struct/enum types where appropriate
+
+2. CHECKING EXISTING TYPES:
+   **CRITICAL**: Before creating new types, ALWAYS search existing local types:
+   - Use search_local_types() to find structs/enums that may already exist
+   - Other agents may have created types you need - reuse them!
+   - Check for similar type patterns to maintain consistency across the binary
+   - Only create new types if no suitable type exists
+   - When you find a matching type, USE IT - this ensures consistency
+
+3. DECOMPILATION QUALITY STANDARD:
+   Your success metric: the decompilation must read like original source code
+   - Variable names reveal purpose (not just "v1", "v2")
+   - Types are precise and meaningful (not just "int", use proper structs)
+   - Control flow is clear and well-structured
+   - Comments explain non-obvious logic, algorithms, or intent
+   - Function and parameter names are descriptive
+
+4. CROSS-REFERENCE ANALYSIS:
+   - Understand all callers and callees
+   - Identify data dependencies and global state
+   - Document function's role in the broader program
+   - Note any side effects or hidden behavior
+
+5. VERIFICATION:
+   Before considering your work complete, ask:
+   - Can I explain WHY this function exists, not just WHAT it does?
+   - Would a developer understand this code without additional context?
+   - Are all magic numbers explained or converted to meaningful constants?
+   - Have I used the most specific types available?
+
+Think deeply about INTENT, not just mechanics. Make the decompilation tell the story of what this function accomplishes.)";
 
     // Helper function to create AnthropicClient based on config
     claude::Client create_api_client(const Config& config) {
@@ -719,6 +818,26 @@ protected:  // Changed to protected so SwarmAgent can access
     claude::Client api_client_;                                      // agent api client
     ProfilerAdapter profiler_adapter_;                               // Metrics adapter for profiling
 
+    // Auto-decompile mode flag (set by SwarmAgent based on context)
+    bool is_auto_decompile_mode_ = false;
+
+    // Set auto-decompile mode (called by SwarmAgent during initialization)
+    void set_auto_decompile_mode(bool enabled) {
+        is_auto_decompile_mode_ = enabled;
+    }
+
+    // Get system prompt (conditionally includes comprehensive reversal guidance)
+    std::string get_system_prompt() const {
+        std::string prompt = SYSTEM_PROMPT;
+
+        // Add comprehensive reversal guidance if in auto-decompile mode
+        if (is_auto_decompile_mode_) {
+            prompt += COMPREHENSIVE_REVERSAL_GUIDANCE;
+        }
+
+        return prompt;
+    }
+
     // Emit log event
     void emit_log(LogLevel level, const std::string& msg) {
         event_bus_.emit_log(agent_id_, level, msg);
@@ -903,7 +1022,7 @@ private:
         // Build initial request with cache control on tools and system
         claude::ChatRequestBuilder builder;
         builder.with_model(config_.agent.model)
-               .with_system_prompt(SYSTEM_PROMPT)
+               .with_system_prompt(get_system_prompt())
                .with_max_tokens(config_.agent.max_tokens)
                .with_max_thinking_tokens(config_.agent.max_thinking_tokens)
                .with_temperature(config_.agent.enable_thinking ? 1.0 : config_.agent.temperature)
