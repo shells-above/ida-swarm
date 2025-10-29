@@ -922,7 +922,7 @@ public:
 
     ChatResponse send_request_with_retry(ChatRequest request) {
         // Multi-account OAuth handles rate limits automatically, so we only need minimal retry logic
-        const int MAX_ATTEMPTS = 2;  // Original + 1 retry after account switch
+        const int MAX_ATTEMPTS = 5;  // Original + 4 retries for server/network errors
 
         // Before sending request, check if OAuth token is expired and refresh if needed
         if (oauth_manager_ && auth_method == AuthMethod::OAUTH && oauth_creds) {
@@ -1013,8 +1013,45 @@ public:
                 }
             }
 
-            // For other errors, don't retry (server errors, network errors, etc.)
-            // The user can retry if needed, but we don't automatically retry here
+            // Check for retryable server/network errors
+            bool is_retryable_error = false;
+            if (response.error) {
+                const std::string& error_msg = *response.error;
+
+                // 5xx server errors (500, 502, 503, 529)
+                bool is_5xx = (error_msg.find("500") != std::string::npos ||
+                              error_msg.find("502") != std::string::npos ||
+                              error_msg.find("503") != std::string::npos ||
+                              error_msg.find("529") != std::string::npos);
+
+                // Overloaded errors
+                bool is_overloaded = (error_msg.find("Overloaded") != std::string::npos ||
+                                     error_msg.find("overloaded") != std::string::npos);
+
+                // CURL network errors (timeout, connection failures)
+                bool is_curl_network = (error_msg.find("CURL error") != std::string::npos &&
+                                       (error_msg.find("timeout") != std::string::npos ||
+                                        error_msg.find("Connection") != std::string::npos ||
+                                        error_msg.find("Failed sending") != std::string::npos ||
+                                        error_msg.find("Failed receiving") != std::string::npos ||
+                                        error_msg.find("Couldn't connect") != std::string::npos));
+
+                is_retryable_error = is_5xx || is_overloaded || is_curl_network;
+            }
+
+            // Retry with exponential backoff for server/network errors
+            if (is_retryable_error && attempt < MAX_ATTEMPTS - 1) {
+                // Exponential backoff: 1s, 2s, 4s, 8s
+                int backoff_seconds = 1 << attempt;  // 2^attempt
+                log(LogLevel::WARNING, std::format(
+                    "Retryable error (attempt {}/{}): {} - retrying in {}s...",
+                    attempt + 1, MAX_ATTEMPTS, response.error.value_or("Unknown"), backoff_seconds));
+
+                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
+                continue;  // Retry request
+            }
+
+            // For non-retryable errors or max attempts reached, return immediately
             log(LogLevel::ERROR, std::format("Request failed: {}", response.error.value_or("Unknown error")));
             return response;
         }
