@@ -235,6 +235,10 @@ private:
         auto_wait();
         LOG("LLM RE: Auto-analysis completed\n");
 
+        // Enable batch mode for MCP orchestrator (suppress all IDA dialogs)
+        batch = true;
+        LOG("LLM RE: Batch mode enabled for MCP orchestrator\n");
+
         // Create orchestrator without UI
         if (!orchestrator_) {
             if (mcp_session_id_.empty()) {
@@ -313,7 +317,8 @@ private:
         
         // Create UI window if it doesn't exist
         if (!ui_window_) {
-            ui_window_ = new ui::OrchestratorUI(nullptr);
+            std::string binary_name = orchestrator_->get_binary_name();
+            ui_window_ = new ui::OrchestratorUI(binary_name, nullptr);
             LOG("LLM RE: Created orchestrator UI\n");
         }
         
@@ -376,13 +381,13 @@ private:
             return;
         }
         LOG("LLM RE: SwarmAgent initialization returned successfully\n");
-        
+
         LOG("LLM RE: Starting swarm agent %s\n", agent_id_.c_str());
         LOG("LLM RE: Task: %s\n", orchestrator_prompt.c_str());
-        
+
         // Start working with the orchestrator's prompt
         swarm_agent_->start_task(orchestrator_prompt);
-        
+
         // Subscribe to agent state changes to monitor completion
         auto& bus = get_event_bus();
         state_subscription_id_ = bus.subscribe([this](const AgentEvent& event) {
@@ -424,7 +429,7 @@ private:
             swarm_agent_ = nullptr;
             return;
         }
-        
+
         // Restore conversation history if available
         if (agent_config_.contains("saved_conversation")) {
             LOG("LLM RE: Restoring conversation history...\n");
@@ -455,7 +460,7 @@ private:
             std::string task = agent_config_.value("saved_task", "Continue analysis");
             swarm_agent_->start_task(task);
         }
-        
+
         LOG("LLM RE: Resurrected agent %s is now active\n", agent_id_.c_str());
         
         // Subscribe to state changes

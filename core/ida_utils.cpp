@@ -1006,7 +1006,15 @@ bool IDAUtils::set_function_prototype(ea_t address, const std::string& prototype
             // If that fails, try apply_cdecl as a more flexible fallback
             // apply_cdecl internally handles various prototype formats and
             // always uses TINFO_DEFINITE flag
-            if (!apply_cdecl(get_idati(), address, proto_with_semi.c_str(), TINFO_DEFINITE)) {
+            // Suppress dialogs by temporarily setting batch mode (apply_cdecl lacks a silent flag)
+            bool old_batch = batch;
+            batch = true;
+
+            bool success = apply_cdecl(get_idati(), address, proto_with_semi.c_str(), TINFO_DEFINITE);
+
+            batch = old_batch;
+
+            if (!success) {
                 throw std::invalid_argument("Failed to parse function prototype. Expected format: 'return_type [calling_convention] function_name(parameters)'");
             }
             // apply_cdecl succeeded, we're done
