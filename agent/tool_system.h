@@ -595,6 +595,7 @@ public:
 
     json parameters_schema() const override {
         return claude::tools::ParameterBuilder()
+            .add_string("type_name", "Name of the type being defined (e.g., 'Point', 'MyStruct', 'ConnectionData'). Must match the name in the definition.")
             .add_string("definition", "C-style type definition (e.g., 'struct Point { int x; int y; };'). Only define one struct per set_local_type tool call")
             .add_boolean("replace_existing", "Replace if type already exists (defaults to true)", false)
             .build();

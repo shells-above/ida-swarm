@@ -55,7 +55,8 @@ public:
     // Check for conflicts before a write operation
     std::vector<ToolConflict> check_for_conflicts(const std::string& agent_id,
                                                   const std::string& tool_name,
-                                                  ea_t address);
+                                                  ea_t address,
+                                                  const json& parameters = json::object());
     
     // Get all tool calls for an agent
     std::vector<ToolCall> get_agent_tool_calls(const std::string& agent_id);

@@ -322,32 +322,59 @@ bool ToolCallTracker::record_tool_call(const std::string& agent_id,
 
 std::vector<ToolConflict> ToolCallTracker::check_for_conflicts(const std::string& agent_id,
                                                                const std::string& tool_name,
-                                                               ea_t address) {
+                                                               ea_t address,
+                                                               const json& parameters) {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     std::vector<ToolConflict> conflicts;
-    
+
     // Only check for write operations
     if (!is_write_tool(tool_name)) {
         return conflicts;
     }
-    
+
     sqlite3_reset(select_conflicts_stmt_);
     sqlite3_bind_int64(select_conflicts_stmt_, 1, address);
     sqlite3_bind_text(select_conflicts_stmt_, 2, agent_id.c_str(), -1, SQLITE_STATIC);
-    
+
     // Create a dummy current call for comparison
     ToolCall current_call;
     current_call.agent_id = agent_id;
     current_call.tool_name = tool_name;
     current_call.address = address;
+    current_call.parameters = parameters;
     current_call.timestamp = std::chrono::system_clock::now();
-    
+
     while (sqlite3_step(select_conflicts_stmt_) == SQLITE_ROW) {
         ToolCall existing = row_to_tool_call(select_conflicts_stmt_);
-        
+
         // Check if it's the same type of operation
         if (existing.tool_name == tool_name) {
+            // Special handling for set_variable - only conflict if same variable
+            if (tool_name == "set_variable") {
+                // Extract variable identifier from both operations
+                std::string current_var = current_call.parameters.value("variable_name", "");
+                std::string existing_var = existing.parameters.value("variable_name", "");
+
+                // Only conflict if operating on the SAME variable
+                if (current_var.empty() || existing_var.empty() || current_var != existing_var) {
+                    continue; // Different variables - no conflict!
+                }
+            }
+
+            // Special handling for set_local_type - only conflict if same type name
+            if (tool_name == "set_local_type") {
+                // Extract type name from both operations
+                std::string current_type = current_call.parameters.value("type_name", "");
+                std::string existing_type = existing.parameters.value("type_name", "");
+
+                // Only conflict if defining the SAME type
+                if (current_type.empty() || existing_type.empty() || current_type != existing_type) {
+                    continue; // Different types - no conflict!
+                }
+            }
+
+            // This is a real conflict
             ToolConflict conflict;
             conflict.first_call = existing;
             conflict.second_call = current_call;
@@ -355,7 +382,7 @@ std::vector<ToolConflict> ToolCallTracker::check_for_conflicts(const std::string
             conflicts.push_back(conflict);
         }
     }
-    
+
     return conflicts;
 }
 
