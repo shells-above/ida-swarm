@@ -18,7 +18,10 @@ std::string Message::serialize() const {
     ss << command;
     for (size_t i = 0; i < params.size(); ++i) {
         ss << " ";
-        if (i == params.size() - 1 && params[i].find(' ') != std::string::npos) {
+        // IRC RFC 1459: Always prefix trailing parameter with ':' to indicate
+        // "everything after this until CRLF is one parameter"
+        // This prevents parser from splitting on whitespace within complex payloads (e.g., JSON)
+        if (i == params.size() - 1) {
             ss << ":" << params[i];
         } else {
             ss << params[i];
@@ -71,8 +74,22 @@ void Channel::remove_client(int client_fd) {
 
 void Channel::broadcast(const Message& msg, int sender_fd) {
     std::lock_guard<std::mutex> lock(mutex_);
-    history_.push_back(msg);
-    
+
+    // Don't store WRITE_REPLICATE messages in history
+    // These are real-time broadcasts only - persistence is handled by DB merge
+    bool should_store = true;
+    if (msg.params.size() >= 2) {
+        const std::string& text = msg.params[1];
+        if (text.find("WRITE_REPLICATE|") == 0) {
+            should_store = false;
+        }
+    }
+
+    if (should_store) {
+        history_.push_back(msg);
+    }
+
+    // Always broadcast to active clients in real-time
     std::string data = msg.serialize();
     for (int fd : clients_) {
         if (fd != sender_fd) {  // Don't echo back to sender
