@@ -38,7 +38,6 @@ private:
     nlohmann::json handle_start_analysis_session(const nlohmann::json& params);
     nlohmann::json handle_send_message(const nlohmann::json& params);
     nlohmann::json handle_close_session(const nlohmann::json& params);
-    nlohmann::json handle_get_session_messages(const nlohmann::json& params);
     nlohmann::json handle_wait_for_response(const nlohmann::json& params);
 
 

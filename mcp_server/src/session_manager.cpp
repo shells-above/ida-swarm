@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <openssl/sha.h>
+#include <errno.h>
 
 // On macOS, environ needs explicit declaration
 extern char **environ;
@@ -22,6 +23,31 @@ extern char **environ;
 namespace fs = std::filesystem;
 
 namespace llm_re::mcp {
+
+// Helper function to read exactly N bytes from a file descriptor
+// Handles partial reads and EINTR interrupts
+static ssize_t read_exactly(int fd, void* buf, size_t count) {
+    size_t total = 0;
+    char* ptr = static_cast<char*>(buf);
+
+    while (total < count) {
+        ssize_t n = read(fd, ptr + total, count - total);
+        if (n == 0) {
+            // EOF reached before reading all bytes
+            return (total > 0) ? total : 0;
+        }
+        if (n < 0) {
+            if (errno == EINTR) {
+                // Interrupted by signal, retry
+                continue;
+            }
+            // Real error
+            return -1;
+        }
+        total += n;
+    }
+    return total;
+}
 
 SessionManager::SessionManager() {
     // Create root directory for session files if it doesn't exist
@@ -177,15 +203,11 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     session->last_activity = session->created_at;
     session->active = true;
 
-    // Setup session directory and files
+    // Setup session directory and pipes
     session->session_dir = (fs::path(sessions_root_dir_) / session_id).string();
     session->state_file = (fs::path(session->session_dir) / "state.json").string();
-    session->request_file = (fs::path(session->session_dir) / "request.json").string();
-    session->response_file = (fs::path(session->session_dir) / "response.json").string();
-    session->request_seq_file = (fs::path(session->session_dir) / "request_seq").string();
-    session->response_seq_file = (fs::path(session->session_dir) / "response_seq").string();
-    session->request_seq = 0;
-    session->response_seq = 0;
+    session->request_pipe = (fs::path(session->session_dir) / "request.pipe").string();
+    session->response_pipe = (fs::path(session->session_dir) / "response.pipe").string();
 
     // Create session directory structure
     if (!create_session_directory(session.get())) {
@@ -207,10 +229,29 @@ std::string SessionManager::create_session(const std::string& binary_path, const
         throw std::runtime_error("Failed to write state file");
     }
 
-    // Start reader thread for this session
+    // Start reader thread for this session (will open response pipe)
     session->reader_thread = std::make_unique<std::thread>(
         &SessionManager::orchestrator_reader_thread, this, session.get()
     );
+
+    // Open request pipe for writing (blocks until orchestrator opens for reading)
+    // CRITICAL: Keep this FD open for the entire session lifetime
+    std::cerr << "MCP Server: Opening request pipe (will block until orchestrator ready): "
+              << session->request_pipe << std::endl;
+
+    session->request_pipe_fd = open(session->request_pipe.c_str(), O_WRONLY);
+    if (session->request_pipe_fd < 0) {
+        std::cerr << "MCP Server: Failed to open request pipe: " << strerror(errno) << std::endl;
+        session->reader_should_stop = true;
+        if (session->reader_thread && session->reader_thread->joinable()) {
+            session->reader_thread->join();
+        }
+        kill_orchestrator(session->orchestrator_pid);
+        cleanup_session_directory(session_id);
+        throw std::runtime_error("Failed to open request pipe: " + std::string(strerror(errno)));
+    }
+
+    std::cerr << "MCP Server: Request pipe opened (fd=" << session->request_pipe_fd << ")" << std::endl;
 
     // Send initial task
     json init_msg;
@@ -220,10 +261,20 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     init_msg["params"]["task"] = initial_task;
 
     if (!send_json_to_orchestrator(session.get(), init_msg)) {
+        close(session->request_pipe_fd);
+        session->request_pipe_fd = -1;
+        session->reader_should_stop = true;
+        if (session->reader_thread && session->reader_thread->joinable()) {
+            session->reader_thread->join();
+        }
         kill_orchestrator(session->orchestrator_pid);
         cleanup_session_directory(session_id);
         throw std::runtime_error("Failed to send initial task to orchestrator");
     }
+
+    // Mark initial task as pending
+    session->has_pending_request = true;
+    session->pending_request_text = initial_task;
 
     // Store session and track binary
     sessions_[session_id] = std::move(session);
@@ -232,12 +283,55 @@ std::string SessionManager::create_session(const std::string& binary_path, const
     return session_id;
 }
 
+json SessionManager::consume_all_responses(Session* session_ptr, int timeout_ms) {
+    if (!session_ptr) {
+        json error;
+        error["error"] = "Invalid session pointer";
+        return error;
+    }
+
+    std::unique_lock<std::mutex> lock(session_ptr->state_mutex);
+
+    // Wait for response (orchestrator sends exactly one per request)
+    if (session_ptr->response_buffer.empty()) {
+        if (timeout_ms > 0) {
+            bool received = session_ptr->response_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                [session_ptr]() {
+                    return !session_ptr->response_buffer.empty();
+                });
+
+            if (!received) {
+                json error;
+                error["error"] = "Timeout waiting for response from orchestrator";
+                return error;
+            }
+        } else {
+            // Wait indefinitely for response
+            session_ptr->response_cv.wait(lock, [session_ptr]() {
+                return !session_ptr->response_buffer.empty();
+            });
+        }
+    }
+
+    // Get the response (only ever one)
+    json response = session_ptr->response_buffer[0];
+    session_ptr->response_buffer.clear();
+
+    // Clear pending flag - ready for next request
+    session_ptr->has_pending_request = false;
+    session_ptr->pending_request_text.clear();
+
+    std::cerr << "MCP Server: Consumed response from buffer, cleared pending flag" << std::endl;
+
+    return response;
+}
+
 json SessionManager::send_message(const std::string& session_id, const std::string& message, bool wait_for_response) {
     Session* session_ptr = nullptr;
 
-    // Acquire lock only to validate session and increment usage count
+    // Acquire lock to validate session
     {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        std::lock_guard<std::mutex> sessions_lock(sessions_mutex_);
 
         auto it = sessions_.find(session_id);
         if (it == sessions_.end() || !it->second->active) {
@@ -249,21 +343,35 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
         session_ptr = it->second.get();
         session_ptr->last_activity = std::chrono::steady_clock::now();
 
-        // Check for pending message - enforce single message at a time
-        if (session_ptr->has_pending_message) {
+        // Increment usage count to prevent session deletion while we're using it
+        session_ptr->usage_count++;
+    } // sessions_mutex_ is released here
+
+    // Check for pending request and prepare for new request
+    {
+        std::lock_guard<std::mutex> state_lock(session_ptr->state_mutex);
+
+        // CRITICAL: Enforce one-request-at-a-time to prevent lost/out-of-order responses
+        if (session_ptr->has_pending_request) {
+            // Decrement usage count before returning error
+            {
+                std::lock_guard<std::mutex> usage_lock(session_ptr->usage_mutex);
+                if (--session_ptr->usage_count == 0) {
+                    session_ptr->usage_cv.notify_all();
+                }
+            }
+
             json error_response;
-            error_response["error"] = "Cannot send message: session is still processing previous message: \"" +
-                                     session_ptr->pending_message_text + "\"";
+            error_response["error"] = "Cannot send message: session has unconsumed response from previous request: \"" +
+                                     session_ptr->pending_request_text + "\". Call wait_for_response() first.";
             return error_response;
         }
 
-        // Mark message as pending
-        session_ptr->has_pending_message = true;
-        session_ptr->pending_message_text = message;
-
-        // Increment usage count to prevent session deletion while we're using it
-        session_ptr->usage_count++;
-    } // sessions_mutex_ is released here - other sessions can now send messages concurrently
+        // Clear response buffer and mark new request as pending
+        session_ptr->response_buffer.clear();
+        session_ptr->has_pending_request = true;
+        session_ptr->pending_request_text = message;
+    }
 
     // Create message for orchestrator
     json msg;
@@ -272,18 +380,21 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
     msg["method"] = "process_input";
     msg["params"]["input"] = message;
 
-    // Send to orchestrator (no longer holding sessions_mutex_!)
+    // Send to orchestrator
     if (!send_json_to_orchestrator(session_ptr, msg)) {
-        // Decrement usage count before returning error
-        // Also clear pending flag since send failed
+        // Clear pending flag since send failed
         {
-            std::lock_guard<std::mutex> lock(session_ptr->queue_mutex);
-            session_ptr->has_pending_message = false;
-            session_ptr->pending_message_text.clear();
+            std::lock_guard<std::mutex> state_lock(session_ptr->state_mutex);
+            session_ptr->has_pending_request = false;
+            session_ptr->pending_request_text.clear();
         }
 
-        if (--session_ptr->usage_count == 0) {
-            session_ptr->usage_cv.notify_all();
+        // Decrement usage count
+        {
+            std::lock_guard<std::mutex> usage_lock(session_ptr->usage_mutex);
+            if (--session_ptr->usage_count == 0) {
+                session_ptr->usage_cv.notify_all();
+            }
         }
 
         json error_response;
@@ -294,8 +405,11 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
     // If background mode (no wait), return success immediately
     if (!wait_for_response) {
         // Decrement usage count
-        if (--session_ptr->usage_count == 0) {
-            session_ptr->usage_cv.notify_all();
+        {
+            std::lock_guard<std::mutex> usage_lock(session_ptr->usage_mutex);
+            if (--session_ptr->usage_count == 0) {
+                session_ptr->usage_cv.notify_all();
+            }
         }
 
         json success_response;
@@ -304,21 +418,15 @@ json SessionManager::send_message(const std::string& session_id, const std::stri
         return success_response;
     }
 
-    // Wait for response (no longer holding sessions_mutex_!)
-    json response;
+    // Blocking mode: consume all responses (clears pending flag)
+    json response = consume_all_responses(session_ptr);
+
+    // Decrement usage count
     {
-        std::unique_lock<std::mutex> queue_lock(session_ptr->queue_mutex);
-        session_ptr->response_cv.wait(queue_lock, [session_ptr]() {
-            return !session_ptr->response_queue.empty();
-        });
-
-        response = session_ptr->response_queue.front();
-        session_ptr->response_queue.pop();
-    }
-
-    // Decrement usage count and notify if this was the last user
-    if (--session_ptr->usage_count == 0) {
-        session_ptr->usage_cv.notify_all();
+        std::lock_guard<std::mutex> usage_lock(session_ptr->usage_mutex);
+        if (--session_ptr->usage_count == 0) {
+            session_ptr->usage_cv.notify_all();
+        }
     }
 
     return response;
@@ -389,6 +497,16 @@ bool SessionManager::close_session(const std::string& session_id) {
         session->reader_thread->join();
     }
 
+    // Close pipe file descriptors if still open
+    if (session->request_pipe_fd >= 0) {
+        close(session->request_pipe_fd);
+        session->request_pipe_fd = -1;
+    }
+    if (session->response_pipe_fd >= 0) {
+        close(session->response_pipe_fd);
+        session->response_pipe_fd = -1;
+    }
+
     // Only hard kill if process is still alive after graceful timeout
     if (is_orchestrator_alive(session->orchestrator_pid)) {
         std::cerr << "MCP Server: Graceful exit timeout, using hard kill as last resort..." << std::endl;
@@ -397,7 +515,7 @@ bool SessionManager::close_session(const std::string& session_id) {
         std::cerr << "MCP Server: Process exited gracefully" << std::endl;
     }
 
-    // Cleanup session directory
+    // Cleanup pipes and session directory
     cleanup_session_directory(session_id);
 
     // Remove binary tracking
@@ -510,6 +628,16 @@ void SessionManager::close_all_sessions() {
                 session->reader_thread->join();
             }
 
+            // Close pipe file descriptors if still open
+            if (session->request_pipe_fd >= 0) {
+                close(session->request_pipe_fd);
+                session->request_pipe_fd = -1;
+            }
+            if (session->response_pipe_fd >= 0) {
+                close(session->response_pipe_fd);
+                session->response_pipe_fd = -1;
+            }
+
             // Kill any remaining processes
             if (is_orchestrator_alive(session->orchestrator_pid)) {
                 std::cerr << "MCP Server: Force-killing session " << session_id
@@ -517,7 +645,7 @@ void SessionManager::close_all_sessions() {
                 kill_orchestrator(session->orchestrator_pid);
             }
 
-            // Cleanup session directory
+            // Cleanup pipes and session directory
             cleanup_session_directory(session_id);
         }
 
@@ -537,6 +665,16 @@ void SessionManager::force_kill_all_sessions() {
         session->active = false;
         session->reader_should_stop = true;
 
+        // Close pipe file descriptors if still open
+        if (session->request_pipe_fd >= 0) {
+            close(session->request_pipe_fd);
+            session->request_pipe_fd = -1;
+        }
+        if (session->response_pipe_fd >= 0) {
+            close(session->response_pipe_fd);
+            session->response_pipe_fd = -1;
+        }
+
         if (is_orchestrator_alive(session->orchestrator_pid)) {
             std::cerr << "MCP Server: Force-killing session " << session_id
                       << " (PID " << session->orchestrator_pid << ")" << std::endl;
@@ -548,7 +686,7 @@ void SessionManager::force_kill_all_sessions() {
             session->reader_thread->detach();
         }
 
-        // Cleanup session directory
+        // Cleanup pipes and session directory
         cleanup_session_directory(session_id);
     }
 
@@ -589,115 +727,6 @@ json SessionManager::get_session_status(const std::string& session_id) const {
 }
 
 
-json SessionManager::wait_for_initial_response(const std::string& session_id, int timeout_ms) {
-    std::cerr << "MCP Server: Waiting for initial response from session " << session_id << " (no timeout)" << std::endl;
-
-    Session* session_ptr = nullptr;
-
-    // Acquire lock to safely access sessions map and increment usage count
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-
-        auto it = sessions_.find(session_id);
-        if (it == sessions_.end()) {
-            json error;
-            error["error"] = "Session not found";
-            return error;
-        }
-
-        session_ptr = it->second.get();
-        // Increment usage count to prevent session deletion while we're waiting
-        session_ptr->usage_count++;
-    } // sessions_mutex_ released here
-
-    // Wait for response without holding sessions_mutex_
-    json response;
-    {
-        std::unique_lock<std::mutex> lock(session_ptr->queue_mutex);
-        // Block indefinitely until response arrives - no timeout
-        session_ptr->response_cv.wait(lock, [session_ptr]() {
-            return !session_ptr->response_queue.empty();
-        });
-
-        response = session_ptr->response_queue.front();
-        session_ptr->response_queue.pop();
-    }
-
-    std::cerr << "MCP Server: Got initial response from session " << session_id << std::endl;
-
-    // Decrement usage count and notify if this was the last user
-    if (--session_ptr->usage_count == 0) {
-        session_ptr->usage_cv.notify_all();
-    }
-
-    return response;
-}
-
-json SessionManager::get_session_messages(const std::string& session_id, int max_messages) {
-    Session* session_ptr = nullptr;
-
-    // Acquire lock to validate session and increment usage count
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-
-        auto it = sessions_.find(session_id);
-        if (it == sessions_.end() || !it->second->active) {
-            json error;
-            error["error"] = "Session not found or inactive";
-            return error;
-        }
-
-        session_ptr = it->second.get();
-        session_ptr->usage_count++;
-    } // sessions_mutex_ released here
-
-    // Get accumulated messages without blocking
-    json result;
-    {
-        std::lock_guard<std::mutex> lock(session_ptr->queue_mutex);
-
-        if (session_ptr->accumulated_responses.empty()) {
-            // No messages available yet
-            result["messages"] = json::array();
-            result["has_pending"] = session_ptr->has_pending_message;
-            if (session_ptr->has_pending_message) {
-                result["pending_message"] = session_ptr->pending_message_text;
-            }
-        } else {
-            // Return accumulated messages
-            int count = max_messages > 0 ? std::min(max_messages, (int)session_ptr->accumulated_responses.size())
-                                         : session_ptr->accumulated_responses.size();
-
-            json messages = json::array();
-            for (int i = 0; i < count; i++) {
-                messages.push_back(session_ptr->accumulated_responses[i]);
-            }
-
-            // Remove returned messages
-            session_ptr->accumulated_responses.erase(
-                session_ptr->accumulated_responses.begin(),
-                session_ptr->accumulated_responses.begin() + count
-            );
-
-            // If we've consumed all messages, clear pending flag
-            if (session_ptr->accumulated_responses.empty()) {
-                session_ptr->has_pending_message = false;
-                session_ptr->pending_message_text.clear();
-            }
-
-            result["messages"] = messages;
-            result["has_pending"] = session_ptr->has_pending_message;
-        }
-    }
-
-    // Decrement usage count
-    if (--session_ptr->usage_count == 0) {
-        session_ptr->usage_cv.notify_all();
-    }
-
-    return result;
-}
-
 json SessionManager::wait_for_response(const std::string& session_id, int timeout_ms) {
     Session* session_ptr = nullptr;
 
@@ -716,61 +745,15 @@ json SessionManager::wait_for_response(const std::string& session_id, int timeou
         session_ptr->usage_count++;
     } // sessions_mutex_ released here
 
-    // Wait for response
-    json result;
-    {
-        std::unique_lock<std::mutex> lock(session_ptr->queue_mutex);
-
-        // Check if response already available
-        if (!session_ptr->accumulated_responses.empty()) {
-            // Return first message
-            result = session_ptr->accumulated_responses[0];
-            session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
-
-            // Clear pending flag if no more messages
-            if (session_ptr->accumulated_responses.empty()) {
-                session_ptr->has_pending_message = false;
-                session_ptr->pending_message_text.clear();
-            }
-        } else {
-            // Wait for response
-            if (timeout_ms > 0) {
-                bool received = session_ptr->response_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                    [session_ptr]() {
-                        return !session_ptr->accumulated_responses.empty();
-                    });
-
-                if (!received) {
-                    result["error"] = "Timeout waiting for response";
-                } else {
-                    result = session_ptr->accumulated_responses[0];
-                    session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
-
-                    if (session_ptr->accumulated_responses.empty()) {
-                        session_ptr->has_pending_message = false;
-                        session_ptr->pending_message_text.clear();
-                    }
-                }
-            } else {
-                // Wait indefinitely
-                session_ptr->response_cv.wait(lock, [session_ptr]() {
-                    return !session_ptr->accumulated_responses.empty();
-                });
-
-                result = session_ptr->accumulated_responses[0];
-                session_ptr->accumulated_responses.erase(session_ptr->accumulated_responses.begin());
-
-                if (session_ptr->accumulated_responses.empty()) {
-                    session_ptr->has_pending_message = false;
-                    session_ptr->pending_message_text.clear();
-                }
-            }
-        }
-    }
+    // Consume all responses (clears pending flag)
+    json result = consume_all_responses(session_ptr, timeout_ms);
 
     // Decrement usage count
-    if (--session_ptr->usage_count == 0) {
-        session_ptr->usage_cv.notify_all();
+    {
+        std::lock_guard<std::mutex> usage_lock(session_ptr->usage_mutex);
+        if (--session_ptr->usage_count == 0) {
+            session_ptr->usage_cv.notify_all();
+        }
     }
 
     return result;
@@ -847,27 +830,27 @@ int SessionManager::spawn_orchestrator(const std::string& binary_path, const std
 }
 
 bool SessionManager::send_json_to_orchestrator(Session* session, const json& msg) {
-    if (!session) return false;
+    if (!session || session->request_pipe_fd < 0) {
+        std::cerr << "Invalid session or pipe not open" << std::endl;
+        return false;
+    }
 
     try {
-        // Write to temporary file first
-        std::string temp_file = session->request_file + ".tmp";
-        std::ofstream out(temp_file);
-        if (!out.is_open()) {
-            std::cerr << "Failed to open request file for writing: " << temp_file << std::endl;
+        // Serialize JSON to string
+        std::string json_str = msg.dump();
+        uint32_t len = json_str.size();
+
+        // Write length-prefixed message to the EXISTING open FD
+        // CRITICAL: Do NOT close this FD - it stays open for the session lifetime
+        ssize_t n = write(session->request_pipe_fd, &len, sizeof(len));
+        if (n != sizeof(len)) {
+            std::cerr << "Failed to write message length to pipe: " << strerror(errno) << std::endl;
             return false;
         }
 
-        out << msg.dump();
-        out.close();
-
-        // Atomically rename to actual request file
-        fs::rename(temp_file, session->request_file);
-
-        // Increment request sequence to signal orchestrator
-        session->request_seq++;
-        if (!write_seq_file(session->request_seq_file, session->request_seq)) {
-            std::cerr << "Failed to update request sequence file" << std::endl;
+        n = write(session->request_pipe_fd, json_str.c_str(), len);
+        if (n != static_cast<ssize_t>(len)) {
+            std::cerr << "Failed to write message body to pipe: " << strerror(errno) << std::endl;
             return false;
         }
 
@@ -878,134 +861,126 @@ bool SessionManager::send_json_to_orchestrator(Session* session, const json& msg
     }
 }
 
-json SessionManager::read_json_from_orchestrator(Session* session, int timeout_ms) {
-    if (!session) {
-        json error;
-        error["error"] = "Invalid session";
-        return error;
-    }
-
-    auto start = std::chrono::steady_clock::now();
-    uint64_t last_seq = session->response_seq;
-
-    while (true) {
-        // Poll the response sequence file
-        uint64_t current_seq = read_seq_file(session->response_seq_file);
-
-        if (current_seq > last_seq) {
-            // New response available
-            try {
-                std::ifstream in(session->response_file);
-                if (!in.is_open()) {
-                    json error;
-                    error["error"] = "Failed to open response file";
-                    return error;
-                }
-
-                std::string content((std::istreambuf_iterator<char>(in)),
-                                   std::istreambuf_iterator<char>());
-                in.close();
-
-                json result = json::parse(content);
-                session->response_seq = current_seq;
-                return result;
-            } catch (const json::exception& e) {
-                json error;
-                error["error"] = std::string("JSON parse error: ") + e.what();
-                return error;
-            } catch (const std::exception& e) {
-                json error;
-                error["error"] = std::string("Error reading response: ") + e.what();
-                return error;
-            }
-        }
-
-        // Check timeout
-        if (timeout_ms > 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count();
-            if (elapsed >= timeout_ms) {
-                json error;
-                error["error"] = "Timeout reading from orchestrator";
-                return error;
-            }
-        }
-
-        // Sleep briefly to avoid busy waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-}
-
 void SessionManager::orchestrator_reader_thread(Session* session) {
-    std::cerr << "MCP Server: Starting reader thread for session " << session->session_id
-              << " (polling " << session->response_file << ")" << std::endl;
+    std::cerr << "MCP Server: Starting reader thread for session " << session->session_id << std::endl;
+    std::cerr << "MCP Server: Opening response pipe: " << session->response_pipe << std::endl;
 
-    int consecutive_errors = 0;
-    const int max_consecutive_errors = 5;
+    // Open pipe for reading (blocks until orchestrator opens for writing)
+    int fd = open(session->response_pipe.c_str(), O_RDONLY);
+    if (fd < 0) {
+        std::cerr << "MCP Server: Failed to open response pipe: " << strerror(errno) << std::endl;
+
+        // Push error to buffer to wake up any waiters
+        json error_response;
+        error_response["error"] = "Failed to open response pipe: " + std::string(strerror(errno));
+        {
+            std::lock_guard<std::mutex> lock(session->state_mutex);
+            session->response_buffer.push_back(error_response);
+        }
+        session->response_cv.notify_all();
+        return;
+    }
+
+    // Store file descriptor for potential cleanup
+    session->response_pipe_fd = fd;
+
+    std::cerr << "MCP Server: Response pipe opened, waiting for messages..." << std::endl;
 
     while (!session->reader_should_stop) {
-        json response = read_json_from_orchestrator(session, 1000); // 1s timeout
+        // Read message length (blocks until data available)
+        uint32_t len;
+        ssize_t n = read_exactly(fd, &len, sizeof(len));
 
-        if (response.contains("error")) {
-            std::string error_msg = response["error"].get<std::string>();
+        if (n == 0) {
+            // EOF - orchestrator closed pipe (clean shutdown or crash)
+            std::cerr << "MCP Server: Orchestrator closed pipe (EOF detected)" << std::endl;
 
-            if (error_msg == "Timeout reading from orchestrator") {
-                // Check if process is still alive during timeout
-                if (!is_orchestrator_alive(session->orchestrator_pid)) {
-                    std::cerr << "MCP Server: Orchestrator process died unexpectedly (PID "
-                              << session->orchestrator_pid << ")" << std::endl;
+            // Check if process actually died
+            if (!is_orchestrator_alive(session->orchestrator_pid)) {
+                std::cerr << "MCP Server: Orchestrator process died (PID "
+                          << session->orchestrator_pid << ")" << std::endl;
 
-                    // Push error response to wake up any waiters
-                    json crash_response;
-                    crash_response["error"] = "Orchestrator process crashed (PID " +
-                                              std::to_string(session->orchestrator_pid) + ")";
-                    {
-                        std::lock_guard<std::mutex> lock(session->queue_mutex);
-                        session->response_queue.push(crash_response);
-                        session->accumulated_responses.push_back(crash_response);
-                        session->has_pending_message = false;
-                    }
-                    session->response_cv.notify_all();
-
-                    // Mark session as inactive
-                    session->active = false;
-                    break;  // Exit reader thread
+                json crash_response;
+                crash_response["error"] = "Orchestrator process terminated (PID " +
+                                          std::to_string(session->orchestrator_pid) + ")";
+                {
+                    std::lock_guard<std::mutex> lock(session->state_mutex);
+                    session->response_buffer.push_back(crash_response);
                 }
-
-                // Process is alive, timeout is normal - reset error counter and continue
-                consecutive_errors = 0;
-                continue;
+                session->response_cv.notify_all();
+                session->active = false;
             }
-
-            // Real error occurred
-            consecutive_errors++;
-            std::cerr << "MCP Server: Reader thread error (" << consecutive_errors << "/" << max_consecutive_errors << "): "
-                      << error_msg << std::endl;
-
-            // Only exit if we get too many consecutive errors (indicates permanent failure)
-            if (consecutive_errors >= max_consecutive_errors) {
-                std::cerr << "MCP Server: Too many consecutive errors, reader thread exiting" << std::endl;
-                break;
-            }
-
-            // For transient errors, wait a bit and retry
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
+            break;
         }
 
-        // Successfully read a response - reset error counter
-        consecutive_errors = 0;
+        if (n < 0) {
+            // Error reading from pipe
+            std::cerr << "MCP Server: Pipe read error: " << strerror(errno) << std::endl;
 
-        // Add response to both queue (for blocking wait) and accumulated (for background retrieval)
-        std::cerr << "MCP Server: Received response from orchestrator: "
-                  << response.dump().substr(0, 200) << "..." << std::endl;
-        {
-            std::lock_guard<std::mutex> lock(session->queue_mutex);
-            session->response_queue.push(response);
-            session->accumulated_responses.push_back(response);  // Also accumulate for get_session_messages
+            json error_response;
+            error_response["error"] = "Pipe read error: " + std::string(strerror(errno));
+            {
+                std::lock_guard<std::mutex> lock(session->state_mutex);
+                session->response_buffer.push_back(error_response);
+            }
+            session->response_cv.notify_all();
+            break;
         }
-        session->response_cv.notify_one();
+
+        // Validate message length (sanity check)
+        if (len == 0 || len > 10 * 1024 * 1024) {  // Max 10MB
+            std::cerr << "MCP Server: Invalid message length: " << len << std::endl;
+            break;
+        }
+
+        // Read message body
+        std::vector<char> buf(len);
+        n = read_exactly(fd, buf.data(), len);
+
+        if (n != static_cast<ssize_t>(len)) {
+            std::cerr << "MCP Server: Failed to read complete message body (expected "
+                      << len << " bytes, got " << n << ")" << std::endl;
+
+            json error_response;
+            error_response["error"] = "Incomplete message read";
+            {
+                std::lock_guard<std::mutex> lock(session->state_mutex);
+                session->response_buffer.push_back(error_response);
+            }
+            session->response_cv.notify_all();
+            break;
+        }
+
+        // Parse JSON
+        try {
+            json response = json::parse(buf.begin(), buf.end());
+
+            std::cerr << "MCP Server: Received response from orchestrator: "
+                      << response.dump().substr(0, 200) << "..." << std::endl;
+
+            // Add to buffer
+            {
+                std::lock_guard<std::mutex> lock(session->state_mutex);
+                session->response_buffer.push_back(response);
+            }
+            session->response_cv.notify_all();
+
+        } catch (const json::exception& e) {
+            std::cerr << "MCP Server: JSON parse error: " << e.what() << std::endl;
+
+            json error_response;
+            error_response["error"] = "JSON parse error: " + std::string(e.what());
+            {
+                std::lock_guard<std::mutex> lock(session->state_mutex);
+                session->response_buffer.push_back(error_response);
+            }
+            session->response_cv.notify_all();
+            break;
+        }
     }
+
+    close(fd);
+    session->response_pipe_fd = -1;
     std::cerr << "MCP Server: Reader thread exiting for session " << session->session_id << std::endl;
 }
 
@@ -1043,21 +1018,21 @@ bool SessionManager::create_session_directory(Session* session) {
         // Create session directory
         fs::create_directories(session->session_dir);
 
-        // Create empty request and response files
-        std::ofstream(session->request_file).close();
-        std::ofstream(session->response_file).close();
-
-        // Initialize sequence files to 0
-        if (!write_seq_file(session->request_seq_file, 0)) {
-            std::cerr << "Failed to create request_seq file" << std::endl;
-            return false;
-        }
-        if (!write_seq_file(session->response_seq_file, 0)) {
-            std::cerr << "Failed to create response_seq file" << std::endl;
+        // Create named pipes (FIFOs)
+        if (mkfifo(session->request_pipe.c_str(), 0666) != 0) {
+            std::cerr << "Failed to create request pipe: " << strerror(errno) << std::endl;
             return false;
         }
 
-        std::cerr << "Created session directory: " << session->session_dir << std::endl;
+        if (mkfifo(session->response_pipe.c_str(), 0666) != 0) {
+            std::cerr << "Failed to create response pipe: " << strerror(errno) << std::endl;
+            unlink(session->request_pipe.c_str());  // Cleanup request pipe
+            return false;
+        }
+
+        std::cerr << "Created session directory with pipes: " << session->session_dir << std::endl;
+        std::cerr << "  Request pipe: " << session->request_pipe << std::endl;
+        std::cerr << "  Response pipe: " << session->response_pipe << std::endl;
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Failed to create session directory: " << e.what() << std::endl;
@@ -1101,39 +1076,6 @@ bool SessionManager::update_state_file(Session* session) {
     }
 }
 
-uint64_t SessionManager::read_seq_file(const std::string& filepath) {
-    try {
-        if (!fs::exists(filepath)) {
-            return 0;
-        }
-
-        std::ifstream in(filepath);
-        if (!in.is_open()) {
-            return 0;
-        }
-
-        uint64_t seq = 0;
-        in >> seq;
-        return seq;
-    } catch (...) {
-        return 0;
-    }
-}
-
-bool SessionManager::write_seq_file(const std::string& filepath, uint64_t seq) {
-    try {
-        std::ofstream out(filepath);
-        if (!out.is_open()) {
-            return false;
-        }
-
-        out << seq;
-        out.close();
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
 
 std::string SessionManager::detect_type_flag(const std::string& binary_path) {
     // Use file command to detect binary type
