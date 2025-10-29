@@ -22,16 +22,18 @@ bool ConflictDetector::initialize() {
     return true;
 }
 
-std::vector<orchestrator::ToolConflict> ConflictDetector::check_conflict(const std::string& tool_name, ea_t address) {
+std::vector<orchestrator::ToolConflict> ConflictDetector::check_conflict(const std::string& tool_name,
+                                                                         ea_t address,
+                                                                         const json& parameters) {
     // Check for conflicts with other agents' changes
-    std::vector<orchestrator::ToolConflict> conflicts = tracker_->check_for_conflicts(agent_id_, tool_name, address);
-    
+    std::vector<orchestrator::ToolConflict> conflicts = tracker_->check_for_conflicts(agent_id_, tool_name, address, parameters);
+
     if (!conflicts.empty()) {
         conflict_count_ += conflicts.size();
-        LOG_INFO("ConflictDetector: Found %zu conflicts for %s at 0x%llx\n", 
+        LOG_INFO("ConflictDetector: Found %zu conflicts for %s at 0x%llx\n",
             conflicts.size(), tool_name.c_str(), address);
     }
-    
+
     return conflicts;
 }
 

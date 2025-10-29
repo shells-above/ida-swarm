@@ -17,7 +17,9 @@ public:
     bool initialize();
     
     // Check for conflicts before a tool call
-    std::vector<orchestrator::ToolConflict> check_conflict(const std::string& tool_name, ea_t address);
+    std::vector<orchestrator::ToolConflict> check_conflict(const std::string& tool_name,
+                                                            ea_t address,
+                                                            const json& parameters = json::object());
     
     // Record a tool call after execution
     bool record_tool_call(const std::string& tool_name, ea_t address, const json& parameters);
