@@ -308,7 +308,6 @@ nlohmann::json MCPServer::handle_start_analysis_session(const nlohmann::json& pa
         }
 
         // No restriction on file type - IDA can handle both raw binaries and databases
-        // todo: user has to manually accept the auto analysis settings if making a new idb
 
         std::cerr << "Starting new analysis session for: " << binary_path << std::endl;
         std::cerr << "Task: " << task << std::endl;
