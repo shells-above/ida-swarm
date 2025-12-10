@@ -8,7 +8,8 @@
 #include "../common.h"
 #include "../messages/types.h"
 #include "../tools/registry.h"
-#include "../auth/oauth_manager.h"
+#include "../auth/oauth_account_pool.h"
+#include "../auth/oauth_flow.h"
 #include "../metrics/metrics_collector.h"
 #include <string>
 #include <vector>
@@ -74,14 +75,14 @@ constexpr const char* STAINLESS_ARCH = "unknown";
 
 // Model selection
 enum class Model {
-    Opus41,
+    Opus45,
     Sonnet45,
     Haiku45
 };
 
 inline std::string model_to_string(Model model) {
     switch (model) {
-        case Model::Opus41: return "claude-opus-4-1-20250805";
+        case Model::Opus45: return "claude-opus-4-5";
         case Model::Sonnet45: return "claude-sonnet-4-5";
         case Model::Haiku45: return "claude-haiku-4-5";
     }
@@ -89,7 +90,7 @@ inline std::string model_to_string(Model model) {
 }
 
 inline Model model_from_string(const std::string& s) {
-    if (s.starts_with("claude-opus-4-1-")) return Model::Opus41;
+    if (s.starts_with("claude-opus-4-5")) return Model::Opus45;
     if (s.starts_with("claude-sonnet-4-5") || s.starts_with("claude-sonnet-4-")) return Model::Sonnet45;
     if (s.starts_with("claude-haiku-4")) return Model::Haiku45;
     throw std::runtime_error("Unknown model: " + s);
@@ -667,11 +668,35 @@ struct ApiError {
 
 // Clean API client
 class Client {
-    // Authentication
+    // === STATIC GLOBAL OAUTH POOL (process-wide singleton) ===
+    static std::mutex global_oauth_mutex_;
+    static std::shared_ptr<auth::OAuthAccountPool> global_oauth_pool_;
+
+    // Helper: Get or create global OAuth pool (lazy initialization)
+    static std::shared_ptr<auth::OAuthAccountPool> get_global_oauth_pool();
+
+    // Helper: Get default config directory
+    static std::filesystem::path get_default_config_dir();
+
+    // Helper: Get fresh credentials from global pool (loads from disk every time)
+    // Returns nullptr if no credentials available or OAuth not configured
+    std::shared_ptr<OAuthCredentials> get_fresh_credentials() {
+        if (auth_method != AuthMethod::OAUTH) {
+            return nullptr;
+        }
+
+        auto pool = get_global_oauth_pool();
+        if (!pool) {
+            return nullptr;
+        }
+
+        return pool->get_best_available_account();
+    }
+
+    // === PER-INSTANCE AUTHENTICATION ===
     AuthMethod auth_method = AuthMethod::API_KEY;
-    std::string api_key;
-    std::shared_ptr<OAuthCredentials> oauth_creds;
-    std::shared_ptr<auth::OAuthManager> oauth_manager_;
+    std::string api_key;  // Only used for API_KEY method
+    // Note: OAuth uses global_oauth_pool_ (no per-instance manager)
 
     std::string api_url = "https://api.anthropic.com/v1/messages";
     std::string request_log_filename;  // Optional filename for request logging (will be in /tmp/anthropic_requests/)
@@ -714,6 +739,9 @@ class Client {
         std::chrono::steady_clock::time_point last_request_time;
         TokenUsage total_usage;
     } stats;
+
+    // Thread safety for stats and mutable state
+    mutable std::mutex stats_mutex_;
 
     // CURL callbacks
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
@@ -764,50 +792,51 @@ class Client {
         }
     }
 
-    // Attempt to refresh OAuth token if manager is available
+    // Attempt to refresh OAuth token using global pool
     // Returns true if refresh succeeded or wasn't needed, false if refresh failed
-    bool refresh_oauth_token_if_needed() {
-        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH || !oauth_creds) {
-            return true; // Not using OAuth or no manager, no refresh needed
+    // NOTE: Refreshed credentials are written to disk atomically by OAuthAccountPool
+    bool refresh_oauth_token_if_needed(const std::string& account_uuid) {
+        if (auth_method != AuthMethod::OAUTH) {
+            return true; // Not using OAuth
         }
 
-        // Try to refresh the specific account
-        auto refreshed_creds = oauth_manager_->refresh_account(oauth_creds->account_uuid);
-        if (!refreshed_creds) {
-            log(LogLevel::ERROR, "Failed to refresh OAuth token: " + oauth_manager_->get_last_error());
+        auto pool = get_global_oauth_pool();
+        if (!pool) {
+            log(LogLevel::ERROR, "No OAuth pool available");
             return false;
         }
 
-        oauth_creds = refreshed_creds;
+        // Refresh token via OAuth flow
+        bool success = refresh_account_tokens(account_uuid);
+        if (!success) {
+            log(LogLevel::ERROR, "Failed to refresh OAuth token for account " + account_uuid);
+            return false;
+        }
+
         log(LogLevel::INFO, "Successfully refreshed OAuth token via API");
         return true;
     }
 
-    // Switch to next available OAuth account (for rate limit handling)
-    bool switch_oauth_account() {
-        if (!oauth_manager_ || auth_method != AuthMethod::OAUTH) {
+    // Check if any OAuth account is available (for rate limit handling)
+    bool has_available_oauth_account() {
+        if (auth_method != AuthMethod::OAUTH) {
             return false;
         }
 
-        // Get best available account globally
-        // This may wait if all accounts are rate limited
-        auto new_creds = oauth_manager_->get_credentials();
-        if (!new_creds) {
-            log(LogLevel::ERROR, "No OAuth accounts available: " + oauth_manager_->get_last_error());
+        auto pool = get_global_oauth_pool();
+        if (!pool) {
+            log(LogLevel::ERROR, "No OAuth pool available");
             return false;
         }
 
-        // Update credentials and use them
-        // Note: May be same account if it just became available after waiting
-        std::string old_uuid = oauth_creds ? oauth_creds->account_uuid : "";
-        oauth_creds = new_creds;
-
-        if (old_uuid != oauth_creds->account_uuid) {
-            log(LogLevel::INFO, "Switched to OAuth account: " + oauth_creds->account_uuid);
-        } else {
-            log(LogLevel::INFO, "Using OAuth account after rate limit expired: " + oauth_creds->account_uuid);
+        // Check if any account is available
+        auto creds = pool->get_best_available_account();
+        if (!creds) {
+            log(LogLevel::ERROR, "No OAuth accounts available: " + pool->get_last_error());
+            return false;
         }
 
+        log(LogLevel::INFO, "OAuth account available: " + creds->account_uuid);
         return true;
     }
 
@@ -851,38 +880,34 @@ class Client {
     }
 
 public:
-    // Constructor for API key authentication
-    explicit Client(const std::string& key, const std::string& base_url = "https://api.anthropic.com/v1/messages", const std::string& log_filename = "")
-        : auth_method(AuthMethod::API_KEY), api_key(key), api_url(base_url) {
-        request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
-    }
+    // === UNIFIED CONSTRUCTOR ===
+    // For API_KEY: credential = your API key string
+    // For OAUTH: credential = "" (uses global pool, auto-initializes)
+    explicit Client(
+        AuthMethod method,
+        const std::string& credential = "",
+        const std::string& base_url = "https://api.anthropic.com/v1/messages",
+        const std::string& log_filename = ""
+    );
 
-    // Constructor for OAuth authentication
-    Client(std::shared_ptr<OAuthCredentials> creds,
-           std::shared_ptr<auth::OAuthManager> oauth_mgr = nullptr,
-           const std::string& base_url = "https://api.anthropic.com/v1/messages",
-           const std::string& log_filename = "")
-        : auth_method(AuthMethod::OAUTH), oauth_creds(creds), oauth_manager_(oauth_mgr), api_url(base_url) {
-        request_log_filename = log_filename.empty() ? generate_timestamp_log_filename() : log_filename;
-    }
+    ~Client() = default;
 
-    ~Client() {
-    }
-    
-    // Set authentication method and credentials
-    void set_api_key(const std::string& key) {
-        auth_method = AuthMethod::API_KEY;
-        api_key = key;
-    }
+    // === OAUTH STATIC METHODS (for managing OAuth accounts) ===
 
-    void set_oauth_credentials(std::shared_ptr<OAuthCredentials> creds) {
-        auth_method = AuthMethod::OAUTH;
-        oauth_creds = creds;
-    }
+    // Trigger OAuth browser flow to add a new account
+    // Returns true if successful, credentials saved to disk automatically
+    static bool authorize_new_account();
 
-    void set_oauth_manager(std::shared_ptr<auth::OAuthManager> oauth_mgr) {
-        oauth_manager_ = oauth_mgr;
-    }
+    // Refresh tokens for a specific account (by UUID)
+    static bool refresh_account_tokens(const std::string& account_uuid);
+
+    // Get all accounts info (for UI display)
+    static std::vector<auth::OAuthAccountPool::AccountInfo> get_accounts_info();
+
+    // Check if OAuth credentials exist on disk
+    static bool has_oauth_credentials();
+
+    // === GETTERS ===
 
     AuthMethod get_auth_method() const {
         return auth_method;
@@ -906,6 +931,7 @@ public:
     }
 
     RequestStats get_stats() const {
+        std::lock_guard<std::mutex> lock(stats_mutex_);
         return stats;
     }
 
@@ -921,44 +947,62 @@ public:
     }
 
     ChatResponse send_request_with_retry(ChatRequest request) {
-        // Multi-account OAuth handles rate limits automatically, so we only need minimal retry logic
-        const int MAX_ATTEMPTS = 5;  // Original + 4 retries for server/network errors
+        const int MAX_ATTEMPTS = 5;
+        int total_attempts = 0;  // Track ALL attempts including retries
 
-        // Before sending request, check if OAuth token is expired and refresh if needed
-        if (oauth_manager_ && auth_method == AuthMethod::OAUTH && oauth_creds) {
-            if (oauth_creds->is_expired(300)) {
-                log(LogLevel::INFO, "OAuth token is expired, refreshing before request...");
-                if (!refresh_oauth_token_if_needed()) {
+        for (int attempt = 0; attempt < MAX_ATTEMPTS && total_attempts < MAX_ATTEMPTS * 2; attempt++, total_attempts++) {
+            // ===== Get FRESH credentials from global pool (NO CACHING) =====
+            std::shared_ptr<OAuthCredentials> current_creds = nullptr;
+
+            if (auth_method == AuthMethod::OAUTH) {
+                current_creds = get_fresh_credentials();
+                if (!current_creds) {
                     ChatResponse failed_response;
                     failed_response.success = false;
-                    failed_response.error = "Failed to refresh expired OAuth token before request";
+                    failed_response.error = "OAuth credentials unavailable (no accounts or all rate-limited)";
                     return failed_response;
                 }
+
+                // Check if expired, refresh if needed (atomic with file locking)
+                if (current_creds->is_expired(300)) {
+                    log(LogLevel::INFO, "OAuth token expired, refreshing...");
+
+                    if (!refresh_oauth_token_if_needed(current_creds->account_uuid)) {
+                        // Refresh failed, try getting another account (reload fresh from disk)
+                        current_creds = get_fresh_credentials();
+                        if (!current_creds || current_creds->is_expired(60)) {
+                            // Try one more time with fresh credentials (another process may have refreshed)
+                            current_creds = get_fresh_credentials();
+                            if (!current_creds || current_creds->is_expired(60)) {
+                                ChatResponse failed_response;
+                                failed_response.success = false;
+                                failed_response.error = "Failed to refresh expired OAuth token";
+                                return failed_response;
+                            }
+                        }
+                    } else {
+                        // Refresh succeeded, reload from disk to get fresh token
+                        current_creds = get_fresh_credentials();
+                        if (!current_creds) {
+                            ChatResponse failed_response;
+                            failed_response.success = false;
+                            failed_response.error = "Failed to load credentials after refresh";
+                            return failed_response;
+                        }
+                    }
+                }
             }
-        }
 
-        // Get initial credentials (best available account globally)
-        if (oauth_manager_ && auth_method == AuthMethod::OAUTH && !oauth_creds) {
-            oauth_creds = oauth_manager_->get_credentials();
-            if (!oauth_creds) {
-                ChatResponse failed_response;
-                failed_response.success = false;
-                failed_response.error = "No OAuth credentials available";
-                return failed_response;
-            }
-        }
+            // Send request with current credentials
+            ChatResponse response = send_request_internal(request, current_creds);
 
-        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            ChatResponse response = send_request_internal(request);
-
-            // Success - return immediately
             if (response.success) {
                 return response;
             }
 
-            // Check if this is a rate limit error (429)
+            // Handle rate limit (429)
             bool is_rate_limit = false;
-            int retry_after_seconds = 60;  // Default
+            int retry_after_seconds = 60;
 
             if (response.error) {
                 const std::string& error_msg = *response.error;
@@ -966,33 +1010,28 @@ public:
                                 error_msg.find("rate limit") != std::string::npos ||
                                 error_msg.find("Rate limit") != std::string::npos);
 
-                // Extract retry_after if available
                 if (response.retry_after_seconds.has_value()) {
                     retry_after_seconds = response.retry_after_seconds.value();
                 }
             }
 
-            // Handle rate limit: mark account and try to switch
-            if (is_rate_limit && oauth_manager_ && oauth_creds) {
+            if (is_rate_limit && auth_method == AuthMethod::OAUTH && current_creds) {
                 log(LogLevel::WARNING, std::format(
                     "Rate limit hit on account {}, retry after {} seconds",
-                    oauth_creds->account_uuid, retry_after_seconds));
+                    current_creds->account_uuid, retry_after_seconds));
 
-                // Mark current account as rate limited
-                oauth_manager_->mark_account_rate_limited(oauth_creds->account_uuid, retry_after_seconds);
-
-                // Try to switch to another account (may wait if all are rate limited)
-                if (switch_oauth_account()) {
-                    log(LogLevel::INFO, "Retrying with available account...");
-                    continue;  // Retry with account
-                } else {
-                    // Truly no accounts available
-                    log(LogLevel::ERROR, "No OAuth accounts available");
-                    return response;
+                // Mark account as rate limited (saves to disk atomically)
+                auto pool = get_global_oauth_pool();
+                if (pool) {
+                    pool->mark_rate_limited(current_creds->account_uuid, retry_after_seconds);
                 }
+
+                // Try next iteration - will get fresh credentials and skip rate-limited account
+                log(LogLevel::INFO, "Retrying with different account...");
+                continue;
             }
 
-            // Check if this is an OAuth authentication error (401)
+            // Handle OAuth authentication error (401)
             bool is_oauth_error = false;
             if (response.error) {
                 const std::string& error_msg = *response.error;
@@ -1001,11 +1040,11 @@ public:
                                   error_msg.find("revoked") != std::string::npos);
             }
 
-            // If OAuth error, try to refresh token
-            if (is_oauth_error && oauth_manager_) {
-                log(LogLevel::WARNING, "OAuth authentication error detected, attempting token refresh...");
-                if (refresh_oauth_token_if_needed()) {
-                    log(LogLevel::INFO, "Token refreshed, retrying request immediately...");
+            if (is_oauth_error && auth_method == AuthMethod::OAUTH && current_creds) {
+                log(LogLevel::WARNING, "OAuth authentication error, attempting token refresh...");
+
+                if (refresh_oauth_token_if_needed(current_creds->account_uuid)) {
+                    log(LogLevel::INFO, "Token refreshed, retrying...");
                     continue;
                 } else {
                     log(LogLevel::ERROR, "Failed to refresh OAuth token");
@@ -1015,51 +1054,56 @@ public:
 
             // Check for retryable server/network errors
             bool is_retryable_error = false;
+            bool is_http2_error = false;
             if (response.error) {
                 const std::string& error_msg = *response.error;
 
-                // 5xx server errors (500, 502, 503, 529)
                 bool is_5xx = (error_msg.find("500") != std::string::npos ||
                               error_msg.find("502") != std::string::npos ||
                               error_msg.find("503") != std::string::npos ||
                               error_msg.find("529") != std::string::npos);
 
-                // Overloaded errors
                 bool is_overloaded = (error_msg.find("Overloaded") != std::string::npos ||
                                      error_msg.find("overloaded") != std::string::npos);
 
-                // CURL network errors (timeout, connection failures)
+                is_http2_error = (error_msg.find("HTTP2 framing") != std::string::npos ||
+                                 error_msg.find("HTTP/2 framing") != std::string::npos);
+
                 bool is_curl_network = (error_msg.find("CURL error") != std::string::npos &&
                                        (error_msg.find("timeout") != std::string::npos ||
+                                        error_msg.find("timed out") != std::string::npos ||
                                         error_msg.find("Connection") != std::string::npos ||
                                         error_msg.find("Failed sending") != std::string::npos ||
                                         error_msg.find("Failed receiving") != std::string::npos ||
-                                        error_msg.find("Couldn't connect") != std::string::npos));
+                                        error_msg.find("Couldn't connect") != std::string::npos ||
+                                        error_msg.find("returned nothing") != std::string::npos ||
+                                        error_msg.find("Empty reply") != std::string::npos ||
+                                        error_msg.find("Partial file") != std::string::npos ||
+                                        error_msg.find("Transfer closed") != std::string::npos ||
+                                        error_msg.find("SSL connect error") != std::string::npos ||
+                                        error_msg.find("SSL connection") != std::string::npos));
 
-                is_retryable_error = is_5xx || is_overloaded || is_curl_network;
+                is_retryable_error = is_5xx || is_overloaded || is_curl_network || is_http2_error;
             }
 
-            // Retry with exponential backoff for server/network errors
             if (is_retryable_error && attempt < MAX_ATTEMPTS - 1) {
-                // Exponential backoff: 1s, 2s, 4s, 8s
-                int backoff_seconds = 1 << attempt;  // 2^attempt
+                int backoff_seconds = 1 << attempt;
+                std::string error_type = is_http2_error ? "HTTP/2 framing error" : "Retryable error";
                 log(LogLevel::WARNING, std::format(
-                    "Retryable error (attempt {}/{}): {} - retrying in {}s...",
-                    attempt + 1, MAX_ATTEMPTS, response.error.value_or("Unknown"), backoff_seconds));
+                    "{} (attempt {}/{}): {} - retrying in {}s...",
+                    error_type, attempt + 1, MAX_ATTEMPTS, response.error.value_or("Unknown"), backoff_seconds));
 
                 std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
-                continue;  // Retry request
+                continue;
             }
 
-            // For non-retryable errors or max attempts reached, return immediately
             log(LogLevel::ERROR, std::format("Request failed: {}", response.error.value_or("Unknown error")));
             return response;
         }
 
-        // Should not reach here, but return a failed response just in case
         ChatResponse failed_response;
         failed_response.success = false;
-        failed_response.error = "Max retry attempts reached";
+        failed_response.error = "Max retry attempts reached (" + std::to_string(total_attempts) + " attempts)";
         return failed_response;
     }
     
@@ -1068,9 +1112,13 @@ public:
         return send_request_with_retry(request);
     }
     
-    ChatResponse send_request_internal(ChatRequest request) {
-        stats.total_requests++;
-        stats.last_request_time = std::chrono::steady_clock::now();
+    ChatResponse send_request_internal(ChatRequest request, std::shared_ptr<OAuthCredentials> creds = nullptr) {
+        // Thread-safe stats update
+        {
+            std::lock_guard<std::mutex> lock(stats_mutex_);
+            stats.total_requests++;
+            stats.last_request_time = std::chrono::steady_clock::now();
+        }
         
         // If using OAuth, prepend Claude Code system prompt as separate blocks
         if (auth_method == AuthMethod::OAUTH) {
@@ -1114,7 +1162,10 @@ public:
         // Perform HTTP request
         CURL* curl = curl_easy_init();
         if (!curl) {
-            stats.failed_requests++;
+            {
+                std::lock_guard<std::mutex> lock(stats_mutex_);
+                stats.failed_requests++;
+            }
             ChatResponse response;
             response.success = false;
             response.error = "Failed to initialize CURL";
@@ -1153,13 +1204,13 @@ public:
         if (auth_method == AuthMethod::API_KEY) {
             headers = curl_slist_append(headers, ("x-api-key: " + api_key).c_str());
         } else {
-            // OAuth authentication
-            if (!oauth_creds) {
+            // OAuth authentication (credentials passed as parameter, NOT cached)
+            if (!creds) {
                 curl_slist_free_all(headers);
                 curl_easy_cleanup(curl);
                 throw std::runtime_error("OAuth credentials not set");
             }
-            headers = curl_slist_append(headers, ("Authorization: Bearer " + oauth_creds->access_token).c_str());
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + creds->access_token).c_str());
             
             // Add Stainless SDK headers for OAuth
             headers = curl_slist_append(headers, ("User-Agent: " + std::string(USER_AGENT)).c_str());
@@ -1215,6 +1266,18 @@ public:
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         // curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);  // 5 minute timeout
 
+        // Force HTTP/1.1 to avoid libcurl HTTP/2 connection reuse bugs
+        // HTTP/2 has known race conditions with connection pooling that cause "Error in the HTTP2 framing layer"
+        // See: https://github.com/curl/curl/issues/3750, https://github.com/curl/curl/issues/10634
+        // HTTP/1.1 is more stable and has better connection management
+        curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
+        // Connection management to prevent stale connection issues
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);  // 30 second connection timeout
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);    // Enable TCP keepalive
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 60L);    // 60 seconds before keepalive probe
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 60L);   // 60 seconds between probes
+
         // Start timing the API request
         auto api_start = std::chrono::steady_clock::now();
 
@@ -1234,7 +1297,10 @@ public:
         ChatResponse response;
 
         if (res != CURLE_OK) {
-            stats.failed_requests++;
+            {
+                std::lock_guard<std::mutex> lock(stats_mutex_);
+                stats.failed_requests++;
+            }
             response.success = false;
             response.error = "CURL error: " + std::string(curl_easy_strerror(res));
 
@@ -1267,7 +1333,10 @@ public:
                 // Check if this is a 50X server error with non-JSON response
                 if (http_code >= 500 && http_code < 600) {
                     // This is a server error, treat it as recoverable
-                    stats.failed_requests++;
+                    {
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        stats.failed_requests++;
+                    }
                     response.success = false;
                     response.error = std::format("Server error (HTTP {}): Non-JSON response - {}",
                         http_code,
@@ -1322,8 +1391,11 @@ public:
             response = ChatResponse::from_json(response_json);
 
             if (response.success) {
-                stats.successful_requests++;
-                stats.total_usage += response.usage;
+                {
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    stats.successful_requests++;
+                    stats.total_usage += response.usage;
+                }
 
                 // Record metrics for successful API requests
                 IMetricsCollector* collector = metrics_collector_ ? metrics_collector_ : &null_metrics_collector_;
@@ -1353,7 +1425,10 @@ public:
                     ));
                 }
             } else {
-                stats.failed_requests++;
+                {
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    stats.failed_requests++;
+                }
 
                 // Enhance error information
                 ApiError api_error = ApiError::from_response(
@@ -1379,7 +1454,10 @@ public:
             }
 
         } catch (const std::exception& e) {
-            stats.failed_requests++;
+            {
+                std::lock_guard<std::mutex> lock(stats_mutex_);
+                stats.failed_requests++;
+            }
             response.success = false;
             response.error = "JSON parse error: " + std::string(e.what());
 

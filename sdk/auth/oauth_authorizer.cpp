@@ -1,5 +1,5 @@
 #include "oauth_authorizer.h"
-#include "oauth_manager.h"
+#include "oauth_account_pool.h"
 #include "../client/client.h"
 #include <curl/curl.h>
 #include <openssl/sha.h>
@@ -441,6 +441,15 @@ std::optional<OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(const std
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    // Force HTTP/1.1 to avoid libcurl HTTP/2 connection reuse bugs
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
+    // Connection management
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 60L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 60L);
     
     CURLcode res = curl_easy_perform(curl);
     
@@ -490,15 +499,24 @@ std::optional<OAuthCredentials> OAuthAuthorizer::exchangeCodeForTokens(const std
 }
 
 bool OAuthAuthorizer::saveCredentials(const OAuthCredentials& creds) {
-    // Use OAuthManager to save credentials in encrypted format
-    OAuthManager oauth_manager;
+    // Use OAuthAccountPool directly (no more OAuthManager!)
+    OAuthAccountPool pool;  // Uses default config dir (~/.claude_cpp_sdk)
 
-    // Calculate next priority (existing accounts + 1)
-    size_t existing_count = oauth_manager.get_account_count();
-    int priority = static_cast<int>(existing_count);  // 0-indexed priorities
+    // Load existing accounts to calculate priority
+    pool.load_from_disk();  // Ignore error if file doesn't exist (first account)
 
-    if (!oauth_manager.save_credentials(creds, priority)) {
-        last_error_ = "Failed to save credentials: " + oauth_manager.get_last_error();
+    // Calculate next priority (existing accounts count)
+    int priority = static_cast<int>(pool.account_count());
+
+    // Add account
+    if (!pool.add_account(creds, priority)) {
+        last_error_ = "Failed to add account: " + pool.get_last_error();
+        return false;
+    }
+
+    // Save to disk
+    if (!pool.save_to_disk()) {
+        last_error_ = "Failed to save credentials: " + pool.get_last_error();
         return false;
     }
 

@@ -2,11 +2,318 @@
 #include <algorithm>
 #include <sstream>
 #include <thread>
+#include <fstream>
+#include <cstdlib>
+#include <sys/stat.h>
 
 namespace claude::auth {
 
-OAuthAccountPool::OAuthAccountPool() {
+// ============================================================================
+// CONSTRUCTOR AND INITIALIZATION
+// ============================================================================
+
+OAuthAccountPool::OAuthAccountPool(const std::filesystem::path& config_dir) {
+    if (config_dir.empty()) {
+        config_dir_ = get_default_config_dir();
+    } else {
+        config_dir_ = config_dir;
+    }
+
+    initialize_file_paths();
+
+    // Ensure config directory exists
+    if (!std::filesystem::exists(config_dir_)) {
+        std::filesystem::create_directories(config_dir_);
+    }
 }
+
+std::filesystem::path OAuthAccountPool::get_default_config_dir() {
+    const char* home_env = std::getenv("HOME");
+    if (!home_env) {
+        throw std::runtime_error("HOME environment variable not set");
+    }
+    return std::filesystem::path(home_env) / ".claude_cpp_sdk";
+}
+
+void OAuthAccountPool::initialize_file_paths() {
+    credentials_file_ = config_dir_ / "credentials.json";
+    credentials_file_tmp_ = config_dir_ / "credentials.json.tmp";
+    lock_file_ = config_dir_ / ".credentials.lock";
+}
+
+// ============================================================================
+// FILE LOCKING (moved from CredentialStore)
+// ============================================================================
+
+OAuthAccountPool::FileLock::FileLock(const std::filesystem::path& lock_file_path)
+    : lock_file_path_(lock_file_path), locked_(false), lock_type_(LockType::SHARED)
+#ifdef _WIN32
+    , handle_(INVALID_HANDLE_VALUE)
+#else
+    , fd_(-1)
+#endif
+{
+}
+
+OAuthAccountPool::FileLock::~FileLock() {
+    if (locked_) {
+        release();
+    }
+}
+
+bool OAuthAccountPool::FileLock::acquire(LockType type, int timeout_seconds) {
+    if (locked_) {
+        return true;  // Already locked
+    }
+
+    lock_type_ = type;
+
+    // Create lock file if it doesn't exist
+    std::ofstream lock_file(lock_file_path_, std::ios::app);
+    lock_file.close();
+
+#ifdef _WIN32
+    // Windows file locking implementation
+    DWORD flags = (type == LockType::EXCLUSIVE) ? LOCKFILE_EXCLUSIVE_LOCK : 0;
+    flags |= LOCKFILE_FAIL_IMMEDIATELY;
+
+    handle_ = CreateFileW(
+        lock_file_path_.wstring().c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (handle_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        OVERLAPPED overlapped = {0};
+        if (LockFileEx(handle_, flags, 0, MAXDWORD, MAXDWORD, &overlapped)) {
+            locked_ = true;
+            return true;
+        }
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        if (elapsed >= timeout_seconds) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+#else
+    // Unix file locking implementation
+    fd_ = open(lock_file_path_.c_str(), O_RDWR | O_CREAT, 0600);
+    if (fd_ < 0) {
+        return false;
+    }
+
+    int lock_operation = (type == LockType::EXCLUSIVE) ? LOCK_EX : LOCK_SH;
+
+    // Try with exponential backoff
+    auto start = std::chrono::steady_clock::now();
+    int backoff_ms = 10;
+
+    while (true) {
+        // Try non-blocking lock
+        if (flock(fd_, lock_operation | LOCK_NB) == 0) {
+            locked_ = true;
+            return true;
+        }
+
+        // Check timeout
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        if (elapsed >= timeout_seconds) {
+            close(fd_);
+            fd_ = -1;
+            return false;
+        }
+
+        // Exponential backoff with cap
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+        backoff_ms = std::min(backoff_ms * 2, 1000);  // Max 1 second
+    }
+#endif
+}
+
+void OAuthAccountPool::FileLock::release() {
+    if (!locked_) {
+        return;
+    }
+
+#ifdef _WIN32
+    if (handle_ != INVALID_HANDLE_VALUE) {
+        UnlockFile(handle_, 0, 0, MAXDWORD, MAXDWORD);
+        CloseHandle(handle_);
+        handle_ = INVALID_HANDLE_VALUE;
+    }
+#else
+    if (fd_ >= 0) {
+        flock(fd_, LOCK_UN);
+        close(fd_);
+        fd_ = -1;
+    }
+#endif
+
+    locked_ = false;
+}
+
+// ============================================================================
+// FILE I/O OPERATIONS (merged from CredentialStore)
+// ============================================================================
+
+bool OAuthAccountPool::credentials_exist() const {
+    return std::filesystem::exists(credentials_file_);
+}
+
+bool OAuthAccountPool::load_from_disk() {
+    // Acquire shared lock for reading
+    FileLock lock(lock_file_);
+    if (!lock.acquire(FileLock::LockType::SHARED, LOCK_TIMEOUT_SECONDS)) {
+        last_error_ = "Failed to acquire lock for reading credentials";
+        return false;
+    }
+
+    // Check if file exists
+    if (!credentials_exist()) {
+        last_error_ = "Credentials file does not exist";
+        return false;
+    }
+
+    // Read file contents
+    auto file_contents = read_file(credentials_file_);
+    if (!file_contents) {
+        last_error_ = "Failed to read credentials file";
+        return false;
+    }
+
+    // Parse JSON
+    try {
+        json creds_json = json::parse(*file_contents);
+        return from_json(creds_json);
+    } catch (const std::exception& e) {
+        last_error_ = std::string("Failed to parse credentials JSON: ") + e.what();
+        return false;
+    }
+}
+
+bool OAuthAccountPool::save_to_disk() {
+    // Acquire exclusive lock for writing
+    FileLock lock(lock_file_);
+    if (!lock.acquire(FileLock::LockType::EXCLUSIVE, LOCK_TIMEOUT_SECONDS)) {
+        last_error_ = "Failed to acquire lock for writing credentials";
+        return false;
+    }
+
+    // Serialize to JSON
+    json creds_json = to_json();
+    std::string json_str = creds_json.dump(2);  // Pretty print with 2-space indent
+
+    // Write atomically (temp file + rename)
+    if (!write_file_atomic(credentials_file_, json_str)) {
+        last_error_ = "Failed to write credentials file";
+        return false;
+    }
+
+    return true;
+}
+
+bool OAuthAccountPool::update_on_disk(std::function<bool(void)> modify_callback) {
+    // Acquire exclusive lock for atomic read-modify-write
+    FileLock lock(lock_file_);
+    if (!lock.acquire(FileLock::LockType::EXCLUSIVE, LOCK_TIMEOUT_SECONDS)) {
+        last_error_ = "Failed to acquire lock for updating credentials";
+        return false;
+    }
+
+    // Load current state
+    if (credentials_exist()) {
+        auto file_contents = read_file(credentials_file_);
+        if (file_contents) {
+            try {
+                json creds_json = json::parse(*file_contents);
+                from_json(creds_json);
+            } catch (...) {
+                // If parse fails, continue with empty state
+            }
+        }
+    }
+
+    // Execute modification callback
+    bool should_save = modify_callback();
+    if (!should_save) {
+        return false;
+    }
+
+    // Save modified state
+    json creds_json = to_json();
+    std::string json_str = creds_json.dump(2);
+
+    if (!write_file_atomic(credentials_file_, json_str)) {
+        last_error_ = "Failed to write updated credentials";
+        return false;
+    }
+
+    return true;
+}
+
+// ============================================================================
+// FILE I/O HELPERS
+// ============================================================================
+
+std::optional<std::string> OAuthAccountPool::read_file(const std::filesystem::path& path) const {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        return std::nullopt;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+bool OAuthAccountPool::write_file_atomic(const std::filesystem::path& path, const std::string& data) {
+    // Write to temp file
+    std::ofstream tmp_file(credentials_file_tmp_);
+    if (!tmp_file.is_open()) {
+        return false;
+    }
+
+    tmp_file << data;
+    tmp_file.close();
+
+    if (!tmp_file.good()) {
+        std::filesystem::remove(credentials_file_tmp_);
+        return false;
+    }
+
+    // Set restrictive permissions (owner read/write only)
+    chmod(credentials_file_tmp_.c_str(), 0600);
+
+    // Atomic rename
+    try {
+        std::filesystem::rename(credentials_file_tmp_, path);
+        return true;
+    } catch (const std::exception& e) {
+        std::filesystem::remove(credentials_file_tmp_);
+        return false;
+    }
+}
+
+// ============================================================================
+// ACCOUNT MANAGEMENT
+// ============================================================================
 
 bool OAuthAccountPool::add_account(const OAuthCredentials& creds, int priority) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -64,42 +371,46 @@ std::shared_ptr<OAuthCredentials> OAuthAccountPool::get_best_available_account()
         }
     }
 
-    // No available accounts - check if any will become available soon
+    // SIMPLIFIED: No waiting logic - just return nullptr
+    // Let the CALLER (Client) handle waiting and retrying
+    // This prevents the dangerous mutex_.unlock()/mutex_.lock() pattern that could cause:
+    // - Invalid iterators (if accounts_ modified while unlocked)
+    // - Segmentation faults
+    // - Race conditions
+
+    // Check if any will become available soon (for error message)
     auto soonest = get_soonest_available_account();
     if (soonest) {
         int wait_seconds = soonest->seconds_until_available();
-        if (wait_seconds > 0 && wait_seconds < 3600) {  // Wait up to 1 hour
-            // Temporarily release mutex while waiting
-            mutex_.unlock();
-            std::this_thread::sleep_for(std::chrono::seconds(wait_seconds));
-            mutex_.lock();
-
-            // Try to get the account that should now be available
-            if (is_account_available(soonest->account_uuid)) {
-                auto it = find_account_by_uuid(soonest->account_uuid);
-                if (it != accounts_.end()) {
-                    return std::make_shared<OAuthCredentials>(it->credentials);
-                }
-            }
-        }
+        last_error_ = "No OAuth accounts available (all rate limited, retry in " +
+                     std::to_string(wait_seconds) + " seconds)";
+    } else {
+        last_error_ = "No OAuth accounts available (all rate limited or expired)";
     }
 
-    last_error_ = "No OAuth accounts available (all rate limited or expired)";
     return nullptr;
 }
 
 void OAuthAccountPool::mark_rate_limited(const std::string& account_uuid, int retry_after_seconds) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // CRITICAL: Must save to disk so OTHER PROCESSES see the rate limit!
+    // This prevents all processes from hammering the same rate-limited account.
 
     auto now = std::chrono::system_clock::now();
-    auto rate_limit_until = now + std::chrono::seconds(retry_after_seconds);
+    auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    double rate_limited_until_timestamp = now_timestamp + retry_after_seconds;
 
-    RateLimitInfo info;
-    info.account_uuid = account_uuid;
-    info.rate_limited_until = rate_limit_until;
-    info.retry_after_seconds = retry_after_seconds;
+    // Atomic update on disk
+    update_on_disk([&]() {
+        std::lock_guard<std::mutex> lock(mutex_);
 
-    rate_limits_[account_uuid] = info;
+        // Find account and update rate limit
+        auto it = find_account_by_uuid(account_uuid);
+        if (it != accounts_.end()) {
+            it->credentials.rate_limited_until = rate_limited_until_timestamp;
+            return true;  // Save to disk
+        }
+        return false;  // Account not found, don't save
+    });
 }
 
 bool OAuthAccountPool::is_account_available(const std::string& account_uuid) const {
@@ -115,9 +426,8 @@ bool OAuthAccountPool::is_account_available(const std::string& account_uuid) con
         return false;  // No refresh token, truly unavailable
     }
 
-    // Check if account is rate limited
-    auto rate_it = rate_limits_.find(account_uuid);
-    if (rate_it != rate_limits_.end() && rate_it->second.is_rate_limited()) {
+    // Check if account is rate limited (uses persisted field from disk - shared across processes!)
+    if (it->credentials.is_rate_limited()) {
         return false;
     }
 
@@ -139,7 +449,11 @@ std::optional<RateLimitInfo> OAuthAccountPool::get_soonest_available_account() c
     return soonest;
 }
 
-bool OAuthAccountPool::load_from_json(const json& j) {
+// ============================================================================
+// SERIALIZATION (private helpers - renamed from load_from_json/save_to_json)
+// ============================================================================
+
+bool OAuthAccountPool::from_json(const json& j) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     try {
@@ -169,6 +483,7 @@ bool OAuthAccountPool::load_from_json(const json& j) {
             creds.refresh_token = account_json.value("refresh_token", "");
             creds.expires_at = account_json.value("expires_at", 0.0);
             creds.account_uuid = account_json.value("account_uuid", "");
+            creds.rate_limited_until = account_json.value("rate_limited_until", 0.0);  // Load rate limits from disk!
 
             int priority = account_json.value("priority", 0);
 
@@ -186,7 +501,7 @@ bool OAuthAccountPool::load_from_json(const json& j) {
     }
 }
 
-json OAuthAccountPool::save_to_json() const {
+json OAuthAccountPool::to_json() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     json accounts_array = json::array();
@@ -198,6 +513,7 @@ json OAuthAccountPool::save_to_json() const {
         account_json["refresh_token"] = account.credentials.refresh_token;
         account_json["expires_at"] = account.credentials.expires_at;
         account_json["account_uuid"] = account.credentials.account_uuid;
+        account_json["rate_limited_until"] = account.credentials.rate_limited_until;  // Persist rate limits!
         account_json["provider"] = "claude_ai";  // Default provider
 
         accounts_array.push_back(account_json);
@@ -263,13 +579,18 @@ std::vector<OAuthAccountPool::AccountInfo> OAuthAccountPool::get_all_accounts_in
         info.account_uuid = account.credentials.account_uuid;
         info.expires_at = account.credentials.expires_at;
 
-        // Check if rate limited
-        auto rate_it = rate_limits_.find(account.credentials.account_uuid);
-        if (rate_it != rate_limits_.end() && rate_it->second.is_rate_limited()) {
-            info.is_rate_limited = true;
-            info.seconds_until_available = rate_it->second.seconds_until_available();
+        // Check if rate limited (from persisted field on disk)
+        info.is_rate_limited = account.credentials.is_rate_limited();
+        if (info.is_rate_limited) {
+            auto now = std::chrono::system_clock::now();
+            auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                now.time_since_epoch()).count();
+            info.seconds_until_available = static_cast<int>(
+                account.credentials.rate_limited_until - now_timestamp);
+            if (info.seconds_until_available < 0) {
+                info.seconds_until_available = 0;
+            }
         } else {
-            info.is_rate_limited = false;
             info.seconds_until_available = 0;
         }
 

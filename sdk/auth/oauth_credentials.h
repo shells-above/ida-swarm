@@ -11,12 +11,20 @@ struct OAuthCredentials {
     std::string refresh_token;
     double expires_at = 0;  // Unix timestamp
     std::string account_uuid;
+    double rate_limited_until = 0;  // Unix timestamp - persisted to disk for cross-process rate limiting
 
     bool is_expired(int buffer_seconds = 300) const {
         auto now = std::chrono::system_clock::now();
         auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             now.time_since_epoch()).count();
         return now_timestamp + buffer_seconds >= expires_at;
+    }
+
+    bool is_rate_limited() const {
+        auto now = std::chrono::system_clock::now();
+        auto now_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+            now.time_since_epoch()).count();
+        return now_timestamp < rate_limited_until;
     }
 };
 

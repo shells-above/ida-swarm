@@ -259,7 +259,6 @@ include(cmake/BuildKeystone.cmake)
 # SDK source files (built WITHOUT IDA headers)
 set(SDK_SOURCES
         sdk/client/client.cpp
-        sdk/auth/oauth_manager.cpp
         sdk/auth/oauth_account_pool.cpp
         sdk/auth/oauth_flow.cpp
         sdk/auth/oauth_authorizer.cpp
@@ -346,7 +345,7 @@ set(HEADERS
         sdk/client/client.h
         sdk/messages/types.h
         sdk/tools/registry.h
-        sdk/auth/oauth_manager.h
+        sdk/auth/oauth_account_pool.h
         sdk/auth/oauth_flow.h
         sdk/auth/oauth_authorizer.h
         sdk/usage/pricing.h

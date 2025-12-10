@@ -531,38 +531,46 @@ When assigned to fully reverse a function, your goal is PERFECT source-level und
    - Are all magic numbers explained or converted to meaningful constants?
    - Have I used the most specific types available?
 
+REMEMBER: Reverse engineering **IS NOT** JUST ABOUT UNDERSTANDING THE FUNCTION ITSELF! You **MUST** explore the functions callers/callees to understand the CONTEXT behind the function. THIS IS CRITICAL!
+By exploring the surrounding functions you gain context on how your function is used and can actually make VALUABLE ASSUMPTIONS about the code. You can **ONLY** do this if you UNDERSTAND THE CONTEXT BEHIND YOUR FUNCTION!
+
 Think deeply about INTENT, not just mechanics. Make the decompilation tell the story of what this function accomplishes.)";
 
     // Helper function to create AnthropicClient based on config
     claude::Client create_api_client(const Config& config) {
-        // Create our own OAuth manager if using OAuth authentication
-        if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-            oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
-        }
-        
-        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-            // Get best available account globally
-            // Client will handle token refresh and account switching automatically
-            std::shared_ptr<claude::OAuthCredentials> oauth_creds =
-                oauth_manager_->get_credentials();
-
-            if (!oauth_creds) {
-                LOG("LLM RE: ERROR - Failed to load OAuth credentials! Error: %s\n",
-                    oauth_manager_->get_last_error().c_str());
-                LOG("LLM RE: WARNING - Falling back to API key authentication\n");
-                LOG("LLM RE: To fix OAuth: Use Settings > Refresh Token or re-authorize your account\n");
-                std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
-                return claude::Client(config.api.api_key, config.api.base_url, log_filename);
-            }
-
-            // Client handles all token refresh and account switching automatically
-            std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
-            return claude::Client(oauth_creds, oauth_manager_, config.api.base_url, log_filename);
-        }
-        
-        // Default to API key with log filename configured
         std::string log_filename = std::format("anthropic_requests_agent_{}.log", agent_id_);
-        return claude::Client(config.api.api_key, config.api.base_url, log_filename);
+
+        if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+            // Client uses global OAuth pool (no manager needed!)
+            // Will throw if credentials don't exist
+            try {
+                return claude::Client(
+                    claude::AuthMethod::OAUTH,
+                    "",  // Credential not needed for OAuth
+                    config.api.base_url,
+                    log_filename
+                );
+            } catch (const std::exception& e) {
+                LOG("LLM RE: ERROR - Failed to initialize OAuth client: %s\n", e.what());
+                LOG("LLM RE: WARNING - Falling back to API key authentication\n");
+                LOG("LLM RE: To fix OAuth: Run Client::authorize_new_account() or check ~/.claude_cpp_sdk/credentials.json\n");
+
+                return claude::Client(
+                    claude::AuthMethod::API_KEY,
+                    config.api.api_key,
+                    config.api.base_url,
+                    log_filename
+                );
+            }
+        }
+
+        // API key authentication
+        return claude::Client(
+            claude::AuthMethod::API_KEY,
+            config.api.api_key,
+            config.api.base_url,
+            log_filename
+        );
     }
 
 public:
@@ -814,7 +822,7 @@ protected:  // Changed to protected so SwarmAgent can access
     std::unique_ptr<AnalysisGrader> grader_;                         // quality evaluator for agent work
     std::unique_ptr<MemoryToolHandler> memory_handler_;              // memory tool handler for /memories filesystem
     claude::tools::ToolRegistry tool_registry_;                      // registry for tools
-    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;      // OAuth manager for this agent instance
+    // Note: OAuth manager no longer needed - Client uses global pool
     claude::Client api_client_;                                      // agent api client
     ProfilerAdapter profiler_adapter_;                               // Metrics adapter for profiling
 
