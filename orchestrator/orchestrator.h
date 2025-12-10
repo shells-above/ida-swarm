@@ -6,7 +6,6 @@
 #include "../core/profiling_manager.h"
 #include "../core/profiler_adapter.h"
 #include "../sdk/claude_sdk.h"
-#include "../sdk/auth/oauth_manager.h"
 #include "../agent/tool_system.h"
 #include "../agent/event_bus.h"
 #include "../analysis/memory_tool.h"
@@ -16,6 +15,7 @@
 #include "merge_manager.h"
 #include "nogo_zone_manager.h"
 #include "auto_decompile_manager.h"
+#include "lldb_manager.h"
 #include "../irc/irc_server.h"
 #include "../irc/irc_client.h"
 #include <memory>
@@ -77,6 +77,9 @@ public:
     void start_auto_decompile();
     void stop_auto_decompile();
 
+    // LLDB revalidation (called when configuration changes)
+    void revalidate_lldb();
+
     // Check if conversation is active
     bool is_conversation_active() const { return conversation_active_; }
 
@@ -100,13 +103,14 @@ private:
     std::unique_ptr<MergeManager> merge_manager_;
     std::unique_ptr<NoGoZoneManager> nogo_zone_manager_;
     std::unique_ptr<AutoDecompileManager> auto_decompile_manager_;
+    std::unique_ptr<LLDBSessionManager> lldb_manager_;
     std::unique_ptr<irc::IRCServer> irc_server_;
     std::unique_ptr<irc::IRCClient> irc_client_;
     
     // Claude API for orchestrator
     std::unique_ptr<claude::Client> api_client_;
     ProfilerAdapter profiler_adapter_;                            // Metrics adapter for profiling
-    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
+    // Note: OAuth manager no longer needed - Client uses global pool
     claude::tools::ToolRegistry tool_registry_;
     std::unique_ptr<MemoryToolHandler> memory_handler_;  // Orchestrator's persistent memory
     
@@ -122,7 +126,8 @@ private:
     bool shutting_down_ = false;
     std::string current_user_task_;
     int allocated_irc_port_ = 0;  // Dynamically allocated port for this orchestrator
-    
+    bool lldb_validation_passed_ = false;  // LLDB connectivity validated at init
+
     // Token tracking
     claude::usage::TokenStats token_stats_;
     
@@ -205,11 +210,22 @@ private:
     // Handle IRC messages (for agent results)
     void handle_irc_message(const std::string& channel, const std::string& sender, const std::string& message);
 
+    // Handle LLDB IRC messages (from agents requesting debugging)
+    void handle_lldb_message(const std::string& channel, const std::string& sender, const std::string& message);
+
+    // LLDB connectivity validation
+    bool validate_lldb_connectivity();
+
     // Consensus value extraction and enforcement
     json extract_consensus_tool_call(const ConflictSession& session);
     void enforce_consensus_tool_execution(const std::string& channel, const json& tool_call, const std::set<std::string>& agents);
     void handle_manual_tool_result(const std::string& message);
     bool verify_consensus_applied(const std::set<std::string>& agents, ea_t address);
+
+    // Agent workspace cleanup
+    // Deletes agent's workspace directory if the agent performed no write operations
+    // Returns true if directory was deleted, false if it had writes or deletion failed
+    bool cleanup_agent_directory_if_no_writes(const std::string& agent_id);
 
     // System prompts
     /*

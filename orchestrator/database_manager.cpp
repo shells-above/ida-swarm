@@ -1,3 +1,22 @@
+/*
+ * IMPORTANT: IDA Binary File Path Metadata
+ *
+ * IDA stores the original binary file location in the database metadata when the database
+ * is first created. This path comes from get_input_file_path() and represents where the
+ * binary was located at analysis time.
+ *
+ * If you move or delete the binary after creating the database, IDA will still reference
+ * the original location. This causes failures for operations that need the binary file:
+ * - Binary patching (both IDA DB + file)
+ * - Code injection / segment injection
+ * - LLDB debugging with modified binaries
+ *
+ * If the binary has moved, you must either:
+ * 1. Move it back to the original location
+ * 2. Update the path in IDA (File -> Load file -> Reload the binary)
+ * 3. Recreate the database from the new binary location
+ */
+
 #include "database_manager.h"
 #include "../core/logger.h"
 #include <filesystem>
@@ -18,14 +37,12 @@ namespace llm_re::orchestrator {
 DatabaseManager::DatabaseManager(const std::string& main_db_path, const std::string& binary_name) : main_database_path_(main_db_path) {
     workspace_dir_ = "/tmp/ida_swarm_workspace/" + binary_name;
 
-    // Get the actual binary file path being analyzed
+    // Get binary path from IDA metadata (see file header comment)
     char input_path[MAXSTR];
     if (get_input_file_path(input_path, sizeof(input_path)) > 0) {
         binary_file_path_ = input_path;
-        LOG_INFO("DatabaseManager: Binary file path: %s\n", binary_file_path_.c_str());
-    } else {
-        LOG_INFO("DatabaseManager: Warning - could not get input file path\n");
     }
+    // Validation happens in initialize()
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -34,6 +51,15 @@ DatabaseManager::~DatabaseManager() {
 
 bool DatabaseManager::initialize() {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Validate binary file exists - required for patching and code injection
+    auto validation_error = validate_binary_path();
+    if (validation_error.has_value()) {
+        LOG_INFO("DatabaseManager: ERROR - Binary validation failed\n");
+        LOG_INFO("DatabaseManager: %s\n", validation_error.value().c_str());
+        return false;
+    }
+    LOG_INFO("DatabaseManager: Binary file validated: %s\n", binary_file_path_.c_str());
 
     // Create workspace directory
     if (!create_workspace()) {
@@ -171,27 +197,31 @@ std::string DatabaseManager::create_agent_database(const std::string& agent_id) 
                 dest.string().c_str());
         }
 
-        // Copy the binary file if available
-        if (!binary_file_path_.empty() && fs::exists(binary_file_path_)) {
-            fs::path binary_source(binary_file_path_);
-            fs::path binary_dest = agent_dir / (agent_id + "_" + binary_source.filename().string());
+        // Copy the binary file (validation already confirmed it exists)
+        fs::path binary_source(binary_file_path_);
+        fs::path binary_dest = agent_dir / (agent_id + "_" + binary_source.filename().string());
 
-            try {
-                fs::copy_file(binary_source, binary_dest, fs::copy_options::overwrite_existing);
-                LOG_INFO("DatabaseManager: Copied binary %s to %s\n",
-                    binary_source.filename().string().c_str(),
-                    binary_dest.string().c_str());
+        try {
+            fs::copy_file(binary_source, binary_dest, fs::copy_options::overwrite_existing);
+            LOG_INFO("DatabaseManager: Copied binary %s to %s\n",
+                binary_source.filename().string().c_str(),
+                binary_dest.string().c_str());
 
-                // Store the binary path for this agent
-                agent_binaries_[agent_id] = binary_dest.string();
-            } catch (const fs::filesystem_error& e) {
-                LOG_INFO("DatabaseManager: Warning - failed to copy binary: %s\n", e.what());
-                // Continue even if binary copy fails - database is more important
-                // we only copy the binary for patching
-                // if it can't copy the binary and the agent tries to inject a segment then stuff will break or if it patches
+            // Ad-hoc sign the binary for iOS compatibility
+            // iOS requires binaries to be signed, even if just with an ad-hoc signature
+            std::string codesign_cmd = "codesign -s - -f \"" + binary_dest.string() + "\" 2>&1";
+            int status = system(codesign_cmd.c_str());
+            if (status == 0) {
+                LOG_INFO("DatabaseManager: Ad-hoc signed binary for iOS\n");
+            } else {
+                LOG_INFO("DatabaseManager: WARNING - codesign failed with status %d\n", status);
             }
-        } else {
-            LOG_INFO("DatabaseManager: No binary file to copy or file doesn't exist\n");
+
+            // Store the binary path for this agent
+            agent_binaries_[agent_id] = binary_dest.string();
+        } catch (const fs::filesystem_error& e) {
+            LOG_INFO("DatabaseManager: ERROR - Failed to copy binary: %s\n", e.what());
+            return "";  // Fail agent creation if binary copy fails
         }
 
         // Get the main database file in the agent directory
@@ -247,23 +277,45 @@ std::vector<fs::path> DatabaseManager::get_database_files(const std::string& bas
 bool DatabaseManager::copy_database_files(const std::string& source, const std::string& dest) {
     try {
         auto files = get_database_files(source);
-        
+
         fs::path dest_dir = fs::path(dest).parent_path();
         if (!fs::exists(dest_dir)) {
             fs::create_directories(dest_dir);
         }
-        
+
         for (const auto& file : files) {
             fs::path dest_file = dest_dir / file.filename();
             fs::copy_file(file, dest_file, fs::copy_options::overwrite_existing);
         }
-        
+
         return true;
-        
+
     } catch (const fs::filesystem_error& e) {
         LOG_INFO("DatabaseManager: Copy failed: %s\n", e.what());
         return false;
     }
+}
+
+std::optional<std::string> DatabaseManager::validate_binary_path() const {
+    // Check if we retrieved a path from IDA
+    if (binary_file_path_.empty()) {
+        return "Could not retrieve binary file path from IDA database metadata. "
+               "The database may be corrupted or was created without a binary reference.";
+    }
+
+    // Check if the file exists at the stored location
+    if (!fs::exists(binary_file_path_)) {
+        return std::string("Binary file not found at path stored in IDA metadata: ") + binary_file_path_ + "\n" +
+               "This path is from when the database was created. If the binary has been moved, "
+               "please move it back, update the path in IDA, or recreate the database.";
+    }
+
+    // Verify it's actually a file, not a directory
+    if (!fs::is_regular_file(binary_file_path_)) {
+        return std::string("Path exists but is not a regular file: ") + binary_file_path_;
+    }
+
+    return std::nullopt;  // Success
 }
 
 

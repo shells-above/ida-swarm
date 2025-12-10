@@ -1,10 +1,12 @@
 #include "orchestrator.h"
 #include "orchestrator_tools.h"
+#include "remote_sync_manager.h"
 #include "../core/logger.h"
+#include "../core/ssh_key_manager.h"
 #include "../agent/consensus_executor.h"
-#include "../sdk/auth/oauth_manager.h"
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <format>
 #include <thread>
 #include <chrono>
@@ -64,21 +66,41 @@ Orchestrator::Orchestrator(const Config& config, const std::string& main_db_path
     nogo_zone_manager_ = std::make_unique<NoGoZoneManager>();
     auto_decompile_manager_ = std::make_unique<AutoDecompileManager>(this);
 
-    // Create our own OAuth manager if using OAuth authentication
-    if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-        oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
-    }
-    
-    // Setup API client
-    if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-        auto creds = oauth_manager_->get_credentials();
-        if (creds) {
-            api_client_ = std::make_unique<claude::Client>(creds, oauth_manager_, config.api.base_url);
+    // Allocate unique IRC port based on binary name (needed for LLDB debugserver port)
+    allocated_irc_port_ = allocate_unique_port();
+    LOG_INFO("Orchestrator: Allocated IRC port %d (unique for %s)\n", allocated_irc_port_, binary_name_.c_str());
+
+    // Initialize LLDB session manager if enabled
+    if (config.lldb.enabled) {
+        try {
+            std::filesystem::path workspace_path = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
+            lldb_manager_ = std::make_unique<LLDBSessionManager>(
+                config.lldb.lldb_path,
+                workspace_path.string(),
+                db_manager_.get(),
+                allocated_irc_port_  // Pass IRC port for debugserver port auto-assignment
+            );
+            LOG("Orchestrator: LLDB debugging support initialized\n");
+        } catch (const std::exception& e) {
+            LOG("Orchestrator: Failed to initialize LLDB manager: %s\n", e.what());
+            LOG("Orchestrator: LLDB debugging will be unavailable. Install LLDB or configure path in preferences.\n");
+            lldb_manager_ = nullptr;
         }
     }
-    
-    if (!api_client_) {
-        api_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
+
+    // Setup API client (no more OAuth manager - Client uses global pool)
+    if (config.api.auth_method == claude::AuthMethod::OAUTH) {
+        api_client_ = std::make_unique<claude::Client>(
+            claude::AuthMethod::OAUTH,
+            "",  // Credential not needed for OAuth (uses global pool)
+            config.api.base_url
+        );
+    } else {
+        api_client_ = std::make_unique<claude::Client>(
+            claude::AuthMethod::API_KEY,
+            config.api.api_key,
+            config.api.base_url
+        );
     }
 
     // Set log filename for orchestrator to include binary name
@@ -100,11 +122,39 @@ Orchestrator::~Orchestrator() {
 bool Orchestrator::initialize() {
     if (initialized_) return true;
     
-    // Clean up any existing workspace directory from previous runs BEFORE initializing logger
+    // Clean up workspace from previous runs BEFORE initializing logger
+    // BUT preserve lldb_config.json (user's device configuration)
     std::filesystem::path workspace_dir = std::filesystem::path("/tmp/ida_swarm_workspace") / binary_name_;
+    std::filesystem::path lldb_config_path = workspace_dir / "lldb_config.json";
+    std::string lldb_config_backup;
+    bool had_lldb_config = false;
+
     if (std::filesystem::exists(workspace_dir)) {
         try {
+            // Step 1: Backup lldb_config.json if it exists
+            if (std::filesystem::exists(lldb_config_path)) {
+                std::ifstream config_file(lldb_config_path);
+                if (config_file) {
+                    std::stringstream buffer;
+                    buffer << config_file.rdbuf();
+                    lldb_config_backup = buffer.str();
+                    had_lldb_config = true;
+                }
+            }
+
+            // Step 2: Delete entire workspace directory
             std::filesystem::remove_all(workspace_dir);
+
+            // Step 3: Recreate workspace directory
+            std::filesystem::create_directories(workspace_dir);
+
+            // Step 4: Restore lldb_config.json
+            if (had_lldb_config) {
+                std::ofstream config_file(lldb_config_path);
+                if (config_file) {
+                    config_file << lldb_config_backup;
+                }
+            }
         } catch (const std::exception& e) {
             // Can't log yet, logger not initialized
         }
@@ -115,7 +165,15 @@ bool Orchestrator::initialize() {
     g_logger.initialize(log_path.string(), "orchestrator");
     LOG_INFO("Orchestrator: Initializing subsystems...\n");
     LOG_INFO("Orchestrator: Workspace cleaned and logger initialized for binary: %s\n", binary_name_.c_str());
-    
+
+    // Generate SSH keys early (for LLDB remote debugging)
+    LOG_INFO("Orchestrator: Ensuring SSH keys exist for remote debugging...\n");
+    if (SSHKeyManager::ensure_key_pair_exists()) {
+        LOG_INFO("Orchestrator: SSH keys ready at %s\n", SSHKeyManager::get_private_key_path().c_str());
+    } else {
+        LOG_INFO("Orchestrator: WARNING - Failed to generate SSH keys\n");
+    }
+
     // Ignore SIGPIPE to prevent crashes when IRC connections break
     signal(SIGPIPE, SIG_IGN);
     LOG_INFO("Orchestrator: Configured SIGPIPE handler\n");
@@ -411,10 +469,8 @@ echo ""
         {AgentEvent::TOOL_CALL}
     );
     LOG_INFO("Orchestrator: Subscribed to TOOL_CALL events for real-time processing\n");
-    
-    // Allocate unique port for IRC server based on binary name
-    allocated_irc_port_ = allocate_unique_port();
-    
+
+    // IRC port already allocated earlier (before LLDB manager init)
     // Start IRC server for agent communication with binary name
     fs::path idb_path(main_database_path_);
     std::string binary_name = idb_path.stem().string();
@@ -439,7 +495,13 @@ echo ""
     irc_client_->join_channel("#results");
     irc_client_->join_channel("#status");      // For agent status updates
     irc_client_->join_channel("#discoveries"); // For agent discoveries
-    
+
+    // Join LLDB control channel if LLDB is enabled
+    if (config_.lldb.enabled) {
+        irc_client_->join_channel("#lldb_control");
+        LOG_INFO("Orchestrator: Joined #lldb_control for remote debugging\n");
+    }
+
     // Set up message callback to receive agent results
     irc_client_->set_message_callback(
         [this](const std::string& channel, const std::string& sender, const std::string& message) {
@@ -448,6 +510,18 @@ echo ""
     );
     
     LOG_INFO("Orchestrator: IRC client connected\n");
+
+    // Validate LLDB connectivity if enabled
+    if (config_.lldb.enabled) {
+        LOG_INFO("Orchestrator: Validating LLDB connectivity...\n");
+        lldb_validation_passed_ = validate_lldb_connectivity();
+
+        if (lldb_validation_passed_) {
+            LOG_INFO("Orchestrator: LLDB validation passed - remote debugging enabled\n");
+        } else {
+            LOG_INFO("Orchestrator: LLDB validation failed - remote debugging disabled\n");
+        }
+    }
 
     // Start conflict channel monitoring thread
     LOG_INFO("Orchestrator: Starting conflict channel monitor\n");
@@ -826,6 +900,32 @@ void Orchestrator::stop_auto_decompile() {
     auto_decompile_manager_->stop_analysis();
 }
 
+void Orchestrator::revalidate_lldb() {
+    LOG_INFO("Orchestrator: Revalidating LLDB connectivity after configuration change\n");
+
+    if (!config_.lldb.enabled) {
+        LOG_INFO("Orchestrator: LLDB is disabled in config, skipping revalidation\n");
+        lldb_validation_passed_ = false;
+        return;
+    }
+
+    // Re-run validation (reads fresh lldb_config.json)
+    bool new_validation_result = validate_lldb_connectivity();
+
+    if (new_validation_result != lldb_validation_passed_) {
+        lldb_validation_passed_ = new_validation_result;
+
+        if (lldb_validation_passed_) {
+            LOG_INFO("Orchestrator: LLDB validation NOW PASSED - remote debugging enabled for new agents\n");
+        } else {
+            LOG_INFO("Orchestrator: LLDB validation NOW FAILED - remote debugging disabled for new agents\n");
+        }
+    } else {
+        LOG_INFO("Orchestrator: LLDB validation status unchanged: %s\n",
+                 lldb_validation_passed_ ? "PASSED" : "FAILED");
+    }
+}
+
 void Orchestrator::signal_task_completion() {
     std::lock_guard<std::mutex> lock(task_completion_mutex_);
     task_completed_ = true;
@@ -868,7 +968,7 @@ void Orchestrator::process_user_input(const std::string& input) {
         
         // Mark conversation as active
         conversation_active_ = true;
-        LOG_INFO("Orchestrator: Starting new conversation with: %s\n", input.c_str());
+        LOG_INFO("Orchestrator: Starting new conversation");
     }
     
     LOG_INFO("Orchestrator: Processing task: %s\n", input.c_str());
@@ -1329,6 +1429,10 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
         };
     }
     
+    // Get the agent's binary path (the copied binary that this agent should patch)
+    std::string agent_binary_path = db_manager_->get_agent_binary(agent_id);
+    LOG_INFO("Orchestrator: Agent binary path: %s\n", agent_binary_path.c_str());
+
     // Agents will discover each other dynamically via IRC
     std::string agent_prompt = generate_agent_prompt(task, context);
 
@@ -1345,10 +1449,12 @@ json Orchestrator::spawn_agent_async(const std::string& task, const std::string&
         {"task", task},                 // Include the raw task for IRC sharing
         {"prompt", agent_prompt},       // Full prompt with task and collaboration instructions
         {"database", agent_db_path},
+        {"agent_binary_path", agent_binary_path},  // Path to agent's copied binary for patching
         {"irc_server", config_.irc.server},
         {"irc_port", allocated_irc_port_},  // Use the dynamically allocated port
         {"memory_directory", agent_memory_dir.string()},  // Fresh memory directory for this agent
-        {"context", context}            // Pass context for conditional system prompt and grader control
+        {"context", context},            // Pass context for conditional system prompt and grader control
+        {"lldb_validated", lldb_validation_passed_}  // LLDB connectivity validation status
     };
     
     // Spawn the agent process
@@ -1642,6 +1748,9 @@ void Orchestrator::wait_for_agents_completion(const std::vector<std::string>& ag
                     if (auto_decompile_manager_ && auto_decompile_manager_->is_active()) {
                         auto_decompile_manager_->on_agent_completed(agent_id);
                     }
+
+                    // Cleanup agent workspace if it didn't perform any write operations
+                    cleanup_agent_directory_if_no_writes(agent_id);
                 }
             }
         }
@@ -1674,7 +1783,13 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
         {"channel", channel},
         {"message", message}
     }));
-    
+
+    // Check for LLDB messages on #lldb_control channel
+    if (channel == "#lldb_control" && message.find("LLDB_") == 0) {
+        handle_lldb_message(channel, sender, message);
+        return;
+    }
+
     // Check for manual tool execution results
     if (message.find("MANUAL_TOOL_RESULT | ") == 0) {
         handle_manual_tool_result(message);
@@ -1968,6 +2083,9 @@ void Orchestrator::handle_irc_message(const std::string& channel, const std::str
                     LOG_INFO("Orchestrator: Failed to auto-merge changes from agent %s: %s\n",
                         agent_id.c_str(), merge_result.value("error", "Unknown error").c_str());
                 }
+
+                // Cleanup agent workspace if it didn't perform any write operations
+                cleanup_agent_directory_if_no_writes(agent_id);
             }
         } catch (const std::exception& e) {
             LOG_INFO("Orchestrator: Failed to parse agent result JSON: %s\n", e.what());
@@ -2013,6 +2131,122 @@ json Orchestrator::extract_consensus_tool_call(const ConflictSession& session) {
         return {
             {"tool_name", "unknown"}
         };
+    }
+}
+
+void Orchestrator::handle_lldb_message(const std::string& channel, const std::string& sender, const std::string& message) {
+    if (!lldb_manager_) {
+        LOG_INFO("Orchestrator: Received LLDB message but LLDB is not enabled\n");
+        return;
+    }
+
+    LOG_INFO("Orchestrator: Handling LLDB message from %s: %s\n", sender.c_str(), message.c_str());
+
+    // Parse message type and route to appropriate handler
+    // Message formats:
+    // LLDB_START_SESSION|request_id|agent_id
+    // LLDB_SEND_COMMAND|request_id|session_id|agent_id|command
+    // LLDB_CONVERT_ADDRESS|request_id|session_id|agent_id|ida_address
+    // LLDB_STOP_SESSION|request_id|session_id|agent_id
+
+    size_t first_pipe = message.find('|');
+    if (first_pipe == std::string::npos) {
+        LOG_INFO("Orchestrator: Invalid LLDB message format (no pipes)\n");
+        return;
+    }
+
+    std::string message_type = message.substr(0, first_pipe);
+    std::string remainder = message.substr(first_pipe + 1);
+
+    json response;
+    std::string request_id;
+    std::string agent_id;
+
+    if (message_type == "LLDB_START_SESSION") {
+        // Format: LLDB_START_SESSION|request_id|agent_id|timeout_ms
+        size_t pipe1 = remainder.find('|');
+        if (pipe1 != std::string::npos) {
+            request_id = remainder.substr(0, pipe1);
+            std::string rest = remainder.substr(pipe1 + 1);
+
+            size_t pipe2 = rest.find('|');
+            if (pipe2 != std::string::npos) {
+                agent_id = rest.substr(0, pipe2);
+                int timeout_ms = std::stoi(rest.substr(pipe2 + 1));
+                response = lldb_manager_->handle_start_session(agent_id, request_id, timeout_ms);
+            }
+        }
+    } else if (message_type == "LLDB_SEND_COMMAND") {
+        // Format: LLDB_SEND_COMMAND|request_id|session_id|agent_id|command
+        size_t pipe1 = remainder.find('|');
+        if (pipe1 != std::string::npos) {
+            request_id = remainder.substr(0, pipe1);
+            remainder = remainder.substr(pipe1 + 1);
+
+            size_t pipe2 = remainder.find('|');
+            if (pipe2 != std::string::npos) {
+                std::string session_id = remainder.substr(0, pipe2);
+                remainder = remainder.substr(pipe2 + 1);
+
+                size_t pipe3 = remainder.find('|');
+                if (pipe3 != std::string::npos) {
+                    agent_id = remainder.substr(0, pipe3);
+                    std::string command = remainder.substr(pipe3 + 1);
+
+                    response = lldb_manager_->handle_send_command(session_id, agent_id, command, request_id);
+                }
+            }
+        }
+    } else if (message_type == "LLDB_CONVERT_ADDRESS") {
+        // Format: LLDB_CONVERT_ADDRESS|request_id|session_id|agent_id|ida_address
+        size_t pipe1 = remainder.find('|');
+        if (pipe1 != std::string::npos) {
+            request_id = remainder.substr(0, pipe1);
+            remainder = remainder.substr(pipe1 + 1);
+
+            size_t pipe2 = remainder.find('|');
+            if (pipe2 != std::string::npos) {
+                std::string session_id = remainder.substr(0, pipe2);
+                remainder = remainder.substr(pipe2 + 1);
+
+                size_t pipe3 = remainder.find('|');
+                if (pipe3 != std::string::npos) {
+                    agent_id = remainder.substr(0, pipe3);
+                    std::string ida_address_str = remainder.substr(pipe3 + 1);
+
+                    uint64_t ida_address = std::stoull(ida_address_str);
+                    response = lldb_manager_->handle_convert_address(session_id, agent_id, ida_address, request_id);
+                }
+            }
+        }
+    } else if (message_type == "LLDB_STOP_SESSION") {
+        // Format: LLDB_STOP_SESSION|request_id|session_id|agent_id
+        size_t pipe1 = remainder.find('|');
+        if (pipe1 != std::string::npos) {
+            request_id = remainder.substr(0, pipe1);
+            remainder = remainder.substr(pipe1 + 1);
+
+            size_t pipe2 = remainder.find('|');
+            if (pipe2 != std::string::npos) {
+                std::string session_id = remainder.substr(0, pipe2);
+                agent_id = remainder.substr(pipe2 + 1);
+
+                response = lldb_manager_->handle_stop_session(session_id, agent_id, request_id);
+            }
+        }
+    } else {
+        LOG_INFO("Orchestrator: Unknown LLDB message type: %s\n", message_type.c_str());
+        return;
+    }
+
+    // Send response back to agent on their private channel
+    if (!request_id.empty() && !agent_id.empty() && irc_client_) {
+        std::string response_channel = std::format("#{}", agent_id);
+        std::string response_type = message_type + "_RESPONSE";
+        std::string response_message = std::format("{}|{}|{}", response_type, request_id, response.dump());
+
+        LOG_INFO("Orchestrator: Sending LLDB response to %s: %s\n", response_channel.c_str(), response_type.c_str());
+        irc_client_->send_message(response_channel, response_message);
     }
 }
 
@@ -2339,11 +2573,19 @@ void Orchestrator::shutdown() {
         }
     }
 
+    // Cleanup LLDB sessions for all agents before terminating them
+    if (lldb_manager_) {
+        LOG_INFO("Orchestrator: Cleaning up LLDB sessions for all agents...\n");
+        for (const auto& [agent_id, info] : agents_) {
+            lldb_manager_->cleanup_agent_sessions(agent_id);
+        }
+    }
+
     // Terminate all agents
     for (auto& [id, info] : agents_) {
         agent_spawner_->terminate_agent(info.process_id);
     }
-    
+
     // Disconnect IRC client
     if (irc_client_) {
         irc_client_->disconnect();
@@ -2513,6 +2755,189 @@ void Orchestrator::replicate_patch_to_agents(const std::string& source_agent, co
             LOG_INFO("Orchestrator: Sent patch replication to %s\n", agent_id.c_str());
         }
     }
+}
+
+bool Orchestrator::validate_lldb_connectivity() {
+    // Ensure SSH keys exist
+    if (!SSHKeyManager::ensure_key_pair_exists()) {
+        LOG_INFO("Orchestrator: Failed to create/find SSH keys\n");
+        return false;
+    }
+
+    LOG_INFO("Orchestrator: SSH keys ready at %s\n",
+             SSHKeyManager::get_private_key_path().c_str());
+
+    // Check if any devices are configured in global device pool
+    if (config_.lldb.devices.empty()) {
+        LOG_INFO("Orchestrator: No devices configured in global device pool\n");
+        LOG_INFO("Orchestrator: Please add devices via Preferences > LLDB tab\n");
+        return false;
+    }
+
+    LOG_INFO("Orchestrator: Found %zu devices in global pool\n", config_.lldb.devices.size());
+
+    // Load workspace device overrides from lldb_config.json
+    fs::path workspace_dir = fs::path("/tmp/ida_swarm_workspace") / binary_name_;
+    fs::path config_path = workspace_dir / "lldb_config.json";
+
+    json workspace_overrides;
+    if (fs::exists(config_path)) {
+        std::ifstream file(config_path);
+        if (file) {
+            try {
+                file >> workspace_overrides;
+                LOG_INFO("Orchestrator: Loaded workspace device overrides from %s\n",
+                         config_path.string().c_str());
+            } catch (const std::exception& e) {
+                LOG_INFO("Orchestrator: Failed to parse lldb_config.json: %s\n", e.what());
+                // Continue with empty overrides
+            }
+        }
+    } else {
+        LOG_INFO("Orchestrator: No workspace config found, treating all devices as enabled\n");
+    }
+
+    // Validate each enabled device
+    int validated_devices = 0;
+    int enabled_devices = 0;
+
+    for (const auto& global_device : config_.lldb.devices) {
+        // Check if device is enabled for this workspace
+        bool device_enabled = true;
+        std::string remote_binary_path;
+
+        if (workspace_overrides.contains("device_overrides") &&
+            workspace_overrides["device_overrides"].contains(global_device.id)) {
+            const auto& override = workspace_overrides["device_overrides"][global_device.id];
+            device_enabled = override.value("enabled", false);
+            remote_binary_path = override.value("remote_binary_path", "");
+        }
+
+        if (!device_enabled) {
+            LOG_INFO("Orchestrator: Device '%s' (%s) is disabled for this workspace\n",
+                     global_device.name.c_str(), global_device.host.c_str());
+            continue;
+        }
+
+        enabled_devices++;
+
+        // Validate remote_binary_path is set
+        if (remote_binary_path.empty()) {
+            LOG_INFO("Orchestrator: Device '%s' (%s) is enabled but missing remote_binary_path\n",
+                     global_device.name.c_str(), global_device.host.c_str());
+            continue;
+        }
+
+        // Build RemoteConfig from global device
+        RemoteConfig remote_cfg;
+        remote_cfg.host = global_device.host;
+        remote_cfg.ssh_port = global_device.ssh_port;
+        remote_cfg.ssh_user = global_device.ssh_user;
+        remote_cfg.debugserver_port = 0;  // Not needed for SSH-only validation
+
+        // Validate connectivity (SSH only)
+        LOG_INFO("Orchestrator: Testing device '%s' (%s) - SSH port %d...\n",
+                 global_device.name.c_str(), remote_cfg.host.c_str(),
+                 remote_cfg.ssh_port);
+
+        ValidationResult result = RemoteSyncManager::validate_connectivity(remote_cfg);
+
+        if (result.is_valid()) {
+            LOG_INFO("Orchestrator: ✅ Device '%s' validation passed\n", global_device.name.c_str());
+            validated_devices++;
+        } else {
+            LOG_INFO("Orchestrator: ❌ Device '%s' validation failed: %s\n",
+                     global_device.name.c_str(), result.error_message.c_str());
+        }
+    }
+
+    // Summary
+    LOG_INFO("Orchestrator: Validation summary: %d/%d enabled devices validated\n",
+             validated_devices, enabled_devices);
+
+    if (validated_devices == 0) {
+        if (enabled_devices == 0) {
+            LOG_INFO("Orchestrator: No devices enabled for this workspace\n");
+        } else {
+            LOG_INFO("Orchestrator: All enabled devices failed validation\n");
+        }
+        return false;
+    }
+
+    LOG_INFO("Orchestrator: Connectivity validation successful! (%d device(s) reachable)\n",
+             validated_devices);
+    return true;
+}
+
+bool Orchestrator::cleanup_agent_directory_if_no_writes(const std::string& agent_id) {
+    // Check if agent performed any write operations
+    if (!tool_tracker_) {
+        LOG_INFO("Orchestrator: Tool tracker not available, skipping cleanup for %s\n", agent_id.c_str());
+        return false;
+    }
+
+    auto write_ops = tool_tracker_->get_agent_write_operations(agent_id);
+
+    if (!write_ops.empty()) {
+        LOG_INFO("Orchestrator: Agent %s performed %zu write operations, keeping database\n",
+                 agent_id.c_str(), write_ops.size());
+        return false;
+    }
+
+    // No write operations - safe to delete the database and binary to save storage
+    // Keep other files like memories directory
+    LOG_INFO("Orchestrator: Agent %s performed no write operations, cleaning up database/binary to save storage\n",
+             agent_id.c_str());
+
+    // Get agent's database path
+    std::string agent_db = db_manager_->get_agent_database(agent_id);
+    if (agent_db.empty()) {
+        LOG_INFO("Orchestrator: Could not find database path for agent %s\n", agent_id.c_str());
+        return false;
+    }
+
+    fs::path db_path(agent_db);
+    fs::path agent_dir = db_path.parent_path();
+
+    // Safety check: verify we're deleting from the expected workspace location
+    std::string expected_prefix = "/tmp/ida_swarm_workspace/";
+    if (agent_dir.string().find(expected_prefix) != 0) {
+        LOG_INFO("Orchestrator: Safety check failed - agent dir '%s' not in expected workspace\n",
+                 agent_dir.string().c_str());
+        return false;
+    }
+
+    int files_removed = 0;
+
+    // Delete the .i64 database file
+    try {
+        if (fs::exists(db_path)) {
+            fs::remove(db_path);
+            LOG_INFO("Orchestrator: Deleted database %s\n", db_path.filename().string().c_str());
+            files_removed++;
+        }
+    } catch (const fs::filesystem_error& e) {
+        LOG_INFO("Orchestrator: Failed to delete database: %s\n", e.what());
+    }
+
+    // Delete the binary copy (agent_id + "_" + original_binary_name)
+    std::string agent_binary = db_manager_->get_agent_binary(agent_id);
+    if (!agent_binary.empty()) {
+        try {
+            fs::path binary_path(agent_binary);
+            if (fs::exists(binary_path)) {
+                fs::remove(binary_path);
+                LOG_INFO("Orchestrator: Deleted binary %s\n", binary_path.filename().string().c_str());
+                files_removed++;
+            }
+        } catch (const fs::filesystem_error& e) {
+            LOG_INFO("Orchestrator: Failed to delete binary: %s\n", e.what());
+        }
+    }
+
+    LOG_INFO("Orchestrator: Cleaned up %d files for agent %s (memories preserved)\n",
+             files_removed, agent_id.c_str());
+    return files_removed > 0;
 }
 
 } // namespace llm_re::orchestrator

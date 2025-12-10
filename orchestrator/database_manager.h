@@ -45,13 +45,17 @@ private:
     std::map<std::string, std::string> agent_databases_;  // agent_id -> db_path
     std::map<std::string, std::string> agent_binaries_;   // agent_id -> binary_path
     mutable std::mutex mutex_;
-    
+
+    // Validate that binary file exists and is accessible
+    // Returns empty optional on success, error message on failure
+    std::optional<std::string> validate_binary_path() const;
+
     // Create workspace directory structure
     bool create_workspace();
-    
+
     // Copy database files
     bool copy_database_files(const std::string& source, const std::string& dest);
-    
+
     // Get all database-related files (idb, i64, til, etc.)
     std::vector<std::filesystem::path> get_database_files(const std::string& base_path) const;
 };
