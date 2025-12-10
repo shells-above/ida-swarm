@@ -296,6 +296,9 @@ set(PLUGIN_SOURCES
         orchestrator/merge_manager.cpp
         orchestrator/nogo_zone_manager.cpp
         orchestrator/auto_decompile_manager.cpp
+        orchestrator/lldb_manager.cpp
+        orchestrator/remote_sync_manager.cpp
+        orchestrator/remote_device_info.cpp
         # Agent components
         agent/swarm_agent.cpp
         agent/conflict_detector.cpp
