@@ -306,6 +306,7 @@ set(PLUGIN_SOURCES
         # UI components
         ui/orchestrator_ui.cpp
         ui/preferences_dialog.cpp
+        ui/device_editor_dialog.cpp
         ui/orchestrator_worker.cpp
         ui/ui_orchestrator_bridge.cpp
         ui/log_window.cpp

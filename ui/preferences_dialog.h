@@ -2,8 +2,10 @@
 
 #include "ui_common.h"
 #include "../core/config.h"
+#include "../orchestrator/lldb_manager.h"
 #include <QDialog>
 #include <QTabWidget>
+#include <vector>
 
 QT_BEGIN_NAMESPACE
 class QRadioButton;
@@ -47,7 +49,18 @@ private slots:
     
     // Test buttons
     void onTestAPIConnection();
-    
+    void onCopySSHCopyIdCommand();
+
+    // Device management
+    void onAddDevice();
+    void onEditDevice();
+    void onRemoveDevice();
+    void onTestDevice();
+    void onTestAllDevices();
+    void onTestDebugserver();
+    void onDeviceSelectionChanged();
+    void refreshDevicesTable();
+
     // OAuth account management
     void onAddAccount();
     void onRemoveAccount();
@@ -78,6 +91,7 @@ private:
     void createIrcTab();
     void createProfilingTab();
     void createSwarmTab();
+    void createLLDBTab();
     void connectSignals();
     
     // Configuration methods
@@ -92,6 +106,11 @@ private:
     void setFieldsEnabled(bool apiKeyMode);
     void showValidationError(const QString& message);
     QString getConfigPath() const;
+
+    // LLDB helper methods
+    void loadDevicePool();
+    void saveDevicePool();
+    QString getWorkspaceConfigPath() const;
     
     // Main layout
     QTabWidget* tabWidget_;
@@ -178,6 +197,21 @@ private:
     QCheckBox* entryPointHeuristicCheck_;
     QDoubleSpinBox* entryPointWeightSpin_;
     QComboBox* entryPointModeCombo_;
+
+    // LLDB Tab widgets
+    QCheckBox* lldbEnabledCheck_;
+    QLineEdit* lldbPathEdit_;
+    QTableWidget* devicesTable_;
+    QPushButton* addDeviceButton_;
+    QPushButton* editDeviceButton_;
+    QPushButton* removeDeviceButton_;
+    QPushButton* testDeviceButton_;
+    QPushButton* testAllDevicesButton_;
+    QPushButton* testDebugserverButton_;
+    QPushButton* copySSHCopyIdButton_;
+
+    // Device pool (for configuration)
+    std::vector<RemoteDevice> devices_;
 
     // Additional buttons
     QPushButton* exportButton_;

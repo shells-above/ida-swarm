@@ -1,6 +1,7 @@
 // Include order is critical! ui_common.h handles the proper ordering
 #include "ui_common.h"
 #include "preferences_dialog.h"
+#include "device_editor_dialog.h"
 
 // Qt implementation headers
 #include <QVBoxLayout>
@@ -33,12 +34,16 @@
 #include <QThread>
 #include <QDir>
 #include <QPointer>
+#include <QFile>
+#include <QClipboard>
+#include <QApplication>
 
 #include "../sdk/client/client.h"
-#include "../sdk/auth/oauth_manager.h"
 #include "../sdk/auth/oauth_authorizer.h"
 #include "../sdk/messages/types.h"
 #include "../core/common_base.h"
+#include "../orchestrator/remote_sync_manager.h"
+#include "../core/ssh_key_manager.h"
 
 #include <fstream>
 #include <filesystem>
@@ -83,6 +88,7 @@ void PreferencesDialog::setupUi() {
     createIrcTab();
     createProfilingTab();
     createSwarmTab();
+    createLLDBTab();
 
     layout->addWidget(tabWidget_);
     
@@ -276,7 +282,7 @@ void PreferencesDialog::createModelsTab() {
     auto* agentLayout = new QFormLayout(agentModelGroup_);
     
     agentModelCombo_ = new QComboBox(agentModelGroup_);
-    agentModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
+    agentModelCombo_->addItem("Claude Opus 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Opus45)));
     agentModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     agentModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     agentLayout->addRow("Model:", agentModelCombo_);
@@ -326,7 +332,7 @@ void PreferencesDialog::createModelsTab() {
     graderLayout->addRow("", graderEnabledCheck_);
     
     graderModelCombo_ = new QComboBox(graderModelGroup_);
-    graderModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
+    graderModelCombo_->addItem("Claude Opus 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Opus45)));
     graderModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     graderModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     graderLayout->addRow("Model:", graderModelCombo_);
@@ -351,7 +357,7 @@ void PreferencesDialog::createModelsTab() {
     auto* orchLayout = new QFormLayout(orchestratorModelGroup_);
     
     orchestratorModelCombo_ = new QComboBox(orchestratorModelGroup_);
-    orchestratorModelCombo_->addItem("Claude Opus 4.1", QVariant::fromValue(static_cast<int>(claude::Model::Opus41)));
+    orchestratorModelCombo_->addItem("Claude Opus 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Opus45)));
     orchestratorModelCombo_->addItem("Claude Sonnet 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Sonnet45)));
     orchestratorModelCombo_->addItem("Claude Haiku 4.5", QVariant::fromValue(static_cast<int>(claude::Model::Haiku45)));
     orchLayout->addRow("Model:", orchestratorModelCombo_);
@@ -598,6 +604,114 @@ void PreferencesDialog::createSwarmTab() {
     tabWidget_->addTab(widget, "Swarm");
 }
 
+void PreferencesDialog::createLLDBTab() {
+    auto* widget = new QWidget();
+    auto* layout = new QVBoxLayout(widget);
+
+    // Global Settings
+    auto* globalGroup = new QGroupBox("Global LLDB Settings", widget);
+    auto* globalLayout = new QFormLayout(globalGroup);
+
+    lldbEnabledCheck_ = new QCheckBox("Enable remote debugging", globalGroup);
+    lldbEnabledCheck_->setToolTip("Enable LLDB remote debugging capability for agents");
+    globalLayout->addRow("", lldbEnabledCheck_);
+
+    lldbPathEdit_ = new QLineEdit(globalGroup);
+    lldbPathEdit_->setPlaceholderText("/usr/bin/lldb");
+    lldbPathEdit_->setToolTip("Path to the LLDB executable");
+    globalLayout->addRow("LLDB Path:", lldbPathEdit_);
+
+    layout->addWidget(globalGroup);
+
+    // Remote Devices
+    auto* devicesGroup = new QGroupBox("Remote Debugger Devices", widget);
+    auto* devicesLayout = new QVBoxLayout(devicesGroup);
+
+    // Devices table (global registry - enabled/path are workspace-specific)
+    devicesTable_ = new QTableWidget(0, 4, devicesGroup);
+    devicesTable_->setHorizontalHeaderLabels({"Enabled", "Name", "Host", "SSH Port"});
+    devicesTable_->horizontalHeader()->setStretchLastSection(false);
+    devicesTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    devicesTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    devicesTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    devicesTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    devicesTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    devicesTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    devicesTable_->setMinimumHeight(200);
+    connect(devicesTable_, &QTableWidget::itemSelectionChanged, this, &PreferencesDialog::onDeviceSelectionChanged);
+    connect(devicesTable_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
+        // Only handle name column (column 1)
+        if (item->column() == 1) {
+            int row = item->row();
+            if (row >= 0 && row < static_cast<int>(devices_.size())) {
+                devices_[row].name = item->text().toStdString();
+                configModified_ = true;
+            }
+        }
+    });
+    devicesLayout->addWidget(devicesTable_);
+
+    // Device management buttons
+    auto* buttonLayout = new QHBoxLayout();
+
+    addDeviceButton_ = new QPushButton("Add Device", devicesGroup);
+    addDeviceButton_->setToolTip("Add a new remote debugging device");
+    connect(addDeviceButton_, &QPushButton::clicked, this, &PreferencesDialog::onAddDevice);
+    buttonLayout->addWidget(addDeviceButton_);
+
+    editDeviceButton_ = new QPushButton("Edit Device", devicesGroup);
+    editDeviceButton_->setToolTip("Edit selected device");
+    editDeviceButton_->setEnabled(false);
+    connect(editDeviceButton_, &QPushButton::clicked, this, &PreferencesDialog::onEditDevice);
+    buttonLayout->addWidget(editDeviceButton_);
+
+    removeDeviceButton_ = new QPushButton("Remove Device", devicesGroup);
+    removeDeviceButton_->setToolTip("Remove selected device");
+    removeDeviceButton_->setEnabled(false);
+    connect(removeDeviceButton_, &QPushButton::clicked, this, &PreferencesDialog::onRemoveDevice);
+    buttonLayout->addWidget(removeDeviceButton_);
+
+    testDeviceButton_ = new QPushButton("Test Selected", devicesGroup);
+    testDeviceButton_->setToolTip("Test connectivity to selected device");
+    testDeviceButton_->setEnabled(false);
+    connect(testDeviceButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestDevice);
+    buttonLayout->addWidget(testDeviceButton_);
+
+    testAllDevicesButton_ = new QPushButton("Test All", devicesGroup);
+    testAllDevicesButton_->setToolTip("Test connectivity to all enabled devices");
+    connect(testAllDevicesButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestAllDevices);
+    buttonLayout->addWidget(testAllDevicesButton_);
+
+    testDebugserverButton_ = new QPushButton("Test Debugserver", devicesGroup);
+    testDebugserverButton_->setToolTip("Test debugserver startup on selected device (diagnostic)");
+    testDebugserverButton_->setEnabled(false);
+    connect(testDebugserverButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestDebugserver);
+    buttonLayout->addWidget(testDebugserverButton_);
+
+    buttonLayout->addStretch();
+    devicesLayout->addLayout(buttonLayout);
+
+    layout->addWidget(devicesGroup);
+
+    // SSH Key Management
+    auto* sshKeyGroup = new QGroupBox("SSH Key Setup", widget);
+    auto* sshKeyLayout = new QVBoxLayout(sshKeyGroup);
+
+    auto* sshKeyInfo = new QLabel("SSH keys are automatically generated on orchestrator startup. Use the button below to copy the ssh-copy-id command");
+    sshKeyInfo->setWordWrap(true);
+    sshKeyInfo->setStyleSheet("QLabel { color: gray; margin-bottom: 10px; }");
+    sshKeyLayout->addWidget(sshKeyInfo);
+
+    copySSHCopyIdButton_ = new QPushButton("Copy ssh-copy-id Command", sshKeyGroup);
+    copySSHCopyIdButton_->setToolTip("Copy ssh-copy-id command to clipboard for selected device");
+    sshKeyLayout->addWidget(copySSHCopyIdButton_);
+
+    layout->addWidget(sshKeyGroup);
+    layout->addStretch();
+
+    tabWidget_->addTab(widget, "LLDB");
+}
+
 void PreferencesDialog::connectSignals() {
     // Button box
     connect(buttonBox_, &QDialogButtonBox::accepted, this, &PreferencesDialog::onAccept);
@@ -615,7 +729,8 @@ void PreferencesDialog::connectSignals() {
     
     // Test buttons
     connect(testApiButton_, &QPushButton::clicked, this, &PreferencesDialog::onTestAPIConnection);
-    
+    connect(copySSHCopyIdButton_, &QPushButton::clicked, this, &PreferencesDialog::onCopySSHCopyIdCommand);
+
     // OAuth account management buttons
     connect(addAccountButton_, &QPushButton::clicked, this, &PreferencesDialog::onAddAccount);
     connect(removeAccountButton_, &QPushButton::clicked, this, &PreferencesDialog::onRemoveAccount);
@@ -656,22 +771,13 @@ void PreferencesDialog::connectSignals() {
         progressDialog->show();
 
         // Refresh tokens in background thread
-        auto* thread = QThread::create([this, progressDialog, config_dir, account_uuid]() {
-            // Create OAuth manager
-            auto oauth_manager = Config::create_oauth_manager(config_dir.toStdString());
+        auto* thread = QThread::create([this, progressDialog, account_uuid]() {
+            // Refresh using new Client static method (uses global pool)
+            bool success = claude::Client::refresh_account_tokens(account_uuid.toStdString());
 
-            bool success = false;
             QString error_message;
-
-            if (oauth_manager) {
-                auto refreshed_creds = oauth_manager->refresh_account(account_uuid.toStdString());
-                success = (refreshed_creds != nullptr);
-
-                if (!success) {
-                    error_message = QString::fromStdString(oauth_manager->get_last_error());
-                }
-            } else {
-                error_message = "Failed to create OAuth manager";
+            if (!success) {
+                error_message = "Failed to refresh token - check that credentials exist at ~/.claude_cpp_sdk/credentials.json";
             }
 
             // Update UI on main thread
@@ -861,6 +967,13 @@ void PreferencesDialog::loadConfiguration() {
     entryPointWeightSpin_->setValue(config.swarm.entry_point_weight);
     entryPointModeCombo_->setCurrentIndex(static_cast<int>(config.swarm.entry_point_mode));
 
+    // LLDB settings - Global
+    lldbEnabledCheck_->setChecked(config.lldb.enabled);
+    lldbPathEdit_->setText(QString::fromStdString(config.lldb.lldb_path));
+
+    // LLDB settings - Device Pool (per-workspace)
+    loadDevicePool();
+
     configModified_ = false;
 }
 
@@ -934,8 +1047,15 @@ void PreferencesDialog::saveConfiguration() {
     config.swarm.entry_point_weight = entryPointWeightSpin_->value();
     config.swarm.entry_point_mode = static_cast<Config::SwarmSettings::EntryPointMode>(entryPointModeCombo_->currentIndex());
 
+    // LLDB settings - Global
+    config.lldb.enabled = lldbEnabledCheck_->isChecked();
+    config.lldb.lldb_path = lldbPathEdit_->text().toStdString();
+
     // Save to file
     config.save();
+
+    // LLDB settings - Device Pool (per-workspace)
+    saveDevicePool();
     
     currentConfig_ = config;
     configModified_ = false;
@@ -1131,7 +1251,11 @@ void PreferencesDialog::onTestAPIConnection() {
                 testApiButton_->setEnabled(true);
                 return;
             }
-            client = std::make_unique<claude::Client>(apiKey, baseUrl);
+            client = std::make_unique<claude::Client>(
+                claude::AuthMethod::API_KEY,
+                apiKey,
+                baseUrl
+            );
         } else {
             // OAuth authentication
             std::string oauthDir = oauthDirEdit_->text().toStdString();
@@ -1142,25 +1266,28 @@ void PreferencesDialog::onTestAPIConnection() {
                 return;
             }
             
-            // Use OAuth manager to get credentials
-            claude::auth::OAuthManager oauthMgr(oauthDir);
-            
-            if (!oauthMgr.has_credentials()) {
-                apiStatusLabel_->setText("✗ No OAuth credentials found in directory");
+            // Try to create OAuth client (uses global pool - no manager needed!)
+            // Note: OAuth config dir is now ignored (always uses ~/.claude_cpp_sdk)
+            if (!claude::Client::has_oauth_credentials()) {
+                apiStatusLabel_->setText("✗ No OAuth credentials found at ~/.claude_cpp_sdk/credentials.json");
                 apiStatusLabel_->setStyleSheet("QLabel { color: red; }");
                 testApiButton_->setEnabled(true);
                 return;
             }
-            
-            auto oauthCreds = oauthMgr.get_credentials();
-            if (!oauthCreds) {
-                apiStatusLabel_->setText("✗ Failed to load OAuth credentials");
+
+            try {
+                client = std::make_unique<claude::Client>(
+                    claude::AuthMethod::OAUTH,
+                    "",  // Credential not needed for OAuth
+                    baseUrl
+                );
+            } catch (const std::exception& e) {
+                apiStatusLabel_->setText("✗ Failed to initialize OAuth client: " +
+                                        QString::fromStdString(e.what()));
                 apiStatusLabel_->setStyleSheet("QLabel { color: red; }");
                 testApiButton_->setEnabled(true);
                 return;
             }
-            
-            client = std::make_unique<claude::Client>(oauthCreds, nullptr, baseUrl);
         }
         
         // Create a simple test message
@@ -1367,22 +1494,23 @@ void PreferencesDialog::onRemoveAccount() {
 
     if (reply == QMessageBox::No) return;
 
-    // Load OAuth manager
-    auto oauth_manager = Config::create_oauth_manager(
-        oauthDirEdit_->text().toStdString());
+    // Use global OAuth pool (no manager needed)
+    claude::auth::OAuthAccountPool pool;  // Uses default ~/.claude_cpp_sdk
 
-    if (!oauth_manager) {
-        QMessageBox::warning(this, "Error", "Failed to load OAuth manager");
+    if (!pool.load_from_disk()) {
+        QMessageBox::warning(this, "Error", "Failed to load OAuth credentials");
         return;
     }
 
     // Remove account
-    if (oauth_manager->remove_account(account_uuid.toStdString())) {
-        refreshAccountsList();
+    if (pool.remove_account(account_uuid.toStdString())) {
+        if (pool.save_to_disk()) {
+            refreshAccountsList();
+        } else {
+            QMessageBox::warning(this, "Error", "Failed to save credentials after removal");
+        }
     } else {
-        QMessageBox::warning(this, "Error",
-            QString("Failed to remove account:\n\n%1")
-                .arg(QString::fromStdString(oauth_manager->get_last_error())));
+        QMessageBox::warning(this, "Error", "Failed to remove account");
     }
 }
 
@@ -1394,17 +1522,16 @@ void PreferencesDialog::onMoveAccountUp() {
     QString uuid1 = accountsTable_->item(row - 1, 1)->data(Qt::UserRole).toString();
     QString uuid2 = accountsTable_->item(row, 1)->data(Qt::UserRole).toString();
 
-    // Load OAuth manager
-    auto oauth_manager = Config::create_oauth_manager(
-        oauthDirEdit_->text().toStdString());
-
-    if (!oauth_manager) return;
+    // Use global OAuth pool (no manager needed)
+    claude::auth::OAuthAccountPool pool;
+    if (!pool.load_from_disk()) return;
 
     // Swap priorities
-    if (oauth_manager->swap_account_priorities(
-            uuid1.toStdString(), uuid2.toStdString())) {
-        refreshAccountsList();
-        accountsTable_->selectRow(row - 1);
+    if (pool.swap_priorities(uuid1.toStdString(), uuid2.toStdString())) {
+        if (pool.save_to_disk()) {
+            refreshAccountsList();
+            accountsTable_->selectRow(row - 1);
+        }
     }
 }
 
@@ -1416,17 +1543,16 @@ void PreferencesDialog::onMoveAccountDown() {
     QString uuid1 = accountsTable_->item(row, 1)->data(Qt::UserRole).toString();
     QString uuid2 = accountsTable_->item(row + 1, 1)->data(Qt::UserRole).toString();
 
-    // Load OAuth manager
-    auto oauth_manager = Config::create_oauth_manager(
-        oauthDirEdit_->text().toStdString());
-
-    if (!oauth_manager) return;
+    // Use global OAuth pool (no manager needed)
+    claude::auth::OAuthAccountPool pool;
+    if (!pool.load_from_disk()) return;
 
     // Swap priorities
-    if (oauth_manager->swap_account_priorities(
-            uuid1.toStdString(), uuid2.toStdString())) {
-        refreshAccountsList();
-        accountsTable_->selectRow(row + 1);
+    if (pool.swap_priorities(uuid1.toStdString(), uuid2.toStdString())) {
+        if (pool.save_to_disk()) {
+            refreshAccountsList();
+            accountsTable_->selectRow(row + 1);
+        }
     }
 }
 
@@ -1447,21 +1573,15 @@ void PreferencesDialog::refreshAccountsList() {
         // Clear table
         accountsTable_->setRowCount(0);
 
-        // Get config directory
-        QString config_dir = oauthDirEdit_->text();
-        if (config_dir.isEmpty()) {
-            config_dir = "~/.claude_cpp_sdk";  // Default
-        }
+        // Use global OAuth pool (no manager needed - always uses ~/.claude_cpp_sdk)
+        claude::auth::OAuthAccountPool pool;
 
-        // Load OAuth manager
-        auto oauth_manager = Config::create_oauth_manager(config_dir.toStdString());
-
-        if (!oauth_manager) {
-            return;
+        if (!pool.load_from_disk()) {
+            return;  // No credentials file yet
         }
 
         // Get all accounts info
-        auto accounts_info = oauth_manager->get_all_accounts_info();
+        auto accounts_info = pool.get_all_accounts_info();
 
         // Populate table
         for (const auto& info : accounts_info) {
@@ -1518,6 +1638,551 @@ void PreferencesDialog::onAccountSelectionChanged() {
     moveUpButton_->setEnabled(hasSelection && row > 0);
     moveDownButton_->setEnabled(hasSelection && row < rowCount - 1);
     refreshAccountsButton_->setEnabled(hasSelection);
+}
+
+// LLDB global device registry helpers
+void PreferencesDialog::loadDevicePool() {
+    devices_.clear();
+
+    // Load from GLOBAL config (not workspace)
+    const Config& config = Config::instance();
+
+    for (const auto& global_device : config.lldb.devices) {
+        RemoteDevice device;
+        device.id = global_device.id;
+        device.name = global_device.name;
+        device.host = global_device.host;
+        device.ssh_port = global_device.ssh_port;
+        device.ssh_user = global_device.ssh_user;
+        // debugserver_port will be auto-assigned from IRC port at runtime
+
+        // Copy cached device info
+        if (global_device.device_info) {
+            DeviceInfo info;
+            info.udid = global_device.device_info->udid;
+            info.model = global_device.device_info->model;
+            info.ios_version = global_device.device_info->ios_version;
+            info.name = global_device.device_info->name;
+            device.device_info = info;
+        }
+
+        // NOTE: enabled and remote_binary_path are workspace-specific
+        // Load them from workspace config if available, otherwise default to disabled
+        device.enabled = false;  // Default to disabled for new workspaces
+        device.remote_binary_path = "";
+
+        // Try to load workspace-specific settings
+        std::string workspace_config_path = getWorkspaceConfigPath().toStdString();
+        if (!workspace_config_path.empty()) {
+            std::ifstream workspace_file(workspace_config_path + "/lldb_config.json");
+            if (workspace_file) {
+                try {
+                    json workspace_json;
+                    workspace_file >> workspace_json;
+                    if (workspace_json.contains("device_overrides") &&
+                        workspace_json["device_overrides"].contains(device.id)) {
+                        const auto& override = workspace_json["device_overrides"][device.id];
+                        device.enabled = override.value("enabled", false);
+                        device.remote_binary_path = override.value("remote_binary_path", "");
+                    }
+                } catch (const std::exception& e) {
+                    LOG("PreferencesDialog: Error loading workspace config for device %s: %s\n",
+                        device.id.c_str(), e.what());
+                }
+            }
+        }
+
+        devices_.push_back(device);
+    }
+
+    refreshDevicesTable();
+}
+
+void PreferencesDialog::saveDevicePool() {
+    // Save to GLOBAL config (connection info only)
+    Config& config = Config::instance();
+    config.lldb.devices.clear();
+
+    for (const auto& device : devices_) {
+        Config::LLDBSettings::GlobalDevice global_device;
+        global_device.id = device.id;
+        global_device.name = device.name;
+        global_device.host = device.host;
+        global_device.ssh_port = device.ssh_port;
+        global_device.ssh_user = device.ssh_user;
+        // debugserver_port not saved - auto-derived from IRC port at runtime
+
+        // Save cached device info if available
+        if (device.device_info) {
+            Config::LLDBSettings::GlobalDevice::DeviceInfo info;
+            info.udid = device.device_info->udid;
+            info.model = device.device_info->model;
+            info.ios_version = device.device_info->ios_version;
+            info.name = device.device_info->name;
+            global_device.device_info = info;
+        }
+
+        config.lldb.devices.push_back(global_device);
+    }
+
+    // Save global config to disk
+    try {
+        config.save();
+        LOG("LLM RE: Global device registry saved successfully\n");
+    } catch (const std::exception& e) {
+        LOG("LLM RE: Error saving global device registry: %s\n", e.what());
+    }
+
+    // Save workspace-specific settings (enabled + remote_binary_path)
+    std::string workspace_config_path = getWorkspaceConfigPath().toStdString();
+    LOG("PreferencesDialog: Workspace config path: %s\n", workspace_config_path.c_str());
+
+    if (!workspace_config_path.empty()) {
+        // Ensure workspace directory exists
+        qmkdir(workspace_config_path.c_str(), 0755);
+
+        json workspace_config;
+        json device_overrides = json::object();
+
+        for (const auto& device : devices_) {
+            json override;
+            override["enabled"] = device.enabled;
+            override["remote_binary_path"] = device.remote_binary_path;
+            device_overrides[device.id] = override;
+            LOG("PreferencesDialog: Saving device %s - enabled=%d, path=%s\n",
+                device.id.c_str(), device.enabled, device.remote_binary_path.c_str());
+        }
+
+        workspace_config["device_overrides"] = device_overrides;
+
+        // Write to workspace config
+        try {
+            std::string config_file_path = workspace_config_path + "/lldb_config.json";
+            LOG("PreferencesDialog: Writing to %s\n", config_file_path.c_str());
+
+            std::ofstream workspace_file(config_file_path);
+            if (workspace_file) {
+                workspace_file << workspace_config.dump(4);
+                workspace_file.close();
+                LOG("LLM RE: Workspace device config saved to %s\n", config_file_path.c_str());
+            } else {
+                LOG("LLM RE: Error: Could not open workspace config file for writing: %s\n", config_file_path.c_str());
+            }
+        } catch (const std::exception& e) {
+            LOG("LLM RE: Error saving workspace device config: %s\n", e.what());
+        }
+    } else {
+        LOG("PreferencesDialog: Warning - workspace config path is empty, not saving workspace-specific settings\n");
+    }
+}
+
+QString PreferencesDialog::getWorkspaceConfigPath() const {
+    // Compute workspace path the same way orchestrator does
+    // Format: /tmp/ida_swarm_workspace/<binary_name>
+
+    // Get current binary name from IDA
+    char binary_path[QMAXPATH];
+    get_input_file_path(binary_path, sizeof(binary_path));
+
+    // Extract just the filename without path
+    const char* binary_name = qbasename(binary_path);
+
+    if (!binary_name || binary_name[0] == '\0') {
+        LOG("PreferencesDialog: Warning - Could not determine binary name\n");
+        return QString();
+    }
+
+    // Build workspace path: /tmp/ida_swarm_workspace/<binary_name>
+    return QString("/tmp/ida_swarm_workspace/%1").arg(binary_name);
+}
+
+// LLDB device management slots
+void PreferencesDialog::refreshDevicesTable() {
+    devicesTable_->setRowCount(0);
+
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        const auto& device = devices_[i];
+
+        int row = devicesTable_->rowCount();
+        devicesTable_->insertRow(row);
+
+        // Enabled - use a checkbox widget
+        auto* enabledWidget = new QWidget();
+        auto* enabledLayout = new QHBoxLayout(enabledWidget);
+        auto* enabledCheck = new QCheckBox();
+        enabledCheck->setChecked(device.enabled);
+        enabledCheck->setProperty("row", row);
+        connect(enabledCheck, &QCheckBox::toggled, this, [this, i](bool checked) {
+            if (i < devices_.size()) {
+                devices_[i].enabled = checked;
+                configModified_ = true;
+            }
+        });
+        enabledLayout->addWidget(enabledCheck);
+        enabledLayout->setAlignment(Qt::AlignCenter);
+        enabledLayout->setContentsMargins(0, 0, 0, 0);
+        devicesTable_->setCellWidget(row, 0, enabledWidget);
+
+        // Name - editable
+        auto* nameItem = new QTableWidgetItem(QString::fromStdString(device.name));
+        nameItem->setFlags(nameItem->flags() | Qt::ItemIsEditable);
+        devicesTable_->setItem(row, 1, nameItem);
+
+        // Host - read-only
+        auto* hostItem = new QTableWidgetItem(QString::fromStdString(device.host));
+        hostItem->setFlags(hostItem->flags() & ~Qt::ItemIsEditable);
+        devicesTable_->setItem(row, 2, hostItem);
+
+        // SSH Port - read-only
+        auto* sshPortItem = new QTableWidgetItem(QString::number(device.ssh_port));
+        sshPortItem->setFlags(sshPortItem->flags() & ~Qt::ItemIsEditable);
+        devicesTable_->setItem(row, 3, sshPortItem);
+
+        // debugserver_port removed - auto-derived from IRC port at runtime
+    }
+}
+
+void PreferencesDialog::onDeviceSelectionChanged() {
+    bool hasSelection = !devicesTable_->selectedItems().isEmpty();
+    editDeviceButton_->setEnabled(hasSelection);
+    removeDeviceButton_->setEnabled(hasSelection);
+    testDeviceButton_->setEnabled(hasSelection);
+    testDebugserverButton_->setEnabled(hasSelection);
+}
+
+void PreferencesDialog::onAddDevice() {
+    DeviceEditorDialog dialog(this, nullptr);
+    if (dialog.exec() == QDialog::Accepted) {
+        devices_.push_back(dialog.get_device());
+        refreshDevicesTable();
+        configModified_ = true;
+    }
+}
+
+void PreferencesDialog::onEditDevice() {
+    int row = devicesTable_->currentRow();
+    if (row < 0 || row >= static_cast<int>(devices_.size())) return;
+
+    DeviceEditorDialog dialog(this, &devices_[row]);
+    if (dialog.exec() == QDialog::Accepted) {
+        devices_[row] = dialog.get_device();
+        refreshDevicesTable();
+        configModified_ = true;
+    }
+}
+
+void PreferencesDialog::onRemoveDevice() {
+    int row = devicesTable_->currentRow();
+    if (row < 0 || row >= static_cast<int>(devices_.size())) return;
+
+    auto reply = QMessageBox::question(this, "Remove Device",
+        QString("Are you sure you want to remove device '%1'?")
+            .arg(QString::fromStdString(devices_[row].name)),
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        devices_.erase(devices_.begin() + row);
+        refreshDevicesTable();
+        configModified_ = true;
+    }
+}
+
+void PreferencesDialog::onTestDevice() {
+    int row = devicesTable_->currentRow();
+    if (row < 0 || row >= static_cast<int>(devices_.size())) return;
+
+    const auto& device = devices_[row];
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    orchestrator::RemoteConfig remote_cfg;
+    remote_cfg.host = device.host;
+    remote_cfg.ssh_port = device.ssh_port;
+    remote_cfg.ssh_user = device.ssh_user;
+    remote_cfg.debugserver_port = 0;  // Not needed for SSH-only test
+
+    auto result = orchestrator::RemoteSyncManager::validate_connectivity(remote_cfg);
+
+    QApplication::restoreOverrideCursor();
+
+    if (result.is_valid()) {
+        QMessageBox::information(this, "Connection Test Passed",
+            QString("✅ Device '%1' SSH connection successful!\n\n"
+                    "The device is ready for debugging.\n"
+                    "Debugserver will be started automatically when needed.")
+                .arg(QString::fromStdString(device.name)));
+    } else {
+        QMessageBox::warning(this, "Connection Test Failed",
+            QString("Device '%1' SSH connection test failed:\n\n%2")
+                .arg(QString::fromStdString(device.name))
+                .arg(QString::fromStdString(result.error_message)));
+    }
+}
+
+void PreferencesDialog::onTestDebugserver() {
+    int row = devicesTable_->currentRow();
+    if (row < 0 || row >= static_cast<int>(devices_.size())) return;
+
+    const auto& device = devices_[row];
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    QString report;
+    bool success = true;
+
+    // Connect via SSH
+    orchestrator::SSH2SessionGuard ssh;
+    std::string error;
+    if (!ssh.connect(device.host, device.ssh_port, device.ssh_user, error)) {
+        QApplication::restoreOverrideCursor();
+        QMessageBox::critical(this, "Debugserver Test Failed",
+            QString("Failed to connect via SSH:\n\n%1")
+                .arg(QString::fromStdString(error)));
+        return;
+    }
+
+    report += "=== Debugserver Diagnostic Test ===\n\n";
+    report += QString("Device: %1\n").arg(QString::fromStdString(device.name));
+    report += QString("Host: %1:%2\n\n").arg(QString::fromStdString(device.host)).arg(device.ssh_port);
+
+    // Test 1: Check PATH
+    report += "[1] Checking PATH...\n";
+    error.clear();
+    std::string path_output = ssh.exec("echo $PATH", error);
+    if (!error.empty()) {
+        report += QString("    ❌ ERROR: %1\n\n").arg(QString::fromStdString(error));
+        success = false;
+    } else {
+        report += QString("    PATH = %1\n\n").arg(QString::fromStdString(path_output));
+    }
+
+    // Test 2: Check debugserver location
+    report += "[2] Finding debugserver...\n";
+    error.clear();
+    std::string which_output = ssh.exec("which debugserver", error);
+    if (!error.empty()) {
+        report += QString("    ❌ ERROR: %1\n\n").arg(QString::fromStdString(error));
+        success = false;
+    } else {
+        report += QString("    ✅ debugserver: %1\n\n").arg(QString::fromStdString(which_output));
+    }
+
+    // Test 3: Check nohup location
+    report += "[3] Finding nohup...\n";
+    error.clear();
+    std::string nohup_output = ssh.exec("which nohup", error);
+    if (!error.empty()) {
+        report += QString("    ❌ ERROR: %1\n\n").arg(QString::fromStdString(error));
+        success = false;
+    } else {
+        report += QString("    ✅ nohup: %1\n\n").arg(QString::fromStdString(nohup_output));
+    }
+
+    // Test 4: Check if test binary exists (using configured remote_binary_path)
+    report += "[4] Checking test binary...\n";
+    if (device.remote_binary_path.empty()) {
+        report += "    ❌ ERROR: remote_binary_path is not configured for this device\n";
+        report += "    Please set the path to the target binary you want to debug\n\n";
+        success = false;
+    } else {
+        report += QString("    Configured path: %1\n").arg(QString::fromStdString(device.remote_binary_path));
+        error.clear();
+        std::string ls_check = ssh.exec(std::format("ls -la \"{}\" 2>&1", device.remote_binary_path), error);
+        if (!error.empty()) {
+            report += QString("    ❌ ERROR: %1\n\n").arg(QString::fromStdString(error));
+            success = false;
+        } else if (ls_check.find("No such file") != std::string::npos) {
+            report += QString("    ❌ ERROR: Binary does not exist at specified path\n");
+            report += QString("    %1\n\n").arg(QString::fromStdString(ls_check));
+            success = false;
+        } else {
+            report += QString("    ✅ Binary exists: %1\n\n").arg(QString::fromStdString(ls_check));
+        }
+    }
+
+    // Test 5: Test redirection without nohup first
+    report += "[5] Testing redirection (without nohup)...\n";
+    error.clear();
+    ssh.exec("rm -f /tmp/redir_test.log", error);  // Clean up
+    std::string redir_test = ssh.exec("echo 'test output' > /tmp/redir_test.log 2>&1; cat /tmp/redir_test.log", error);
+    if (!error.empty()) {
+        report += QString("    ❌ ERROR: %1\n\n").arg(QString::fromStdString(error));
+    } else {
+        report += QString("    Redirection works: %1\n\n").arg(QString::fromStdString(redir_test));
+    }
+
+    // Test 6: Test debugserver WITHOUT nohup or backgrounding
+    report += "[6] Testing debugserver directly (foreground, 2sec timeout)...\n";
+    int test_port = 9999;
+
+    // Use configured remote_binary_path, or skip test if not set
+    if (device.remote_binary_path.empty()) {
+        report += "    ⊘ SKIPPED: remote_binary_path not configured\n\n";
+    } else {
+        std::string test_binary = device.remote_binary_path;
+
+        error.clear();
+        ssh.exec("rm -f /tmp/debugserver_direct.log", error);  // Clean up
+
+        // Run debugserver in foreground with timeout, capture output
+        std::string direct_cmd = std::format(
+            "timeout 2 debugserver 0.0.0.0:{} \"{}\" > /tmp/debugserver_direct.log 2>&1; cat /tmp/debugserver_direct.log",
+            test_port,
+            test_binary
+        );
+        std::string direct_output = ssh.exec(direct_cmd, error);
+        if (!error.empty()) {
+            report += QString("    Command error: %1\n").arg(QString::fromStdString(error));
+            report += QString("    Output: %1\n\n").arg(QString::fromStdString(direct_output));
+        } else {
+            report += QString("    Output captured:\n    %1\n\n").arg(QString::fromStdString(direct_output));
+        }
+    }
+
+    // Test 7: Try with nohup + backgrounding
+    report += "[7] Testing debugserver with nohup + background...\n";
+
+    if (device.remote_binary_path.empty()) {
+        report += "    ⊘ SKIPPED: remote_binary_path not configured\n\n";
+    } else {
+        std::string test_binary = device.remote_binary_path;
+
+        error.clear();
+        ssh.exec("rm -f /tmp/debugserver_test.log", error);  // Clean up
+
+        std::string start_cmd = std::format(
+            "nohup debugserver 0.0.0.0:{} \"{}\" > /tmp/debugserver_test.log 2>&1 & echo $!",
+            test_port,
+            test_binary
+        );
+        std::string pid_output = ssh.exec(start_cmd, error);
+
+        if (!error.empty()) {
+            report += QString("    ❌ Failed to start: %1\n\n").arg(QString::fromStdString(error));
+            success = false;
+        } else {
+            int debugserver_pid = -1;
+            try {
+                pid_output.erase(pid_output.find_last_not_of(" \n\r\t") + 1);
+                debugserver_pid = std::stoi(pid_output);
+                report += QString("    Debugserver PID: %1\n").arg(debugserver_pid);
+
+                // Wait a moment
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                // Check if still running
+                error.clear();
+                std::string ps_output = ssh.exec(std::format("ps -p {} -o comm=", debugserver_pid), error);
+                if (!error.empty() || ps_output.find("debugserver") == std::string::npos) {
+                    report += QString("    ❌ Debugserver not running (crashed immediately)\n");
+                    report += QString("    ps output: '%1'\n").arg(QString::fromStdString(ps_output));
+
+                    // Fetch log
+                    error.clear();
+                    std::string log_output = ssh.exec("cat /tmp/debugserver_test.log 2>&1", error);
+                    if (!error.empty()) {
+                        report += QString("    Failed to fetch log: %1\n\n").arg(QString::fromStdString(error));
+                    } else if (log_output.empty()) {
+                        report += QString("    Log is empty (debugserver never ran)\n\n");
+                    } else {
+                        report += QString("    Log:\n    %1\n\n").arg(QString::fromStdString(log_output));
+                    }
+                    success = false;
+                } else {
+                    report += QString("    ✅ Debugserver running: %1\n").arg(QString::fromStdString(ps_output));
+
+                    // Cleanup
+                    error.clear();
+                    ssh.exec(std::format("kill -9 {}", debugserver_pid), error);
+                    if (!error.empty()) {
+                        report += QString("    WARNING: Failed to kill debugserver: %1\n\n").arg(QString::fromStdString(error));
+                    } else {
+                        report += QString("    ✅ Debugserver killed successfully\n\n");
+                    }
+                }
+            } catch (const std::exception& e) {
+                report += QString("    ❌ Failed to parse PID from: '%1'\n\n").arg(QString::fromStdString(pid_output));
+                success = false;
+            }
+        }
+    }
+
+    QApplication::restoreOverrideCursor();
+
+    if (success) {
+        report += "=== All tests passed! ✅ ===\n";
+        QMessageBox::information(this, "Debugserver Test Passed", report);
+    } else {
+        report += "=== Some tests failed ❌ ===\n";
+        QMessageBox::warning(this, "Debugserver Test Failed", report);
+    }
+}
+
+void PreferencesDialog::onTestAllDevices() {
+    if (devices_.empty()) {
+        QMessageBox::information(this, "No Devices", "No devices configured to test.");
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    int passed = 0;
+    int failed = 0;
+    QString report;
+
+    for (const auto& device : devices_) {
+        orchestrator::RemoteConfig remote_cfg;
+        remote_cfg.host = device.host;
+        remote_cfg.ssh_port = device.ssh_port;
+        remote_cfg.ssh_user = device.ssh_user;
+        remote_cfg.debugserver_port = 0;  // Not needed for SSH-only test
+
+        auto result = orchestrator::RemoteSyncManager::validate_connectivity(remote_cfg);
+
+        if (result.is_valid()) {
+            passed++;
+            report += QString("✅ %1: PASSED\n").arg(QString::fromStdString(device.name));
+        } else {
+            failed++;
+            report += QString("❌ %1: FAILED (%2)\n")
+                .arg(QString::fromStdString(device.name))
+                .arg(QString::fromStdString(result.error_message));
+        }
+    }
+
+    QApplication::restoreOverrideCursor();
+
+    QMessageBox::information(this, "Test All Devices",
+        QString("Test Results:\n\nPassed: %1\nFailed: %2\n\n%3")
+            .arg(passed).arg(failed).arg(report));
+}
+
+void PreferencesDialog::onCopySSHCopyIdCommand() {
+    int row = devicesTable_->currentRow();
+    if (row < 0 || row >= static_cast<int>(devices_.size())) {
+        QMessageBox::warning(this, "No Device Selected",
+            "Please select a device from the table first.");
+        return;
+    }
+
+    const auto& device = devices_[row];
+    std::string key_path = std::string(get_user_idadir()) + "/ida_swarm_ssh_key.pub";
+
+    // Build ssh-copy-id command
+    std::string command;
+    if (device.ssh_port == 22) {
+        command = std::format("ssh-copy-id -i {} {}@{}",
+                            key_path, device.ssh_user, device.host);
+    } else {
+        command = std::format("ssh-copy-id -i {} -p {} {}@{}",
+                            key_path, device.ssh_port, device.ssh_user, device.host);
+    }
+
+    QApplication::clipboard()->setText(QString::fromStdString(command));
+    QMessageBox::information(this, "Command Copied",
+        QString("ssh-copy-id command copied to clipboard.\n\n"
+                "Run this command in your terminal to copy the SSH key to your remote device.\n"
+                "You'll be prompted for the remote device's password."));
 }
 
 } // namespace llm_re::ui
