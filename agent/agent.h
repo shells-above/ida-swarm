@@ -1552,8 +1552,9 @@ private:
                             // Add grader's questions as user message and continue
                             // Mark this as grader feedback with a special prefix we can filter
                             claude::messages::Message continue_msg = claude::messages::Message::user_text("__GRADER_FEEDBACK__: " + grade.response +
-                                " [NOTE FROM SYSTEM]: The grader can be very strict, "
-                                "it performs a meticulous analysis of your final message (your FINAL / LATEST MESSAGE ONLY!) "
+                                " [NOTE FROM SYSTEM]: DO NOT RESPOND *TO* THE GRADER! The grader performs an evaluation on you (it is provided the user task), "
+                                "and your job is to answer the USERS TASK! The user does NOT want to see you talking to the grader, RESPOND TO THE USERS TASK! The grader JUST GUIDES YOU. "
+                                "The grader can be very strict, it performs a meticulous analysis of your final message (your FINAL / LATEST MESSAGE ONLY!) "
                                 "and determines if it meets the criteria of the users task. "
                                 "If something *truly* is not possible, and you can't complete it you need to make that clear to the Grader, "
                                 "or else it will keep rejecting you. If this is the case, you can not just say that you can not do it, "

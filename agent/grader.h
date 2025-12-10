@@ -4,7 +4,6 @@
 #include "core/config.h"
 #include "core/profiler.h"
 #include "sdk/claude_sdk.h"
-#include "sdk/auth/oauth_manager.h"
 
 namespace llm_re {
 
@@ -41,7 +40,7 @@ private:
     mutable std::unique_ptr<claude::Client> api_client_;  // Mutable to allow token refresh in const methods
     const Config& config_;
     mutable qmutex_t mutex_;
-    mutable std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;  // OAuth manager for this grader instance
+    // Note: OAuth manager no longer needed - Client uses global pool
     
     
     // Grader system prompt

@@ -7,34 +7,16 @@
 namespace llm_re {
 
 AnalysisGrader::AnalysisGrader(const Config& config) : config_(config) {
-    // Create our own OAuth manager if using OAuth authentication
+    // Create API client (no more OAuth manager - Client uses global pool)
     if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-        oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
-    }
-    
-    // Create API client based on auth method
-    if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-        std::shared_ptr<claude::OAuthCredentials> oauth_creds =
-            oauth_manager_->get_credentials();
-
-        if (oauth_creds) {
-            // Initialize API client with OAuth - pass shared_ptr so it shares credentials
-            // Also pass oauth_manager_ so Client can handle token refresh automatically
-            api_client_ = std::make_unique<claude::Client>(
-                oauth_creds,
-                oauth_manager_,
-                config.api.base_url
-            );
-        } else {
-            // Fallback to API key
-            api_client_ = std::make_unique<claude::Client>(
-                config.api.api_key,
-                config.api.base_url
-            );
-        }
-    } else {
-        // Use API key authentication
         api_client_ = std::make_unique<claude::Client>(
+            claude::AuthMethod::OAUTH,
+            "",  // Credential not needed for OAuth
+            config.api.base_url
+        );
+    } else {
+        api_client_ = std::make_unique<claude::Client>(
+            claude::AuthMethod::API_KEY,
             config.api.api_key,
             config.api.base_url
         );
