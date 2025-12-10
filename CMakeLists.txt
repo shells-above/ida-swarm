@@ -227,6 +227,10 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# Find libssh2 via pkg-config
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBSSH2 REQUIRED libssh2)
+
 # Find SQLite3 for IRC server
 find_package(SQLite3 REQUIRED)
 
@@ -266,6 +270,7 @@ set(COMMON_SOURCES
         core/ida_utils.cpp
         core/config.cpp
         core/logger.cpp
+        core/ssh_key_manager.cpp
         analysis/actions.cpp
         analysis/deep_analysis.cpp
         analysis/memory_tool.cpp
@@ -387,6 +392,12 @@ set_target_properties(ida_swarm64 PROPERTIES
 target_include_directories(ida_swarm64 SYSTEM PRIVATE
         ${IDASDK_PATH}/include
         ${IDA_PLUGINS_PATH}/hexrays_sdk/include
+        ${LIBSSH2_INCLUDE_DIRS}
+)
+
+# Add library directories for libssh2
+target_link_directories(ida_swarm64 PRIVATE
+        ${LIBSSH2_LIBRARY_DIRS}
 )
 
 # Common libraries
@@ -408,6 +419,7 @@ target_link_libraries(ida_swarm64
         ${QT_CORE_FRAMEWORK}
         ${QT_GUI_FRAMEWORK}
         ${QT_WIDGETS_FRAMEWORK}
+        ${LIBSSH2_LIBRARIES}
 )
 
 # Post-build: Copy unified plugin to IDA plugins directory
