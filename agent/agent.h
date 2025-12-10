@@ -1133,33 +1133,108 @@ private:
     // Estimate current conversation token count
     int estimate_current_conversation_tokens() const {
         int total_tokens = 0;
-        
+
         // Estimate tokens from execution state messages
         for (const claude::messages::Message& msg : execution_state_.get_messages()) {
-            std::optional<std::string> text = claude::messages::ContentExtractor::extract_text(msg);
-            if (text) {
-                total_tokens += text->length() / 2;  // Conservative token estimation (2 chars per token)
-            }
-            
-            // Add tokens for tool calls and results
-            auto tool_calls = claude::messages::ContentExtractor::extract_tool_uses(msg);
-            for (const auto* tool : tool_calls) {
-                total_tokens += tool->name.length() / 2;
-                total_tokens += tool->input.dump().length() / 2;
+            // Count ALL content types in the message
+            for (const auto& content : msg.contents()) {
+                if (auto* text = dynamic_cast<const claude::messages::TextContent*>(content.get())) {
+                    total_tokens += text->text.length() / 4;  // ~4 chars per token for text
+                } else if (auto* tool_use = dynamic_cast<const claude::messages::ToolUseContent*>(content.get())) {
+                    total_tokens += tool_use->name.length() / 4;
+                    total_tokens += tool_use->input.dump().length() / 4;
+                } else if (auto* tool_result = dynamic_cast<const claude::messages::ToolResultContent*>(content.get())) {
+                    // Tool results are often the LARGEST part of the context!
+                    total_tokens += tool_result->content.length() / 4;
+                } else if (auto* thinking = dynamic_cast<const claude::messages::ThinkingContent*>(content.get())) {
+                    total_tokens += thinking->thinking.length() / 4;
+                } else if (auto* redacted = dynamic_cast<const claude::messages::RedactedThinkingContent*>(content.get())) {
+                    total_tokens += redacted->data.length() / 4;
+                }
             }
         }
-        
+
         return total_tokens;
     }
 
+    // Trim oldest tool results in conversation history to free up context space
+    // Returns the number of tokens freed
+    int trim_oldest_tool_results(int tokens_needed) {
+        claude::ChatRequest& request = execution_state_.get_request();
+        int tokens_freed = 0;
+
+        // Iterate through messages from OLDEST to NEWEST (skip first message which is usually the task)
+        // Start from index 1 to preserve the initial task message
+        for (size_t msg_idx = 1; msg_idx < request.messages.size() && tokens_freed < tokens_needed; ++msg_idx) {
+            claude::messages::Message& msg = request.messages[msg_idx];
+
+            // Only process user messages (which contain tool results)
+            if (msg.role() != claude::messages::Role::User) {
+                continue;
+            }
+
+            // Create a new message with trimmed tool results
+            claude::messages::Message new_msg(msg.role());
+            bool modified = false;
+
+            for (const std::unique_ptr<claude::messages::Content>& content : msg.contents()) {
+                if (auto* tool_result = dynamic_cast<claude::messages::ToolResultContent*>(content.get())) {
+                    // Check if this tool result is large enough to be worth trimming
+                    int result_tokens = tool_result->content.length() / 4;
+
+                    // Only trim if it's substantial (>1000 tokens) and we still need space
+                    if (result_tokens > 1000 && tokens_freed < tokens_needed) {
+                        // Keep a small summary instead of the full result
+                        int chars_to_keep = 400;  // Keep ~100 tokens as a summary
+                        std::string trimmed_content;
+
+                        if (tool_result->content.length() > (size_t)chars_to_keep) {
+                            trimmed_content = tool_result->content.substr(0, chars_to_keep);
+                            int truncated_tokens = (tool_result->content.length() - chars_to_keep) / 4;
+                            trimmed_content += std::format("\n\n[...TRIMMED: Old tool result truncated to free {} tokens for recent context]", truncated_tokens);
+
+                            tokens_freed += truncated_tokens;
+                            modified = true;
+
+                            emit_log(LogLevel::INFO, std::format("Trimmed old tool result at message {} ({} tokens freed)",
+                                msg_idx, truncated_tokens));
+                        } else {
+                            trimmed_content = tool_result->content;
+                        }
+
+                        new_msg.add_content(std::make_unique<claude::messages::ToolResultContent>(
+                            tool_result->tool_use_id,
+                            trimmed_content,
+                            tool_result->is_error,
+                            tool_result->cache_control
+                        ));
+                    } else {
+                        // Keep as-is
+                        new_msg.add_content(content->clone());
+                    }
+                } else {
+                    // Keep non-tool-result content as-is
+                    new_msg.add_content(content->clone());
+                }
+            }
+
+            if (modified) {
+                msg = std::move(new_msg);
+            }
+        }
+
+        return tokens_freed;
+    }
+
     // Check and trim tool result if it would exceed context limits
+    // First tries to trim OLDEST tool results, only trims new result as last resort
     claude::messages::Message check_and_trim_tool_result(claude::messages::Message result_msg) {
         // Extract tool result content
         const std::vector<std::unique_ptr<claude::messages::Content>>& contents = result_msg.contents();
         if (contents.empty()) {
             return result_msg;  // No content to check
         }
-        
+
         // Find the tool result content
         claude::messages::ToolResultContent* tool_result = nullptr;
         for (const std::unique_ptr<claude::messages::Content>& content: contents) {
@@ -1168,42 +1243,60 @@ private:
                 break;
             }
         }
-        
+
         if (!tool_result) {
             return result_msg;  // No tool result found
         }
-        
+
         // Estimate tokens in tool result
-        int tool_result_tokens = tool_result->content.length() / 2;  // Conservative estimation for tool results
+        int tool_result_tokens = tool_result->content.length() / 4;  // ~4 chars per token
         int current_conversation_tokens = estimate_current_conversation_tokens();
         int available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
-        
+
         // Check if we need to trim
         if (tool_result_tokens <= available_tokens) {
             return result_msg;  // Fits within limits
         }
-        
+
+        // Calculate how many tokens we need to free
+        int tokens_needed = tool_result_tokens - available_tokens;
+
+        // FIRST: Try to trim OLDEST tool results in the conversation history
+        int tokens_freed = trim_oldest_tool_results(tokens_needed);
+
+        // Recalculate available tokens after trimming old results
+        current_conversation_tokens = estimate_current_conversation_tokens();
+        available_tokens = config_.agent.context_limit - current_conversation_tokens - config_.agent.tool_result_trim_buffer;
+
+        // Check if trimming old results freed enough space
+        if (tool_result_tokens <= available_tokens) {
+            emit_log(LogLevel::INFO, std::format("Freed {} tokens from old tool results, new result fits", tokens_freed));
+            return result_msg;  // Now fits within limits
+        }
+
+        // LAST RESORT: If still not enough, trim the new tool result
         // Calculate how much to keep (in characters)
-        int chars_to_keep = available_tokens * 2;  // Convert tokens back to characters
+        int chars_to_keep = available_tokens * 4;  // Convert tokens back to characters (~4 chars per token)
         if (chars_to_keep < 100) {  // Always keep at least 100 characters
             chars_to_keep = 100;
         }
-        
+
         // Trim the content and add truncation notice
         std::string original_content = tool_result->content;
         std::string trimmed_content;
-        
+
         if (chars_to_keep < (int)original_content.length()) {
             trimmed_content = original_content.substr(0, chars_to_keep);
-            int truncated_tokens = (original_content.length() - chars_to_keep) / 2;
-            trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits]", truncated_tokens);
-            
-            emit_log(LogLevel::WARNING, std::format("Trimmed tool result from {} to {} characters ({} tokens truncated)", 
-                original_content.length(), trimmed_content.length(), truncated_tokens));
+            int truncated_tokens = (original_content.length() - chars_to_keep) / 4;
+            trimmed_content += std::format("\n\n[...TRIMMED: Tool result too long, truncated {} more tokens to fit context limits (after freeing {} tokens from old results)]",
+                truncated_tokens, tokens_freed);
+
+            emit_log(LogLevel::WARNING, std::format("Trimmed NEW tool result from {} to {} characters ({} tokens truncated) - old result trimming freed {} tokens but wasn't enough",
+                original_content.length(), trimmed_content.length(), truncated_tokens, tokens_freed));
         } else {
             trimmed_content = original_content;
         }
-        
+
         // Create new message with trimmed content
         claude::messages::Message trimmed_msg(result_msg.role());
         for (const auto& content : contents) {
@@ -1220,7 +1313,7 @@ private:
                 trimmed_msg.add_content(content->clone());
             }
         }
-        
+
         return trimmed_msg;
     }
 
