@@ -13,7 +13,7 @@ OrchestratorWorker::OrchestratorWorker(orchestrator::Orchestrator* orch, QObject
 }
 
 void OrchestratorWorker::process_task(const QString& task) {
-    LOG("OrchestratorWorker: process_task called with: %s\n", task.toStdString().c_str());
+    LOG("OrchestratorWorker: process_task called");
     
     if (!orchestrator_) {
         LOG("OrchestratorWorker: ERROR - orchestrator_ is null\n");

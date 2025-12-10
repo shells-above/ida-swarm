@@ -519,9 +519,7 @@ void OrchestratorUI::on_task_submitted() {
         LOG("OrchestratorUI: Task is empty, returning\n");
         return;
     }
-    
-    LOG("OrchestratorUI: Task: %s\n", task.c_str());
-    
+
     // Clear input
     task_panel_->clear_input();
     
@@ -551,6 +549,14 @@ void OrchestratorUI::on_preferences_clicked() {
                 statusBar()->showMessage("Configuration updated", 3000);
                 // The UI components will use Config::instance() directly
                 // so no need to manually update anything here
+
+                // CRITICAL: Revalidate LLDB connectivity when configuration changes
+                // This allows devices to be enabled/configured without restarting
+                auto* bridge = &UIOrchestratorBridge::instance();
+                auto* orch = bridge->get_orchestrator();
+                if (orch) {
+                    orch->revalidate_lldb();
+                }
             });
 
     dialog.exec();
