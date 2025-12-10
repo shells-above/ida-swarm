@@ -24,7 +24,7 @@ public:
     // Get pricing for a specific model
     static constexpr ModelPricing get_pricing(Model model) {
         switch (model) {
-            case Model::Opus41:
+            case Model::Opus45:
                 return {15.0, 75.0, 18.75, 1.5};
             case Model::Sonnet45:
                 return {3.0, 15.0, 3.75, 0.30};

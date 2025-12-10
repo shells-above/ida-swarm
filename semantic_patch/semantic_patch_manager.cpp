@@ -471,6 +471,9 @@ std::string SemanticPatchManager::decompile_function(ea_t func_addr) {
         throw std::runtime_error("Hex-Rays decompiler not available");
     }
 
+    // NOTE: Casts are hidden in decompiler output via hexrays.cfg
+    // (HO_DISPLAY_CASTS bit removed from HEXOPTIONS)
+
     // Get function pointer - REQUIRED by decompile() API
     func_t *func = get_func(func_addr);
     if (!func) {

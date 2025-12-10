@@ -8,7 +8,6 @@
 #include "core/common.h"
 #include "core/config.h"
 #include "sdk/claude_sdk.h"
-#include "sdk/auth/oauth_manager.h"
 
 namespace llm_re {
 
@@ -44,27 +43,24 @@ private:
     mutable qmutex_t mutex_;
 
     std::unique_ptr<claude::Client> deep_analysis_client_;
-    std::shared_ptr<claude::auth::OAuthManager> oauth_manager_;
+    // Note: OAuth manager no longer needed - Client uses global pool
 
 public:
     // Constructor with Config for OAuth support
     explicit DeepAnalysisManager(const Config& config) {
-        // Create our own OAuth manager if using OAuth authentication
+        // Create API client (no more OAuth manager - Client uses global pool)
         if (config.api.auth_method == claude::AuthMethod::OAUTH) {
-            oauth_manager_ = Config::create_oauth_manager(config.api.oauth_config_dir);
-        }
-        
-        // Create API client based on config
-        if (config.api.auth_method == claude::AuthMethod::OAUTH && oauth_manager_) {
-            std::shared_ptr<claude::OAuthCredentials> oauth_creds =
-                oauth_manager_->get_credentials();
-            if (oauth_creds) {
-                deep_analysis_client_ = std::make_unique<claude::Client>(oauth_creds, oauth_manager_, config.api.base_url);
-            } else {
-                deep_analysis_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
-            }
+            deep_analysis_client_ = std::make_unique<claude::Client>(
+                claude::AuthMethod::OAUTH,
+                "",  // Credential not needed for OAuth
+                config.api.base_url
+            );
         } else {
-            deep_analysis_client_ = std::make_unique<claude::Client>(config.api.api_key, config.api.base_url);
+            deep_analysis_client_ = std::make_unique<claude::Client>(
+                claude::AuthMethod::API_KEY,
+                config.api.api_key,
+                config.api.base_url
+            );
         }
         mutex_ = qmutex_create();
     }

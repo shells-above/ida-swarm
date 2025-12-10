@@ -17,6 +17,7 @@
 #include "core/config.h"
 #include "core/ida_utils.h"
 #include <loader.hpp>
+#include <nalt.hpp>  // For set_root_filename and get_input_file_path
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>  // for _exit
@@ -356,9 +357,25 @@ private:
         }
         
         // Try to access config to verify it's valid
-        LOG("LLM RE: Config auth_method=%d, api_key_len=%zu\n", 
+        LOG("LLM RE: Config auth_method=%d, api_key_len=%zu\n",
             (int)config_->api.auth_method, config_->api.api_key.length());
-        
+
+        // The database was copied from original and still points to original binary.
+        // Fix it NOW so Agent constructor gets the correct path from get_input_file_path().
+        if (agent_config_.contains("agent_binary_path")) {
+            std::string agent_binary_path = agent_config_["agent_binary_path"];
+            LOG("LLM RE: Fixing database input file path to: %s\n", agent_binary_path.c_str());
+            set_root_filename(agent_binary_path.c_str());
+
+            // Verify it worked
+            char verify_path[MAXSTR];
+            if (get_input_file_path(verify_path, sizeof(verify_path)) > 0) {
+                LOG("LLM RE: Database input file path updated to: %s\n", verify_path);
+            }
+        } else {
+            LOG("LLM RE: WARNING - No agent_binary_path in config! Agent will patch original binary!\n");
+        }
+
         LOG("LLM RE: About to call new SwarmAgent\n");
         try {
             swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);
@@ -409,9 +426,25 @@ private:
     
     void start_resurrected_agent() {
         if (swarm_agent_) return;
-        
+
         LOG("LLM RE: start_resurrected_agent() called for %s\n", agent_id_.c_str());
-        
+
+        // The database was copied from original and still points to original binary.
+        // Fix it NOW so Agent constructor gets the correct path from get_input_file_path().
+        if (agent_config_.contains("agent_binary_path")) {
+            std::string agent_binary_path = agent_config_["agent_binary_path"];
+            LOG("LLM RE: Fixing database input file path to: %s\n", agent_binary_path.c_str());
+            set_root_filename(agent_binary_path.c_str());
+
+            // Verify it worked
+            char verify_path[MAXSTR];
+            if (get_input_file_path(verify_path, sizeof(verify_path)) > 0) {
+                LOG("LLM RE: Database input file path updated to: %s\n", verify_path);
+            }
+        } else {
+            LOG("LLM RE: WARNING - No agent_binary_path in config! Agent will patch original binary!\n");
+        }
+
         // Create the SwarmAgent with resurrection config
         try {
             swarm_agent_ = new agent::SwarmAgent(*config_, agent_id_);

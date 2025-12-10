@@ -37,11 +37,18 @@ CodeInjectionManager::~CodeInjectionManager() {
 
 // Initialize the manager
 bool CodeInjectionManager::initialize() {
+    // Validate binary path exists (required for segment injection)
     if (agent_binary_path_.empty()) {
-        LOG("CodeInjectionManager: Warning - no binary path provided\n");
-    } else {
-        LOG("CodeInjectionManager: Using binary path: %s\n", agent_binary_path_.c_str());
+        LOG("CodeInjectionManager: ERROR - No binary path provided\n");
+        return false;
     }
+
+    if (!std::filesystem::exists(agent_binary_path_)) {
+        LOG("CodeInjectionManager: ERROR - Binary file not found: %s\n", agent_binary_path_.c_str());
+        return false;
+    }
+
+    LOG("CodeInjectionManager: Initialized with binary: %s\n", agent_binary_path_.c_str());
     return true;
 }
 

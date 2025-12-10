@@ -13,7 +13,7 @@
 #include "sdk/tools/registry.h"
 
 // Authentication
-#include "sdk/auth/oauth_manager.h"
+#include "sdk/auth/oauth_account_pool.h"
 #include "sdk/auth/oauth_authorizer.h"
 #include "sdk/auth/oauth_flow.h"
 
