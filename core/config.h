@@ -2,8 +2,9 @@
 
 #include "common_base.h"
 #include "sdk/client/client.h"
-#include "sdk/auth/oauth_manager.h"
 #include <memory>
+#include <vector>
+#include <optional>
 
 namespace llm_re {
 
@@ -14,13 +15,9 @@ struct Config {
         static Config instance;
         return instance;
     }
-    
-    // Create a new OAuth manager instance for a component
-    // Each component creates its own instance that reads from the same credential files
-    static std::shared_ptr<claude::auth::OAuthManager> create_oauth_manager(const std::string& config_dir) {
-        return std::make_shared<claude::auth::OAuthManager>(config_dir);
-    }
-    
+
+    // Note: create_oauth_manager() REMOVED - components now use Client with global OAuth pool
+
     // Load configuration from default location
     void load();
     
@@ -138,6 +135,33 @@ public:
     struct ProfilingSettings {
         bool enabled = true;  // Enable/disable profiling
     } profiling;
+
+    struct LLDBSettings {
+        bool enabled = false;
+        std::string lldb_path = "/usr/bin/lldb";
+
+        // Global device registry - jailbroken iOS devices user owns
+        // NOTE: Remote debugging currently only supports jailbroken iOS devices.
+        // TODO: Future support for Linux (lldb-server), Android, macOS, Windows
+        struct GlobalDevice {
+            std::string id;                 // Unique identifier (UDID or user-provided)
+            std::string name;               // Human-readable name
+            std::string host;               // IP/hostname
+            int ssh_port = 22;              // SSH port
+            std::string ssh_user = "root";  // SSH username
+            // NOTE: debugserver_port removed - now auto-derived from IRC port at runtime
+
+            // Auto-discovered device information (cached)
+            struct DeviceInfo {
+                std::string udid;
+                std::string model;
+                std::string ios_version;
+                std::string name;
+            };
+            std::optional<DeviceInfo> device_info;
+        };
+        std::vector<GlobalDevice> devices;  // Global device registry
+    } lldb;
 
     // Load/save configuration
     bool save_to_file(const std::string& path) const;

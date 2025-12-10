@@ -170,15 +170,23 @@ std::vector<std::pair<ea_t, std::string>> IDAUtils::search_strings_unified(const
         std::string lower_pattern = pattern;
         std::transform(lower_pattern.begin(), lower_pattern.end(), lower_pattern.begin(), ::tolower);
 
-        // Suppress dialog by temporarily setting batch mode
-        bool old_batch = batch;
-        batch = true;
-        
-        // Refresh string list
-        build_strlist();
-        
-        // Restore batch mode
-        batch = old_batch;
+        // Only build the string list if it hasn't been built yet.
+        // We use a static flag since get_strlist_qty() returns 0 both before
+        // building and when there are genuinely no strings in the binary.
+        static bool strlist_initialized = false;
+        if (!strlist_initialized) {
+            // Suppress dialog by temporarily setting batch mode
+            bool old_batch = batch;
+            batch = true;
+
+            // Build string list once
+            build_strlist();
+
+            // Restore batch mode
+            batch = old_batch;
+
+            strlist_initialized = true;
+        }
 
         size_t qty = get_strlist_qty();
         int count = 0;
@@ -564,6 +572,9 @@ std::string IDAUtils::get_function_decompilation(ea_t address) {
         if (!init_hexrays_plugin()) {
             return result;
         }
+
+        // NOTE: Casts are hidden in decompiler output via hexrays.cfg
+        // (HO_DISPLAY_CASTS bit removed from HEXOPTIONS)
 
         func_t *func = get_func(address);
         if (!func) {

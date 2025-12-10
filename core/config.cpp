@@ -46,6 +46,34 @@ bool Config::save_to_file(const std::string& path) const {
         // Profiling settings
         j["profiling"]["enabled"] = profiling.enabled;
 
+        // LLDB settings
+        j["lldb"]["enabled"] = lldb.enabled;
+        j["lldb"]["lldb_path"] = lldb.lldb_path;
+
+        // Global device registry
+        json devices_array = json::array();
+        for (const auto& device : lldb.devices) {
+            json device_json;
+            device_json["id"] = device.id;
+            device_json["name"] = device.name;
+            device_json["host"] = device.host;
+            device_json["ssh_port"] = device.ssh_port;
+            device_json["ssh_user"] = device.ssh_user;
+
+            // Save cached device info if available
+            if (device.device_info) {
+                json info_json;
+                info_json["udid"] = device.device_info->udid;
+                info_json["model"] = device.device_info->model;
+                info_json["ios_version"] = device.device_info->ios_version;
+                info_json["name"] = device.device_info->name;
+                device_json["device_info"] = info_json;
+            }
+
+            devices_array.push_back(device_json);
+        }
+        j["lldb"]["devices"] = devices_array;
+
         // Swarm settings
         j["swarm"]["max_parallel_auto_decompile_agents"] = swarm.max_parallel_auto_decompile_agents;
 
@@ -152,6 +180,38 @@ bool Config::load_from_file(const std::string& path) {
         // Profiling settings
         if (j.contains("profiling")) {
             profiling.enabled = j["profiling"].value("enabled", profiling.enabled);
+        }
+
+        // LLDB settings
+        if (j.contains("lldb")) {
+            lldb.enabled = j["lldb"].value("enabled", lldb.enabled);
+            lldb.lldb_path = j["lldb"].value("lldb_path", lldb.lldb_path);
+
+            // Load global device registry
+            if (j["lldb"].contains("devices") && j["lldb"]["devices"].is_array()) {
+                lldb.devices.clear();
+                for (const auto& device_json : j["lldb"]["devices"]) {
+                    LLDBSettings::GlobalDevice device;
+                    device.id = device_json.value("id", "");
+                    device.name = device_json.value("name", "");
+                    device.host = device_json.value("host", "");
+                    device.ssh_port = device_json.value("ssh_port", 22);
+                    device.ssh_user = device_json.value("ssh_user", "root");
+
+                    // Load cached device info if present
+                    if (device_json.contains("device_info")) {
+                        LLDBSettings::GlobalDevice::DeviceInfo info;
+                        const auto& info_json = device_json["device_info"];
+                        info.udid = info_json.value("udid", "");
+                        info.model = info_json.value("model", "");
+                        info.ios_version = info_json.value("ios_version", "");
+                        info.name = info_json.value("name", "");
+                        device.device_info = info;
+                    }
+
+                    lldb.devices.push_back(device);
+                }
+            }
         }
 
         // Swarm settings
