@@ -2,6 +2,7 @@
 #include "../core/logger.h"
 #include "../core/ida_utils.h"
 #include "agent_irc_tools.h"
+#include "agent_lldb_tools.h"
 #include "../sdk/messages/types.h"
 #include <format>
 #include <thread>
@@ -130,6 +131,18 @@ bool SwarmAgent::initialize(const json& swarm_config) {
     LOG_INFO("SwarmAgent: Registering IRC communication tools\n");
     register_swarm_irc_tools(tool_registry_, this);
 
+    // Register LLDB tools if enabled AND validated
+    if (config_.lldb.enabled) {
+        bool lldb_validated = swarm_config.value("lldb_validated", false);
+
+        if (lldb_validated) {
+            LOG_INFO("SwarmAgent: LLDB validation passed - registering remote debugging tools\n");
+            register_lldb_tools(tool_registry_, this);
+        } else {
+            LOG_INFO("SwarmAgent: LLDB enabled but validation failed - tools not registered\n");
+        }
+    }
+
     // Start the base agent
     LOG_INFO("SwarmAgent: Starting base agent worker thread\n");
     start();
@@ -223,7 +236,13 @@ void SwarmAgent::handle_irc_message(const std::string& channel, const std::strin
         // Ignore own messages
         return;
     }
-    
+
+    // Check for LLDB response messages (from orchestrator)
+    if (message.find("LLDB_") == 0 && message.find("_RESPONSE|") != std::string::npos) {
+        handle_lldb_response_message(message);
+        return;  // Don't inject as user message
+    }
+
     // Ignore certain messages in #agents channel - they're only for orchestrator
     // todo: make separate channels for talking -> orchestrator and receiving commands and do proper packet handling
     // this system got more complicated than i thought it would
@@ -832,6 +851,11 @@ bool SwarmAgent::connect_to_irc() {
     LOG_INFO("SwarmAgent: Joining #agents channel\n");
     irc_client_->join_channel("#agents");
 
+    // Join private channel for receiving orchestrator responses (e.g., LLDB responses)
+    std::string private_channel = std::format("#{}", agent_id_);
+    LOG_INFO("SwarmAgent: Joining private channel %s\n", private_channel.c_str());
+    irc_client_->join_channel(private_channel);
+
     irc_connected_ = true;
     LOG_INFO("SwarmAgent: IRC setup complete\n");
     emit_log(LogLevel::INFO, "Connected to IRC server");
@@ -1197,11 +1221,12 @@ void SwarmAgent::on_iteration_start(int iteration) {
     // Send status update on first iteration and every 10 iterations
     // Skip in auto-decompile mode to save costs and reduce latency
     status_update_counter_++;
-    if ((status_update_counter_ == 1 || status_update_counter_ % 10 == 0) &&
-        irc_connected_ &&
-        !is_auto_decompile_mode_) {
-        generate_and_send_status_update();
-    }
+    // COMMENTED OUT: Haiku status updates disabled
+    // if ((status_update_counter_ == 1 || status_update_counter_ % 10 == 0) &&
+    //     irc_connected_ &&
+    //     !is_auto_decompile_mode_) {
+    //     generate_and_send_status_update();
+    // }
 }
 
 void SwarmAgent::generate_and_send_status_update() {
@@ -1344,6 +1369,95 @@ Respond ONLY with the JSON, no other text.)";
 
     } catch (const json::exception& e) {
         LOG_INFO("SwarmAgent: Failed to parse status update JSON: %s\n", e.what());
+    }
+}
+
+// LLDB response handling methods
+
+json SwarmAgent::wait_for_lldb_response(const std::string& request_id, int timeout_ms) {
+    LOG_INFO("SwarmAgent: Waiting for LLDB response (request_id=%s, timeout=%dms)\n",
+             request_id.c_str(), timeout_ms);
+
+    auto cv = std::make_shared<std::condition_variable>();
+
+    {
+        std::unique_lock<std::mutex> lock(lldb_response_mutex_);
+        lldb_cv_map_[request_id] = cv;
+    }
+
+    std::unique_lock<std::mutex> lock(lldb_response_mutex_);
+
+    // Wait for response or timeout
+    bool received = cv->wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, &request_id]() {
+        return lldb_pending_responses_.find(request_id) != lldb_pending_responses_.end();
+    });
+
+    if (!received) {
+        LOG_INFO("SwarmAgent: LLDB response timeout for request_id=%s\n", request_id.c_str());
+        lldb_cv_map_.erase(request_id);
+        return {
+            {"status", "error"},
+            {"error", "Timeout waiting for LLDB response from orchestrator"},
+            {"request_id", request_id}
+        };
+    }
+
+    // Get response
+    json response = lldb_pending_responses_[request_id];
+
+    // Cleanup
+    lldb_pending_responses_.erase(request_id);
+    lldb_cv_map_.erase(request_id);
+
+    LOG_INFO("SwarmAgent: Received LLDB response for request_id=%s\n", request_id.c_str());
+
+    return response;
+}
+
+void SwarmAgent::handle_lldb_response_message(const std::string& message) {
+    // Parse message format: LLDB_<TYPE>_RESPONSE|<request_id>|<json_response>
+    // Example: LLDB_START_RESPONSE|req_12345|{"status":"success","session_id":"sess_abc"}
+
+    LOG_INFO("SwarmAgent: Handling LLDB response message: %s\n", message.c_str());
+
+    size_t first_pipe = message.find('|');
+    if (first_pipe == std::string::npos) {
+        LOG_INFO("SwarmAgent: Invalid LLDB response format (no pipes)\n");
+        return;
+    }
+
+    size_t second_pipe = message.find('|', first_pipe + 1);
+    if (second_pipe == std::string::npos) {
+        LOG_INFO("SwarmAgent: Invalid LLDB response format (missing second pipe)\n");
+        return;
+    }
+
+    std::string message_type = message.substr(0, first_pipe);
+    std::string request_id = message.substr(first_pipe + 1, second_pipe - first_pipe - 1);
+    std::string response_json_str = message.substr(second_pipe + 1);
+
+    LOG_INFO("SwarmAgent: Parsed LLDB response - type=%s, request_id=%s\n",
+             message_type.c_str(), request_id.c_str());
+
+    try {
+        json response = json::parse(response_json_str);
+
+        std::unique_lock<std::mutex> lock(lldb_response_mutex_);
+
+        // Store response
+        lldb_pending_responses_[request_id] = response;
+
+        // Notify waiting thread
+        auto cv_it = lldb_cv_map_.find(request_id);
+        if (cv_it != lldb_cv_map_.end()) {
+            cv_it->second->notify_one();
+            LOG_INFO("SwarmAgent: Notified waiting thread for request_id=%s\n", request_id.c_str());
+        } else {
+            LOG_INFO("SwarmAgent: No waiting thread found for request_id=%s\n", request_id.c_str());
+        }
+
+    } catch (const json::exception& e) {
+        LOG_INFO("SwarmAgent: Failed to parse LLDB response JSON: %s\n", e.what());
     }
 }
 

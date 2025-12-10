@@ -103,6 +103,10 @@ public:
         active_conflicts_[channel] = state;
     }
 
+    // LLDB response handling (for synchronous IRC requests to orchestrator)
+    json wait_for_lldb_response(const std::string& request_id, int timeout_ms);
+    void handle_lldb_response_message(const std::string& message);
+
 protected:
     // Override tool processing to add conflict detection for ALL tools
     std::vector<claude::messages::Message> process_tool_calls(const claude::messages::Message& msg, int iteration) override;
@@ -131,6 +135,10 @@ private:
     // Conflict handling state
     std::map<std::string, SimpleConflictState> active_conflicts_;  // Channel -> conflict state mapping
 
+    // LLDB response tracking (for synchronous request-response over IRC)
+    std::map<std::string, json> lldb_pending_responses_;                           // request_id -> response JSON
+    std::map<std::string, std::shared_ptr<std::condition_variable>> lldb_cv_map_;  // request_id -> condition variable
+    std::mutex lldb_response_mutex_;                                               // Protects above maps
 
     // Connect to IRC server
     bool connect_to_irc();
@@ -143,15 +151,13 @@ private:
     
     // Manual tool execution support
     void handle_manual_tool_execution(const std::string& channel, const std::string& message);
-    static bool parse_manual_tool_message(const std::string& message, std::string& target_agent,
-                                   std::string& tool_name, json& parameters);
+    static bool parse_manual_tool_message(const std::string& message, std::string& target_agent, std::string& tool_name, json& parameters);
     void send_manual_tool_result(const std::string& channel, bool success, const json& result);
 
     // Write tool replication for auto decompile mode
     void broadcast_write_tool(const std::string& tool_name, const json& parameters);
     void handle_write_replicate_message(const std::string& message);
-    static bool parse_write_replicate_message(const std::string& message, std::string& source_agent,
-                                             std::string& tool_name, json& parameters);
+    static bool parse_write_replicate_message(const std::string& message, std::string& source_agent, std::string& tool_name, json& parameters);
 
     // Message adapters
     std::unique_ptr<ConsoleAdapter> console_adapter_;
