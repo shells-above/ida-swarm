@@ -304,7 +304,19 @@ Each agent receives a single function and performs comprehensive reversal:
 - Define or reuse struct/enum types as appropriate
 - Coordinate type definitions with other agents via search_local_types()
 
-### 8. Integration Capabilities
+### 8. Remote LLDB Debugging
+
+Agents can perform dynamic analysis by connecting to remote debuggers on jailbroken iOS devices. This enables runtime inspection alongside static analysis:
+
+- Set breakpoints at functions identified during static analysis
+- Inspect register values, memory, and stack contents at runtime
+- Step through code execution to understand complex control flow
+- Examine runtime data structures and heap allocations
+- Validate static analysis hypotheses with live execution
+
+Multiple agents can debug simultaneously across a pool of devices.
+
+### 9. Integration Capabilities
 
 **MCP Server Integration**
 - Model Context Protocol server for external tool integration
